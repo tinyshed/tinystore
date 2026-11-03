@@ -19,10 +19,11 @@ An event is written first as a row of the stream's head, so that `append`
 returns quickly and a read finds it at once. Once a stream has a segment's
 worth of events, or its oldest waiting event is an hour old (half the
 stream's `keep` when that is shorter), the engine packs them into a segment:
-blocks of events sorted by their time. Events that
-arrive more than ten seconds late are packed apart, so they never force a
-packed segment to be rewritten. Small segments are later merged, four of a
-size at a time, keeping the places where each one began.
+blocks of events sorted by their time. [Late
+events](../../guides/records/reading.md#which-events-are-late) are packed
+apart, so they never force a packed segment to be rewritten. Small segments
+are later merged, four of a size at a time, keeping the places where each
+one began.
 
 Each block also keeps the order in which its events arrived: the head row
 each event was written in, and its place in that row. A read orders events
@@ -44,8 +45,8 @@ column picks the smallest encoding that gives its values back exactly:
 | UUIDs and hex        | their bytes, not their 36 characters                              |
 | times inside a value | how far behind the event's own time they lie                      |
 
-A value comes back as it was written, byte for byte: `1.2300`, `-0` and the
-order of a JSON object's keys included.
+A value comes back as it was written, byte for byte, as [What an event
+carries](../../guides/records/events.md#what-an-event-carries) shows.
 
 ## Reading only what can match
 
@@ -112,31 +113,36 @@ bucket's edge cuts.
 - **Retention clips a read before a summary is used**, so a block that is
   half expired is decoded, not answered from a summary that still counts the
   expired half.
-- **A query is bounded before it starts**: decoded samples, bytes, blocks and
-  series each have a budget, and passing one is a `limit` error, never a
-  quietly smaller answer.
+- **A query is bounded before it starts**: the series it finds, the bytes it
+  reads, the samples it decodes and the answer each have a
+  [budget](../production/limits.md#bounds-by-name), and passing one is a
+  `limit` error, never a quietly smaller answer.
 
 ## Why this design?
 
 **Why blocks in SQLite rather than files of their own.** A block is a row, so
 packing a segment and deleting the head rows it replaced is one transaction.
 A crash in the middle of packing leaves the last commit, and the next packing
-starts from it (contract DUR-09). The engines get compression and skipping
-from their own layout, and crash safety and backups from SQLite.
+starts from it (contract DUR-09). [SQLite as TinyStore runs
+it](sqlite.md#why-this-design) says why SQLite.
 
 **Why column by column.** Log lines and samples repeat themselves: the same
 keys, the same levels, the same routes, timestamps a second apart. Stored by
 column, each kind of repetition finds the encoding that removes it, and a
 query reads only the columns it needs.
 
-**Why bit for bit.** Whoever draws a chart can round. Nobody can unround. A
+**Why bit for bit.** A program that draws a chart can round the values
+itself, but nothing can bring back digits that the store rounded away. A
 metrics store that rounds as it stores answers a question you did not ask,
 and you cannot tell.
 
 **Why the encodings were chosen by measurement.** Each one was kept because a
 research round measured it on real logs and real metrics against the
 alternatives, file size and query time both. The Go engine's FSE coder was
-left out by the owner's choice, after it saved 0.15 bytes per event. The
+left out on purpose: it saved 0.15 bytes of about 17.6 per record, on 1.7
+million log lines and events of a production corpus, as the
+[records-port](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-port-2026-10-11.md)
+round measured on a Ryzen 7 7700 under Windows 11. The
 [research reports](https://github.com/tinyshed/research/tree/main/tinystore/reports)
 have every number with its machine and data.
 

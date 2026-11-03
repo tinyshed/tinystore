@@ -3,22 +3,21 @@
 The bytes a TinyStore server and its clients exchange over any byte stream: a
 child's stdin and stdout, a Unix socket, a Windows named pipe, TCP or TLS.
 Read it to write a client in a language TinyStore has no SDK for, or to see
-what an SDK does on the wire; the Bun and Python SDKs are built to this page.
+what an SDK does on the wire; the Bun and Node, Python and Go SDKs are built
+to this page.
 
-Frames, the profile, the handshake, the errors and every engine's methods, kv,
-jobs, blobs, sql, records and metrics, are built in `server/wire`, and why the
-server behaves as it does is
-[its design](https://github.com/tinyshed/research/blob/main/tinystore/design/server.md).
+Frames, the profile, the handshake, the errors and every engine's methods are
+built in `crates/tinystore/src/wire/`, and why the server behaves as it does
+is [its design](https://github.com/tinyshed/research/blob/main/tinystore/design/server.md).
 Every example on this page is a vector of
 [testdata/wire/vectors.json](../testdata/wire/vectors.json),
 which the server and every SDK are tested against: a value in a typed
 notation, the bytes it is, and the bytes a decoder refuses, each named after
 the rule it breaks. Every message is also a vector of
-[messages.json](../testdata/wire/messages.json), its bytes and its
-fields by the names the tables below give them, with the methods' numbers and
-the errors' codes, so that an SDK checks each field of each message in one
-loop; the Go types write it, through a schema of each message's keys that
-`TestMessageVectors` holds.
+[protocol.json](../testdata/wire/protocol.json), as [Methods](#methods) says.
+[messages.json](../testdata/wire/messages.json) keeps older vectors, which
+the Go server wrote before the Rust core, with the methods' numbers and the
+errors' codes.
 
 ## Frames
 
@@ -97,9 +96,9 @@ A `HELLO` from Bun:
 A body must fit the credit it is sent under, so the max body both sides agree
 is the smallest of the server's, the client's and the client's stream
 credit: a client granting 64 KiB a stream takes bodies of 64 KiB at most.
-Every SDK grants 2 MiB, so a request is 2 MiB at most, and a client refuses
-a larger one before it sends it: a `limit` that names the method and
-`request bytes`, the size wanted and the body agreed.
+Every SDK grants 2 MiB, and refuses a larger request before it sends it, with
+the `limit` error that [Over the
+wire](handbook/production/limits.md#over-the-wire) shows.
 
 `WELCOME`:
 
@@ -119,9 +118,7 @@ a larger one before it sends it: a `limit` that names the method and
 | 12  | durability        | str          | `full` or `os`, when the store was opened with one: how far its files' commits go before they return                                   |
 
 A client that found the server through `SERVE` sends no `REQUEST` before the
-proof checks, compared in constant time: only the user the server runs as can
-read `SERVE`, so a process that took the endpoint of a server gone cannot
-answer, and a client whose proof fails reads `SERVE` again, as a stale one.
+proof checks, as [the proof](#finding-a-local-server) says below.
 `HELLO` carries nothing a stranger could use, since a local connection takes
 no token. A challenge of another length is a `HELLO` the server cannot take;
 a remote connection's challenge gets no proof, its server being the one its
@@ -156,7 +153,7 @@ not start, and its error names the folder. On Linux and macOS such a folder
 refuses its new mode. `SERVE` there is a hint; `LOCK` is the truth.
 
 ```json
-{"protocol": 1, "server": "0.4.0", "pid": 4212, "instance": "q1q0l3yZ3JvYw8g7oM2sYA",
+{"protocol": 1, "server": "0.7.0", "pid": 4212, "instance": "q1q0l3yZ3JvYw8g7oM2sYA",
  "secret": "Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE",
  "endpoints": ["unix:///srv/app/data/server/tinystore.sock"], "sidecar": true}
 ```
@@ -236,13 +233,13 @@ Where a local server listens:
 A remote server's tokens file gives each token one capability: `admin`
 may do anything, `data` reads and writes, and `read` reads only. A `read`
 connection may call only the methods the schema marks `read`, every other
-one being `permission`; its SQL runs on a reader and is a query, a
+one being `permission`; and its SQL runs on a reader and is a query, a
 statement that writes, attaches a file or sets a pragma being `permission`
-too; and its `sql.open` applies no migration. Its opens may still name a
-bucket, a queue or files the store did not have, as any first open does,
-but choose nothing the writers live with: a bucket's `idle`, under which a
-read renews a key, counters' `flushEvery`, a database's `durability` and a
-stream's `keep` are `permission`. Its reads renew no key.
+too. Its opens may still name a bucket, a queue or files the store did not
+have, as any first open does, but choose nothing the writers live with: a
+bucket's `idle`, under which a read renews a key, counters' `flushEvery`, a
+database's `durability` and a stream's `keep` are `permission`. Its reads
+renew no key.
 
 ## Streams
 
@@ -397,6 +394,7 @@ An error is the final frame of its stream, with ERROR set:
 | code                 | means                                                                                                                                    | sent again                  |
 |----------------------|------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
 | `invalid`            | the request cannot be done as asked                                                                                                      | no                          |
+| `not_found`          | what the request needs is not there: a file, a config's declaration                                                                      | no                          |
 | `limit`              | a bound: memory, size or count; `what` names the `limit`, what the call `wanted` of it and the `bound`, where the engine knows them      | later, or smaller           |
 | `closed`             | the store or the handle closed                                                                                                           | after opening again         |
 | `in_use`             | a name is taken, or a lock's key stayed held past a hold's wait                                                                          | later                       |
@@ -410,14 +408,15 @@ An error is the final frame of its stream, with ERROR set:
 | `permission`         | the connection's capability does not allow it, as a `read` connection opening an encrypted bucket                                        | no                          |
 | `unimplemented`      | a method, or a field of a request, this server does not have: `what` names the field, the message the server's version                   | no                          |
 | `cancelled`          | the client cancelled it                                                                                                                  | —                           |
-| `unavailable`        | the server is closing                                                                                                                    | on another connection       |
-| `internal`           | a fault of the server's                                                                                                                  | —                           |
+| `unavailable`        | busy for now: the server is closing, or a copy has no link to its home                                                                   | later, or elsewhere         |
+| `internal`           | a fault of the server's, or an error its system gave, as a disk's                                                                        | —                           |
+| `protocol`           | in a `GOAWAY` alone: a frame or a `HELLO` that breaks this page's rules                                                                  | no                          |
+| `unauthenticated`    | in a `GOAWAY` alone: a token the server does not know                                                                                    | no                          |
 
-The first nine are the root's sentinels, so that an SDK's error classes mean
-what `errors.Is` means in Go. A frame or a `HELLO` the server cannot take is a
-`GOAWAY` with `protocol` or `unauthenticated`, and the connection ends. A
-name's value in `what` is str, or bin where its bytes are not UTF-8, as a kv
-key of bytes may be.
+Each code is one error class in every SDK, and one sentinel in Go, so that
+`errors.Is(err, tinystore.ErrConflict)` holds for a `conflict`. After a
+`GOAWAY` the connection ends. A name's value in `what` is str, or bin where
+its bytes are not UTF-8, as a kv key of bytes may be.
 
 A conflict on stream 7:
 
@@ -478,7 +477,7 @@ holds a vector of every message, which every SDK reads. The tables below are
 written from those files by `just protocol`, and CI checks them, so a number
 here is the number the server answers.
 
-A method's high byte is its engine and its low byte the operation:
+Each engine's high byte, as [Frames](#frames) says:
 
 <!-- written from protocol/*.wire by `just protocol`: engines -->
 | high byte | engine   |
@@ -672,7 +671,8 @@ Its messages are in `protocol/sql.wire`. A query's rows come in its
 the client's credit. A row a query downloads past the agreed body is `limit`.
 A batch's results travel in one message, and past the agreed body they are
 `outcome_unknown`, since the batch committed. A query holds its rows in the
-server's memory, 64 MiB of them at most, before the first leaves. A
+server's memory before the first leaves, as many as one `all` may hold
+([Limits and defaults](handbook/production/limits.md#sql)). A
 `sql.tx` holds its database's writer while the client's calls come as `DATA`,
 and a transaction whose client stalls, cancels or leaves is rolled back.
 
@@ -816,6 +816,15 @@ Its messages are in `protocol/locks.wire`. A hold is answered once its key is
 given, from whichever thread lets it go, and a client that cancels it before
 is answered `cancelled`.
 
+A hold's `request` is 16 random bytes the client picks. A hold sent again
+with the same `request`, after its answer was lost, on any connection, is
+answered the lease already given, which then lasts its `ttl` from that
+answer. A lease that ran out before it was asked again has ended, and the
+hold is a new one, with a new fence. A hold still waiting takes over the
+earlier one's place in line, which is answered `cancelled`. `renew` and
+`release` name the lease by `lease`, 16 random bytes only its holder learns:
+a fence, which a holder hands to others, proves nothing.
+
 ### channels
 
 <!-- written from protocol/*.wire by `just protocol`: methods of channels -->
@@ -826,10 +835,10 @@ is answered `cancelled`.
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/channels.wire`. A subscription answers once the
-store has it, then sends its batches within the client's credit. A client
-that grants nothing falls behind and misses messages, and the next batch says
-how many it missed: the log is bounded, and neither the publisher nor the
-server waits for it.
+store has it, then sends its batches within the client's credit. Neither the
+publisher nor the server waits for a client that grants nothing: it misses
+messages, and the next batch says how many, as
+[Subscriptions](guides/channels/subscriptions.md) explains.
 
 ### search
 

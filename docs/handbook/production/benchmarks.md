@@ -142,7 +142,8 @@ without reading all of it.
   both in one file.
 - **Writes that do not wait for the disk.** With `'os'`, kv writes stop at
   about 30,000 per second, where Redis reaches 190,000.
-- **Large files.** MinIO reads a 1 MiB file 2.7 times as fast.
+- **Large files.** MinIO reads a 1 MiB file 5.7 times as fast as TinyStore's
+  server, and 2.7 times as fast as the core in process.
 - **Metrics on disk.** VictoriaMetrics keeps a sample in 0.71 bytes, against
   TinyStore's 1.00.
 - **A search over many lines in a short range.** Loki counts a word over

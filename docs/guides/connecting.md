@@ -31,12 +31,12 @@ let store = Store::open("./data", Options::default())?; // always the core in th
 
 ## Which one
 
-| Way                  | What runs                                                                              | Choose it for                                     |
-|----------------------|----------------------------------------------------------------------------------------|---------------------------------------------------|
-| sidecar, the default | one `tinystore serve` beside the directory, started by the first process that opens it | a web server and its workers in several processes |
-| `private`            | a child on this process's stdin and stdout, ending with it                             | tests, scripts, one process alone; a test's clock |
-| `embedded`           | the core inside this process: no child, no socket                                      | one process that wants the shortest path          |
-| `connect`            | a server on another machine, over TLS with a token                                     | programs on several machines                      |
+| Way                  | What runs                                                                                                                        | Choose it for                                     |
+|----------------------|----------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|
+| sidecar, the default | one `tinystore serve` beside the directory, started by the first process that opens it, on a Unix socket or a Windows named pipe | a web server and its workers in several processes |
+| `private`            | a child on this process's stdin and stdout, ending with it                                                                       | tests, scripts, one process alone; a test's clock |
+| `embedded`           | the core inside this process: no child, no socket                                                                                | one process that wants the shortest path          |
+| `connect`            | a server on another machine, over TLS with a token                                                                               | programs on several machines                      |
 
 - **One directory, one holder.** A store's directory is held by one process,
   through its `LOCK`. Several processes on one machine share it through the

@@ -39,9 +39,10 @@ and the worker renews it every 15 seconds while the handler runs. So a lease
 does not bound how long a handler may take, which is the queue's `timeout`;
 it bounds how long a vanished worker keeps a job.
 
-A lease is its attempt. When the handler answers, the worker settles the job
-by naming the attempt it claimed. If the lease ran out meanwhile and another
-worker took the job, the late settlement changes nothing (contract JOB-05).
+Each lease belongs to one attempt. When the handler answers, the worker
+settles the job by naming the attempt it claimed. If the lease ran out
+meanwhile and another worker took the job, the late settlement changes
+nothing (contract JOB-05).
 
 ## What a crash does
 
@@ -107,21 +108,17 @@ job that repeats moves on to its next time instead, its error kept.
 A handler that throws runs again after its backoff: one second, then two,
 four, and so on, up to an hour, each a tenth longer or shorter at random so
 that a thousand failed jobs do not retry in the same instant. A handler can
-answer instead of throwing:
-
-| The handler returns | The job                                          |
-|---------------------|--------------------------------------------------|
-| `run.retry('10m')`  | runs again in ten minutes, counted as an attempt |
-| `run.snooze('10m')` | runs again in ten minutes, not counted           |
-| `run.fail(reason)`  | fails for good now, with the reason as its error |
+also answer with a retry, a snooze or a failure of its own, as [Retry,
+snooze and fail](../../guides/jobs/steps.md#retry-snooze-and-fail) shows.
 
 ## Limits across processes
 
-`concurrency` and `rate` are the queue's, not a worker's. A claim counts the
-live leases of the queue, and of a group, in the same transaction that takes
-new ones, so two workers in two processes never both take the last place. A
-job of a full group is set aside, not skipped forever: it is claimed as soon
-as its group has room.
+`concurrency` is the queue's, not a worker's. A claim counts the live leases
+of the queue, and of a group, in the same transaction that takes new ones, so
+two workers in two processes never both take the last place. A job of a full
+group is set aside, not skipped forever: it is claimed as soon as its group
+has room. A `rate` is counted by each process that runs a worker, so two
+processes may together start up to twice the rate (contract JOB-09).
 
 ## Why this design?
 

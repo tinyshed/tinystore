@@ -9,23 +9,14 @@ error tells you.
 ## Every call is bounded
 
 Every call that could hold a lot of data has a bound of its own, whatever
-else is going on:
-
-| Call                           | Bound                                                      |
-|--------------------------------|------------------------------------------------------------|
-| SQL `all`, `columns`           | 64 MiB of values; read more with `each` or a page          |
-| a search of a table's index    | 64 MiB of its hits' rows together; ask for fewer hits      |
-| a page of `list`               | 1,000 keys, files, jobs or events                          |
-| an aggregate of metrics        | 100,000 buckets, and its own budgets of samples and bytes  |
-| an ingest of metrics           | 10,000 samples; a Prometheus text, 100,000                 |
-| `top` and `distinct` of events | 64 MiB of different values                                 |
-| a value in kv, a job, a step   | 1 MiB                                                      |
-| an upload                      | a few buffers of 64 KiB to 1 MiB, whatever the file's size |
-| a channel's messages           | 64 MiB of the store's memory for all channels              |
+else is going on: the rows of one SQL read or one search, a page of a list,
+the buckets of an aggregate, the samples of an ingest, a value, the messages
+of every channel. [Limits and defaults](../production/limits.md) gives each
+one. An upload needs no bound of its own: it holds a few buffers of 64 KiB to
+1 MiB, whatever the file's size.
 
 A call past its bound fails with a `limit` error. It never returns a smaller
-answer that looks complete: a list cut at its bound with no word would show a
-user's dashboard with data missing, and nobody would know.
+answer that looks complete.
 
 ## A budget for the whole store
 
@@ -40,13 +31,17 @@ let store = Store::open("data", Options { memory: Some(512 << 20), ..Options::de
 tinystore serve ./data --memory 512MiB
 ```
 
+In Bun, Node, Python and Go, `open` takes no budget. To give a store one,
+run its server yourself with `--memory`, and `open` finds that server.
+
 With a budget, work reserves the bytes it will hold before it allocates them,
 and gives them back when it is done. A call whose reservation does not fit
-waits up to ten seconds for other work to give memory back, then fails with
-`limit`. A server that listens on the network has a budget of 1 GiB unless
-`--memory` says otherwise, because its callers are not under your control.
-Without a budget, as in an embedded store or the sidecar by default, every
-call still has its own bound. The store never reads a container's memory
+waits a while for other work to give memory back, then fails with `limit`. A
+server that listens on the network has a budget by default, because its
+callers are not under your control. [Limits and
+defaults](../production/limits.md#the-store) has both numbers. Without a
+budget, as in an embedded store or the sidecar by default, every call still
+has its own bound. The store never reads a container's memory
 limit to make a budget of its own: inside a container, give `memory` (or
 `--memory`) a part of the container's limit yourself (contract STORE-05).
 
@@ -79,8 +74,9 @@ meets is listed by its name in
 ## Why this design?
 
 **Why refuse instead of answering less.** An answer cut silently is the worst
-kind of bug: tests with small data pass, and production quietly shows wrong
-numbers. A refusal is loud, names its bound, and says what to do.
+kind of bug: tests with small data pass, and production quietly shows a
+user's dashboard with data missing. A refusal is loud, names its bound, and
+says what to do.
 
 **Why reserve before allocating.** If work allocated first and checked later,
 the check would come after the memory was already gone. Reserving first means

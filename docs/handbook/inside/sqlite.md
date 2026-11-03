@@ -28,8 +28,9 @@ the database, and readers see a consistent snapshot while a writer works.
 
 Reads run on separate connections, each opened `query_only`: a read path
 cannot write by mistake, even through a statement the program wrote. A file
-has one reader per processor, between 4 and 16. One reader stays open, and
-the others close after a minute without use, because a burst of reads would
+has a reader per processor, within the bounds that [Limits and
+defaults](../production/limits.md#sql) gives. One reader stays open, and the
+others close after a minute without use, because a burst of reads would
 otherwise keep their memory for good.
 
 A read transaction covers fetching the bytes, not building the answer.
@@ -44,14 +45,16 @@ would make the log grow for a minute.
 A commit appends pages to the `-wal` file. A checkpoint copies them back into
 the database file, so that the log can start again from its beginning. SQLite
 runs its own checkpoint inside the commit that makes the log 1,000 pages long.
-That checkpoint syncs the disk twice, and every write queued behind the commit
-waits for it.
+That checkpoint syncs the disk twice, which takes tens of milliseconds on a
+busy disk, and every write queued behind the commit waits for it.
 
 TinyStore runs the checkpoint beside the writer instead. When a commit makes
 the log 1,000 pages long, the next caller that has its answer runs the
 checkpoint on a connection of its own, and the writer goes on with the next
 commit meanwhile. The same happens in a store opened without background work,
-because no extra thread runs it.
+because no extra thread runs it. `search.db` waits longer, up to 16,000
+pages while the log is smaller than an eighth of the file, so that a page
+that many sets write again is copied once for several of them.
 
 | The `-wal` file holds | What happens                                                          |
 |-----------------------|-----------------------------------------------------------------------|
@@ -59,14 +62,15 @@ because no extra thread runs it.
 | 1,000 pages or more   | a caller whose write was answered runs a checkpoint beside the writer |
 | 32,000 pages          | the writer checkpoints it and starts it over before the next commit   |
 
-The log reaches 32,000 pages, about 128 MiB of 4 KiB pages, only while writes
-never pause long enough for a checkpoint to catch up, or while reads never
-stop. A read that began before the last commit keeps the checkpoint from
-copying that commit, so with reads always under way no checkpoint copies the
-whole log, and the log would grow for as long as the store runs. At 32,000
-pages the writer waits up to 100 ms for the reads that began before it copied
-the log, and then starts the log over. A read that takes longer than that
-makes the writer try again later, once the log has grown further.
+The log reaches 32,000 pages, about 125 MiB of 4 KiB pages and 31 MiB of
+`records.db`'s 1 KiB ones, only while writes never pause long enough for a
+checkpoint to catch up, or while reads never stop. A read that began before
+the last commit keeps the checkpoint from copying that commit, so with reads
+always under way no checkpoint copies the whole log, and the log would grow
+for as long as the store runs. At 32,000 pages the writer waits up to 100 ms
+for the reads that began before it copied the log, and then starts the log
+over. A read that takes longer than that makes the writer try again later,
+once the log has grown further.
 
 A file that a node copies to other nodes, and a node's copy of a file, keep
 their own checkpoints, because a checkpoint there must wait until the node
@@ -90,9 +94,12 @@ each statement when it is compiled, and TinyStore refuses any that would:
 `pragma` that sets a value, and a temporary table, view, trigger or index
 (contract SQL-02). The writer is shared by every write of a commit and a
 reader by whoever reads next, so a `pragma foreign_keys = off` in one write
-would change the rules for its neighbours. A temporary table stays on the
-writer, and SQLite finds it before the file's own table of the same name, so
-every later write to that name would go to memory and never reach the file.
+would change the rules for its neighbours. The authorizer refuses it for
+every caller, a program in the same process and a client with a token alike,
+so the rule holds without anyone having to remember it. A temporary table
+stays on the writer, and SQLite finds it before the file's own table of the
+same name, so every later write to that name would go to memory and never
+reach the file.
 A statement also may not write `sqlite_dbpage`, the table of the file's raw
 pages that a node uses to copy files. A page written there would break the
 tables of the file for every reader and every copy.
@@ -118,17 +125,17 @@ shared cache puts every connection's pages behind one mutex.
 
 ## Migrations that cannot drift
 
-An application's database applies its migrations in one transaction when it
-opens, with foreign keys off while they run, as SQLite's guide to rebuilding a
-table requires, and checks them before the commit (contract SQL-04). The file
-keeps a checksum of every applied migration. One that was edited, renamed,
-deleted or put before another stops the file from opening, naming the
-migration (contract SQL-03).
+An application's database keeps a checksum of every migration it applied.
+One that was edited, renamed, deleted or put before another stops the file
+from opening, naming the migration (contract SQL-03). [What opening
+does](../../guides/sql/migrations.md#what-opening-does) has the rest: one
+transaction, and foreign keys off while the migrations run.
 
 ## Engines that share a file
 
 A bucket, a queue or a search index opened from an application's database
-lives in that database's file and commits with its rows. An engine kept in a
+commits with its rows, as [Two engines in one
+file](../start/directory.md#two-engines-in-one-file) shows. An engine kept in a
 file can ask to run before each commit: a table's search index reads the rows
 whose keys its triggers noted, inside each write's own savepoint, so that a
 write the index cannot take fails alone and the row and its index change in
@@ -175,24 +182,9 @@ readable for twenty years. TinyStore's engines that need a custom layout,
 logs and metrics, pack their data into blocks stored as rows of SQLite, so
 they get compression and still inherit crash safety from SQLite.
 
-**Why one file per engine instead of one database.** A file has one writer.
-Logs, metrics, jobs and sessions in one file would queue behind each other,
-and a burst of log lines would make a sign-in wait. Separate files give each
-engine its own writer and its own durability.
-
-**Why a checkpoint does not run on the writer's turn.** SQLite's own
-checkpoint holds the writer for two syncs of the disk. On a busy disk, a sync
-can take tens of milliseconds, so every write queued behind that commit waits
-that long, and with many writers in flight most of them see it. A checkpoint
-on another connection copies the same pages while commits go on. The writer
-still checkpoints the log itself at 32,000 pages, so the file stays bounded
-when writes never stop.
-
-**Why the store refuses statements instead of trusting the program.** The
-writer and the readers are shared, so a statement that changes its connection
-changes it for every other caller. Rules that hold only when everyone
-remembers them do not hold. The authorizer enforces them at compile time, for
-every caller, the program in the same process and a client with a token alike.
+**Why one file per engine instead of one database.** A file has one writer,
+so a burst of log lines in a shared file would make a sign-in wait, as [A
+file per engine](../start/directory.md#a-file-per-engine) explains.
 
 ## See also
 

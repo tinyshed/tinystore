@@ -29,18 +29,12 @@ integer keys to values. `set` becomes a `REQUEST` frame with the method
 `kv.set` and a body that holds the bucket's handle, the key and the value's
 bytes.
 
-Where the frame goes depends on how the store was opened:
-
-| Opened as             | The frame goes                                               |
-|-----------------------|--------------------------------------------------------------|
-| `embedded`            | through four C functions into the core, in the same process  |
-| the sidecar (default) | through a Unix socket or a Windows named pipe to `tinystore` |
-| `private`             | through the stdin of a child process the program started     |
-| `connect`             | through TLS to `tinystore serve` on another machine          |
-
-The bytes are the same in all four cases. That is why a program moves from
-one way to another by changing its `open` line, and why chapter 22, One core,
-four languages, can describe every SDK at once.
+Where the frame goes depends on how the store was opened: into the core in
+the same process, to a sidecar or a child of the program, or over TLS to a
+server, as [Connecting](../../guides/connecting.md#which-one) lists. The bytes
+are the same in all four cases. That is why a program moves from one way to
+another by changing its `open` line, and why [One core, four
+languages](one-core.md) can describe every SDK at once.
 
 ## Into the writer
 
@@ -116,10 +110,8 @@ Each write runs in a savepoint of its own. A write that fails, a broken
 constraint or a value the bucket cannot keep, rolls back its savepoint, and
 the others commit (contract DUR-03). The commit syncs the write-ahead log
 once, and SQLite's WAL means a sync is one append to the end of one file.
-
-The transaction begins `immediate`, taking the write lock at once. A
-transaction that began deferred and tried to upgrade on its first write would
-get a "busy" that no timeout can wait out.
+The transaction begins `immediate`, taking the write lock at once, for the
+reason that [One writer per file](sqlite.md#one-writer-per-file) gives.
 
 ## Back to the program
 
@@ -136,16 +128,13 @@ all of them.
 
 If the sync itself fails, the leader cannot know whether the commit reached
 the disk. Every write in it then answers `outcome unknown` (contract DUR-05),
-never success and never an ordinary failure. Read what you wrote before you
-write again.
+which [Time and errors](time-and-errors.md#why-this-design) explains.
 
 ## Why this design?
 
-**Why one writer per file.** SQLite lets one connection write a file at a
-time, whatever you do. Two connections that try at once wait on a file lock
-and retry, and under load one of them gets `database is locked`. TinyStore
-says it in the code instead: one write connection per file, behind a mutex,
-so a busy moment is a short orderly line and never an error.
+**Why one writer per file.** Two writers of one file get `database is
+locked` under load, and one writer behind a mutex makes them wait in line
+instead, as [One writer per file](sqlite.md#one-writer-per-file) shows.
 
 **Why callers take turns instead of a writer thread.** A dedicated writer
 thread adds a hand-off to every write, two context switches, and a thread per
@@ -164,11 +153,9 @@ wait in a queue with writes that are known in advance. That is why `db.tx`
 holds the writer alone, pays its own sync, and is bounded at five seconds.
 Writes known before they run, `exec` and `batch`, share commits.
 
-**Why the protocol even inside one process.** The pipe could have been a C
-API with a function per call. Then every new call would need a new function
-in every binding of every language. Carrying whole protocol frames keeps the
-binding at four functions forever, and makes the embedded store and a remote
-server the same code to test.
+**Why the protocol even inside one process.** It keeps the binding at four
+functions however many calls there are, as [One core, four
+languages](one-core.md#why-this-design) explains.
 
 ## See also
 

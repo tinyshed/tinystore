@@ -23,14 +23,14 @@ program relies on most, and ends with what TinyStore does not promise.
 
 ## Your errors
 
-| Id       | TinyStore promises                                                               |
-|----------|----------------------------------------------------------------------------------|
-| ERR-01   | every failure is one of a few kinds, the same in every engine and language       |
-| ERR-02   | an error names what failed and keeps its cause                                   |
-| ERR-05   | a call past a bound fails `limit`, naming the bound, and never answers less      |
-| ERR-06   | a call that fails `limit` or `invalid` changes nothing                           |
-| ERR-07   | damage to one item never stops its neighbours                                    |
-| STORE-09 | a read you cancel, or whose timeout passes, stops at once and frees what it held |
+| Id       | TinyStore promises                                                          |
+|----------|-----------------------------------------------------------------------------|
+| ERR-01   | every failure is one of a few kinds, the same in every engine and language  |
+| ERR-02   | an error names what failed and keeps its cause                              |
+| ERR-05   | a call past a bound fails `limit`, naming the bound, and never answers less |
+| ERR-06   | a call that fails `limit` or `invalid` changes nothing                      |
+| ERR-07   | damage to one item never stops its neighbours                               |
+| STORE-09 | a read you cancel, or whose timeout passes, stops and frees what it held    |
 
 ## Your work in the background
 
@@ -75,18 +75,13 @@ program relies on most, and ends with what TinyStore does not promise.
 | NOT-11 | nothing before `v0.1.0` is compatible: formats, schemas and the protocol change without migration |
 | NOT-12 | events of one time that v0.1.0 packed keep its order, not always the order they were appended     |
 
-A job runs at least once, not exactly once, and `once` runs a key at most
-once while its answer stands, not an effect exactly once. Both are said in
-their chapters, with the code that makes a second run harmless.
-
 ## Why promises with ids
 
 A guarantee written only in prose drifts: someone changes the code, a test
-still passes, and the sentence in the docs is no longer true. A promise with
-an id is tied to the tests that keep it, and the build refuses a promise that
-no test keeps. When a promise must change, its line in `CONTRACTS.md`
-changes in the same commit, so the change is visible to everyone who reads
-the history.
+still passes, and the sentence in the docs is no longer true. An id ties a
+promise to the tests that keep it. When a promise must change, its line in
+`CONTRACTS.md` changes in the same commit, so the change is visible to
+everyone who reads the history.
 
 ## See also
 

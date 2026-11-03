@@ -19,16 +19,9 @@ tinystore serve ./data --listen tls://0.0.0.0:7443 --tls-cert cert.pem --tls-key
 data hBVwqW1DHNHzhxCuwnzuCl6vSeta8REkKpp7M04IQ5k
 ```
 
-| Capability | May                                                                                  |
-|------------|--------------------------------------------------------------------------------------|
-| `admin`    | anything, backups included                                                           |
-| `data`     | read and write the store                                                             |
-| `read`     | call only the methods the schema marks as reads; SQL only on a reader, no migrations |
-
-`--listen tls://` refuses to start without a certificate, a key and a tokens
-file. The same server still serves programs on its own machine through its
-local socket or named pipe, which need no token: their permission is the file
-system's.
+A token's capability is `admin`, `data` or `read`. Programs on the server's
+own machine need no token. [serve](../../guides/cli/serve.md#remote) says what
+each capability may do, and lists every flag.
 
 ## Connect
 
@@ -50,38 +43,21 @@ store, err := tinystore.Connect(ctx, "tls://db.internal:7443", os.Getenv("TINYST
 // A Rust program runs the store in its own process: Store::open.
 ```
 
-Every call after `connect` is the same as on a store opened locally. The
-client checks the server's certificate before the token leaves, so a token is
-never sent to a machine that only claims to be the server. A connection that
-drops is made again by the SDK; a subscription comes back with `onMissed`,
-and a worker's jobs return to the queue as a dead worker's would.
+[Connecting](../../guides/connecting.md#a-remote-server) says what the SDK
+does when a connection drops.
 
 ## In a container
 
 The release publishes an image, `ghcr.io/tinyshed/tinystore`, with the
-`tinystore` executable for amd64 and arm64:
-
-```sh
-docker run -v /srv/chat:/data -p 7443:7443 ghcr.io/tinyshed/tinystore:0.3 \
-  serve /data --listen tls://0.0.0.0:7443 --tls-cert /data/cert.pem --tls-key /data/key.pem --tokens /data/tokens.txt
-```
-
-On a terminal the server prints a banner and one line per event; anywhere
-else, in a container or a pipe, each line is a JSON object on stderr, ready
-for any log collector.
+`tinystore` executable for amd64 and arm64: [serve](../../guides/cli/serve.md#in-a-container)
+shows the command that runs it, and [Output](../../guides/cli/serve.md#output)
+what the server prints there.
 
 ## Look at it while it runs
 
-The command line reads a store beside the server that holds it, without
-stopping it and without writing a byte:
-
-```sh
-tinystore status ./data                        # what the store holds and who serves it
-tinystore logs ./data -f                       # the application's logs as they arrive
-tinystore sql ./data chat "select count(*) from messages"
-tinystore backup ./data backups/now.zip
-tinystore stop ./data                          # stop the server once its work is finished
-```
+The command line reads a store beside the server that holds it, as
+[Running it](../production/running-it.md) shows, and `tinystore stop ./data`
+stops the server once its work is finished.
 
 ## Why this design?
 

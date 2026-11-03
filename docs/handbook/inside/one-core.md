@@ -31,32 +31,16 @@ the transport. An SDK writes the same bytes into whichever it was given.
 
 ## Frames
 
-Everything on the wire is a frame: a header of twelve bytes, then a body.
-
-```text
-0             4      5       6          8             12
-│ body length │ kind │ flags │ method   │ stream      │ body …
-```
-
-A connection opens with `HELLO` and `WELCOME`, which agree on the protocol's
-version and the largest body. A call is a `REQUEST` and its `RESPONSE` on a
-stream number the client picked; many streams share one connection, so a slow
-download never blocks a quick call. A download, such as a page of events or a
-file's bytes, is a `RESPONSE` followed by `DATA` frames.
-
-A body is one MessagePack value: a map from small integer keys to values, the
-same keys in every language, generated from one schema per engine in
-`protocol/*.wire`. The schema writes the codec of every language and the test
-vectors each of them must read and write byte for byte, so the four SDKs
-cannot drift apart. The [wire protocol](../../wire.md) page has every rule.
-
-## Credit
-
-A receiver grants credit, and a sender never sends more than it was granted.
-A program that reads a tail of events slowly holds the server's sending, not
-the server's memory: the server stops at the credit the client gave, and a
-slow subscriber of a channel is told what it missed instead of growing a
-buffer. A connection holds at most its streams times the agreed body.
+Everything on the wire is a frame: a header of twelve bytes, then a body in
+MessagePack.
+A call is a `REQUEST` and its `RESPONSE` on a stream of its own, and many
+streams share one connection, so a slow download never blocks a quick call.
+A receiver grants credit, and a sender never sends more than it was granted,
+so a client that reads slowly holds back the server's sending, not its
+memory. Every message is written from one schema per engine in
+`protocol/*.wire`, which also writes the vectors every SDK is tested against,
+so the four SDKs cannot drift apart. The [wire protocol](../../wire.md) page
+has every frame and rule.
 
 ## The pipe: four functions
 
@@ -119,10 +103,9 @@ and a cron script that open the same directory all join one sidecar.
 ## A remote server
 
 `tinystore serve ./data --listen tls://0.0.0.0:7443` serves the same protocol
-over TLS, to clients that connect with a token. A token gives `admin`,
-`data`, which reads and writes, or `read`, which can only call methods the
-schema marks as reads. A local connection, through the pipe or a sidecar,
-needs no token: its permission is the file system's.
+over TLS, to clients that connect with a token of `admin`, `data` or `read`
+([serve](../../guides/cli/serve.md#remote)). A local connection, through the
+pipe or a sidecar, needs no token: its permission is the file system's.
 
 ## Why this design?
 
@@ -131,7 +114,8 @@ had a Go engine and re-implemented parts of it in each SDK. A C API with a
 function per call would have needed a new function in four bindings for
 every feature. With the protocol as the boundary, a feature is a message, its
 dispatch and its typed call in each SDK, and the core's behaviour is the same
-for every language because it is the same code.
+for every language because it is the same code. It also makes the embedded
+store and a remote server the same code to test.
 
 **Why MessagePack with integer keys.** It is compact, every language has a
 fast encoder, and integer keys keep a message small without a schema at run

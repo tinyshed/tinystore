@@ -8,16 +8,11 @@ and how vectors are searched exactly or from clusters.
 
 ## From text to words
 
-Every field's text goes through the same steps when a document is set and
-when a search is asked:
-
-1. Normalised to NFKC and lower case, with Latin accents and Russian stress
-   marks removed, so `Café` and `cafe` are one word.
-2. Split into words by Unicode's rules, in any script. Chinese, Japanese and
-   Thai, written without spaces, are split into overlapping pairs of
-   characters.
-3. A Cyrillic word is also kept as its Snowball stem, so `хлеба` finds
-   `хлеб`.
+Every field's text goes through the steps of [Words in any
+language](../../guides/search/fields.md#words-in-any-language) when a
+document is set and when a search is asked. Besides Latin accents, the first
+step also removes Russian stress marks. A Cyrillic word's stem is the one
+that Snowball's Russian stemmer gives.
 
 ## Postings in blocks
 
@@ -101,9 +96,9 @@ gone documents pass half a percent of the index, they are purged from the
 rest.
 
 A misspelt word that matches nothing is read as the nearest word the index
-holds, one letter off from five letters and two from nine, and `corrected`
-says so. The words the index holds are kept in a finite-state dictionary,
-which finds the nearest ones without reading every word.
+holds, by the rules of [Typos](../../guides/search/typos.md#the-rules). The
+words the index holds are kept in a finite-state dictionary, which finds the
+nearest ones without reading every word.
 
 ## Vectors, exactly
 
@@ -125,9 +120,12 @@ the bits, and scores again on the floats those most likely to win.
 How many clusters a search reads and how many members it scores again is
 measured on a sample of the index's own vectors, and measured again as the
 index grows. The promise is the average share of the exact best ten that a
-search finds, never a fixed number of clusters, because the same number gave
-0.94 on one collection and 0.90 on others in the research round. Every score
-a search returns is still its vector's exact cosine.
+search finds, never a fixed number of clusters, because the same share of
+clusters found 0.94 of the exact ten on a million MIRACL passages and 0.90
+on Amazon's products and StackExchange, in the
+[search-hybrid](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-hybrid-2026-10-16.md)
+round, on a Ryzen 7 7700 in a WSL2 container with 2 CPUs. Every score a
+search returns is still its vector's exact cosine.
 
 | Search              | Reads                                           | Answers                               |
 |---------------------|-------------------------------------------------|---------------------------------------|
@@ -153,10 +151,12 @@ block-max skipping makes them fast enough for the sizes one machine holds.
 
 **Why clusters and not HNSW.** HNSW, the graph most vector databases use,
 answers faster, but it keeps every vector's neighbours in memory and its
-index costs many times the vectors themselves. In the `search-vectors`
-research round, on a million vectors, clusters answered in about 3 ms at 0.94 of the exact ten
-holding 96 MiB, against HNSW's 0.4 ms and 2.2 GiB. For an embedded store
-sharing a machine with its program, the memory decides.
+index costs many times the vectors themselves. On a million passages with
+bge-m3's vectors of 1,024 dimensions, clusters answered in about 3 ms at
+0.94 of the exact ten holding 96 MiB, against HNSW's 0.4 ms and 2.2 GiB, in
+the [search-vectors](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-vectors-2026-10-16.md)
+round, on a Ryzen 7 7700 in a WSL2 container with 2 CPUs. For an embedded
+store sharing a machine with its program, the memory decides.
 
 **Why one index for words and vectors.** A hybrid search in two systems needs
 two queries, two sets of scores and code to merge them. In one index, both

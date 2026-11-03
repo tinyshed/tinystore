@@ -1,9 +1,10 @@
 # Running it
 
-The chat is in production. This chapter is the operator's page: what to
-watch, where to look when something is wrong, and how to let an AI agent read
-the store. Everything here reads a store beside the program that holds it,
-without stopping it and without writing a byte (contract CLI-01).
+This chapter is the operator's page for a store in production, such as the
+chat's: what to watch, where to look when something is wrong, and how to let
+an AI agent read the store. The commands here read a store beside the program
+that holds it, without stopping it and without writing to it (contract
+CLI-01).
 
 ## Is it healthy?
 
@@ -12,7 +13,7 @@ tinystore status ./data
 ```
 
 ```text
-● ./data  served by tinystore 0.3.0 · pid 37420 · up 12m · durability full
+● ./data  served by tinystore 0.7.0 · pid 37420 · up 12m · durability full
 
   kv         36 KiB
   jobs       60 KiB
@@ -24,13 +25,13 @@ tinystore status ./data
 ```
 
 `status` says who serves the directory, the durability it was started with,
-and how large each file is. A program that passes a durability must pass
-that one, or none: a server started without `--durability` says `not set`,
-and refuses a program that asks for either. A directory no server holds says
-`○ ./data  not served`. On a node it also
-shows which files are homes, which are copies and how far behind they are;
-`tinystore node status` shows the links. `--json` prints the same for
-scripts.
+and how large each file is. A program that opens the store with a durability
+must ask for the one the server was started with, or the open fails. A
+server started without `--durability` says `not set`, and refuses a program
+that asks for `full` or `os`. A directory no server holds says
+`○ ./data  not served`. On a node it also shows which files are homes, which
+are copies and how far behind they are; `tinystore node status` shows the
+links. `--json` prints the same for scripts.
 
 ## What is it doing?
 
@@ -41,8 +42,9 @@ tinystore sql ./data chat "select count(*) from messages where created_at > unix
 tinystore kv ./data list sessions 42                # one user's sessions
 ```
 
-`sql` refuses a statement that writes unless `--write`, which needs the
-store's own lock, so it never changes a store that a program is running.
+`sql` only reads unless you add `--write`. With it, a statement goes through
+the server that holds the store, once, and a store that a program opened
+`embedded` refuses it: see [sql](../../guides/cli/kv-sql-schema.md#sql).
 
 ## The store's own metrics
 
@@ -55,29 +57,33 @@ measures itself into `metrics.db`:
 | jobs piling up                    | `tinystore_jobs_waiting`                                      | a line that only goes up         |
 | how long jobs take                | `tinystore_jobs_run_ms`                                       | a p95 near the queue's `timeout` |
 | retries and failures              | `tinystore_jobs_retried_total`, `tinystore_jobs_failed_total` | a rate above zero for long       |
-| the disk                          | `tinystore_disk_free_bytes`, `tinystore_file_bytes`           | free space falling toward 1 GiB  |
+| the disk                          | `tinystore_disk_free_bytes`, `tinystore_file_bytes`           | free space falling to `keepFree` |
 | memory                            | `tinystore_memory_used_bytes`                                 | near its budget                  |
 | lost log lines                    | `tinystore_records_lines_dropped_total`                       | any increase                     |
 | background work                   | `tinystore_background_failures_total`                         | any increase                     |
 
-Read them as [How fast it is](../chat/how-fast-it-is.md) reads the chat's
-own: `aggregate` with `rate`, `p95` or `last`.
+[The store's own metrics](../../guides/metrics/self-metrics.md) says what
+each series measures, and [How fast it is](../chat/how-fast-it-is.md) reads
+the chat's own: `aggregate` with `rate`, `p95` or `last`.
 
 ## When the disk fills
 
-The store keeps 1 GiB of the disk free, or what `keepFree` (`--keep-free`)
-says. A write that would leave less fails with a `limit` error and writes
-nothing, so the store's files are never left half written by a full disk.
-Free space by shortening what streams and metric names keep, by expiring
-files, or by moving the store to a larger disk with a backup and a restore.
+The store keeps part of the disk free, as much as `keepFree`
+(`--keep-free`) says ([Limits and defaults](limits.md#the-store)). A write
+that would leave less fails with a `limit` error and writes nothing, so the
+store's files are never left half written by a full disk. Free space by
+shortening what streams and metric names keep, by expiring files, or by
+moving the store to a larger disk with a backup and a restore.
 
 ## When something reads `corrupt`
 
 A whole file read whose bytes no longer match their hash, or a block of logs
 or metrics that no longer decodes, fails `corrupt` and names the item.
-Damage to one item never stops its neighbours (contract ERR-07): a damaged
-segment or series is listed by `damaged()` and removed by `drop()`, and
-packing goes past it. Restore the item from a backup if you need it.
+Damage to one item never stops its neighbours (contract ERR-07).
+[Repair](../../guides/records/repair.md) lists and drops a damaged segment
+of events, and [Removing a series](../../guides/metrics/reading.md#removing-a-series)
+deletes a damaged series. Restore the item from a backup first if you need
+it.
 
 ## Let an AI agent read the store
 
@@ -85,19 +91,16 @@ packing goes past it. Restore the item from a backup if you need it.
 claude mcp add tinystore -- tinystore mcp ./data
 ```
 
-`tinystore mcp` speaks the Model Context Protocol on stdin and stdout, with
-tools that only read: `status`, `logs`, `kv_get`, `kv_list`, `jobs_list`,
-`sql_query` and `search_list`. An agent can answer "why did the reply to
-message 41 fail?" by reading the job's error, the request's log lines and the
-row, and it can change nothing. `--write kv_set,jobs_add` gives it those
-writes alone, each a tool its host asks for; see [AI agents](../../guides/cli/mcp.md#writing).
+`tinystore mcp` gives an agent tools that only read, so it can find why the
+reply to a message failed and change nothing. `--write` adds the writes it
+names. [AI agents](../../guides/cli/mcp.md) lists every tool.
 
 ## A checklist
 
 - Back up every night with a schedule, and try a restore once a month on
   another machine: [Keeping it](../chat/keeping-it.md).
 - Keep the encryption key apart from the data if you use encrypted buckets.
-- Watch `tinystore_jobs_waiting` and `tinystore_disk_free_bytes`.
+- Watch the jobs waiting and the free disk, as the table above says.
 - Give every stream a `keep` that matches how long you need its events.
 - Serve other machines over TLS only, with `data` tokens for programs and
   `read` tokens for dashboards.

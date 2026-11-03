@@ -2,8 +2,9 @@
 
 Every bound and default of TinyStore in one place, by engine. A call past a
 bound fails with a `limit` or `invalid` error that names the bound, and
-changes nothing. Each chapter of the book has the same numbers beside the
-calls they bound.
+changes nothing. Each engine's guide repeats its own numbers in a table
+beside the calls they bound, and the chapters of the book link here instead
+of repeating them.
 
 ## The store
 
@@ -77,6 +78,7 @@ calls they bound.
 | a field's weight   | above 0, at most 1,000                                                        |
 | a filter           | 8 conditions, 100 values                                                      |
 | `vectorWeight`     | 0.5                                                                           |
+| a table's index    | the rows of one search's hits, 64 MiB together, as one `all`                  |
 
 ## Channels and locks
 
@@ -103,6 +105,13 @@ calls they bound.
 | series in a store             | 100,000                                    |
 | buckets of an aggregate       | 100,000                                    |
 
+## Nodes
+
+| What                                       | Limit or default                                  |
+|--------------------------------------------|---------------------------------------------------|
+| a link that has not shown its token        | closed after 10 seconds, or past 64 KiB before it |
+| links that have not shown their tokens yet | 64 at once                                        |
+
 ## Over the wire
 
 Bun, Node, Python and Go send each call to the core as one request. A
@@ -127,6 +136,9 @@ in Rust) carries three facts:
 - `limit`, the bound's name, for example `set_many documents`
 - `wanted`, what the call would have taken of it, for example 1001
 - `bound`, the most it takes, for example 1000
+
+They are fields of the error in Bun, Python and Go, and `error.fact("limit")`
+and its like in Rust.
 
 Each SDK exports the same bounds, so a program can size its batches before
 it calls, and can tell which bound an error met without reading its

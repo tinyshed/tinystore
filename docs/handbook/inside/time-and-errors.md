@@ -36,27 +36,31 @@ point in 1970 or 2090 that no chart will ever show.
 
 ## One set of errors
 
-| Kind                 | Means                                                           | What to do                                  |
-|----------------------|-----------------------------------------------------------------|---------------------------------------------|
-| `invalid`            | the call is wrong: a name, an option, a value, a broken rule    | fix the call; retrying gives the same error |
-| `not found`          | something the call needs is not there                           | check the name or the id                    |
-| `conflict`           | something changed since you read it, or a unique key is taken   | read again and decide                       |
-| `too old`, `too new` | a time outside the engine's window                              | check the clock and the units               |
-| `limit`              | a bound was reached; the answer is refused, not made smaller    | do less, or read a page                     |
-| `in use`             | another process or holder has it                                | wait, or use the process that holds it      |
-| `unavailable`        | busy for now                                                    | try again                                   |
-| `cancelled`          | the caller cancelled                                            | nothing                                     |
-| `closed`             | the store closed                                                | open it again                               |
-| `corrupt`            | stored bytes no longer read as they were written                | restore from a backup                       |
-| `outcome unknown`    | a commit failed after the write ran: it may or may not be saved | read what you wrote before you write again  |
-| `lost`               | a lease ran out while its holder worked                         | assume another holder ran beside it         |
-| `suspended`          | a damaged part is set aside until repaired                      | see the store's damaged list                |
+| Kind                 | Means                                                           | What to do                                   |
+|----------------------|-----------------------------------------------------------------|----------------------------------------------|
+| `invalid`            | the call is wrong: a name, an option, a value, a broken rule    | fix the call; retrying gives the same error  |
+| `not found`          | something the call needs is not there                           | check the name or the id                     |
+| `conflict`           | something changed since you read it, or a unique key is taken   | read again and decide                        |
+| `too old`, `too new` | a time outside the engine's window                              | check the clock and the units                |
+| `limit`              | a bound was reached; the answer is refused, not made smaller    | do less, or read a page                      |
+| `in use`             | another process or holder has it                                | wait, or use the process that holds it       |
+| `unavailable`        | busy for now                                                    | try again                                    |
+| `cancelled`          | the caller cancelled                                            | nothing                                      |
+| `closed`             | the store closed                                                | open it again                                |
+| `corrupt`            | stored bytes no longer read as they were written                | restore from a backup                        |
+| `outcome unknown`    | a commit failed after the write ran: it may or may not be saved | read what you wrote before you write again   |
+| `committed locally`  | a synchronous home kept the write, and no copy held it in time  | nothing: it stands, unless that disk is lost |
+| `lost`               | a lease ran out while its holder worked                         | assume another holder ran beside it          |
+| `suspended`          | a damaged part is set aside until repaired                      | see the store's damaged list                 |
+| `io`                 | the system failed a call: a file, the disk, a thread            | read the cause it carries                    |
+| `internal`           | a fault of TinyStore's own; an `io` over the wire is one too    | report it                                    |
 
 Each kind is one class in every SDK: `ConflictError` in TypeScript and
 Python, `tinystore.ErrConflict` with `errors.Is` in Go, `ErrorKind::Conflict`
 in Rust. The same kind travels over the wire as one code, so a Python program
 talking to a remote server gets the same `ConflictError` as one with the core
-in its process.
+in its process. The [wire protocol's errors](../../wire.md#errors) list the
+codes, with the few that only a connection gives, such as `permission`.
 
 ## An error names what failed
 
@@ -74,13 +78,9 @@ SQLite error reaches you with the bucket, the key and SQLite's own words.
 A name that does not exist is told the nearest one that does, when one is an
 edit or two away: a config key, a filter's field, a command of the CLI.
 
-A `limit` error also says which bound the call met, so a program can react
-without reading the message. It has three facts: `limit`, the bound's name;
-`wanted`, what the call would have taken of it; and `bound`, the most it
-takes. A `setMany` of 1,001 documents fails with `set_many documents`, 1001
-and 1000. They are fields of `LimitError` in Bun and Python and of `Error` in
-Go, and `error.fact("limit")` in Rust. Every name and its bound is listed in
-[Limits and defaults](../production/limits.md#bounds-by-name).
+A `limit` error also names the bound the call met, what the call wanted and
+the most the bound takes, so a program can react without reading the
+message, as [Bounds by name](../production/limits.md#bounds-by-name) shows.
 
 ## Why this design?
 

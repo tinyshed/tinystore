@@ -40,25 +40,19 @@ tinystore serve ./us --node-listen 0.0.0.0:7444 --node-config node.toml
 tinystore serve ./eu --from us.internal:7444 --node-listen 0.0.0.0:7444 --node-config node.toml
 ```
 
-```toml title="node.toml"
-token-file = "/etc/tinystore/node-token"   # the token that nodes show each other
-advertise = "eu.internal:7444"             # where other nodes reach this one
+`node.toml` holds the token that nodes show each other and their TLS
+certificates, as [Nodes](../../guides/cli/nodes.md) shows. A link between two
+machines takes TLS. A node with no `[tls]` refuses a link beyond its own
+machine unless its config says `insecure = true` (contract REPL-11). Anyone
+who reaches a node's port can open a link, so the node soon closes one that
+has not shown its token, and holds only a few such links at once ([Limits
+and defaults](../production/limits.md#nodes)). The European chat processes
+open `./eu` as they open any store, through its sidecar, so their code does
+not change.
 
-[tls]
-cert = "/etc/tinystore/node.pem"
-key = "/etc/tinystore/node.key"
-roots = "/etc/tinystore/ca.pem"
-```
-
-A link between two machines takes TLS. A node with no `[tls]` refuses a link
-beyond its own machine unless its config says `insecure = true` (contract
-REPL-11). Anyone who reaches a node's port can open a link, so the node closes
-one that has not shown its token within ten seconds, or that sends more than
-64 KiB before it does, and holds at most 64 such links at once. The European
-chat processes open `./eu` as they open any store, through its sidecar, so
-their code does not change.
-
-A Bun program can be a node itself, with its store inside it:
+A Bun or Node program can be a node itself, with its store inside it, and a
+Rust program can too, through `Options::node`. Python and Go have no such
+option: they open a node that `tinystore serve` runs.
 
 ```ts
 const store = await open('./data', { embedded: true, node: { from: ['eu.internal:7444'], token } })
@@ -72,7 +66,8 @@ const page = await messages.where({ chat_id: chatId }).orderBy('id', 'desc').lis
 ```
 
 Every read, a key, a page of messages, a search, a log query, runs on the
-local copy. Nothing crosses the ocean, with one exception.
+local copy. These are the chat's own calls, the same in every language: only
+the node they run on is new. Nothing crosses the ocean, with one exception.
 
 A `get`, `entry` or `has` of an idle key that is due for renewal sends the
 renewal to the home (see [Expiry](../../guides/kv/expiry.md#idle-keys)). The
@@ -135,10 +130,9 @@ REPL-12).
 
 ## Writes that must not wait for the ocean
 
-A write on a copy pays the round trip to its home. A file whose writers are
-in one region can have its home there instead: each node writes the files it
-makes. Give the chat's European tenants a database of their own, made by the
-European node, and its home is Europe:
+A file whose writers are in one region can have its home there instead:
+each node writes the files it makes. Give the chat's European tenants a
+database of their own, made by the European node, and its home is Europe:
 
 ```ts
 const tenant = await store.database(`tenant-${tenantId}`, { migrations }) // made here, written here
