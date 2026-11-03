@@ -15,9 +15,9 @@ which the server and every SDK are tested against: a value in a typed
 notation, the bytes it is, and the bytes a decoder refuses, each named after
 the rule it breaks. Every message is also a vector of
 [protocol.json](../testdata/wire/protocol.json), as [Methods](#methods) says.
-[messages.json](../testdata/wire/messages.json) keeps older vectors, which
-the Go server wrote before the Rust core, with the methods' numbers and the
-errors' codes.
+[messages.json](../testdata/wire/messages.json) keeps a vector of each
+message as the Go server first wrote it, with the methods' numbers and the
+errors' codes, and the Bun SDK's tests still check every field of each.
 
 ## Frames
 

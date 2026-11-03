@@ -155,7 +155,8 @@ if let [own, under, ..] = rps.given.as_slice()
   `given` out, so the table keeps its four columns, and `JSON.stringify` keeps
   it. Python's `print(line)` leaves it out too.
 - A server older than 0.1.1 sends no `given`, so the SDK's is empty. Check
-  its length before you read `given[0]`, as the code above does.
+  its length before you read `given[0]`, as the code above does, or Go panics
+  and TypeScript reads `undefined`.
 
 ## What was read and not used
 

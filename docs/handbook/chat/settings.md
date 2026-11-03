@@ -375,7 +375,7 @@ settings](../../guides/config/live.md) covers both.
 
 - [Replies in the background](replies.md): the worker that the switch
   pauses.
-- [Layers and files](../../guides/config/layers.md#limits): the bounds of a
+- [Layers and files](../../guides/config/layers.md#limits-and-defaults): the bounds of a
   config, and [Durations](../../guides/config/layers.md#rules) the units a
   duration takes.
 - [Config API reference](../../reference/bun/config.md): every call and rule of

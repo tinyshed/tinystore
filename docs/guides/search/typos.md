@@ -93,6 +93,10 @@ words that exist second-guesses the user: a search for a rare brand turns
 into a search for a common word. Correcting only what matches nothing never
 loses a hit the user typed for.
 
+**Why say `corrected`.** A search that silently searches for something else
+leaves the user wondering why the hits don't hold their word. Saying what was
+searched lets the page say so, and offer what was typed.
+
 **Why five and nine letters.** Short words sit one edit from many others:
 `cat`, `car`, `cut`, `cot`. Correcting them reads noise. The thresholds are
 the ones Meilisearch uses, so a search box behaves as people already expect.

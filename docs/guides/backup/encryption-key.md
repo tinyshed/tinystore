@@ -66,7 +66,9 @@ Put the key back as `encryption.key` in the restored directory, or open the
 store with `encryptionKeyFile` naming where you keep it. Until then, every
 other bucket, table and file reads, and opening an encrypted bucket fails with
 an `io` error that names the missing key. If the key is lost for good, put a
-new one there, as [Older keys](../kv/encrypted.md#older-keys) shows.
+new one there, as [Older keys](../kv/encrypted.md#older-keys) shows. Nothing
+recovers a sealed value without its key: keep a copy apart from the backups
+that leave it out, and test a restore with it.
 
 ## The program's own files
 

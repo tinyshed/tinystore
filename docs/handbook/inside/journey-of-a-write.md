@@ -134,7 +134,8 @@ which [Time and errors](time-and-errors.md#why-this-design) explains.
 
 **Why one writer per file.** Two writers of one file get `database is
 locked` under load, and one writer behind a mutex makes them wait in line
-instead, as [One writer per file](sqlite.md#one-writer-per-file) shows.
+instead, so a busy moment is a short line and never an error, as [One writer
+per file](sqlite.md#one-writer-per-file) shows.
 
 **Why callers take turns instead of a writer thread.** A dedicated writer
 thread adds a hand-off to every write, two context switches, and a thread per

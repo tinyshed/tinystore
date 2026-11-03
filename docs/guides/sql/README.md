@@ -83,7 +83,8 @@ Handbook builds a chat's tables, writes and pages step by step.
 ## Async Rust
 
 Rust only: with the `async` feature, `tinystore::aio` opens the same
-database, and you await each call that reads or writes. [Rust with
+database, and you await each call that reads or writes: each has the name,
+arguments and answer of its blocking twin. [Rust with
 async](../../handbook/start/rust-async.md) explains where each call runs and
 what a dropped future does.
 

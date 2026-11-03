@@ -170,8 +170,11 @@ let page = audit.list().since(Duration::from_mins(1)).page()?; // cart.created, 
   them, and every read gives that same order.
 - Events that TinyStore v0.1.0 packed are the exception. They keep the order
   that v0.1.0 gave them, the same on every read, which is not always the
-  order they were appended (contract NOT-12). Events appended after you
-  upgrade come after them, in the order they were appended.
+  order they were appended (contract NOT-12): in one stream a late event may
+  come before or after the stream's other events of its time, and events of
+  different streams come in the order of the blocks they were packed in.
+  Events appended after you upgrade come after them, in the order they were
+  appended.
 
 ### Which events are late
 

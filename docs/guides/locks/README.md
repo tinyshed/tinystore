@@ -99,10 +99,14 @@ uploads.hold(user_id, |_permit| async move { upload(user_id).await }).await?;
 - The function you pass gets the lease by value and returns a future, which
   runs while the key is held. The key goes to the next holder when that
   future ends, fails or is dropped.
-- A hold waits, fails and is refused as in blocking Rust:
-  [Holding and waiting](holding.md) and
-  [When a lease is lost](leases.md#when-a-lease-is-lost) say how. A hold in a
-  task that you spawn waits like any other holder.
+- A hold waits, fails and is refused as in blocking Rust: past `wait` it
+  fails in use (`ErrorKind::InUse`), and a lease that ends while the future
+  runs, at `max_hold` or as the store closes, fails it `lost`
+  (`ErrorKind::Lost`). [Holding and waiting](holding.md) and [When a lease is
+  lost](leases.md#when-a-lease-is-lost) say how. A hold in a task that you
+  spawn waits like any other holder.
+- If you drop the hold's future while it waits, it leaves the line, so
+  `tokio::time::timeout(d, summaries.hold(…))` works beside `wait`.
 - If you keep the lease after the hold, by returning it or by moving it into
   a task, `lease.lost()` returns true once the hold ends. Another holder may
   have the key by then.

@@ -121,7 +121,9 @@ let gone = articles.delete("a-17").await?; // true: there was one
 articles.ready().await?; // returns once a rebuild has switched in
 ```
 
-Opening an index is still a plain call. The answers are the same types as in
+`get` answers in its first poll when one of the file's readers is free, and
+otherwise on the store's threads. Opening an index is still a plain call. The
+answers are the same types as in
 the blocking API: `Found`, `Hit`, `Status` and `Listed`, and the filters
 `eq`, `is_in`, `range`, `missing`, `or` and `and`.
 

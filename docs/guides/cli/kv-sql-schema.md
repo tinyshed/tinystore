@@ -28,7 +28,8 @@ tinystore kv ./data list drafts --database app   # a bucket kept in sql/app.db
 `--json` gives each value with its key and expiry. An encrypted bucket's
 values are read with the key the directory holds. A bucket the program opened
 from a database, `db.bucket("drafts")`, lives in that database's file, and
-`--database` names it.
+`--database` names it, for `kv set` and `kv delete` too. A value written to an
+encrypted bucket is written encrypted.
 
 ### Write a key
 

@@ -129,9 +129,10 @@ writer. [Under the hood](../../README.md#under-the-hood) explains each choice.
 and each engine keeps the durability it needs: see [A file per
 engine](directory.md#a-file-per-engine).
 
-**Why one core in Rust.** A feature is written once and behaves the same in
-every SDK. The first versions copied parts of a Go engine into each SDK, and
-the copies drifted: see [One core, four
+**Why one core in Rust.** The first versions were written in Go, and the Bun
+and Python SDKs repeated parts of it: the logger, the config, the console
+format. Each copy drifted. Now a feature is written once and behaves the same
+in every SDK: see [One core, four
 languages](../inside/one-core.md#why-this-design).
 
 ## See also

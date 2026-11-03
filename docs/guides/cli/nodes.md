@@ -31,8 +31,10 @@ roots = "/etc/tinystore/ca.pem"
 | `--node-config <file.toml>` | the rest of what the node is                     |
 
 The config's other keys are `files`, `catalog`, `synchronous`,
-`synchronous-with`, `failover` and `insecure`. A link beyond its own machine
-takes TLS unless `insecure = true`.
+`synchronous-with`, `failover` and `insecure`, beside `token-file` and
+`advertise` above and `[tls]`'s `cert`, `key` and `roots`: the certificate a
+node shows, its key, and the certificates it trusts. A link beyond its own
+machine takes TLS unless `insecure = true`.
 
 ## node status
 

@@ -23,14 +23,14 @@ program relies on most, and ends with what TinyStore does not promise.
 
 ## Your errors
 
-| Id       | TinyStore promises                                                          |
-|----------|-----------------------------------------------------------------------------|
-| ERR-01   | every failure is one of a few kinds, the same in every engine and language  |
-| ERR-02   | an error names what failed and keeps its cause                              |
-| ERR-05   | a call past a bound fails `limit`, naming the bound, and never answers less |
-| ERR-06   | a call that fails `limit` or `invalid` changes nothing                      |
-| ERR-07   | damage to one item never stops its neighbours                               |
-| STORE-09 | a read you cancel, or whose timeout passes, stops and frees what it held    |
+| Id       | TinyStore promises                                                                       |
+|----------|------------------------------------------------------------------------------------------|
+| ERR-01   | every failure is one of a few kinds, the same in every engine and language               |
+| ERR-02   | an error names what failed and keeps its cause                                           |
+| ERR-05   | a call past a bound fails `limit`, naming the bound, and never answers less              |
+| ERR-06   | a call that fails `limit` or `invalid` changes nothing                                   |
+| ERR-07   | damage to one item never stops its neighbours                                            |
+| STORE-09 | a read you cancel stops at once, one past its timeout soon after, and frees what it held |
 
 ## Your work in the background
 

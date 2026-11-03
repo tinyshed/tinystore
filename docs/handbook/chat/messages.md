@@ -465,8 +465,8 @@ process down.
 
 **Why every start checks old migrations.** A migration that someone edited
 after it ran means the files on disk and the code disagree about the schema,
-and nothing tells you until a query fails in production. TinyStore keeps a
-checksum of each applied migration and refuses to open the file when one
+and nothing tells you until a query fails in production. TinyStore keeps the
+text of each applied migration and refuses to open the file when one
 changed.
 
 **Why writes share a commit but a transaction does not.** Writes known

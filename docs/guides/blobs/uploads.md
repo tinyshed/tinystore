@@ -2,7 +2,8 @@
 
 A file is written whole or not at all. `put` writes one in a call, from bytes,
 text or a stream; `upload` writes one a piece at a time, for bytes that arrive
-over time, and publishes it only at `commit`.
+over time, and publishes it only at `commit`. Nobody ever sees half a file:
+not while it is written, not after a crash.
 
 ```ts
 const reports = store.files('reports', { maxFileSize: '2GiB' })
@@ -105,7 +106,8 @@ quota: nothing already stored is removed to make room, and there is no bound
 unless set. A size is a number of bytes or text in `KiB`, `MiB`, `GiB` or
 `TiB`; `'2GB'` is `invalid`, since it is 10⁹ bytes to some and 2³⁰ to others.
 
-The store keeps 1 GiB of the disk free unless told otherwise, as [Limits and
+The store keeps 1 GiB of the disk free unless told otherwise, `keep_free` in
+Rust's `Options` and `--keep-free` for a server, as [Limits and
 defaults](../../handbook/production/limits.md#the-store) says. A file that
 would leave less is `limit` and leaves nothing (contract BLOB-07). An upload
 asks the disk as its first bytes arrive and every 64 MiB after.

@@ -207,6 +207,14 @@ let password = config.get().password.as_ref().map(|password| password.reveal().c
   `"default": null` declares a setting with no value, of any kind:
   `{ "kind": "text", "secret": true, "default": null }`.
 
+| Language   | No value                                                                    |
+|------------|-----------------------------------------------------------------------------|
+| TypeScript | `optional(String)`, `optional(secret(String))`, `optional(int({ min: 1 }))` |
+| Python     | `str \| None = None`, `Secret \| None = None`                               |
+| Go         | a pointer: `*string`, `*tinystore.Secret`, `*int`                           |
+| Rust       | `Option<T>`, and `Option<Secret<String>>` for a secret                      |
+| As data    | `"default": null`                                                           |
+
 In Rust, `Secret<Option<String>>` is refused when the config opens: write
 `Option<Secret<String>>`.
 

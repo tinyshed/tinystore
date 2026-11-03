@@ -46,7 +46,8 @@ A commit appends pages to the `-wal` file. A checkpoint copies them back into
 the database file, so that the log can start again from its beginning. SQLite
 runs its own checkpoint inside the commit that makes the log 1,000 pages long.
 That checkpoint syncs the disk twice, which takes tens of milliseconds on a
-busy disk, and every write queued behind the commit waits for it.
+busy disk, and every write queued behind the commit waits for it: with many
+writers in flight, most of them see it.
 
 TinyStore runs the checkpoint beside the writer instead. When a commit makes
 the log 1,000 pages long, the next caller that has its answer runs the
@@ -125,11 +126,12 @@ shared cache puts every connection's pages behind one mutex.
 
 ## Migrations that cannot drift
 
-An application's database keeps a checksum of every migration it applied.
-One that was edited, renamed, deleted or put before another stops the file
-from opening, naming the migration (contract SQL-03). [What opening
+An application's database keeps the name and text of every migration it
+applied. One that was edited, renamed, deleted or put before another stops
+the file from opening, naming the migration (contract SQL-03). [What opening
 does](../../guides/sql/migrations.md#what-opening-does) has the rest: one
-transaction, and foreign keys off while the migrations run.
+transaction, and [foreign keys off while the migrations
+run](../../guides/sql/migrations.md#rebuilding-a-table).
 
 ## Engines that share a file
 

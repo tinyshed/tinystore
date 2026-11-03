@@ -39,6 +39,7 @@ of repeating them.
 | a quota                            | one to eight windows                        |
 | rate limits and counters in memory | 100,000 keys per name, written every second |
 | an idle key's renewal              | once a thirtieth of its span has passed     |
+| a `once` run's answer, kept        | 1 day unless `keep` says                    |
 
 ## Jobs
 
@@ -82,15 +83,17 @@ of repeating them.
 
 ## Channels and locks
 
-| What                          | Limit or default                   |
-|-------------------------------|------------------------------------|
-| a message                     | 1 MiB                              |
-| a branch's log                | its newest 1,024 messages or 4 MiB |
-| every channel's messages      | 64 MiB of the store's memory       |
-| a store's subscriptions       | 10,000                             |
-| a connection's pending output | 8 MiB                              |
-| a lock's `wait`               | 10 seconds                         |
-| `maxHold`                     | none                               |
+| What                          | Limit or default                                                      |
+|-------------------------------|-----------------------------------------------------------------------|
+| a message                     | 1 MiB                                                                 |
+| a branch's log                | its newest 1,024 messages or 4 MiB                                    |
+| every channel's messages      | 64 MiB of the store's memory                                          |
+| a store's subscriptions       | 10,000                                                                |
+| a connection's pending output | 8 MiB                                                                 |
+| a lock's `wait`               | 10 seconds                                                            |
+| a lock's `ttl`, a lease       | 10 seconds in an SDK, 30 in `tinystore lock hold`, 1 second to 1 hour |
+| a semaphore's `limit`         | 1 to 1,000                                                            |
+| `maxHold`                     | none                                                                  |
 
 ## Records and metrics
 

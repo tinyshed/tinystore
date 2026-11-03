@@ -339,8 +339,8 @@ waits](../../guides/records/logging.md#never-waits)).
 
 The `tinystore` command reads a store while your program runs, and never
 stops the program. Its commands that write, such as `kv set`, go through the
-process that serves the store ([How it
-behaves](../../guides/cli/README.md#how-it-behaves)):
+process that serves the store ([Who
+writes](../../guides/cli/README.md#who-writes)):
 
 ```sh
 tinystore status ./data

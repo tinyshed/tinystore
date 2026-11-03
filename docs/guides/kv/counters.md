@@ -60,7 +60,7 @@ views.add("/notes", 1)?;
   `flushEvery` answers at once, with the copy's count and the adds still
   queued. The home counts it once, however often it is sent (contract
   REPL-12). An add with `flushEvery`, and every `delete` and `clear`, passes
-  on to the home and waits for its answer.
+  on to the home and waits for its answer. `get` reads the node's copy.
 
 ## Async Rust
 

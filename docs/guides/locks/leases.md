@@ -91,14 +91,12 @@ to refuses the late write.
 
 ## Exactly one grant
 
-A request to hold carries an id of its own. If the answer is lost on the way
-back, the SDK asks again with the same id, on any connection, and the store
-answers the lease it already gave instead of giving the key twice. That
-answer also renews the lease for its `ttl`, because the SDK counts the
-deadline from the answer. If the lease ran out before the SDK asked again,
-the store ends it and treats the request as a new one, with a new fence. The
-lease's own id, 128 random bits only its holder learns, is what renewing and
-letting go name: a fence, which a holder hands to others, proves nothing.
+A hold whose answer is lost on the way back is asked again with the same
+request, and the store answers the lease it already gave, renewed for its
+`ttl`, rather than give the key twice. Renewing and letting go name the
+lease by an id only its holder learns, never by its fence, which a holder
+hands to others. [locks](../../wire.md#locks) in the wire protocol has the
+bytes.
 
 Holding a key is a write, so a `read` token's hold fails `permission`
 (contract SEC-01).

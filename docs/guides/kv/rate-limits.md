@@ -100,7 +100,8 @@ if !answer.ok {
 A rate limit keeps its times in memory, so `allow`, `allow_n`, `peek` and
 `reset` answer in their future's first poll. When memory does not hold a key
 yet, the call reads it from `kv.db` first, on the store's threads if the read
-would wait.
+would wait. Once its future was polled, an `allow` or a `reset` takes effect
+even if you drop the future (contract DUR-11).
 
 ## See also
 

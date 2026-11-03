@@ -123,8 +123,9 @@ bucket's edge cuts.
 **Why blocks in SQLite rather than files of their own.** A block is a row, so
 packing a segment and deleting the head rows it replaced is one transaction.
 A crash in the middle of packing leaves the last commit, and the next packing
-starts from it (contract DUR-09). [SQLite as TinyStore runs
-it](sqlite.md#why-this-design) says why SQLite.
+starts from it (contract DUR-09), and a backup takes the blocks with the rest
+of the file. [SQLite as TinyStore runs it](sqlite.md#why-this-design) says
+why SQLite.
 
 **Why column by column.** Log lines and samples repeat themselves: the same
 keys, the same levels, the same routes, timestamps a second apart. Stored by
