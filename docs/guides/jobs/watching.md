@@ -111,8 +111,10 @@ application's own: an event the handler records, or a row it writes.
   with it: `done`, `failed`, or `cancelled`, a state only a watcher sees.
 - A watch whose connection drops watches again on the next one; a job that
   ended meanwhile ends the watch without its last state.
-- Progress lives in memory, ten updates a second at most: a run that a
-  restart ends starts its progress again from nothing.
+- Progress lives in memory: a run that a restart ends starts its progress
+  again from nothing. A worker in Bun, Node, Python or Go sends the latest
+  progress ten times a second at most, so a handler can set it for every
+  chunk it reads.
 
 Stream the states to a browser over server-sent events, and a user sees the
 queue move.

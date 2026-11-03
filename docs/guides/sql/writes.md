@@ -174,18 +174,10 @@ db.batch([
   database refuses its jobs with an invalid error, because no write is atomic
   across two files.
 
-Pick the write by what it costs:
-
-| Write                                      | Atomic | Shares its commit with other writes |
-|--------------------------------------------|--------|-------------------------------------|
-| `exec`, then `add` on a queue of the store | no     | yes                                 |
-| `tx` with `tx.with(queue).add`             | yes    | no                                  |
-| `batch` with `queue.adding`                | yes    | yes                                 |
-
 A transaction holds the writer and pays for its own sync. So `db.tx` with
 `tx.with(queue)` costs one sync per call, and it never groups with other
-writes. Two separate commits do group, but a crash between them keeps the row
-and loses the job. Use a batch when the job does not depend on what a read
+writes. Two separate commits, the row and then a job of a queue of the store,
+do group, but a crash between them keeps the row and loses the job. Use a batch when the job does not depend on what a read
 finds.
 
 ## A transaction
@@ -351,9 +343,10 @@ A `?` without its value is refused, not read as `NULL`.
 
 ## Durability
 
-A database commits as the store does, `full` unless the store says
-otherwise. A database of what can be rebuilt, a cache of rendered pages, may
-commit faster:
+A database commits with the store's
+[durability](../../handbook/start/directory.md#a-file-per-engine) unless it
+sets its own. A database of what can be rebuilt, a cache of rendered pages,
+may commit faster with `os`:
 
 ```ts
 const cache = await store.database('cache', { durability: 'os' })
@@ -370,9 +363,6 @@ cache, err := sqldb.Open(ctx, store, "cache", sqldb.Durability("os"))
 ```rust
 let cache = store.database("cache").durability(Durability::Os).open()?;
 ```
-
-With `os`, a write is in the operating system's hands when it returns: a
-crash of the program loses nothing, a power cut may lose the last writes.
 
 ## See also
 

@@ -156,12 +156,13 @@ that creates the table again and fills it with
 | the index in the same file and commit as the rows            | either: FTS5's triggers, or [a table's index](../search/table-index.md) |
 
 FTS5 ranks by scoring every document that matches. On MS MARCO's 8.8 million
-passages, `order by rank limit 10` took about four seconds per query, where
-the Search engine takes a few milliseconds, as the
-[search-msmarco-timing](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-msmarco-timing-2026-11-01.md) and
-[search-tinystore-queries](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-tinystore-queries-2026-11-02.md)
-research rounds measured on one machine. A query whose words are rare costs
-FTS5 little.
+passages, `order by rank limit 10` took 4.1 to 4.2 seconds per query at the
+median, over 200 of its queries, warm, on a Ryzen 7 7700 in a WSL2 container
+with 2 CPUs. The
+[report](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-msmarco-timing-2026-11-01.md)
+has every number. The Search engine takes a few milliseconds on the same
+machine, as [How search finds](../../handbook/inside/how-search-finds.md)
+shows. A query whose words are rare costs FTS5 little.
 
 ## Places with R*Tree
 

@@ -59,12 +59,11 @@ while `dedupe` keeps it once the job is done.
 `add`, `update` and `cancel` answer rather than throw: a message being sent
 says it is too late to edit, and the program shows that.
 
-A `set` of a running job waits for the run under way to end, whether it is
-done, fails, retries or snoozes, and then starts the job anew: with the set's
-value, at the time the set names or else at once, its attempts counted from
-one and the steps of the run before gone. A job that repeats and is set
-without a time is the exception: its run under way goes on through its
-retries, and the set's run is the repeat's next.
+A `set` of a running job waits for the run under way to end, however it
+ends. Then the job starts anew with the set's value, at the set's time or at
+once, its attempts counted from one and the earlier run's steps gone. A
+repeating job set without a time is the exception: its run under way goes on
+through its retries, and the set's run is the repeat's next.
 
 ## Debounce and throttle
 
@@ -109,9 +108,6 @@ _, err = pushes.Add(ctx, push, jobs.ID(fmt.Sprint("digest:", userID)))
 let pushes = store.queue::<Push>("pushes").dedupe(Duration::from_hours(1)).open()?;
 pushes.id(&format!("digest:{user_id}")).add(&push)?;
 ```
-
-With `dedupe`, a done job keeps its id taken for that long, so `add` of the
-same id adds nothing; `set` arms it again.
 
 ## Pages of jobs
 

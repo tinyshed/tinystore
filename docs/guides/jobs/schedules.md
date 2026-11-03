@@ -51,7 +51,7 @@ let cleanup = store.schedule("cleanup").cron("10 3 * * *", "Europe/Berlin").work
 
 | Repeat            | Runs                                                       | For                               |
 |-------------------|------------------------------------------------------------|-----------------------------------|
-| `every: '30s'`    | every 30 seconds, each id at a phase of its own            | work whose moment does not matter |
+| `every: '30s'`    | every 30 seconds                                           | work whose moment does not matter |
 | `cron` and a zone | at the wall-clock times the five fields name, in that zone | "at 20:00 for each user"          |
 
 - Many ids repeating `every` 30 seconds do not run in the same instant: each

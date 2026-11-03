@@ -108,6 +108,19 @@ err = pushes.Work(ctx, func(ctx context.Context, p Push, run *jobs.Run) error {
 })
 ```
 
+```rust
+let worker = pushes.work(|push: Push, run| -> Result<Outcome, AppError> {
+    let answer = provider.send(&push)?;
+    if answer.unknown_token {
+        return Ok(run.fail("the provider no longer knows this token"));
+    }
+    if let Some(retry_at) = answer.retry_at {
+        return Ok(run.snooze(retry_at)); // a SystemTime, or a Duration from now
+    }
+    Ok(run.done())
+})?;
+```
+
 | Option          | Default                                                           |
 |-----------------|-------------------------------------------------------------------|
 | `attempts`      | 10                                                                |

@@ -59,7 +59,9 @@ refused.
 | an applied one renamed, deleted or put before another | fails, naming it                                     |
 | more migrations than the folder                       | fails: an older program on a newer file              |
 
-Line endings do not count as an edit. A folder checked out on Windows with
+The file keeps the name and the text of each migration it applied, in
+`_tinystore_migrations`, and each open compares them with the folder's. Line
+endings do not count as an edit. A folder checked out on Windows with
 `\r\n` at the end of each line, for example by Git's `core.autocrlf`, opens a
 file whose migrations were applied from the same files with `\n`.
 
@@ -175,14 +177,14 @@ silence. During a rolling deploy:
   starts, or make `0005` a change the old code does not notice, a new
   table or a new nullable column, and deploy it a version ahead.
 
-`tinystore migrate <dir> <name> <folder>` applies a folder beside a running
-server, for a deploy that migrates before it starts the program.
+`tinystore migrate <dir> <db> <migrations>` applies a folder from a deploy,
+before the program starts: no program may hold the directory meanwhile. See
+[migrate](../cli/kv-sql-schema.md#migrate).
 
-## Limits
+## Limits and defaults
 
 | What                    | Limit                                                |
 |-------------------------|------------------------------------------------------|
-| a migration's name      | `0001_name.sql`: its number, then a name             |
 | a database's name       | `[a-z0-9][a-z0-9_-]{0,63}`, its file `sql/<name>.db` |
 | the engine's own tables | names that start with `_tinystore_`, beside yours    |
 

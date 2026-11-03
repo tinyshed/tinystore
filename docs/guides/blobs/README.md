@@ -69,12 +69,10 @@ Handbook stores and serves a chat's uploads.
 
 ## Async Rust
 
-A Rust program on an async runtime, such as tokio, opens its files from
-`tinystore::aio::Store`, with the `async` feature. The calls have the same
-names as in the blocking API, and every call that reads, writes or waits
-returns a future that you `.await`. This section shows only Rust, because in
-Bun, Node and Python every call is awaited already, and in Go a call blocks
-its goroutine, which costs little.
+Rust only: with the `async` feature, files opened from
+`tinystore::aio::Store` have the same calls, awaited. [Rust with
+async](../../handbook/start/rust-async.md) explains the async store, what a
+dropped future does and how to cross between the two APIs.
 
 ```rust
 // blocking
@@ -100,9 +98,7 @@ avatars.folder("users").folder(42).clear().await?;
 
 `put` and `create` take owned bytes, such as a `Vec<u8>`, a `String` or
 `Bytes`, because a file larger than 16 KiB is written to disk on the store's
-own threads, and the future may be gone by then. The futures of the files'
-calls are `Send + 'static`, so you can pass them to `tokio::spawn`. Only an
-upload's `write` and a file's `read_at` borrow their bytes.
+own threads, and the future may be gone by then.
 
 The file that `get` returns is a `Stream` of its bytes, 256 KiB per piece.
 Hand it to a response as it is:
@@ -149,8 +145,7 @@ while let Some(info) = files.next().await {
 | `for info in avatars.all()`                 | `while let Some(info) = files.next().await`        |
 
 `tinystore::aio::blobs::Files::from(files)` and `files.blocking()` cross
-between the two APIs. Both give the same set of files, so a command-line tool
-can block on it while a server beside it awaits.
+between the two APIs, and give the same set of files.
 
 Maintenance has no async form. The store runs it by itself every minute.
 Only a test that opens its store with `background: false` calls it, and that
@@ -176,16 +171,10 @@ TinyStore must first save a new block of ids for file contents. That happens
 for the first file after the store opens, and then about once every 1,000
 files.
 
-No call commits, syncs the disk or waits on the thread that polls its future
-(contract STORE-10). A file on disk is opened, read and written on the
-store's threads, so your executor's threads never wait for the disk. A write
-does nothing until its future is first polled. Once polled, it commits even
-if you drop the future, and that includes a `put` that still waits for
-memory (contract DUR-11). A read that you drop stops, and a whole read stops
-between two pieces of 256 KiB (contract STORE-09).
-
-[Rust with async](../../handbook/start/rust-async.md) in the Handbook covers
-the async store, its transactions and its close.
+A file on disk is opened, read and written on the store's threads. A polled
+`put` commits even if you drop its future while it still waits for memory
+(contract DUR-11). A whole read that you drop stops between two pieces of
+256 KiB (contract STORE-09).
 
 ## Reference
 

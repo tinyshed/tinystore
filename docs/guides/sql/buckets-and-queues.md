@@ -192,10 +192,9 @@ index](../search/table-index.md).
 ## Events
 
 A stream of events opened from the database, `db.events('audit')`, stays in
-`records.db` with every other stream. Its appends inside a transaction or a
-batch of the database wait in the database's file and reach the stream when
-the rows commit, or never. An audit line then exists exactly when its change
-does. See [An audit that commits with the change](../records/audit.md).
+`records.db`, and its appends in a transaction or a batch of the database
+reach it when the rows commit. See [An audit that commits with the
+change](../records/audit.md).
 
 ## Why not two files
 

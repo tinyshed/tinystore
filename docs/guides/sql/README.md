@@ -60,17 +60,18 @@ let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Directio
 - A broken constraint names itself: a unique key is `conflict`, anything else
   `invalid` (contract SQL-08).
 - A statement may not attach a file, begin a transaction, set a pragma or
-  make a temporary table, view, trigger or index (contract SQL-02).
-- A query you cancel, or whose timeout passes, stops at once and gives its
-  connection back (contract STORE-09).
+  make a temporary object: a table, view, trigger or index (contract SQL-02).
+- A query you cancel, or whose timeout passes, stops and gives its connection
+  back, except a query inside a transaction (contract STORE-09). See [What
+  stops and what does not](cancel.md#what-stops-and-what-does-not).
 
 ## In these guides
 
 | Page                                                      | Covers                                                  |
 |-----------------------------------------------------------|---------------------------------------------------------|
-| [Migrations](migrations.md)                               | files, their order, checksums, changing a schema        |
+| [Migrations](migrations.md)                               | files, their order, checks, changing a schema           |
 | [Writes and transactions](writes.md)                      | `exec`, `batch`, `tx`, errors and `outcome unknown`     |
-| [Stopping a slow query](cancel.md)                        | a cancel or a timeout that stops a query at once        |
+| [Stopping a slow query](cancel.md)                        | a cancel or a timeout that stops a query                |
 | [Tables and queries](tables.md)                           | the builder: conditions, joins, pages, updates, deletes |
 | [Rows that include rows](include.md)                      | `include`: each row with the rows of a query            |
 | [Buckets and queues in a database](buckets-and-queues.md) | keys, jobs, files and events that commit with rows      |
@@ -81,12 +82,10 @@ Handbook builds a chat's tables, writes and pages step by step.
 
 ## Async Rust
 
-This section is about Rust only. In Bun, Node and Python every call is
-already awaited, and in Go a call blocks only its goroutine.
-
-With the `async` feature, `tinystore::aio` opens the same database with
-awaited calls. You open the store and the database as before, and you add
-`.await` to each call that reads or writes:
+Rust only: with the `async` feature, `tinystore::aio` opens the same
+database, and you await each call that reads or writes. [Rust with
+async](../../handbook/start/rust-async.md) explains where each call runs and
+what a dropped future does.
 
 ```rust
 use tinystore::aio::Store;
@@ -102,41 +101,23 @@ let sent = db
 let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Direction::Desc).list(50, None).await?;
 ```
 
-Each call has the same name, arguments and answer as its blocking twin.
 `sql!`, `sql::eq`, `Done`, `Page` and the rest come from `tinystore::sql`,
 as in blocking Rust:
 
-| Blocking                                      | Async                                                | Where it runs                                                  | If you drop the future after it was polled |
-|-----------------------------------------------|------------------------------------------------------|----------------------------------------------------------------|--------------------------------------------|
-| `db.all(q)?`, `db.one(q)?`, `db.scalar(q)?`   | `db.all(q).await?`, and the same for the others      | on the store's threads                                         | the query stops at once                    |
-| a query's `all`, `count`, `list` and the rest | `query.list(50, None).await?`                        | on the store's threads                                         | the query stops at once                    |
-| `db.exec(q)?`, `db.batch(writes)?`            | `db.exec(q).await?`, `db.batch(writes).await?`       | queued at the writer, the commit on the store's threads        | the write still commits                    |
-| `table.insert(&row)?`, `query.delete()?`      | `table.insert(&row).await?`, `query.delete().await?` | as `exec`                                                      | the write still commits                    |
-| `db.tx(...)?`                                 | `db.tx(move ...).await?`                             | the closure, on the store's threads, one transaction at a time | it runs to its end                         |
+| Blocking                                      | Async                                                |
+|-----------------------------------------------|------------------------------------------------------|
+| `db.all(q)?`, `db.one(q)?`, `db.scalar(q)?`   | `db.all(q).await?`, and the same for the others      |
+| a query's `all`, `count`, `list` and the rest | `query.list(50, None).await?`                        |
+| `db.exec(q)?`, `db.batch(writes)?`            | `db.exec(q).await?`, `db.batch(writes).await?`       |
+| `table.insert(&row)?`, `query.delete()?`      | `table.insert(&row).await?`, `query.delete().await?` |
+| `db.tx(...)?`                                 | `db.tx(move ...).await?`                             |
 
-No call commits, syncs the disk or waits on your executor's thread. Every
-future is `Send + 'static`, so you can pass it to `tokio::spawn`, and it does
-nothing until it is first polled. A statement that writes, such as an
-`insert … returning id` that you run with `db.all`, goes on to the writer
-once TinyStore finds that it writes. From then on it commits like `exec`,
-even if you drop the future (contract DUR-11).
-
-### Stop a slow query
-
-```rust
-let total = db.scalar::<i64>("select count(*) from messages");
-match tokio::time::timeout(Duration::from_secs(2), total).await {
-    Ok(total) => println!("{} messages", total?),
-    Err(_) => println!("too slow: the query was stopped"), // its connection is free again
-}
-```
-
-When the timeout drops the future, SQLite stops the statement and the
-connection goes back at once (contract STORE-09). The same happens when an
-HTTP handler's client goes away and the handler's future is dropped. A
-`CancellationToken` works too: a read whose future you make inside
-`token.run(|| db.all(q))` stops when the token is cancelled or its timeout
-passes.
+A statement that writes, such as an `insert … returning id` that you run
+with `db.all`, goes on to the writer once TinyStore finds that it writes.
+From then on it commits like `exec`, even if you drop the future (contract
+DUR-11). To stop a slow query, drop its future, for example with
+`tokio::time::timeout`, or make it inside `token.run(...)`: see [What
+dropping a future does](../../handbook/start/rust-async.md#what-dropping-a-future-does).
 
 ### Transactions
 
@@ -150,13 +131,12 @@ let moved = db
     .await?;
 ```
 
-The closure is the blocking one, made `move`, because it runs on one of the
-store's threads after `tx` returns. It holds the database's writer, so the
-calls inside it are blocking and have no `.await`. The transactions of one
-database run one at a time, in the order you first await them, and they wait
-for their turn without holding a thread. The five-second bound counts from
-the first poll, so the time a transaction waits for its turn counts too
-(contract SQL-07).
+The closure is the blocking one, made `move`, and its calls have no
+`.await`, as [Transactions](../../handbook/start/rust-async.md#transactions)
+in Rust with async explains. The transactions of one database run one at a
+time, in the order you first await them, and they wait for their turn
+without holding a thread. The five-second bound counts from the first poll,
+so the time a transaction waits for its turn counts too (contract SQL-07).
 
 ### A bucket, a queue or an index in the database
 
@@ -176,9 +156,8 @@ db.batch([bumped.into(), indexing.adding(&Index { note })]).await?; // one commi
 let session = sessions.get(&token).await?; // outside a transaction, awaited
 ```
 
-A bucket, a queue or a table's search index opens from the async database
-with the same builder as in blocking Rust, and its calls are awaited. It
-lives in the database's file, so a bucket or a queue joins `db.tx` through
+A bucket, a queue or a table's search index of the async database lives in
+the database's file, so a bucket or a queue joins `db.tx` through
 `tx.with(&handle)` and `db.batch` through `queue.adding(&job)`, and commits
 with the rows or not at all (contract DUR-06). A stream opened from it,
 `db.events("audit")`, joins them the same way, through `tx.with(&audit)` and
@@ -187,8 +166,8 @@ rows commit (contract REC-13). To drop a table's search index, await
 `db.drop_search_index(name)`. The drop waits for its turn with the
 database's transactions, and once polled it runs to its end.
 
-`Database::from(db)` and `db.blocking()` cross between the two APIs. Both
-are cheap copies of one database, never a second one.
+`Database::from(db)` and `db.blocking()` cross between the two APIs, and
+give the same database, never a second one.
 
 ## Reference
 

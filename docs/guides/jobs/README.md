@@ -65,7 +65,8 @@ let worker = emails.work(|email: Email, run| -> Result<(), AppError> {
   and its stale lease settles nothing, so an `update` or a `set` made once
   the lease ended runs (contract JOB-05).
 - A step runs once per job, across its attempts (contract JOB-06).
-- `concurrency` and `rate` count every worker of every process.
+- `concurrency` counts every worker of every process, and a `rate` counts
+  within each process (contract JOB-09).
 
 ## In these guides
 
@@ -86,12 +87,10 @@ and crashes.
 
 ## Async Rust
 
-A Rust program that runs on tokio or another executor can await its queues
-instead of blocking a thread. Turn on the `async` feature and open the store
-from `tinystore::aio::Store`. A queue opens with the same builder, and each
-call that waits returns a future. This section shows only Rust, because in
-Bun, Node and Python every call is already awaited, and in Go a call blocks
-its goroutine.
+Rust only: with the `async` feature, a queue opened from
+`tinystore::aio::Store` has the same calls, awaited. [Rust with
+async](../../handbook/start/rust-async.md) explains where each call runs and
+what a dropped future does.
 
 ```rust
 use tinystore::aio::Store;
@@ -125,10 +124,9 @@ Each async call has the name of its blocking twin:
 | `run.step("render", work)?`                 | `run.step("render", work).await?`                       |
 | `imports.claim()?`, `claimed.settle(())?`   | `imports.claim().await?`, `claimed.settle(()).await?`   |
 
-`all` and `watch` return a `Stream`. Call `next` on it from
-`tokio_stream::StreamExt` or `futures::StreamExt`. A handler is an `async`
-function that takes the job's value and its `Run` by value, so that a
-multi-threaded runtime can move its future between threads.
+`all` and `watch` return a `Stream`. A handler is an `async` function that
+takes the job's value and its `Run` by value, so that a multi-threaded
+runtime can move its future between threads.
 
 ### A worker is a future
 
@@ -155,14 +153,6 @@ handler returns changes nothing.
 
 ### Where the calls run
 
-`add`, `set`, `update`, `cancel` and `settle` queue their write at
-`jobs.db`'s writer in the first poll, and the commit runs on the store's
-threads. A write future that was polled once commits even if you drop it
-(contract DUR-11). `get`, `list` and the reads of `all` and `watch` run on
-the store's threads, and a dropped future stops its read (contract
-STORE-09). No call commits, syncs the disk or waits on your executor's
-thread (contract STORE-10).
-
 A watch reads its job again each time the queue commits. Unlike the blocking
 watch, it doesn't look again every minute, so a scheduled job that becomes
 due shows up when a worker claims it.
@@ -174,9 +164,6 @@ in blocking Rust:
 let queue = emails.clone(); // the closure runs on the store's threads and owns what it takes
 store.tx(move |tx| tx.with(&queue).id("welcome:42").add(&email)).await?;
 ```
-
-[Rust with async](../../handbook/start/rust-async.md) in the Handbook
-explains the async API's shape and what dropping a future does.
 
 ## Reference
 

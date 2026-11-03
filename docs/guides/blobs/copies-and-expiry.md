@@ -59,8 +59,8 @@ docs.key("final.md").if_match(&final_.etag).rename_from("draft.md")?;
 | `create`         | —              | nothing written, `false`     |
 
 A copy and its source are two files from then on: replacing or deleting one
-leaves the other, and a copy outlives its source (contract BLOB-05). Both
-stay within one set of files; between two sets, read and `put`.
+leaves the other (contract BLOB-05). Both stay within one set of files.
+Between two sets, read and `put`.
 
 ## Expiry
 
@@ -111,27 +111,23 @@ A backup does not belong in files with a `ttl`.
 
 ```ts
 await docs.delete('notes.md') // nothing to delete is not an error
-await docs.folder('users', 42).clear() // a folder, at once, however many files
 ```
 
 ```python
 await docs.delete("notes.md")
-await docs.folder("users", 42).clear()
 ```
 
 ```go
 err = docs.Delete(ctx, "notes.md")
-err = docs.Folder("users", 42).Clear(ctx)
 ```
 
 ```rust
 docs.delete("notes.md")?;
-docs.folder("users").folder(42).clear()?;
 ```
 
-A delete, a clear, an expiry or a replace drops the file's name in one
-commit. The bytes stay as long as a copy or a reader that opened them still
-holds them, then go in the background.
+A delete, a folder's [`clear`](uploads.md#folders), an expiry or a replace
+drops the file's name in one commit. The bytes stay as long as a copy or a
+reader that opened them still holds them, then go in the background.
 
 ## See also
 

@@ -2,8 +2,8 @@
 
 A query that nobody waits for any more should stop. When a visitor closes a
 tab or a request passes its timeout, cancel the query: TinyStore stops its
-SQLite statement at once, gives its connection back to the database, and the
-call fails as cancelled. The same works for the reads of metrics and records.
+SQLite statement, gives its connection back to the database, and the call
+fails as cancelled. The same works for the reads of metrics and records.
 
 ```ts
 import { withSignal } from '@tinyshed/tinystore'
@@ -103,8 +103,12 @@ past its timeout of 2s: cancelled`.
 
 ## What stops and what does not
 
-- A query that runs stops its statement at once, and its connection goes back
-  to the database (contract STORE-09).
+- A query that runs stops its statement at once when you cancel it, and its
+  connection goes back to the database (contract STORE-09).
+- A timeout in Bun, Node, Python and Go cancels the query when it passes. A
+  Rust `CancellationToken::timeout` is checked while SQLite runs the
+  statement, so a statement that SQLite runs as one step, such as `count(*)`
+  of a whole table, finishes that step first.
 - A query that waits for a free connection stops waiting.
 - Over a connection to a server, the server stops the query when the client
   cancels it or disconnects (contract WIRE-10).
@@ -124,10 +128,6 @@ past its timeout of 2s: cancelled`.
 > **A cancelled write may still commit.** In Bun, Node, Python and Go, a
 > cancel returns the call at once, but a write already sent runs to its end
 > on the store. Read what it wrote before you write it again.
-
-A timeout is checked while SQLite runs the statement. A statement that SQLite
-runs as one step, such as `count(*)` of a whole table, finishes that step
-first, while a cancel stops it at once.
 
 ## See also
 
