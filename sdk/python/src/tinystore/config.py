@@ -189,6 +189,8 @@ class FileLayer:
 
     path: str
     optional: bool
+    secrets: bool = True
+    """False refuses a secret the file gives: its secrets come from the environment"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,13 +208,15 @@ Layer = type | Mapping[str, Any] | FileLayer | EnvLayer | Literal[False] | None
 """A layer of a config's list: the declaration first, then a dict, a file, the environment, or nothing."""
 
 
-def file(path: str | os.PathLike[str], *, optional: bool = False) -> FileLayer:
+def file(path: str | os.PathLike[str], *, optional: bool = False, secrets: bool = True) -> FileLayer:
     """A file a config reads, TOML, YAML or JSON by its extension; a relative path is the working directory's.
 
     One that does not exist is InvalidError unless it is optional: then it
-    declares nothing, and explain says so.
+    declares nothing, and explain says so. ``secrets=False`` refuses a secret
+    the file gives, for a file committed beside the code: the error names the
+    variable and its ``_FILE`` that give it instead, never the secret.
     """
-    return FileLayer(str(path), optional)
+    return FileLayer(str(path), optional, secrets)
 
 
 def env(
@@ -673,7 +677,9 @@ def _layer_data(layer: Any, place: int, declared: Mapping[str, Any]) -> dict[str
         return None
     if isinstance(layer, FileLayer):
         text = _read_text(layer.path)
-        return {"file": {"name": layer.path, "optional": layer.optional, **({} if text is None else {"text": text})}}
+        refused = {} if layer.secrets else {"secrets": False}
+        given = {} if text is None else {"text": text}
+        return {"file": {"name": layer.path, "optional": layer.optional, **refused, **given}}
     if isinstance(layer, EnvLayer):
         return {"env": _env_data(layer, declared)}
     if isinstance(layer, Mapping):

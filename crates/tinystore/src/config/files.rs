@@ -23,6 +23,8 @@ const MOST_BYTES: u64 = 1 << 20;
 pub struct File {
     path: PathBuf,
     optional: bool,
+    /// Whether a secret may be read from it.
+    secrets: bool,
     /// The text a program's SDK read and sent, none for a file it found
     /// absent; a file the core reads itself has none.
     sent: Option<Option<String>>,
@@ -32,11 +34,27 @@ impl File {
     /// A file that may be absent: then it declares nothing, and `explain`
     /// says it was absent.
     pub fn optional(path: impl Into<PathBuf>) -> File {
-        File { path: path.into(), optional: true, sent: None }
+        File { path: path.into(), optional: true, secrets: true, sent: None }
+    }
+
+    /// Whether the file may give a secret. `false` refuses the config when
+    /// the file gives one, for a file committed beside the code, whose
+    /// secrets come from the environment: the error names the variable and
+    /// its `_FILE` that give it instead, and never the secret.
+    ///
+    /// ```
+    /// use tinystore::config::File;
+    ///
+    /// let committed = File::optional("dashbin.toml").secrets(false);
+    /// let required = File::from("app.toml").secrets(false);
+    /// ```
+    pub fn secrets(mut self, secrets: bool) -> File {
+        self.secrets = secrets;
+        self
     }
 
     fn required(path: PathBuf) -> File {
-        File { path, optional: false, sent: None }
+        File { path, optional: false, secrets: true, sent: None }
     }
 
     /// A file a program's SDK read where the program runs: its name as the
@@ -46,12 +64,16 @@ impl File {
         expect(dead_code, reason = "only an SDK over the wire and a store's logger send it")
     )]
     pub(super) fn sent(name: String, optional: bool, text: Option<String>) -> File {
-        File { path: name.into(), optional, sent: Some(text) }
+        File { path: name.into(), optional, secrets: true, sent: Some(text) }
     }
 
     /// The file as an error names it: its path as the program wrote it.
     pub(super) fn shown(&self) -> String {
         self.path.display().to_string()
+    }
+
+    pub(super) fn gives_secrets(&self) -> bool {
+        self.secrets
     }
 }
 
@@ -91,8 +113,14 @@ pub(super) struct Read {
 
 /// What `file` gives the settings of `declaration`, each chosen group's read
 /// as its chooser in the file picks it, else as `before` says the layers
-/// before it did, or every problem with it.
-pub(super) fn read(file: &File, declaration: &Declaration, before: &Choices) -> Result<Read, Vec<String>> {
+/// before it did, or every problem with it. A secret given by a file that
+/// refuses secrets is one, which `refused` words by the secret's path.
+pub(super) fn read(
+    file: &File,
+    declaration: &Declaration,
+    before: &Choices,
+    refused: &dyn Fn(&str) -> String,
+) -> Result<Read, Vec<String>> {
     let name = file.shown();
     let read = match &file.sent {
         Some(sent) => check_size(sent.clone()),
@@ -105,9 +133,11 @@ pub(super) fn read(file: &File, declaration: &Declaration, before: &Choices) -> 
         Err(why) => return Err(vec![format!("{name}: {why}")]),
     };
     let tree = parse(&file.path, &text).map_err(|why| vec![format!("{name}: {why}")])?;
-    let mut walked = Walked::after(before);
+    let mut walked = Walked { refuses_secrets: !file.secrets, ..Walked::after(before) };
     walk(&declaration.root, &tree, "", &mut walked);
-    let problems: Vec<String> = walked.problems.into_iter().map(|problem| format!("{name}: {problem}")).collect();
+    let secrets = walked.secrets.iter().map(|path| refused(path));
+    let problems: Vec<String> =
+        walked.problems.into_iter().chain(secrets).map(|problem| format!("{name}: {problem}")).collect();
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -282,10 +312,15 @@ pub(super) struct Walked {
     /// The group each chosen group was read as by the layers before this
     /// one, which its settings are read as unless this layer chooses.
     pub(super) before: Choices,
+    /// Whether the layer is a file that may give no secret.
+    pub(super) refuses_secrets: bool,
     pub(super) given: Vec<(String, Value)>,
     pub(super) picked: Vec<Picked>,
     pub(super) entries: Vec<(String, String)>,
     pub(super) problems: Vec<String>,
+    /// The paths of the secrets a layer that refuses them gave, whatever
+    /// their values, which are never read.
+    pub(super) secrets: Vec<String>,
 }
 
 impl Walked {
@@ -328,6 +363,7 @@ pub(super) fn walk(group: &Group, tree: &Map<String, Value>, path: &str, walked:
             (Some(Node::Group(_) | Node::Entries(_) | Node::Chosen(_)), other) => {
                 walked.problems.push(format!("{at}: {} is not a group of settings", shown(other)));
             }
+            (Some(Node::Setting(setting)), _) if setting.secret && walked.refuses_secrets => walked.secrets.push(at),
             (Some(Node::Setting(setting)), value) => match rules::check(setting, value) {
                 Ok(value) => walked.given.push((at, value)),
                 Err(_) if setting.secret => walked.problems.push(format!("{at}: a secret is text")),
@@ -364,9 +400,10 @@ fn walk_chosen(chosen: &Chosen, map: &Map<String, Value>, stand: &Stand<'_>, wal
         }
         return;
     };
-    let mut inner = Walked::default();
+    let mut inner = Walked { refuses_secrets: walked.refuses_secrets, ..Walked::default() };
     walk(&chosen.groups[&name], map, stand.at, &mut inner);
     walked.problems.extend(inner.problems);
+    walked.secrets.extend(inner.secrets);
     let at = stand.at;
     let picked =
         inner.given.into_iter().map(|(path, value)| Picked { node: at.to_owned(), group: name.clone(), path, value });

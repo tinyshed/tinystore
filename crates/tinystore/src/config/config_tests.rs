@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::fixture::{env, written};
 use super::*;
 use crate::kv::fixture::{Fixture, fixture};
 use crate::{Clock, Error, ErrorKind};
@@ -59,14 +60,8 @@ impl Default for Limits {
     }
 }
 
-fn env(variables: &[(&str, &str)]) -> Env {
-    Env::prefix("APP").from(variables.iter().map(|&(name, value)| (name, value)))
-}
-
 fn file(f: &Fixture, name: &str, text: &str) -> std::path::PathBuf {
-    let path = f.dir.path().join(name);
-    std::fs::write(&path, text).unwrap();
-    path
+    written(f.dir.path(), name, text)
 }
 
 fn open(f: &Fixture, variables: &[(&str, &str)]) -> Config<Settings> {

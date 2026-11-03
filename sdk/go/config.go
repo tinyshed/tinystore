@@ -63,8 +63,9 @@ type layer interface {
 }
 
 type fileLayer struct {
-	path     string
-	optional bool
+	path      string
+	optional  bool
+	noSecrets bool
 }
 
 func (f fileLayer) config(o *configOptions) { o.layers = append(o.layers, f) }
@@ -74,6 +75,12 @@ type FileOption func(*fileLayer)
 
 // Optional lets the file be absent: then it declares nothing, and Explain says so.
 func Optional() FileOption { return func(f *fileLayer) { f.optional = true } }
+
+// NoSecrets refuses the config when the file gives a secret, for a file
+// committed beside the code, whose secrets come from the environment: the
+// error names the variable and its _FILE that give it instead, never the
+// secret, and a missing secret's error names no such file.
+func NoSecrets() FileOption { return func(f *fileLayer) { f.noSecrets = true } }
 
 // File is a TOML, YAML or JSON file the config reads, by its extension:
 // .toml, .yaml or .yml, .json or .jsonc, JSON taking comments and a trailing

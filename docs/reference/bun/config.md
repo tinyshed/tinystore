@@ -110,6 +110,7 @@ interface FileLayer {
     readonly [layerMark]: 'file'
     readonly path: string
     readonly optional: boolean
+    readonly secrets: boolean
 }
 ```
 
@@ -405,7 +406,9 @@ what the layers gave the first is dropped, and explain says so.
 function file(path: string, options?: FileOptions): FileLayer
 ```
 
-A file a config reads: TOML, YAML or JSON by its extension, a relative path the program's.
+A file a config reads: TOML, YAML or JSON by its extension, a relative path
+the program's. `file('dashbin.toml', { secrets: false })` refuses a secret it
+gives.
 
 ## env
 

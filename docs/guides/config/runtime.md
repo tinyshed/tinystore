@@ -16,7 +16,7 @@ const postgres = {
 const stripe = { key: secret(String) }
 const config = await store.config('dashbin', [
 	{ instance: entries({ plugin: required(String), settings: chosenBy('plugin', { postgres, stripe }) }) },
-	file('dashbin.toml'),
+	file('dashbin.toml', { secrets: false }),
 	env('DASHBIN'),
 ])
 const settings = config.value.instance.aimee?.settings // postgres's settings
@@ -47,7 +47,7 @@ class Dashbin:
     instance: Entries[Instance] = entries()
 
 
-config = await store.config("dashbin", [Dashbin, file("dashbin.toml"), env("DASHBIN")])
+config = await store.config("dashbin", [Dashbin, file("dashbin.toml", secrets=False), env("DASHBIN")])
 settings = config.value.instance["aimee"].settings  # a Postgres
 ```
 
@@ -67,7 +67,7 @@ declaration := json.RawMessage(`{
 	} }
 }`)
 config, err := tinystore.OpenConfigJSON(ctx, store, "dashbin", declaration,
-	tinystore.File("dashbin.toml"), tinystore.Env("DASHBIN"))
+	tinystore.File("dashbin.toml", tinystore.NoSecrets()), tinystore.Env("DASHBIN"))
 settings := config.Get()["instance"].(map[string]any)["aimee"].(map[string]any)["settings"]
 ```
 
@@ -85,7 +85,7 @@ let declaration = Declaration::from_json(json!({
         "settings": { "chosenBy": "plugin", "groups": { "postgres": postgres, "stripe": stripe } },
     } },
 }))?;
-let config = store.config("dashbin", declaration).file("dashbin.toml").env("DASHBIN").open()?;
+let config = store.config("dashbin", declaration).file(File::from("dashbin.toml").secrets(false)).env("DASHBIN").open()?;
 let settings = &config.get()["instance"]["aimee"]["settings"]; // a serde_json::Value
 ```
 
@@ -104,7 +104,9 @@ DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD_FILE=/run/secrets/aimee
 
 Here `aimee` uses the postgres plugin, so its settings are postgres's: the
 port takes its default, 5432, and the password is a secret that its `_FILE`
-variable reads. `explain` gives each field its own line:
+variable reads. `dashbin.toml` is committed beside the code, so it is marked
+to [refuse secrets](layers.md#keep-secrets-out-of-a-committed-file): a
+password written in it fails the config, whichever plugin declares it. `explain` gives each field its own line:
 
 ```text
 instance.aimee.plugin             "postgres"   dashbin.toml
@@ -176,20 +178,21 @@ program runs. A Rust or Go program declares its settings as JSON instead:
 `Declaration::from_json` in Rust, which `store.config` and `config::load`
 take, and `OpenConfigJSON` in Go.
 
-| In the JSON                                 | Declares                                                                                          |
-|---------------------------------------------|---------------------------------------------------------------------------------------------------|
-| `"kind"`                                    | `text`, `integer`, `number`, `boolean`, `duration`, `object` or `any`                             |
-| `"kind": { "list": { "kind": "text" } }`    | a list, whose items are values of a kind or a `{ "group": … }`                                    |
-| `"default"`                                 | the value when no layer gives one; a duration as `"30s"`                                          |
-| `"default": null`                           | a setting with [no value](secrets.md#settings-with-no-value) until a layer gives one, of any kind |
-| `"required": true`                          | a setting that a layer must give, which has no default                                            |
-| `"secret": true`                            | text that prints as `***`                                                                         |
-| `"live": true`                              | a setting that changes while the program runs, with a store                                       |
-| `"min"`, `"max"`                            | the bounds of a number, a duration or the length of a list                                        |
-| `"oneOf"`                                   | the texts that a setting accepts                                                                  |
-| `{ "group": { … } }`                        | a group of settings                                                                               |
-| `{ "entries": { … } }`                      | a map of [entries](layers.md#entries), each the group of settings it names                        |
-| `{ "chosenBy": "plugin", "groups": { … } }` | a group that the text setting `plugin` beside it chooses by name                                  |
+| In the JSON                                 | Declares                                                                                                                 |
+|---------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `"kind"`                                    | `text`, `integer`, `number`, `boolean`, `duration`, `object` or `any`                                                    |
+| `"kind": { "list": { "kind": "text" } }`    | a list, whose items are values of a kind or a `{ "group": … }`                                                           |
+| `"default"`                                 | the value when no layer gives one; a duration as `"30s"`                                                                 |
+| `"default": null`                           | a setting with [no value](secrets.md#settings-with-no-value) until a layer gives one, of any kind                        |
+| `"required": true`                          | a setting that a layer must give, which has no default                                                                   |
+| `"secret": true`                            | text that prints as `***`                                                                                                |
+| `"live": true`                              | a setting that changes while the program runs, with a store                                                              |
+| `"min"`, `"max"`                            | the bounds of a number, a duration or the length of a list                                                               |
+| `"oneOf"`                                   | the texts that a setting accepts                                                                                         |
+| `{ "group": { … } }`                        | a group of settings                                                                                                      |
+| `{ "entries": { … } }`                      | a map of [entries](layers.md#entries), each the group of settings it names                                               |
+| `{ "chosenBy": "plugin", "groups": { … } }` | a group that the text setting `plugin` beside it chooses by name                                                         |
+| `"secrets": false`, in a file's layer       | a file that [refuses secrets](layers.md#keep-secrets-out-of-a-committed-file), as `file(…, { secrets: false })` sends it |
 
 A declaration that means nothing, such as a setting with neither a default
 nor `required`, is refused when it is read, and the error names the setting.

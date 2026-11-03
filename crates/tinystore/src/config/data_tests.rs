@@ -254,6 +254,20 @@ fn a_rule_sent_refuses_a_layers_value_naming_it() {
     assert!(refused(opened(&f, &layers)).to_string().contains("layer 2: prot: no such setting"));
 }
 
+// contract: CFG-16, CFG-06
+#[test]
+fn a_file_sent_that_refuses_secrets_refuses_the_one_it_gives() {
+    let f = fixture();
+    let file = |secrets: bool| {
+        let text = "[db]\nurl = \"postgres://secret\"\n";
+        json!({ "file": { "name": "app.toml", "text": text, "secrets": secrets } })
+    };
+    let error = refused(opened(&f, &json!([file(false), { "env": { "prefix": "APP" } }]))).to_string();
+    let said = "app.toml: db.url: a secret is not read from app.toml; set APP_DB_URL or APP_DB_URL_FILE";
+    assert!(error.contains(said) && !error.contains("postgres://secret"), "{error}");
+    assert_eq!(opened(&f, &json!([file(true)])).unwrap().get()["db"]["url"], "postgres://secret");
+}
+
 #[test]
 fn a_file_sent_absent_is_refused_unless_optional() {
     let f = fixture();

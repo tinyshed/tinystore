@@ -213,6 +213,24 @@ pub fn optional(path: impl Into<PathBuf>) -> File
 A file that may be absent: then it declares nothing, and `explain`
 says it was absent.
 
+### File.secrets
+
+```rust
+pub fn secrets(self, secrets: bool) -> File
+```
+
+Whether the file may give a secret. `false` refuses the config when
+the file gives one, for a file committed beside the code, whose
+secrets come from the environment: the error names the variable and
+its `_FILE` that give it instead, and never the secret.
+
+```rust
+use tinystore::config::File;
+
+let committed = File::optional("dashbin.toml").secrets(false);
+let required = File::from("app.toml").secrets(false);
+```
+
 ## Config
 
 ```rust

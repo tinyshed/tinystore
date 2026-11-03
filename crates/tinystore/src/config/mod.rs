@@ -50,6 +50,8 @@ mod declaration;
 mod env;
 mod explain;
 mod files;
+#[cfg(test)]
+mod fixture;
 mod handle;
 mod hub;
 mod layers;

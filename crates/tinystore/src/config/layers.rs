@@ -74,7 +74,7 @@ impl Base {
         let mut problems = base.declared_entries(declaration);
         for layer in layers {
             let before = base.choices(declaration);
-            if let Err(found) = base.take(layer, declaration, &before) {
+            if let Err(found) = base.take(layer, declaration, &before, layers) {
                 problems.extend(found);
             }
         }
@@ -153,8 +153,15 @@ impl Base {
     }
 
     /// Takes what a layer gives, each chosen group's settings read as
-    /// `before` says the layers before it chose, unless the layer chooses.
-    fn take(&mut self, layer: &Layer, declaration: &Declaration, before: &Choices) -> Result<(), Vec<String>> {
+    /// `before` says the layers before it chose, unless the layer chooses;
+    /// `layers` are every layer, which a refused secret's hint names.
+    fn take(
+        &mut self,
+        layer: &Layer,
+        declaration: &Declaration,
+        before: &Choices,
+        layers: &[Layer],
+    ) -> Result<(), Vec<String>> {
         match layer {
             Layer::Object { place, value } => {
                 let mut walked = Walked::after(before);
@@ -166,7 +173,7 @@ impl Base {
                 self.took(walked, &Origin::Layer { place: *place });
             }
             Layer::File(file) => {
-                let read = files::read(file, declaration, before)?;
+                let read = files::read(file, declaration, before, &|path| not_read_from(&file.shown(), path, layers))?;
                 if read.absent {
                     self.absent.push(file.shown());
                 }
@@ -215,7 +222,8 @@ impl Base {
         for (path, setting) in declaration.settings_of(&self.shape) {
             let value = self.stacks.get(&path).and_then(|stack| stack.last()).map(|stacked| &stacked.value);
             if setting.required && value.is_none_or(|value| value == "") {
-                missing.push(format!("{path} is required: {}", givers(&path, layers)));
+                let ways = givers(&path, setting.secret, layers).unwrap_or_else(|| "no layer gives it".to_owned());
+                missing.push(format!("{path} is required: {ways}"));
             }
         }
         missing
@@ -244,17 +252,31 @@ impl Base {
     }
 }
 
-/// What would give a setting: `set APP_REGION, or region in app.yaml`.
-fn givers(path: &str, layers: &[Layer]) -> String {
+/// What would give a setting: `set APP_REGION, or region in app.yaml`, none
+/// when no layer would. A secret's variable is said with its `_FILE`, and a
+/// file that refuses secrets is not said at all.
+fn givers(path: &str, secret: bool, layers: &[Layer]) -> Option<String> {
     let ways: Vec<String> = layers
         .iter()
-        .map(|layer| match layer {
-            Layer::Env(env) => format!("set {}", env.name_of(path)),
-            Layer::File(file) => format!("{path} in {}", file.shown()),
-            Layer::Object { place, .. } => format!("{path} in layer {place}"),
+        .filter_map(|layer| match layer {
+            Layer::Env(env) if secret => Some(format!("set {0} or {0}_FILE", env.name_of(path))),
+            Layer::Env(env) => Some(format!("set {}", env.name_of(path))),
+            Layer::File(file) if secret && !file.gives_secrets() => None,
+            Layer::File(file) => Some(format!("{path} in {}", file.shown())),
+            Layer::Object { place, .. } => Some(format!("{path} in layer {place}")),
         })
         .collect();
-    if ways.is_empty() { "no layer gives it".to_owned() } else { ways.join(", or ") }
+    (!ways.is_empty()).then(|| ways.join(", or "))
+}
+
+/// A secret that a file that refuses secrets gave, as the file's problem
+/// says it, its value never read: `db.password: a secret is not read from
+/// app.toml; set APP_DB_PASSWORD or APP_DB_PASSWORD_FILE`.
+pub(super) fn not_read_from(file: &str, path: &str, layers: &[Layer]) -> String {
+    match givers(path, true, layers) {
+        Some(ways) => format!("{path}: a secret is not read from {file}; {ways}"),
+        None => format!("{path}: a secret is not read from {file}, and no other layer gives it: read the environment"),
+    }
 }
 
 /// Sets the value at `path` of `tree`, making the groups on its way.
@@ -281,3 +303,7 @@ pub(super) fn shown_value(value: &Value, duration: bool) -> String {
         _ => value.to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "layers_tests.rs"]
+mod tests;

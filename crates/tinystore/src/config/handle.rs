@@ -181,6 +181,7 @@ where
     let base = Base::read(&opening.declaration, &opening.layers, !opening.kept)
         .map_err(|problems| within(refused(problems)))?;
     let (value, tree) = making.layered(&base).map_err(|problems| within(refused(problems)))?;
+    making.secrets_inside(&base, &opening.layers).map_err(|problems| within(refused(problems)))?;
     let hub = match &opening.store {
         Some(store) => Hub::of(store, &opening.name).map_err(within)?,
         None => Hub::detached(),

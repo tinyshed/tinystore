@@ -7,11 +7,16 @@ fn declaration() -> Declaration {
     Declaration::of_marked(&value).unwrap()
 }
 
+/// How a test words a secret its file refuses, which none of these declares.
+fn refused(path: &str) -> String {
+    format!("{path}: a secret is refused")
+}
+
 fn read_text(name: &str, text: &str) -> Result<Vec<(String, Value)>, Vec<String>> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(name);
     std::fs::write(&path, text).unwrap();
-    read(&File::from(path), &declaration(), &Choices::new()).map(|read| read.given)
+    read(&File::from(path), &declaration(), &Choices::new(), &refused).map(|read| read.given)
 }
 
 #[test]
@@ -65,9 +70,9 @@ fn an_empty_key_declares_nothing_and_an_unknown_extension_is_refused() {
 fn a_missing_file_is_refused_unless_optional() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("absent.yaml");
-    let refused = read(&File::from(path.clone()), &declaration(), &Choices::new()).unwrap_err();
-    assert!(refused[0].ends_with("absent.yaml: no such file; File::optional lets it be absent"), "{refused:?}");
-    assert!(read(&File::optional(path), &declaration(), &Choices::new()).unwrap().absent);
+    let missing = read(&File::from(path.clone()), &declaration(), &Choices::new(), &refused).unwrap_err();
+    assert!(missing[0].ends_with("absent.yaml: no such file; File::optional lets it be absent"), "{missing:?}");
+    assert!(read(&File::optional(path), &declaration(), &Choices::new(), &refused).unwrap().absent);
 }
 
 #[test]

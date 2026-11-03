@@ -198,6 +198,7 @@ export interface FileLayer {
 	readonly [layerMark]: 'file'
 	readonly path: string
 	readonly optional: boolean
+	readonly secrets: boolean
 }
 
 /** The environment a config reads. */
@@ -216,6 +217,12 @@ export type Layer<D> = FileLayer | EnvLayer | Overlay<D> | false | null | undefi
 export interface FileOptions {
 	/** a file that may be absent: then it declares nothing, and explain says so */
 	optional?: boolean | undefined
+	/**
+	 * false refuses a secret the file gives, for a file committed beside the
+	 * code: its secrets come from the environment, and the error names the
+	 * variable and its _FILE that give one, never the file
+	 */
+	secrets?: boolean | undefined
 }
 
 /** Settings' own variables by their paths: `{ port: 'PORT', db: { url: 'DATABASE_URL' } }`. */
@@ -615,9 +622,18 @@ function refuseEntries(inner: Described): void {
 	}
 }
 
-/** A file a config reads: TOML, YAML or JSON by its extension, a relative path the program's. */
+/**
+ * A file a config reads: TOML, YAML or JSON by its extension, a relative path
+ * the program's. `file('dashbin.toml', { secrets: false })` refuses a secret it
+ * gives.
+ */
 export function file(path: string, options: FileOptions = {}): FileLayer {
-	return Object.freeze({ [layerMark]: 'file' as const, path, optional: options.optional === true })
+	return Object.freeze({
+		[layerMark]: 'file' as const,
+		path,
+		optional: options.optional === true,
+		secrets: options.secrets !== false,
+	})
 }
 
 /**
@@ -789,9 +805,10 @@ async function layerData(
 	}
 	const kind = layerOf(layer)
 	if (kind === 'file') {
-		const { path, optional } = layer as FileLayer
+		const { path, optional, secrets } = layer as FileLayer
 		const text = await readText(path)
-		return { file: { name: path, optional, ...(text === undefined ? {} : { text }) } }
+		const refused = secrets ? {} : { secrets: false }
+		return { file: { name: path, optional, ...refused, ...(text === undefined ? {} : { text }) } }
 	}
 	if (kind === 'env') {
 		return { env: await envData(layer as EnvLayer, declared) }

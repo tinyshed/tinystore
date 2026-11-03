@@ -388,6 +388,40 @@ class Maybe:
 
 
 @dataclass
+class CommittedDb:
+    host: str = "localhost"
+    password: Secret = secret()  # noqa: RUF009
+
+
+@dataclass
+class Committed:
+    db: CommittedDb = field(default_factory=CommittedDb)
+
+
+# contract: CFG-16, CFG-06
+async def test_a_file_that_refuses_secrets_names_the_variable_that_gives_one_and_never_the_secret(
+    store: tinystore.Store, directory: Path
+) -> None:
+    toml = directory / "committed.toml"
+    toml.write_text('[db]\nhost = "db"\npassword = "s3cret"\n')
+
+    async def opening(given: dict[str, str]) -> tinystore.Config[Committed]:
+        return await store.config("committed", [Committed, file(toml, secrets=False), env("APP", from_=given)])
+
+    with pytest.raises(tinystore.InvalidError) as refused:
+        await opening({})
+    said = f"{toml}: db.password: a secret is not read from {toml}; set APP_DB_PASSWORD or APP_DB_PASSWORD_FILE"
+    assert said in str(refused.value) and "s3cret" not in str(refused.value)
+    toml.write_text('[db]\nhost = "db"\n')
+    with pytest.raises(tinystore.InvalidError) as missing:
+        await opening({})
+    assert "db.password is required: set APP_DB_PASSWORD or APP_DB_PASSWORD_FILE" in str(missing.value)
+    assert "db.password in" not in str(missing.value)
+    config = await opening({"APP_DB_PASSWORD": "s3cret"})
+    assert (config.value.db.host, config.value.db.password.reveal()) == ("db", "s3cret")
+
+
+@dataclass
 class Port:
     port: int = 8080
 

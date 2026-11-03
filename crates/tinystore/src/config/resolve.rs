@@ -9,10 +9,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use super::declaration::{Declaration, Group, Item, Kind, Node, Setting, at};
+use super::declaration::{Declaration, Group, Item, Kind, Node, Setting, at, gives_secret};
 use super::explain::Origin;
 use super::hub::{Change, Kept};
-use super::layers::{Base, Stacked, set};
+use super::layers::{Base, Layer, Stacked, not_read_from, set};
 use super::marks::marked;
 use super::rules;
 
@@ -161,6 +161,39 @@ impl<T: Serialize + DeserializeOwned> Making<'_, T> {
         set(&mut probe, path, value.clone());
         let read = marked(&self.built(&probe).ok()?).ok()?;
         Some(at(&read, path).cloned().unwrap_or(Value::Null))
+    }
+
+    /// Refuses each value that a file that refuses secrets gave a map, a list
+    /// or any value whose type holds a secret inside, which the declaration
+    /// cannot see: a `BTreeMap` of a struct with a `Secret` field. Each such
+    /// value is read as the program's type, whose marks say where its
+    /// secrets are, as `explain` finds them.
+    pub(super) fn secrets_inside(&self, base: &Base, layers: &[Layer]) -> Result<(), Vec<String>> {
+        let refusing: Vec<String> = layers
+            .iter()
+            .filter_map(|layer| match layer {
+                Layer::File(file) if !file.gives_secrets() => Some(file.shown()),
+                _ => None,
+            })
+            .collect();
+        if refusing.is_empty() {
+            return Ok(());
+        }
+        let tree = base.tree();
+        let mut found = Vec::new();
+        for (path, setting) in self.declaration.settings_of(&base.shape) {
+            if !matches!(setting.kind, Kind::Object | Kind::List(_) | Kind::Any) {
+                continue;
+            }
+            for stacked in base.stacks.get(&path).into_iter().flatten() {
+                let Origin::File { path: file } = &stacked.from else { continue };
+                let read = || self.written_at(&tree, &path, &stacked.value);
+                if refusing.contains(file) && read().is_some_and(|read| gives_secret(&stacked.value, &read)) {
+                    found.push(format!("{file}: {}", not_read_from(file, &path, layers)));
+                }
+            }
+        }
+        if found.is_empty() { Ok(()) } else { Err(found) }
     }
 }
 

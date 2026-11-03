@@ -14,7 +14,7 @@
 //!                "settings": { "kind": "object", "default": {}, "chosenBy": "plugin",
 //!                              "groups": { "postgres": { "port": { "kind": "integer", "default": 5432 } } } } }
 //! layers       [ { "object": { "port": 80 }, "place": 2 },
-//!                { "file": { "name": "app.yaml", "text": "port: 9000\n", "optional": false } },
+//!                { "file": { "name": "app.yaml", "text": "port: 9000\n", "optional": false, "secrets": false } },
 //!                { "env": { "prefix": "APP", "vars": { "port": "PORT" }, "variables": { "PORT": "3000" },
 //!                           "files": { "/run/secrets/db": "postgres://…" }, "dotenv": [] } } ]
 //! ```
@@ -253,8 +253,9 @@ fn layer(value: &Value) -> Result<Layer, String> {
     if let Some(Value::Object(file)) = map.get("file") {
         let name = text(file, "name")?;
         let optional = file.get("optional").and_then(Value::as_bool).unwrap_or(false);
+        let secrets = file.get("secrets").and_then(Value::as_bool).unwrap_or(true);
         let given = file.get("text").and_then(Value::as_str).map(str::to_owned);
-        return Ok(Layer::File(File::sent(name, optional, given)));
+        return Ok(Layer::File(File::sent(name, optional, given).secrets(secrets)));
     }
     if let Some(Value::Object(env)) = map.get("env") {
         return env_layer(env).map(Layer::Env);

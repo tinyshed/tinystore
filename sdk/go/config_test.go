@@ -300,6 +300,41 @@ func TestASettingWithNoValueIsNilUntilALayerGivesItASecretTooAndExplainSaysUnset
 	})
 }
 
+type committed struct {
+	DB struct {
+		Host     string           `json:"host"`
+		Password tinystore.Secret `json:"password" config:"required"`
+	} `json:"db"`
+}
+
+// contract: CFG-16, CFG-06
+func TestAFileThatRefusesSecretsNamesTheVariableThatGivesOneAndNeverTheSecret(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		toml := filepath.Join(t.TempDir(), "committed.toml")
+		ways.Must(0, os.WriteFile(toml, []byte("[db]\nhost = \"db\"\npassword = \"s3cret\"\n"), 0o600))
+		opening := func(variables map[string]string) (*tinystore.Config[committed], error) {
+			return tinystore.OpenConfig(ctx, store, "committed", committed{},
+				tinystore.File(toml, tinystore.NoSecrets()), tinystore.Env("APP", tinystore.EnvFrom(variables)))
+		}
+		_, err := opening(map[string]string{})
+		says(t, err, toml+": db.password: a secret is not read from "+toml+"; set APP_DB_PASSWORD or APP_DB_PASSWORD_FILE")
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Fatalf("the error printed the secret: %v", err)
+		}
+		ways.Must(0, os.WriteFile(toml, []byte("[db]\nhost = \"db\"\n"), 0o600))
+		_, err = opening(map[string]string{})
+		says(t, err, "db.password is required: set APP_DB_PASSWORD or APP_DB_PASSWORD_FILE")
+		if strings.Contains(err.Error(), "db.password in") {
+			t.Fatalf("the hint names the file: %v", err)
+		}
+		config := ways.Must(opening(map[string]string{"APP_DB_PASSWORD": "s3cret"}))
+		if value := config.Get(); value.DB.Host != "db" || value.DB.Password.Reveal() != "s3cret" {
+			t.Fatalf("value %+v", value)
+		}
+	})
+}
+
 type port struct {
 	Port int `json:"port"`
 }

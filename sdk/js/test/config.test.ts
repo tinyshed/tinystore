@@ -419,6 +419,31 @@ for (const way of ways) {
 			expect((refused as Error).message).toContain('APP_PORT: 0 is below 1')
 		})
 
+		// contract: CFG-16, CFG-06
+		test('a file that refuses secrets names the variable that gives one, and never the secret', async () => {
+			const toml = join(dir, 'committed.toml')
+			writeFileSync(toml, '[db]\nhost = "db"\npassword = "s3cret"\n')
+			const opening = (from: Record<string, string>) =>
+				store.config('committed', [
+					{ db: { host: 'localhost', password: secret(String) } },
+					file(toml, { secrets: false }),
+					env('APP', { from }),
+				])
+			const refused = ((await caught(opening({}))) as Error).message
+			expect(refused).toContain(
+				`${toml}: db.password: a secret is not read from ${toml}; set APP_DB_PASSWORD or APP_DB_PASSWORD_FILE`,
+			)
+			expect(refused).not.toContain('s3cret')
+			writeFileSync(toml, '[db]\nhost = "db"\n')
+			const missing = ((await caught(opening({}))) as Error).message
+			expect(missing).toContain(
+				'db.password is required: set APP_DB_PASSWORD or APP_DB_PASSWORD_FILE',
+			)
+			expect(missing).not.toContain('db.password in')
+			const config = await opening({ APP_DB_PASSWORD: 's3cret' })
+			expect([config.value.db.host, config.value.db.password.reveal()]).toEqual(['db', 's3cret'])
+		})
+
 		test('a file absent is refused unless optional, and a key no setting has is named', async () => {
 			const missing = join(dir, 'missing.toml')
 			const opening = (layers: Parameters<typeof file>[]) =>

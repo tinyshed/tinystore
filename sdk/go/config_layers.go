@@ -71,6 +71,9 @@ func settingPaths(group *setting, path string) []string {
 
 func (f fileLayer) data([]string, []string) (map[string]any, error) {
 	file := map[string]any{"name": f.path, "optional": f.optional}
+	if f.noSecrets {
+		file["secrets"] = false
+	}
 	text, found, err := readText(f.path)
 	if err != nil {
 		return nil, err

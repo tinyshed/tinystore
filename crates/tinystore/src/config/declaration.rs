@@ -711,20 +711,39 @@ impl Probe<'_> {
 /// which finds a secret inside a map, a list or any value, where the
 /// declaration has one setting given whole.
 pub(crate) fn masked(given: &Value, read: &Value) -> Value {
+    each_secret(given, read, &mut |_| Value::from("***"))
+}
+
+/// Whether `given` has a value at a place where `read`, the same value as
+/// the program's type writes it with its marks, holds a secret: a map that
+/// gave an entry's host alone gives no secret, though its type holds one.
+pub(crate) fn gives_secret(given: &Value, read: &Value) -> bool {
+    let mut gives = false;
+    each_secret(given, read, &mut |value| {
+        gives |= !value.is_null();
+        value.clone()
+    });
+    gives
+}
+
+/// `given` with each value at a place where `read` holds a secret made
+/// what `secret` makes of it, the rest as it was given.
+fn each_secret(given: &Value, read: &Value, secret: &mut dyn FnMut(&Value) -> Value) -> Value {
     if let Value::Object(map) = read
         && let Some((key, inner)) = mark(map)
     {
-        return if key == SECRET || key == SECRET_REQUIRED { Value::from("***") } else { masked(given, inner) };
+        return if key == SECRET || key == SECRET_REQUIRED { secret(given) } else { each_secret(given, inner, secret) };
     }
     match (given, read) {
         (Value::Object(given), Value::Object(read)) => {
             let each = given.iter().map(|(key, value)| {
-                (key.clone(), read.get(key).map_or_else(|| value.clone(), |read| masked(value, read)))
+                let made = read.get(key).map_or_else(|| value.clone(), |read| each_secret(value, read, secret));
+                (key.clone(), made)
             });
             Value::Object(each.collect())
         }
         (Value::Array(given), Value::Array(read)) => {
-            let each = given.iter().zip(read).map(|(value, read)| masked(value, read));
+            let each = given.iter().zip(read).map(|(value, read)| each_secret(value, read, secret));
             Value::Array(each.chain(given.iter().skip(read.len()).cloned()).collect())
         }
         _ => given.clone(),

@@ -197,6 +197,14 @@ type FileOption func(*fileLayer)
 
 FileOption is how a config reads a file.
 
+### NoSecrets
+
+```go
+func NoSecrets() FileOption
+```
+
+NoSecrets refuses the config when the file gives a secret, for a file committed beside the code, whose secrets come from the environment: the error names the variable and its \_FILE that give it instead, never the secret, and a missing secret's error names no such file.
+
 ### Optional
 
 ```go

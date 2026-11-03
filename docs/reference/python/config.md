@@ -114,13 +114,20 @@ How many items a list holds at least and at most: ``Annotated[list[str], Items(1
 ## file
 
 ```python
-def file(path: str | os.PathLike[str], *, optional: bool = False) -> FileLayer: ...
+def file(
+    path: str | os.PathLike[str],
+    *,
+    optional: bool = False,
+    secrets: bool = True,
+) -> FileLayer: ...
 ```
 
 A file a config reads, TOML, YAML or JSON by its extension; a relative path is the working directory's.
 
 One that does not exist is InvalidError unless it is optional: then it
-declares nothing, and explain says so.
+declares nothing, and explain says so. ``secrets=False`` refuses a secret
+the file gives, for a file committed beside the code: the error names the
+variable and its ``_FILE`` that give it instead, never the secret.
 
 ## env
 

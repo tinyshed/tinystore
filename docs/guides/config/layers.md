@@ -107,6 +107,53 @@ rps = 1000
   does nothing.
 - A file is read when the config opens, 1 MiB at most.
 
+## Keep secrets out of a committed file
+
+A settings file that is committed beside the code must not hold a password,
+or the password leaks with the next push. Mark such a file so that it refuses
+secrets. Each secret then comes from the environment:
+
+```ts
+const config = await store.config('dashbin', [decl, file('dashbin.toml', { secrets: false }), env('DASHBIN')])
+```
+
+```python
+config = await store.config("dashbin", [Settings, file("dashbin.toml", secrets=False), env("DASHBIN")])
+```
+
+```go
+config, err := tinystore.OpenConfig(ctx, store, "dashbin", defaults,
+	tinystore.File("dashbin.toml", tinystore.NoSecrets()), tinystore.Env("DASHBIN"))
+```
+
+```rust
+let config = store
+    .config("dashbin", Settings::default())
+    .file(File::from("dashbin.toml").secrets(false))
+    .env(Env::prefix("DASHBIN"))
+    .open()?;
+```
+
+If `dashbin.toml` gives `db.password`, which is a secret, the config doesn't
+open. The error names the variable that gives the secret instead, and never
+the secret's value:
+
+```text
+config dashbin: dashbin.toml: db.password: a secret is not read from dashbin.toml; set DASHBIN_DB_PASSWORD or DASHBIN_DB_PASSWORD_FILE: invalid
+```
+
+- The mark is `secrets: false / secrets=False / NoSecrets() / .secrets(false)`.
+  A file without it may hold secrets, as before.
+- The file's other settings are read as usual. A secret is refused wherever
+  it stands: in a group, in an [entry](#entries) or in a group that a
+  setting [chooses](runtime.md).
+- If a required secret is missing, the error names its variable and its
+  `_FILE`, and never the file: `db.password is required: set
+  DASHBIN_DB_PASSWORD or DASHBIN_DB_PASSWORD_FILE`.
+- The mark is on the file, not on a setting. Your program knows which file is
+  committed, so one mark keeps every secret out of it, including the secrets
+  of a plugin's settings that the program loads as it runs.
+
 ## The environment
 
 `env('APP')` reads `APP_` and each setting's path in upper snake case:

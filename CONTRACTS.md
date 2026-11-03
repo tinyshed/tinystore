@@ -91,6 +91,7 @@ These contracts are what does not.
 - **CFG-13** A config declared as data, the JSON every SDK sends, MUST read the same layers, rules, secrets and `explain` as one declared by a type, and a declaration that means nothing MUST be refused when it opens, naming where.
 - **CFG-14** A group a text setting beside it chooses MUST be read, checked, masked and named as the group that setting names once every layer is read: a value that names no group MUST be refused naming the nearest, a field of a group not chosen MUST be refused, and what a layer gave a group that is not chosen MUST be dropped and said.
 - **CFG-15** A setting declared with no value, `"default": null` as data or each language's own optional, MUST be null until a layer gives it, a value a layer gives MUST be checked against its kind and rules, one declared a secret MUST stay a secret, and `explain` MUST say it is `unset` rather than show a value.
+- **CFG-16** A file marked to hold no secrets, `secrets: false`, MUST keep the config from opening when it gives a secret, wherever the secret stands, naming the setting, the file and the variable and its `_FILE` that give it, never its value; the hint for a required secret that no layer gave MUST NOT name that file.
 
 ### Locks
 

@@ -88,6 +88,10 @@ let pool = connect(config.get().db.url.reveal())?;
   text, where the program hands it to what needs it.
 - A secret is never kept in the store, so a [live change](live.md) cannot
   set it: only a file, a variable or its `_FILE` gives it.
+- A file that is committed beside the code can be
+  [marked to refuse secrets](layers.md#keep-secrets-out-of-a-committed-file):
+  a secret it gives fails the config, and the error names the variable that
+  gives the secret instead.
 - An error about a secret names its variable and never quotes its text.
 - A secret is text. It cannot be `live`: a value an admin page could set and
   read back is not a secret.
@@ -131,7 +135,8 @@ config app: region is required: region in app.toml, or set APP_REGION: invalid
 ```
 
 - A required setting has no default: a layer gives it, or the config does not
-  open, and the error names every layer that could have.
+  open, and the error names every layer that could have. For a secret, it
+  names the variable with its `_FILE`, and no file that refuses secrets.
 - An empty text counts as missing.
 - The value a declaration gives is never counted as given: Go's zero value
   and Rust's `Default` do not satisfy `required`.
