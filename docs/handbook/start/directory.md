@@ -39,13 +39,13 @@ Each line above opens a different store, for the sake of the example. A real
 program picks one of them. The calls after `open` are the same in all four
 cases, because all four reach the same core:
 
-| Way              | Where the core runs                         | Use it for                                                   |
-|------------------|---------------------------------------------|--------------------------------------------------------------|
-| sidecar, default | a `tinystore` process beside your program   | a web application, several processes that share a store      |
-| `private`        | a child process that lives and dies with it | tests and scripts that must not touch a running sidecar      |
-| `embedded`       | inside your program                         | one process that owns the store, with the fastest calls      |
-| `connect`        | a `tinystore serve` on another machine      | programs that reach a store over the network, with a token   |
-| Rust             | inside your program                         | Rust programs, which call the engines directly with no bytes |
+| Way              | Where the core runs, and how a call gets there                                           | Use it for                                                   |
+|------------------|------------------------------------------------------------------------------------------|--------------------------------------------------------------|
+| sidecar, default | a `tinystore` process beside your program, through a Unix socket or a Windows named pipe | a web application, several processes that share a store      |
+| `private`        | a child process that lives and dies with it, through its stdin and stdout                | tests and scripts that must not touch a running sidecar      |
+| `embedded`       | inside your program, through four C functions                                            | one process that owns the store, with the fastest calls      |
+| `connect`        | a `tinystore serve` on another machine, over TLS                                         | programs that reach a store over the network, with a token   |
+| Rust             | inside your program, as direct calls                                                     | Rust programs, which call the engines directly with no bytes |
 
 ## Give up on a store that does not open
 
@@ -89,8 +89,8 @@ process holds the directory and no sidecar answers`. In Python this text is a
 note of the `CancelledError`. `connect` stops the same way. An `open` that
 gave up starts no more servers and keeps no connection. A sidecar that it
 already started can still take the directory once it is free. With no client,
-that sidecar exits after its idle time, and never sooner than 15 seconds
-after it started (contract WIRE-11).
+that sidecar exits after its idle time, 30 seconds unless set, and never
+sooner than 15 seconds after it started (contract WIRE-11).
 
 ## What is in the directory
 
@@ -128,10 +128,10 @@ and neither waits for the other (contract STORE-02).
 Each file also has its own durability, which says how far a write goes before
 the call returns:
 
-| Durability | A write returns after                 | It survives               | Default for          |
-|------------|---------------------------------------|---------------------------|----------------------|
-| `'full'`   | the disk has synced it                | a crash, and a power loss | kv, jobs, sql, blobs |
-| `'os'`     | the operating system has it, unsynced | a crash of the program    | records, metrics     |
+| Durability | A write returns after                 | It survives               | Default for          | SQLite's `synchronous` |
+|------------|---------------------------------------|---------------------------|----------------------|------------------------|
+| `'full'`   | the disk has synced it                | a crash, and a power loss | kv, jobs, sql, blobs | `FULL`                 |
+| `'os'`     | the operating system has it, unsynced | a crash of the program    | records, metrics     | `NORMAL`               |
 
 You can set one durability for the whole store when you open it, such as
 `open('./data', { durability: 'os' })`, and a database can set its own. The
@@ -154,10 +154,11 @@ between the two can leave the message without its job.
 | a file in `blobs/`, its metadata in a bucket, its document in an index      | no: three files, each written whole on its own    |
 | a backup                                                                    | one moment of the whole store, every file at once |
 
-Where no commit covers them, write in an order a crash can be repaired from:
-the file first, then the metadata that names it, then the index. A crash
-leaves at worst a file nothing names, or metadata the index misses, and a
-check that compares them repairs both.
+Where no commit covers them, write in an order that a crash can be repaired
+from: the file first, then the metadata that names it, then the index. A
+crash then leaves at worst a file that nothing names, or metadata that the
+index misses. TinyStore has no check that compares the three, so a program
+that splits them this way finds and repairs those with a job of its own.
 
 When two things must commit together, open one inside the other's file. A
 bucket or a queue opened from a database lives in that database's file, and
@@ -185,8 +186,8 @@ let replies = db.queue::<Reply>("replies").open()?; // kept in sql/chat.db, not 
 
 `replies` is a queue like any other, and a worker runs its jobs the same way.
 The difference is where it lives: a transaction of `db` can now insert a
-message and add its reply job in one commit (contract DUR-06). Chapter 7,
-Replies in the background, builds exactly that.
+message and add its reply job in one commit (contract DUR-06). [Replies in
+the background](../chat/replies.md) builds exactly that.
 
 ## Close the store
 
@@ -210,8 +211,10 @@ store.close()?;
 handlers that are running. Every engine is still open while they finish, so a
 handler can still write a bucket or a table. Then `close` writes what the
 loggers and metrics still hold, and closes the engines in the reverse order of
-opening. A store whose last handle is dropped closes the same
-way. A handle used after its store closed fails with a `closed` error
+opening. In Rust, a store whose last handle is dropped closes the same way,
+on the thread that drops it ([Rust with
+async](rust-async.md#errors-and-closing)). A handle used after its store
+closed fails with a `closed` error
 (`ClosedError` in TypeScript and Python, `tinystore.ErrClosed` in Go,
 `ErrorKind::Closed` in Rust).
 
@@ -220,22 +223,20 @@ end of the block, and `async with` does the same in Python.
 
 ## Why this design?
 
-**Why one owner per directory.** SQLite allows several processes to write
-one file. They then take turns through a lock on the file, and under load a
-process that waits too long gets `database is locked`. Writes from different
-processes also cannot share a disk sync, because no process sees the others'
-writes before they commit. With one owner, every write to a file goes through
-one queue in one process: waiting is a short, orderly line, and a hundred
-writes share a few syncs. The `LOCK` file makes the rule hold: a second
-process that tries to own the directory is refused (contract STORE-01).
+**Why one owner per directory.** Several processes can write one SQLite
+file, but they take turns through its file lock, their background work
+collides, and they cannot share a disk sync, because no process sees the
+others' writes before they commit.
+With one owner, every write to a file goes through one queue in one
+process, as [One writer per file](../inside/sqlite.md#one-writer-per-file)
+describes, and a hundred writes share a few syncs. The `LOCK` file makes the
+rule hold: a second process that tries to own the directory is refused
+(contract STORE-01).
 
-**Why the sidecar uses the same protocol as a remote server.** A Bun, Python
-or Go call becomes a message of the wire protocol, whether it travels
-through memory to an embedded core, through a socket to a sidecar, or over
-TLS to another machine. Only the transport changes. So a program moves from
-one way to another by changing its `open` line, and a test that runs against
-a private child tests the same code paths as production. Chapter 22, One core,
-four languages, shows the protocol in detail.
+**Why the sidecar uses the same protocol as a remote server.** Only the
+transport changes between the ways in the table above, so a test against a
+private child runs the same code paths as production. [One core, four
+languages](../inside/one-core.md#why-this-design) gives the reasons.
 
 **Why a file per engine instead of one big database.** Logs and metrics
 arrive in bursts and can lose their last second to a power loss. Sessions

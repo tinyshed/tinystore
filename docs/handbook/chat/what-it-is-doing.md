@@ -38,9 +38,10 @@ as any logger prints them, and the stream `chat` in the store. Go's is a
 as it always did, and libraries that log through `slog` or `tracing` land in
 the store too.
 
-`redact: secrets` hides the values of keys that name a secret, at any depth:
-`apiKey`, `api_key`, `password`, `token`, `authorization` and the other usual
-names. A line that logs a request's headers never puts a key in the file.
+`redact: secrets` hides the values of keys that name a secret, at any depth,
+such as `apiKey`, `password`, `token` and `authorization`, so a line that
+logs a request's headers never puts a key in the file ([Hiding
+secrets](../../guides/records/logging.md#hiding-secrets)).
 
 ## Log a request
 
@@ -83,12 +84,11 @@ On a terminal the lines print like this:
 `with` (`bind` in Python, a span in Rust) gives every line of the request its
 id and route. The trace id is the one in the request's `traceparent` header,
 so one request's lines can be found later across every stream, the worker's
-included. In Python the trace travels in a context variable, in Go in the
-`context.Context`, and in TypeScript through every `await` inside the call.
+included. [Traces](../../guides/records/traces.md) says how the trace travels
+in each language.
 
-A log call never waits for the disk. The logger keeps its lines in a buffer
-and writes them every second. If the buffer is full, a line is dropped and
-counted, and the console says so at most once in ten minutes.
+A log call never waits for the disk: a full buffer drops the line and counts
+it ([Never waits](../../guides/records/logging.md#never-waits)).
 
 ## Events that must stay
 
@@ -115,9 +115,9 @@ audit.append("chat.deleted", &Deleted { chat_id: 9, user_id: 42 })?;
 event has a name that says what happened and fields that say the details. It
 takes the trace of the request it was appended in, like a log line does.
 
-Each stream keeps its events for its own `keep`: `audit` for 365 days, while
-a stream nobody gave a `keep` keeps 14 days. Older events are removed a
-segment at a time, with no cleanup job.
+Each stream keeps its events for its own `keep`, `audit` for 365 days, and
+older events go with no cleanup job ([How long a stream
+keeps](../../guides/records/events.md#how-long-a-stream-keeps)).
 
 ## Read them back
 
@@ -149,11 +149,11 @@ let page = events.list().since(Duration::from_hours(1)).min_level(Level::WARN).p
 let resets = events.list().since(Duration::from_hours(1)).search("connection reset").page()?;
 ```
 
-`store.events()` without a name reads every stream at once. A page holds up
-to 1,000 events, oldest first, and `next` reads the page after. Each event
-has its `at`, `stream`, `name`, `level`, `message`, `fields`, `context` and
-trace. `where: { userId: 42 }` finds the events whose fields or context hold
-that value, and `search` finds a phrase anywhere in an event.
+`store.events()` without a name reads every stream at once, a page of events
+at a time, oldest first, and `next` reads the page after. `where: { userId:
+42 }` finds the events whose fields or context hold that value, and `search`
+finds a phrase anywhere in an event: [A query](../../guides/records/reading.md#a-query)
+lists every condition.
 
 How often does something go wrong, and where?
 
@@ -206,34 +206,22 @@ drops them, counts them, and says so, so the loss is visible and never
 silent.
 
 **Why logs may lose their last second to a power loss.** `records.db` is
-written with the operating system's durability unless the store says
-otherwise: a crash of the program loses nothing, but a power loss can take
-the last second. That makes a line cost almost nothing to write. An event
-that must survive a power loss belongs in a store opened with
-`durability: 'full'`.
+written with the operating system's [durability](../start/directory.md#a-file-per-engine)
+unless the store says otherwise, which makes a line cost almost nothing to
+write. An event that must survive a power loss belongs in a store opened
+with `durability: 'full'`.
 
 **Why events are kept as columns.** Most log lines share their keys and many
-of their values. TinyStore packs a stream's events into blocks, one column
-per key, with dictionaries for repeated text and compact integers for
-numbers. A query that asks for one trace or one level skips the blocks that
-cannot match, using the keys and filters kept beside each block. Chapter 20,
-How logs and metrics pack, explains the format.
-
-## Limits and defaults
-
-| What              | Limit                                                          |
-|-------------------|----------------------------------------------------------------|
-| a stream's name   | `[a-z0-9][a-z0-9_-]{0,63}`                                     |
-| a stream's `keep` | 14 days unless set                                             |
-| a logger's buffer | 1,024 lines, written every second                              |
-| a page of `list`  | 1,000 events unless `limit` says, 10,000 at most               |
-| an event's time   | from as long ago as the stream keeps to 10 minutes ahead       |
-| a `tail`'s buffer | the store's last megabyte of events; `missed` counts more      |
-| `top`             | the 10 most frequent values unless `limit` says, 1,000 at most |
+of their values, so a stream's events are packed into blocks of columns, and
+a query skips the blocks that cannot match. [How logs and metrics
+pack](../inside/how-logs-and-metrics-pack.md) explains the format.
 
 ## See also
 
 - [Your first store](../start/first-store.md#look-inside): `tinystore logs`
   while a program runs.
+- [Limits and defaults](../production/limits.md#records-and-metrics): the
+  bounds of Records, and its guides' tables, such as
+  [Tail](../../guides/records/tail-and-poll.md#tail) for a tail's buffer.
 - [Records API reference](../../reference/bun/records.md): every call of
   loggers, events and reads.

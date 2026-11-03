@@ -201,10 +201,12 @@ fn check_code(ip: &str, code: &str) -> Result<Response, AppError> {
 }
 ```
 
-`take` reads the key and deletes it in one write. If the user clicks "Sign in"
-twice, or an attacker races the user with the same code, only one of the
-calls gets the user id. The other gets nothing. A code that nobody uses
-expires 15 minutes after it was written, and nothing has to clean it up.
+`take` reads the key and deletes it in one write, where a `get` and then a
+`delete` would let a second request read the code between the two. If the
+user clicks "Sign in" twice, or an attacker races the user with the same
+code, only one of the calls gets the user id. The other gets nothing. A code
+that nobody uses expires 15 minutes after it was written, and nothing has to
+clean it up.
 
 The rate limit lets one IP address try 5 codes per minute, with at most 5 at
 once. A six-digit code has a million values, so guessing one at that rate
@@ -286,13 +288,13 @@ sessions.under(user_id).clear()?; // sign out everywhere
 ```
 
 `under(userId)` is a branch of the bucket: the keys that belong to one user.
-"Sign out everywhere" is `clear()` on the branch. It removes every session of
-that user in one call, for every reader at once, however many devices they
-used.
+"Sign out everywhere" is `clear()` on the branch, which removes every session
+of that user in one call, however many devices they used
+([Branches](../../guides/kv/branches.md#how-branches-work)).
 
-The bucket's `idle: '30d'` means a session expires 30 days after it was last
-read or written. Every `get` keeps an active user signed in, and a user who
-leaves for a month is signed out without any code of yours.
+Since the bucket is `idle: '30d'`, every `get` keeps an active user signed
+in, and a user who leaves for a month is signed out without any code of
+yours.
 
 ## Limits per plan
 
@@ -328,14 +330,12 @@ if !used.ok {
 }
 ```
 
-`allow` counts the message in both windows, or in neither. A message that is
-refused because the weekly window is full does not use up the 5-hour window.
-Each window starts at the user's first message and resets on its own, and the
-answer says when: `windows.weekly.resetsAt` (`resets_at`, `ResetsAt`).
-
-If the model fails and the user gets no answer, give the use back with
-`messages.refund(userId)`. To look without counting, call `peek` instead of
-`allow`.
+`allow` counts the message in both windows, or in neither, and the answer
+says when each window resets: `windows.weekly.resetsAt` (`resets_at`,
+`ResetsAt`). If the model fails and the user gets no answer, give the use
+back with `messages.refund(userId)`. [How it
+behaves](../../guides/kv/quotas.md#how-it-behaves) has the rest, `peek`
+included.
 
 ## Requests sent twice
 
@@ -429,9 +429,9 @@ step "Request 2 gets the same answer. The phone sees message 41, and the chat sa
 `run` returns the answer kept for the key, or runs the function and keeps
 what it returns. A second call with the same key waits for the first one,
 in this process or in another, and returns the same answer (contract KV-11).
-If the function throws, nothing is kept, and the next `run` with that key
-runs it again. That is what you want when the database was briefly
-unavailable.
+If the function throws, nothing is kept, so a retry after the database was
+briefly unavailable runs it again. [What `run`
+does](../../guides/kv/once.md#what-run-does) has every case.
 
 ## Why this design?
 
@@ -443,56 +443,29 @@ contains. TinyStore does not hash keys for you, because most keys, such as a
 user id or an IP address, are not secrets, and a digest makes them unreadable
 in `tinystore kv list`.
 
-**Why `take` instead of `get` and `delete`.** Between a `get` and a `delete`,
-another request can `get` the same code. With two requests in flight, both
-would sign in, and a code meant for one use would work twice. `take` reads
-and deletes in one write, so of two callers exactly one gets the value.
+**Why a rate limit for guesses and a quota for plans.** A rate limit smooths
+traffic and costs no disk write, at the price of one extra burst after a
+crash, which is fine for guesses at a code. A quota counts uses against a
+plan, as a pricing page promises them, and is written on every `allow`.
+[Rate limit or quota](../../guides/kv/rate-limits.md#rate-limit-or-quota)
+compares the two.
 
-**Why idle expiry does not cost a write per read.** If every `get` of an idle
-session wrote a new expiry, every page view would be a disk sync. TinyStore
-renews an idle key only after a thirtieth of its span has passed, about once
-a day for 30 days. It writes the renewal together with other writes a second
-later, so the `get` itself never waits for the disk. A sweep over sessions
-with `list` or `all` renews nothing, so an admin page that lists sessions
-does not keep them alive.
+**Why idle expiry does not cost a write per read.** The renewal is written
+once a thirtieth of the span has passed, together with other writes, so a
+`get` never waits for the disk: see [Idle
+keys](../../guides/kv/expiry.md#idle-keys).
 
-**Why a rate limit for guesses and a quota for plans.** They answer different
-questions. A rate limit smooths traffic: 5 per minute, refilled
-continuously, so there is no window edge where a script gets 10 tries in two
-seconds. A quota counts uses against a plan, in windows that reset, because
-"300 messages per week" is what a pricing page promises. Both answer with the
-same shape, `ok`, `left` and `retryAt`.
-
-**Why a rate limit is kept in memory.** Checking a rate limit on every request
-must be cheap, so its state lives in memory and reaches `kv.db` every second.
-A crash loses at most that last second, which can let one extra burst
-through. For guesses at a sign-in code that is fine. A quota is written on
-every `allow`, because a plan's limit is a promise to a customer.
-
-**Why `once` keeps no errors, and is not "exactly once".** If the database
-was down for a second, the retry must be allowed to try again, so an error
-is never kept. And `once` cannot make an effect happen exactly once: if the
-process dies after the insert but before the answer is kept, the next run
-inserts again. It guarantees that a key runs at most once while its answer
-is kept. For a payment, pass the same key to the payment provider too, so that
-its own deduplication covers that gap.
-
-## Limits and defaults
-
-| What                               | Limit                                                 |
-|------------------------------------|-------------------------------------------------------|
-| a key, with its owners             | 1 KiB                                                 |
-| a value                            | 1 MiB                                                 |
-| a bucket's name                    | 64 bytes                                              |
-| a page of `list`                   | 1,000 keys                                            |
-| a quota                            | one to eight windows                                  |
-| rate limits and counters in memory | 100,000 keys per name, written every second           |
-| `ttl`, `idle`                      | none unless the bucket or the call sets one; not both |
+**Why `once` is not "exactly once".** If the process dies after the insert
+but before the answer is kept, the next run inserts again, so for a payment
+pass the same key to the payment provider too: see [What it does not
+promise](../../guides/kv/once.md#what-it-does-not-promise).
 
 ## See also
 
 - [Messages](messages.md): the database that `once` writes into.
 - [Your first store](../start/first-store.md#look-inside): `tinystore kv`
   lists a bucket's keys while the chat runs.
+- [Limits and defaults](../production/limits.md#kv): every bound of KV, from
+  a key's size to the windows of a quota.
 - [KV API reference](../../reference/bun/kv.md): every call of buckets, limits
   and `once`.

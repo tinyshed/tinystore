@@ -200,12 +200,10 @@ step "The tab reloads the chat from the database, which has every message, and g
 
 A publisher never waits for a subscriber, and a subscriber that falls behind
 is told exactly how many messages it missed before its next one (contract
-CHAN-02). A channel is not a log: the database is. So a missed event costs
-one reload, never a wrong screen.
-
-The same holds when the connection to the store drops. The SDK subscribes
-again by itself, and the next call is `onMissed` with the reason
-`reconnect`, because messages may have been lost meanwhile.
+CHAN-02). A channel is not a durable log: the database is. So a missed event
+costs one reload, never a wrong screen. A connection to the store that drops
+ends in `onMissed` too, as [Missed
+messages](../../guides/channels/subscriptions.md#missed-messages) says.
 
 ## One summary per chat at a time
 
@@ -271,15 +269,15 @@ if started.is_none() {
 
 The migration adds the two columns:
 
-```sql title="migrations/0004_summaries.sql"
+```sql title="migrations/0005_summaries.sql"
 alter table chats add column summary text;
 alter table chats add column summary_fence text not null default '';
 ```
 
 `tryHold` runs the function only if nobody holds the key, and returns at once
-otherwise. `hold` would wait for the key instead, ten seconds unless `wait`
-says otherwise. While the function runs, the SDK renews the lease every third
-of its `ttl`, and the key is let go when the function returns or throws.
+otherwise, where `hold` would wait for the key. While the function runs, the
+SDK renews the lease, and the key is let go when the function returns or
+throws ([Leases over a connection](../../guides/locks/leases.md)).
 
 ## A worker that stalls
 
@@ -327,20 +325,12 @@ step "Worker A wakes up and writes its stale summary with fence 41. The where cl
 ```
 
 Every lease the store gives has a fence larger than every earlier one, across
-restarts too (contract LOCK-02). A lease over a connection lasts its `ttl`
-from its last renewal, and one that ran out is never renewed (contract
-LOCK-05). The fence is what makes this safe: the lock makes two writers at
-once rare, and the fence makes the late one harmless. Anything that keeps the
-largest fence it has seen can refuse a late write, as the `where` clause does
-here.
-
-The fence is a 128-bit number. Padded to 40 digits, it compares as text in
-the same order as the number, so SQLite can compare it.
-
-A Rust program runs the lock in the store's own process, where a holder
-cannot freeze apart from the store, so its lease ends only when its function
-does. `maxHold` bounds a lease in every language, for work that must never
-hold a key longer than a set time.
+restarts too (contract LOCK-02), and a lease that ran out is never renewed
+(contract LOCK-05). The lock makes two writers at once rare, and the fence
+makes the late one harmless: anything that keeps the largest fence it has
+seen can refuse a late write, as the `where` clause does here. [Checking a
+fence in SQL](../../guides/locks/fences.md#checking-a-fence-in-sql) says why
+it is padded to 40 digits.
 
 ## Why this design?
 
@@ -357,36 +347,26 @@ tab stops the worker. TinyStore keeps a bounded log per branch, lets each
 subscriber read at its own pace, and tells the slow one what it lost, with
 an exact count.
 
-**Why locks live in memory.** One process owns the store, and every holder
-reaches the store through it, so that process sees every lease and every
-waiter. Giving and renewing a lease is a change in memory, with no disk sync.
-After a restart nobody holds anything, which is right: the threads that held
-the keys are gone. A lease kept on disk would make a restarted store wait
-out the `ttl` of holders that no longer exist.
+**Why locks live in memory.** Every holder reaches the store through the
+process that owns it, so giving a lease is a change in memory with no disk
+sync ([Locks live in memory](../../guides/locks/holding.md#locks-live-in-memory)).
+After a restart nobody holds anything, which is right: a lease kept on disk
+would make a restarted store wait out the `ttl` of holders that no longer
+exist.
 
 **Why a fence and not just a lock.** No lock can stop a process that froze
 while holding it: when it wakes, it does not know that its time ran out.
 Only the thing it writes to can refuse it, and only if it can tell old from
 new. The fence gives it that number, as Martin Kleppmann's essay on
-distributed locks describes. A payment provider that compares nothing still
-needs an idempotency key: a lock makes double work rare, never impossible.
-
-## Limits and defaults
-
-| What                          | Limit                                                |
-|-------------------------------|------------------------------------------------------|
-| a message                     | 1 MiB                                                |
-| a branch's log                | its newest 1,024 messages or 4 MiB                   |
-| every channel's messages      | 64 MiB of the store's memory                         |
-| a store's subscriptions       | 10,000                                               |
-| a connection's pending output | 8 MiB                                                |
-| `wait` of `hold`              | 10 seconds unless set                                |
-| a lease over a connection     | its `ttl` from its last renewal, renewed every third |
-| `maxHold`                     | none unless set                                      |
+distributed locks describes. A payment provider still needs an idempotency
+key ([Fences outside the
+store](../../guides/locks/fences.md#fences-outside-the-store)).
 
 ## See also
 
 - [Replies in the background](replies.md): the worker that publishes the
   events.
+- [Limits and defaults](../production/limits.md#channels-and-locks): every
+  bound of Channels and Locks, from a message's size to `maxHold`.
 - [Channels API reference](../../reference/bun/channels.md) and
   [Locks API reference](../../reference/bun/locks.md): every call of both.

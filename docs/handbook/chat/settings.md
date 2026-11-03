@@ -140,10 +140,11 @@ max_tokens = 2048
 ```
 
 The environment is read as the prefix and each setting's path in upper snake
-case: `model.api_key` is `CHAT_MODEL_API_KEY`. `vars` gives a setting a
-variable of its own name instead, such as the `PORT` a hosting platform sets.
-`CHAT_MODEL_API_KEY_FILE=/run/secrets/key` reads the key from a file, as
-Docker and Kubernetes pass secrets.
+case, `CHAT_MODEL_API_KEY`, and `vars` gives `port` the `PORT` a hosting
+platform sets ([The environment](../../guides/config/layers.md#the-environment)).
+`CHAT_MODEL_API_KEY_FILE` reads the key from a file, as Docker and
+Kubernetes pass secrets ([Secrets from
+files](../../guides/config/secrets.md#secrets-from-files)).
 
 The config opens only when every layer reads, or fails with one error that
 lists every problem:
@@ -182,11 +183,10 @@ A read is a read of memory, so read the value where you use it, on every
 request, instead of copying it at start. Then a change reaches the next
 request with no restart.
 
-`api_key` is a secret. It prints as `***` everywhere: in `console.log`, in
-`JSON.stringify`, in Python's `repr`, in Go's `fmt`, in Rust's `Debug`, in the
-logs and in `explain`. `reveal()` gives its text at the one place that needs
-it. A secret is never kept in the store, so only a file or a variable can give
-it.
+`api_key` is a secret. It prints as `***` everywhere, from `console.log` to
+`explain`, and `reveal()` gives its text at the one place that needs it. A
+secret is never kept in the store, so only a file or a variable can give it
+([Secrets](../../guides/config/secrets.md#secrets)).
 
 ## Change a live setting
 
@@ -216,12 +216,12 @@ config.update(|s| *s.replies.enabled = false)?;
 config.reset("replies.enabled")?; // the layers give it again
 ```
 
-Only a setting marked `live` can change while the chat runs. A port or a
-path takes effect at start, so changing one under a running program would be
-a lie. A change is kept in `kv.db`, survives a restart and goes over every
-layer until `reset`. Every process connected to the store sees it as soon as
-it is committed. A change that breaks a rule, `max_tokens: 99999`, is refused
-and keeps nothing.
+Only a setting marked `live` can change while the chat runs ([Only what is
+live changes](../../guides/config/live.md#only-what-is-live-changes)). A
+change is kept in `kv.db`, survives a restart and goes over every layer until
+`reset`. Every process connected to the store sees it as soon as it is
+committed. A change that breaks a rule, `max_tokens: 99999`, is refused and
+keeps nothing.
 
 The reply worker checks the switch on every job, and snoozes while it is off:
 
@@ -346,11 +346,12 @@ replies.enabled   false               a change, version 1, 2026-10-24 09:35:00 U
 ```
 
 `explain` lists every setting, its value, the layer that gave it and the
-values it went over. After the settings it lists what was read and not used:
-an optional file that was missing, or a variable such as `CHAT_PROT=9000`
-that names no setting. A typo in a variable is said, never silently ignored.
-Each line's `given` holds the same as data, such as the version and the time
-of a change: see [Explain and validate](../../guides/config/explain.md#each-value-as-data).
+values it went over. After the settings it lists what was read and not used,
+such as a variable `CHAT_PROT=9000` that names no setting, so a typo is
+never silently ignored ([What was read and not
+used](../../guides/config/explain.md#what-was-read-and-not-used)). Each
+line's `given` holds the same as data, such as the version and the time of a
+change: see [Explain and validate](../../guides/config/explain.md#each-value-as-data).
 
 ## Why this design?
 
@@ -359,36 +360,23 @@ an order that depends on how they were called, or on rules nobody remembers.
 Then "why is the port 9000?" takes an afternoon. Here the order is the list
 you wrote, top to bottom, and `explain` answers the question in one line.
 
-**Why only `live` settings change.** A running program read its port, its
-database path and its pool size at start. Changing them in the store would
-show a value the program is not using. Marking the few settings that are
-really read on every request keeps the rest honest, and the type system and
-the core both refuse to change the others.
-
 **Why a change wins over the environment.** An admin who turns replies off
 during an outage must not be overruled by the next deploy, whose environment
-still says `true`. A change stays until someone resets it, and `explain` shows
-it with its time and version, so it is never a mystery.
+still says `true`: see [A change outranks every
+layer](../../guides/config/live.md#a-change-outranks-every-layer).
 
-**Why one config for every process.** Four web processes and a worker that
-each read their own file would disagree for minutes after a change. Changes
-live in the store, and every process sharing the store follows one stream of
-them. A single `update` reaches all of them, and `ifVersion` stops an admin
-page from overwriting a change it never showed.
-
-## Limits and defaults
-
-| What             | Limit                                                   |
-|------------------|---------------------------------------------------------|
-| a config's name  | `[a-z0-9][a-z0-9_-]{0,63}`                              |
-| a setting's path | 256 bytes                                               |
-| a file           | TOML, YAML 1.2, or JSON with comments, by its extension |
-| a duration       | `w`, `d`, `h`, `m`, `s`, `ms`, as `'1h30m'`             |
-| a secret         | text only; never `live`, never kept in the store        |
+**Why only `live` settings change, and one config serves every process.** A
+port read at start and changed in the store would show a value the program
+is not using, and four processes that each read their own file would
+disagree for minutes after a change. [Live
+settings](../../guides/config/live.md) covers both.
 
 ## See also
 
 - [Replies in the background](replies.md): the worker that the switch
   pauses.
+- [Layers and files](../../guides/config/layers.md#limits): the bounds of a
+  config, and [Durations](../../guides/config/layers.md#rules) the units a
+  duration takes.
 - [Config API reference](../../reference/bun/config.md): every call and rule of
   configs.

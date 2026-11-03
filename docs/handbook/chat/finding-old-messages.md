@@ -10,9 +10,9 @@ service.
 ## Index the messages table
 
 The program fills a column with each message's vector, as the embedding model
-returns it. A third migration adds that column:
+returns it. Another migration adds that column:
 
-```sql title="migrations/0003_embeddings.sql"
+```sql title="migrations/0004_embeddings.sql"
 alter table messages add column embedding blob;
 ```
 
@@ -188,10 +188,10 @@ let result = found.search("alfamma").filter(eq("chat_id", &7)).run()?;
 result.corrected // Some("alfama"): the word the search read instead
 ```
 
-A word that matches nothing is read as the nearest word the index holds: one
-letter off for a word of five to eight letters, two for a longer one. A word
-that matches something is never changed (contract SRCH-09). `corrected` lets
-the page say "Showing results for alfama".
+A word that matches nothing is read as the nearest word the index holds, as
+[Typos](../../guides/search/typos.md#the-rules) says, and a word that matches
+something is never changed (contract SRCH-09). `corrected` lets the page say
+"Showing results for alfama".
 
 ## Search by meaning
 
@@ -294,45 +294,35 @@ nightly jobs that compare and repair. Here the table's triggers note each
 changed row, and every commit of the file brings the index up to date
 before it ends. A rollback undoes both.
 
-**Why BM25, exact.** BM25 ranks a word by how rare it is and how often a
-message uses it, the standard that search engines use. Many engines
-approximate it to be fast. TinyStore scores the exact best ten, using block
-bounds to skip documents that cannot win, so a search gives the same answer
-every time for the same messages, after any packing or cleanup.
+**Why BM25, exact.** An exact search gives the same answer every time for
+the same messages, after any packing or cleanup. [How search
+finds](../inside/how-search-finds.md#why-this-design) says why exact is the
+default and how it stays fast.
 
 **Why vectors come from your model.** Embedding models change every few
-months, and each has its own price, languages and size. The store keeps the
-vectors you give it and searches them exactly, by cosine (contract SRCH-02).
-For millions of vectors, `recall: 0.95` switches to clusters, which answer in
-a few milliseconds at the cost of missing about one in twenty of the exact
-best. You choose; the index never does it silently.
+months, and each has its own price, languages and size, so the store keeps
+the vectors you give it and runs no model. It searches them exactly unless
+you ask for `recall`, which finds most of the exact best faster: you choose,
+and the index never does it silently ([Faster with
+`recall`](../../guides/search/vectors.md#faster-with-recall)).
 
 **Why words and vectors are added, not merged by rank.** One common way to
 combine them, reciprocal rank fusion, uses only the positions of hits in each
-list. In the `search-hybrid` research round (the bge-m3 model on Amazon's
-products and twelve StackExchange forums, 600 judged questions each), adding
-the two scaled scores ranked better than fusion by rank in all four
-comparisons. So it is the default, and `vectorWeight` lets you lean either
-way. The [research reports](https://github.com/tinyshed/research/tree/main/tinystore/reports)
-have every number.
-
-## Limits and defaults
-
-| What               | Limit                             |
-|--------------------|-----------------------------------|
-| a search's text    | 1 KiB, its first 32 words         |
-| `limit` + `offset` | 1,000; `limit` is 10 unless set   |
-| a vector           | 4,096 dimensions                  |
-| a field's weight   | above 0, at most 1,000            |
-| a filter           | 8 conditions, 100 values          |
-| a filter's value   | 256 bytes                         |
-| `vectorWeight`     | 0.5 unless set, from 0 to 1       |
-| typos              | 1 letter from 5 letters, 2 from 9 |
+list, so a hit that one half scored far above the rest counts the same as
+one barely ahead. In the `search-hybrid` research round (the bge-m3 model on
+Amazon's products and twelve StackExchange forums, 600 judged questions
+each), adding the two scaled scores ranked better than fusion by rank in all
+four comparisons. So it is the default, and `vectorWeight` lets you lean
+either way. [The round's
+report](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-hybrid-2026-10-16.md)
+has every number and the command that reproduces it.
 
 ## See also
 
 - [Messages](messages.md): the table this index follows.
 - [Replies in the background](replies.md): the worker that can fill the
   vectors.
+- [Limits and defaults](../production/limits.md#search): every bound of
+  Search, from a search's text to a filter's values.
 - [Search API reference](../../reference/bun/search.md): every call of indexes
   and searches.

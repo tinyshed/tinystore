@@ -9,11 +9,11 @@ together.
 
 ## A place for the reply
 
-A reply is a message that points at the message it answers. A second
+A reply is a message that points at the message it answers. The next
 migration adds that column, with a unique index, so that a message can have
 one reply at most:
 
-```sql title="migrations/0002_replies.sql"
+```sql title="migrations/0003_replies.sql"
 alter table messages add column reply_to integer references messages (id);
 create unique index messages_reply_to on messages (reply_to);
 ```
@@ -247,21 +247,15 @@ let worker = replies.work(move |reply: Reply, run| -> Result<(), AppError> {
 worker.stop(); // at shutdown
 ```
 
-The handler gets the job's value and its run. What the handler does decides
-what happens to the job:
-
-| The handler                 | The job                                                          |
-|-----------------------------|------------------------------------------------------------------|
-| returns                     | is done                                                          |
-| throws, or returns an error | runs again after the backoff; after 5 attempts it fails for good |
-| returns `run.fail(reason)`  | fails for good now, with the reason kept as its error            |
-| returns `run.retry('10m')`  | runs again in ten minutes, counted as an attempt                 |
-| returns `run.snooze('10m')` | runs again in ten minutes, not counted                           |
-
-`snooze` is for the model's own rate limit: when the API answers "slow down,
-try in 30 seconds", that is no failure, and it must not use up an attempt.
-`fail` is for a job that can never succeed, such as a message deleted before
-its reply was written.
+The handler gets the job's value and its run. If it returns, the job is
+done. If it throws, the job runs again after the backoff, and fails for good
+after 5 attempts. It can also answer with `run.fail`, `run.retry` or
+`run.snooze`, as [Retry, snooze and
+fail](../../guides/jobs/steps.md#retry-snooze-and-fail) shows. `snooze` is
+for the model's own rate limit: when the API answers "slow down, try in 30
+seconds", that is no failure, and it must not use up an attempt. `fail` is
+for a job that can never succeed, such as a message deleted before its reply
+was written.
 
 ## What a crash does
 
@@ -314,11 +308,10 @@ step "It inserts the reply. on conflict do nothing keeps one reply, even if the 
   set db "reply: saved"
 ```
 
-A job runs at least once, not exactly once. A run that ends before it is
-marked done runs again (contract JOB-05), and the steps it finished are not
-run again (contract JOB-06). What is left must bear running twice: here the
-insert says `on conflict (reply_to) do nothing`, so the reply is saved once
-whatever happens.
+A run that ends before it is marked done runs again (contract JOB-05), and
+the steps it finished are not run again (contract JOB-06). So only what is
+left must bear running twice: here the insert says `on conflict (reply_to) do
+nothing`, so the reply is saved once whatever happens.
 
 ## Show the reply's progress
 
@@ -353,8 +346,9 @@ for job in replies.watch(format!("reply:{message_id}")) {
 ```
 
 `watch` yields the job as it is, then again each time it changes, and ends
-when the job ends. A reply that failed once and succeeded on its second
-attempt looks like this:
+when the job ends ([How a watch
+behaves](../../guides/jobs/watching.md#how-a-watch-behaves)). A reply that
+failed once and succeeded on its second attempt looks like this:
 
 ```mermaid
 flowchart TB
@@ -368,52 +362,32 @@ queue knows where every reply is.
 
 ## Why this design?
 
-**Why the queue lives in the chat's database.** Saving a message and then
-adding a job are two writes. If they go to two files, a crash between them
-leaves a message that nobody answers, or a job for a message that was never
-saved. The usual fix is an "outbox" table and a process that copies rows from
-it into the queue. TinyStore removes the need: a queue opened from `db` keeps
-its jobs in the same file as the messages, and one transaction commits both.
-
-**Why at least once, and not exactly once.** A worker can die after the model
-answered and before the job was marked done. No queue can know whether the
-effect happened, so it has two choices: run the job again, or risk never
-running it. TinyStore runs it again. Your code makes the second run harmless,
-with steps for the expensive parts and a unique key for the final write.
+**Why the queue lives in the chat's database.** A message and its job in two
+files can part in a crash, which systems built on a queue server patch with
+an outbox table and a relay. A queue opened from `db` commits with the
+messages instead: see [Two engines in one
+file](../start/directory.md#two-engines-in-one-file).
 
 **Why steps.** A retry that starts from the top asks the model again: more
 cost, more time and maybe a different answer. A step keeps its answer in the
 database under the job, so a retry continues where the last attempt stopped.
 Steps end with their job, so they never pile up.
 
-**Why an attempt is counted before it runs.** A message that crashes the
-process every time it is processed would otherwise retry forever and take
-the worker down with it on every restart. TinyStore counts each attempt
-before the handler starts, so such a job fails for good after five attempts.
-
 **Why `concurrency` counts every process.** The chat may run four web
 processes, each with a worker. If each one allowed four replies at once, the
 model would get sixteen requests. `concurrency: 4` is a limit of the queue,
 across every worker of the store, so the model sees four at most.
 
-**Why progress lives in memory.** Progress changes often, and nobody needs
-it after a restart: a run that restarts starts its progress again. So
-`setProgress` writes nothing to the disk, and a worker can report it many
-times per second.
+**Why progress lives in memory.** Nobody needs progress after a restart, so
+`setProgress` writes nothing to the disk, and a worker can call it as often
+as it likes ([How a watch
+behaves](../../guides/jobs/watching.md#how-a-watch-behaves)).
 
-## Limits and defaults
-
-| What            | Limit                                              |
-|-----------------|----------------------------------------------------|
-| an id, a group  | 1 to 1,024 bytes                                   |
-| a job's value   | 1 MiB of JSON                                      |
-| a step's answer | 1 MiB of JSON                                      |
-| progress        | 4 KiB of JSON                                      |
-| `ahead`         | counted up to 10,000                               |
-| `attempts`      | 10 unless set                                      |
-| `backoff`       | from 1 s, doubling, up to 1 h, unless set          |
-| `timeout`       | 1 minute per run unless set                        |
-| waiting jobs    | 10,000,000 per queue unless `maxWaiting` says less |
+**Why at least once, and why an attempt counts before it runs.** A worker
+can die after the model answered and before the job was marked done, and no
+queue can know whether the effect happened, so TinyStore runs the job again
+rather than risk never running it. [How a job
+lives](../inside/how-a-job-lives.md#what-a-crash-does) gives both reasons.
 
 ## See also
 
@@ -421,5 +395,7 @@ times per second.
   builds on.
 - [Your first store](../start/first-store.md#what-a-crash-does): a job that
   survives a crash before any worker runs it.
+- [Limits and defaults](../production/limits.md#jobs): every bound of Jobs,
+  from `attempts` and `backoff` to the size of a job's value.
 - [Jobs API reference](../../reference/bun/jobs.md): every call of queues,
   workers and runs.

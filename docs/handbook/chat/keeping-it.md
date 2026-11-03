@@ -32,16 +32,12 @@ let backup = store.backup().write("backups/chat-2026-10-19.zip")?;
 tinystore backup ./data backups/chat-2026-10-19.zip
 ```
 
-The backup is one zip of every engine's files, with a `manifest.json` that
-lists each file's size and SHA-256. The chat keeps answering while it is
-made: every file is copied as it stood at one moment, and the writers stop
-only for the instant it takes to begin a read of each. The zip appears under its name only once it is
-whole, so a backup that fails leaves no half zip behind. The folder it goes
-into must exist.
-
-Any tool that opens a zip opens it. It is not encrypted: what the store keeps
-in the clear is in the clear in the zip, so keep backups as safely as the
-store's directory.
+The backup is one zip of every engine's files as they stood at one moment,
+with a `manifest.json` of each file's size and SHA-256, and the chat keeps
+answering while it is made. A backup that fails leaves no half zip behind.
+The folder it goes into must exist. The zip is not encrypted, so keep
+backups as safely as the store's directory: [What a backup
+holds](../../guides/backup/restore.md#what-a-backup-holds) has the rest.
 
 ## Every night
 
@@ -81,13 +77,12 @@ let nightly = store.schedule("backup").cron("0 3 * * *", "Europe/Berlin").work(m
 ```
 
 `run.at` is the time the run was due, not the time it started, so a backup
-that starts late is still named after its night. The schedule is a job like
-any other: if the chat is down at three, it runs once when the chat comes
-back, not once for every night it missed. A run that fails is retried with a
-backoff, and the schedule goes on.
-
-A cron needs a time zone. "Three in the morning" means nothing without one,
-and a default of UTC would be a guess.
+that starts late is still named after its night. If the chat is down at
+three, the backup runs once when it comes back, and a run that fails is
+retried ([How a repeat
+behaves](../../guides/jobs/schedules.md#how-a-repeat-behaves)). A cron needs
+a time zone, because "three in the morning" means nothing without one, and a
+default of UTC would be a guess.
 
 ## Restore
 
@@ -99,21 +94,19 @@ tinystore restore backups/chat-2026-10-19.zip ./data
 tinystore::backup::restore("backups/chat-2026-10-19.zip", "data")?; // before Store::open
 ```
 
-A restore writes into an empty or missing directory, never over a store. It
-checks every file against the manifest's size and SHA-256 before it names
-it, so it either restores everything or leaves the directory empty. Then the
-chat opens the directory as it opens any store.
-
-A program in TypeScript, Python or Go restores through the `tinystore`
-command, because a restore happens before any store is open.
+A restore writes into an empty or missing directory, never over a store, and
+restores everything or leaves the directory empty ([What a restore
+checks](../../guides/backup/restore.md#what-a-restore-checks)). Then the
+chat opens the directory as it opens any store. A program in TypeScript,
+Python or Go restores through the `tinystore` command, because a restore
+happens before any store is open.
 
 > [!WARNING]
 > **The encryption key is not in a backup**
 > If the chat keeps encrypted buckets, the store's encryption key is left out
-> of the zip unless you ask for it, and the backup says `keyLeftOut: true`.
-> Without the key, the restored store cannot read those values. Keep the key
-> apart, or back it up on purpose with `includeEncryptionKey`
-> (`include_encryption_key`, `tinystore.IncludeEncryptionKey()`).
+> of the zip unless you ask for it, and without it the restored store cannot
+> read those values. [The encryption
+> key](../../guides/backup/encryption-key.md) says how to keep it.
 
 ## Test on a clock you move
 
@@ -178,13 +171,11 @@ reminders.run_due(remind)?; // 1: the reminder ran
 codes.get("k7q2")?; // None: the code expired
 ```
 
-Every engine reads the time through the store's clock: expiry, jobs, a
-quota's windows, the time of a log line. Moving the clock moves all of them
-together, and it never moves backwards. `runDue` runs what is due and
-returns, so a test checks the result right after.
-
-A private store is a server for the test alone, in a temporary directory,
-so tests run in parallel without sharing a sidecar.
+Moving the clock moves every engine together: expiry, jobs, a quota's
+windows and the time of a log line. `runDue` runs what is due and returns,
+so a test checks the result right after. A private store is a server for
+the test alone, so tests run in parallel ([How it
+behaves](../../guides/jobs/testing.md#how-it-behaves)).
 
 ## Why this design?
 
@@ -204,10 +195,9 @@ holds every file's commits back for the instant it takes to begin a read of
 each, and a restore is the store as it stood then.
 
 **Why a restore checks every byte.** A backup is the copy you use on your
-worst day. A restore that finds a damaged file and stops halfway would leave
-you with a store that opens and is wrong. TinyStore checks every file before
-it puts it in place, and leaves an empty directory if anything does not
-match, so a restore is either the backup or nothing.
+worst day, and a restore that stopped halfway would leave a store that opens
+and is wrong. So a restore is either the backup or nothing (contract
+BAK-02).
 
 **Why a clock instead of sleeping.** A test that waits 15 minutes for a code
 to expire is never run, and one that waits 50 milliseconds for a job is

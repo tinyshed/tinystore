@@ -95,12 +95,12 @@ let db = store.database("chat").migrations("migrations").open()?;
 let messages = db.table::<Message>("messages");
 ```
 
-The database's file is `data/sql/chat.db`. Opening it applies every migration
-the file has not applied yet, all of them in one transaction, so the file has
-the old schema or the whole new one. Then it checks the ones applied before:
-if a migration file was edited, renamed or deleted after it ran, the open
-fails and names the file. A program that starts has the schema its code
-expects, or it does not start.
+The database's file is `data/sql/chat.db`. Opening it applies the
+migrations the file has not applied yet, in one transaction, and fails,
+naming the file, if one that ran was edited, renamed or deleted since. A
+program that starts has the schema its code expects, or it does not start:
+[What opening does](../../guides/sql/migrations.md#what-opening-does) has
+every case.
 
 `db.table` is a typed handle on one table. It reads rows into your type, by
 the columns' names: Go's `ChatID` is the column `chat_id`. It costs nothing
@@ -313,9 +313,8 @@ transaction's own writes.
 
 A transaction holds the database's writer while its function runs, so keep it
 short: no calls to the model, no HTTP requests, nothing that waits on the
-outside world. TinyStore enforces that: a transaction that runs longer than
-five seconds is rolled back and fails with a `limit` error. Its function runs
-exactly once, and TinyStore never retries it for you.
+outside world. A transaction that runs longer than five seconds is rolled
+back and fails with a `limit` error, and its function runs exactly once.
 
 ## Read a chat, a page at a time
 
@@ -346,10 +345,9 @@ let page = newest.list(50, None)?;
 let older = newest.list(50, page.next.as_deref())?; // page.next is None after the last page
 ```
 
-`list` returns the rows and a cursor, `next`, for the page after them. The
-next page starts right after the last row of this one, by the query's order,
-so a message that arrives while the user scrolls never shows up twice and
-never pushes another one out of view. A page by `offset` would do both.
+`list` returns the rows and a cursor, `next`, for the page after them, so a
+message that arrives while the user scrolls never shows up twice, as it
+would with `offset` ([Pages](../../guides/sql/tables.md#pages)).
 
 The builder writes the SQL a person would. `newest.limit(50).toSQL()`
 (`to_sql()` in Python and Rust) shows it:
@@ -431,11 +429,9 @@ let chats: Vec<ChatRow> = db.all(sql!(
 `all` returns every row, `one` returns one row or nothing, and `scalar`
 returns one value, such as a `count(*)`. Each of them also takes a write with
 `returning`, which runs on the writer and returns its rows after the commit.
-
-Use the builder when the query depends on the request, such as filters a
-user turns on and off, or pages. Use SQL when the query is fixed, or when it
-has joins and subqueries. Both end up as the same kind of statement, with
-values as parameters.
+Use the builder when the query depends on the request, and SQL when it is
+fixed or has joins and subqueries ([Builder or
+SQL?](../../guides/sql/tables.md#builder-or-sql)).
 
 ## Change the schema
 
@@ -445,26 +441,18 @@ To change the schema, add a new migration file. Never edit one that has run:
 alter table chats add column pinned integer not null default 0 check (pinned in (0, 1));
 ```
 
-The next start applies `0002_pinned.sql` and records it. A file that
-contains `0001` but not `0002` is updated, and a file that already ran both
-is left as it is. If you edit `0001_chats.sql` after it ran, every start
-refuses to open the database, until the file is back as it was.
+The next start applies `0002_pinned.sql` and records it. If you edit
+`0001_chats.sql` after it ran, every start refuses to open the database,
+until the file is back as it was.
 
 ## When a write fails
 
-| Error             | When                                                                       | What to do                                  |
-|-------------------|----------------------------------------------------------------------------|---------------------------------------------|
-| `conflict`        | a unique or primary key is taken                                           | the row exists: read it, or choose another  |
-| `invalid`         | a foreign key, a `check` or a `not null` breaks; a value of the wrong type | fix the value; `constraint` says which rule |
-| `limit`           | a transaction ran longer than five seconds; `all` read more than 64 MiB    | do less inside it; read a page or `each`    |
-| `outcome unknown` | the disk sync of a shared commit failed                                    | read what you wrote before you write again  |
-
-The classes are `ConflictError`, `InvalidError`, `LimitError` and
-`OutcomeUnknownError` in TypeScript and Python. In Go they are the kinds
-`tinystore.Conflict`, `tinystore.Invalid`, `tinystore.Limit` and
-`tinystore.OutcomeUnknown` of a `*tinystore.Error`, and in Rust the same
-names in `ErrorKind`. Every error names the database and the statement or
-migration it is about.
+A taken key fails with a `conflict` error, a broken `check` or foreign key
+with `invalid`, a transaction past five seconds with `limit`, and a shared
+commit whose sync failed with `outcome unknown`. Every error names the
+database and the statement or migration it is about. [When a write
+fails](../../guides/sql/writes.md#when-a-write-fails) says what to do about
+each.
 
 ## Why this design?
 
@@ -479,16 +467,13 @@ process down.
 after it ran means the files on disk and the code disagree about the schema,
 and nothing tells you until a query fails in production. TinyStore keeps a
 checksum of each applied migration and refuses to open the file when one
-changed. There are no "down" migrations: to undo a change, write the next
-migration.
+changed.
 
-**Why writes share a commit but a transaction does not.** Syncing the disk is
-the slow part of a write. When many requests insert at once, TinyStore syncs
-once for all of them, and a savepoint around each insert lets one fail
-without the others. A transaction is different: its function decides what to
-write from what it reads, so it must hold the writer alone while it runs and
-pay for its own sync. That is why `exec` and `tx` are two calls: they cost
-different things.
+**Why writes share a commit but a transaction does not.** Writes known
+before they run share one sync, each in a savepoint of its own, while a
+transaction decides what to write from what it reads, so it holds the writer
+alone and pays its own sync. [The journey of a
+write](../inside/journey-of-a-write.md#why-this-design) gives the reasons.
 
 **Why a transaction runs once and stops at five seconds.** Some libraries run
 a transaction's function again when it conflicts. If that function called a
@@ -498,12 +483,10 @@ hangs would stop the whole database. The five-second bound turns that hang
 into an error.
 
 **Why a statement may not set a pragma or begin a transaction.** All the
-writes of a commit share one connection. A `pragma foreign_keys = off` or a
-`commit` inside one write would change the rules for the writes beside it. So
-TinyStore refuses `attach`, `begin`, `commit`, `rollback`, savepoints and
-pragmas that change a setting, when it compiles the statement (contract
-SQL-02). Pragmas that only read, such as `pragma table_info(messages)`, still
-work.
+writes of a commit share one connection, so a `pragma foreign_keys = off` in
+one write would change the rules for the writes beside it. TinyStore refuses
+such a statement (contract SQL-02), and [Every connection the
+same](../inside/sqlite.md#every-connection-the-same) lists what it refuses.
 
 **Why `undefined` in a condition is an error.** `messages.where({ chat_id:
 undefined })` could mean "every chat". If a request forgot to send the chat's
@@ -512,18 +495,6 @@ the condition instead, and refuses `update` and `delete` with an empty one
 (contract SQL-09). A filter that applies only sometimes is an `if` in your
 code.
 
-## Limits and defaults
-
-| What                        | Limit                                                        |
-|-----------------------------|--------------------------------------------------------------|
-| a database's name           | `[a-z0-9][a-z0-9_-]{0,63}`, its file `sql/<name>.db`         |
-| a transaction               | 5 seconds, then rolled back with a `limit` error             |
-| rows `all` holds in memory  | 64 MiB; read more with `each` or `list`                      |
-| one `each` read             | 5 seconds of one snapshot                                    |
-| writes in one shared commit | 1,024, or 8 MiB                                              |
-| readers                     | one per processor, 4 to 16; unused ones close after a minute |
-| durability                  | the store's, `'full'` unless set; a database can set its own |
-
 ## See also
 
 - [The chat we build](../start/chat.md): where this chapter fits in the
@@ -531,4 +502,6 @@ code.
 - [One directory, many engines](../start/directory.md#two-engines-in-one-file):
   keep a bucket or a queue inside this database, so that it commits with the
   rows.
+- [Limits and defaults](../production/limits.md#sql): every bound of the SQL
+  engine, from a transaction's five seconds to the readers.
 - [SQL API reference](../../reference/bun/sql.md): every call of the SQL engine.

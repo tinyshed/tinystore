@@ -5,11 +5,6 @@ adds a background job, runs it and logs a line. Then it looks inside the
 store with the `tinystore` command. It takes about ten minutes, in
 TypeScript, Python, Go or Rust.
 
-> [!NOTE]
-> **Version 0.3**
-> Until `1.0`, a minor release may still change the API, and
-> [its notes](../../releases/README.md) say what changed.
-
 ## Install
 
 ```sh for=bun
@@ -45,11 +40,14 @@ LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE
 | Rust         | the Rust toolchain itself | the crate, compiled into your program                     |
 
 Rust programs compile the core in, so a Rust program is the store. It builds
-SQLite too, with the flags in `.cargo/config.toml`: without them many readers
-at once wait on one another, which the store's logger warns of in its first
-lines, and a synced commit on Linux takes 1.5x as long. The other
-languages talk to the same core in a separate process by default, as
-[How the store runs](#how-the-store-runs) explains below.
+SQLite too, with the flags in `.cargo/config.toml`. Without them, many
+readers at once wait on one another, which the store's logger warns of in
+its first lines. On Linux, a synced commit then calls `fsync` instead of
+`fdatasync`, which made a 4 KiB write about 1.5 times as slow in [a research
+round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-optimization-2026-10-09.md)
+on a Ryzen 7 7700 under Docker on WSL2. The other languages talk to the same
+core in a separate process by default, as [How the store
+runs](#how-the-store-runs) explains below.
 
 ## The whole program
 
@@ -239,7 +237,7 @@ The type is the one you give the bucket: an interface in TypeScript, a
 dataclass in Python, a struct in Go and Rust. The value is stored as JSON, so
 a Python program reads what a Go program wrote. Buckets do much more: keys
 that expire, versions for safe updates, branches such as one user's
-sessions. Chapter 6, Sessions and limits, covers them.
+sessions. [Sessions and limits](../chat/sessions-and-limits.md) covers them.
 
 ## Do work later
 
@@ -318,10 +316,11 @@ step "The worker sends the email and the job is done. Nothing was lost, and you 
 ```
 
 A write that returned success survives the process dying (contract DUR-01).
-The other side of this is that a job runs at least once, not exactly once.
-If the program dies after the email was sent but before the job was marked
-done, the email is sent again after the restart. Chapter 7, Replies in the
-background, shows how a handler makes a second run harmless.
+The other side of this is that a job runs at least once, not exactly once:
+if the program dies after the email was sent but before the job was marked
+done, the email is sent again after the restart. [Replies in the
+background](../chat/replies.md#what-a-crash-does) shows how a handler makes
+a second run harmless.
 
 ## Log what happened
 
@@ -332,20 +331,23 @@ by time, level, fields or text.
 
 Go uses the standard `slog` package with a handler from TinyStore, and Rust
 uses `tracing` with a layer from TinyStore, so the rest of your program logs
-as it always did. A log call never waits for the disk. The logger keeps its
-lines in memory and writes them to the store within a second.
+as it always did. A log call never waits for the disk: the logger keeps its
+lines in memory and writes them to the store within a second ([Never
+waits](../../guides/records/logging.md#never-waits)).
 
 ## Look inside
 
-The `tinystore` command reads a store while your program runs. It never
-changes anything and never stops the program:
+The `tinystore` command reads a store while your program runs, and never
+stops the program. Its commands that write, such as `kv set`, go through the
+process that serves the store ([How it
+behaves](../../guides/cli/README.md#how-it-behaves)):
 
 ```sh
 tinystore status ./data
 ```
 
 ```text
-● ./data  served by tinystore 0.3.0 · pid 15865 · up 4s · durability not set: full, os for records and metrics
+● ./data  served by tinystore 0.7.0 · pid 15865 · up 4s · durability not set: full, os for records and metrics
 
   kv        76 KiB
   jobs     125 KiB
@@ -360,8 +362,10 @@ tinystore logs ./data             # 15:39:52.006 INFO  hello  email sent  to=ada
 tinystore logs ./data -f          # every new line as it arrives, until Ctrl+C
 ```
 
-`tinystore` alone lists every command. Chapter 28, Running it, covers them
-all, along with `tinystore mcp`, which lets an AI agent read the store.
+`tinystore` alone lists every command. [The command
+line](../../guides/cli/README.md) covers them all, and [Running
+it](../production/running-it.md) shows them at work, along with `tinystore
+mcp`, which lets an AI agent read the store.
 
 </div>
 
@@ -380,42 +384,37 @@ data/
 ```
 
 The engines open lazily: `kv.db` appears when the first bucket opens, and a
-program that never logs has no `records.db`. Next to each file you may see
-`-wal` and `-shm` files. Those are SQLite's write-ahead log, and they belong
-to the file beside them.
+program that never logs has no `records.db`. [What is in the
+directory](directory.md#what-is-in-the-directory) lists every file.
 
 A Rust program runs the store inside its own process. A Bun, Node, Python or
 Go program does not, by default. Its SDK starts a small `tinystore` process
-next to it, called the sidecar, and talks to it over a local socket or a
-named pipe on Windows. The sidecar writes its address to `server/SERVE`, so a
-second program that opens the same directory finds it and joins it. When the
-last program has disconnected, the sidecar waits 30 seconds and exits.
+next to it, called the sidecar, which writes its address to `server/SERVE`,
+so a second program that opens the same directory finds it and joins it.
+[Four ways to open a store](directory.md#four-ways-to-open-a-store) shows
+the others.
 
 ## Why this design?
 
-**Why a sidecar by default.** A directory can have only one owner at a time,
-because two processes writing the same SQLite file through separate caches
-would wait on each other's locks, and their background work would collide.
-But a web application often runs several processes: four workers behind a
-load balancer, and a cron script beside them. The sidecar lets all of them
-share one store with one owner. If your program is the only one that ever
-opens the directory, open it with `embedded: true` (`embedded=True`,
+**Why a sidecar by default.** A web application often runs several
+processes, and only one process may own a directory, so the sidecar gives
+them all one owner. If your program is the only one that ever opens the
+directory, open it with `embedded: true` (`embedded=True`,
 `tinystore.Embedded()`), and the core runs inside your process with no
-sidecar at all.
+sidecar at all. [One core, four
+languages](../inside/one-core.md#why-this-design) says more.
 
 **Why a write waits for the disk.** A program that was told "saved" must
-find the value after a crash or a power loss, so `set` and `add` return only
-after the disk has synced. A sync takes time, so TinyStore groups writes:
-while one sync runs, the writes that arrive wait together and share the next
-one. A hundred concurrent requests pay for a few syncs, not a hundred.
-Chapter 15, The journey of a write, follows one write all the way down.
+find the value after a power loss, so `set` and `add` return after the disk
+has synced, and the writes that arrive together share one sync. [The
+journey of a write](../inside/journey-of-a-write.md) follows one write all
+the way down.
 
 **Why logs do not wait.** A log line is worth less than the request that
-writes it, so the logger never makes a request wait for the disk. Lines wait
-in a bounded buffer and are written every second. If the buffer is full, a
-line is dropped and counted, never blocking the program. Logs and metrics
-also default to a lighter durability than the other engines: they survive the
-program crashing, but a power loss may take the last second of them.
+writes it, so the logger never makes a request wait for the disk, and drops
+a line rather than block when its buffer is full. Logs and metrics also
+default to a lighter [durability](directory.md#a-file-per-engine) than the
+other engines.
 
 ## See also
 

@@ -81,12 +81,14 @@ waiting.set(reply_queue_length() as f64);
 
 `with` (`labels` in Python) picks the series by its labels: each set of
 labels is a series of its own. A call never waits and never writes: it
-changes a number in memory. The instruments send what changed to the store
-every 15 seconds, and when the store closes.
+changes a number in memory.
 
 Four web processes and a worker that count into `chat_replies_total` count
-into one total. The store keeps the totals and adds what each process sends,
-so a process that restarts loses only the last 15 seconds it had not sent.
+into one total. A program on Bun, Node, Python or Go sends what changed
+every second, and the store adds it to the totals it writes every 15
+seconds. So a process that crashes loses about its last second, and a crash
+of the store's own process its last 15 seconds ([One total across
+processes](../../guides/metrics/instruments.md#one-total-across-processes)).
 
 ## Sizes, not durations
 
@@ -182,98 +184,45 @@ let mean = stats.query().name("chat_model_ms").since(Duration::from_hours(1)).ag
 ```
 
 An aggregate cuts the range into buckets of `every`, counted from 1970 in
-UTC, and answers one exact value per bucket:
-
-| `op`           | Of                 | A bucket's answer                                                   |
-|----------------|--------------------|---------------------------------------------------------------------|
-| `increase`     | a counter          | how much it grew, resets counted                                    |
-| `rate`         | a counter, a timer | that per second                                                     |
-| `avg`, `sum`   | a gauge, a timer   | the exact average and sum                                           |
-| `min`, `max`   | a gauge, a timer   | the least and the greatest                                          |
-| `last`         | a gauge            | its last value in the bucket                                        |
-| `p50`, `p95` … | a gauge, a timer   | a gauge's sample at that rank; a timer's bucket, `lower` to `upper` |
-
-A timer's percentile answers with the two bounds of the bucket that holds
-it: `lower: 1000, upper: 2500` means "the 95th percentile lies between one
-and two and a half seconds". It does not invent a single number between them,
-because the store never measured one. `estimate: true` adds an interpolated
-point, named so that nobody mistakes it for a measurement.
+UTC, and answers one exact value per bucket: [Ops](../../guides/metrics/aggregates.md#ops)
+lists what each `op` answers. A timer's percentile answers with the two
+bounds of the bucket that holds it: `lower: 1000, upper: 2500` means "the
+95th percentile lies between one and two and a half seconds", as
+[Percentiles](../../guides/metrics/aggregates.md#percentiles) explains.
 
 ## The store's own metrics
 
-Open the store with `selfMetrics` and it measures itself into the same
-`metrics.db`: its commits and how long each write waited, the size of each
-file, its memory, its disk, and each engine's own numbers.
-
-```ts
-await using store = await open('./data', { selfMetrics: true })
-```
-
-```python
-store = await tinystore.open("data", self_metrics=True)
-```
-
-```go
-store, err := tinystore.Open(ctx, "data", tinystore.SelfMetrics())
-```
-
-```rust
-let store = Store::open("data", Options { self_metrics: Some(SelfMetrics::default()), ..Options::default() })?;
-```
-
-They are read like your own, under names that start with `tinystore_`:
-`tinystore_commit_ms`, `tinystore_jobs_waiting`, `tinystore_jobs_run_ms`,
-`tinystore_file_bytes`, `tinystore_memory_used_bytes`,
-`tinystore_disk_free_bytes`. A program may not write a name that starts with
-`tinystore_`.
+Open the store with `selfMetrics`, and it measures itself into the same
+`metrics.db`: its commits and how long each write waited, its files, its
+memory, its disk and each engine's own numbers, under names that start with
+`tinystore_`. A program may not write such a name itself. [The store's own
+metrics](../../guides/metrics/self-metrics.md) shows how to turn it on and
+lists every name.
 
 ## Why this design?
 
-**Why a sample is kept bit for bit.** Many time-series databases round,
-downsample or average values as they store them, and a chart then shows
-numbers nobody measured. TinyStore keeps every sample as it was given, `-0`
-and NaN included, and proves every packing gives the same bits back. Whoever
-draws the chart may round; nobody can unround.
+**Why a sample is kept bit for bit.** Whoever draws the chart may round, but
+nobody can unround, as [How logs and metrics
+pack](../inside/how-logs-and-metrics-pack.md) shows.
 
-**Why an aggregate is exact and rounded once.** A sum over a day adds every
-sample of the day exactly, whatever blocks they were packed in, and rounds
-the result once. An average is the sum of all samples over their count, never
-an average of averages. So the same question gives the same answer, however
-the data was packed.
-
-**Why a percentile is two bounds.** A timer counts durations into buckets, so
-it knows that 95% of calls took at most 2.5 seconds and more than 1 second,
-and nothing finer. Prometheus' `histogram_quantile` interpolates a single
-number between the bounds, and that number looks measured but is a guess.
-TinyStore answers the interval, and gives the interpolated point only when
-asked, under the name `estimate`.
-
-**Why buckets add up.** An `increase` counts each step between two samples in
-the bucket where the step ends, and the first bucket takes its step from the
-last sample before the range. So 12 buckets of 5 minutes add up to exactly the
-hour, and two adjacent hours add up to the two hours. A dashboard that sums
-its bars gets the total.
+**Why an aggregate is exact and rounded once.** An average is the sum of all
+samples over their count, never an average of averages, so the same
+question gives the same answer, however the data was packed. A percentile of
+a timer is two bounds, because a number between them would look measured
+but be a guess, and buckets of any width add up to the range: see
+[Aggregates](../../guides/metrics/aggregates.md).
 
 **Why instruments send changes, not totals.** If each process wrote its own
 total, four processes would make four series, and a restart would look like a
 reset. Each process sends what changed since its last send, and the store
 keeps one total. A send that a lost connection repeats is counted once.
 
-## Limits and defaults
-
-| What                                 | Limit                                                      |
-|--------------------------------------|------------------------------------------------------------|
-| a name's `keep`                      | 30 days unless set                                         |
-| an instrument's sets of labels       | 2,000 between two sends; more go to `__overflow`           |
-| series in a store                    | 100,000 unless the store's `maxSeries` says                |
-| instruments' writes                  | every 15 seconds, at `flush` and when the store closes     |
-| a series no process sent for an hour | leaves memory; sent again, it starts a new run with a zero |
-| an aggregate                         | 100,000 buckets                                            |
-
 ## See also
 
 - [Replies in the background](replies.md): the worker the timer measures.
 - [What it is doing](what-it-is-doing.md): logs and events beside the
   numbers.
+- [Limits and defaults](../production/limits.md#records-and-metrics): every
+  bound of Metrics, from a name's `keep` to the buckets of an aggregate.
 - [Metrics API reference](../../reference/bun/metrics.md): every instrument, read
   and aggregate.

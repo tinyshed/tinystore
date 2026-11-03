@@ -7,17 +7,15 @@ runtime of its own. Every engine is there: each call that reads, writes or
 waits returns a future, and you run a transaction and close the store with
 `.await` too.
 
-> [!NOTE]
-> **Rust only**
-> This page is about Rust. In Bun, Node and Python every call is already
-> awaited, and in Go a call blocks its goroutine, which costs little. The
-> examples on this page show only Rust for that reason.
+This page is about Rust only. In Bun, Node and Python every call is already
+awaited, and in Go a call blocks its goroutine, which costs little. The
+examples on this page show only Rust for that reason.
 
 ## Turn it on
 
 ```toml
 [dependencies]
-tinystore = { version = "0.3", features = ["async"] }
+tinystore = { version = "0.7", features = ["async"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
@@ -91,11 +89,6 @@ answer on a thread that TinyStore starts for the call, not on the store's
 threads. So a slow home, or a run under way at the home, never holds the
 threads that your other calls need.
 
-Once you poll a write, it commits even if you drop its future (contract
-DUR-11). A write whose future you never poll writes nothing. A read whose
-future you drop stops where it is and gives its reader back (contract
-STORE-09), so `tokio::time::timeout` around a read stops it.
-
 The store's threads are a pool of at most sixteen, and each running worker
 adds a thread of its own beside them for its claims. TinyStore starts them as
 calls need them, ends each one after a minute without work, and stops all of
@@ -109,18 +102,20 @@ A future that is never polled reads and writes nothing. After its first poll:
 
 - **A read stops.** Its SQLite statement is interrupted and its reader goes
   back at once, as if a `CancellationToken` was cancelled (contract
-  STORE-09). This is what a web handler wants when its client goes away.
+  STORE-09). This is what a web handler wants when its client goes away, and
+  it is safe, because a read changes nothing.
   `tokio::time::timeout(duration, call)` stops a read this way when the time
   runs out.
-- **A write commits.** Writes share a commit, and a commit cannot stop half
-  way, so a write that was polled commits whether or not anyone still awaits
-  it (contract DUR-11). Only its answer is lost. To know that a write
-  happened, await it.
+- **A write commits.** Once a write is queued, other writes may be
+  committing with it, and taking it out would fail them too, so a write that
+  was polled commits whether or not anyone still awaits it (contract
+  DUR-11). Only its answer is lost. To know that a write happened, await it.
 - **A transaction runs to its end**, as a write does.
 
 A `CancellationToken` still works around a call. Make the future inside
-`token.run(...)`, and its read stops when you call `token.cancel()`: it fails
-with a cancelled error (`ErrorKind::Cancelled`).
+`token.run(...)`, and its read stops when you call `token.cancel()`, or when
+the time of a token made with `CancellationToken::timeout(duration)` runs
+out: it fails with a cancelled error (`ErrorKind::Cancelled`).
 
 ## Transactions
 
@@ -145,10 +140,8 @@ wait for your program's other tasks. Inside the closure, the calls go through
 `tx.with(&handle)`, exactly as in the blocking API. If the closure returns an
 error, the transaction rolls back and the future returns that error. If the
 closure panics, the transaction rolls back and the panic continues where you
-await the future.
-
-Once its future is polled, a transaction runs to its end, even if you drop
-the future. To know whether it committed, await it.
+await the future. Once its future is polled, a transaction runs to its end,
+even if you drop the future, so await it to know whether it committed.
 
 Don't call `block_on` on an awaited call inside the closure. That call would
 wait for the writer the transaction holds, so it fails with an invalid error
@@ -197,9 +190,11 @@ blocking twin. A call made after its store closed fails with a closed error
 (`ErrorKind::Closed`), and so does a call that was still waiting for the
 store's threads when the store closed.
 
-There is one way to time out a call: your runtime's timeout, such as
-`tokio::time::timeout`. When it drops the future, a read stops and a write
-still commits.
+A call times out in one of two ways: your runtime's timeout, such as
+`tokio::time::timeout`, which drops the future, or a token from
+`CancellationToken::timeout` that you make the future in. Either way a read
+stops and a write still commits, as [What dropping a future
+does](#what-dropping-a-future-does) says.
 
 `store.close().await` closes the store on a thread that the call starts. It
 waits for background work, for the handlers that run and for each engine's
@@ -241,12 +236,6 @@ writer until it commits. If its closure could await other tasks, every write
 to that file would wait for them, and one slow request would stall all the
 others. A blocking closure on the store's threads keeps the writer for the
 time the transaction's own reads and writes take.
-
-**Why a polled write commits.** Writes that arrive together share one commit
-and one sync of the disk. Once a write is queued, other writes may be
-committing with it, and taking it out would mean failing them too. So a
-dropped future only stops waiting for the answer. A read is different: it
-changes nothing, so stopping it is always safe.
 
 ## See also
 

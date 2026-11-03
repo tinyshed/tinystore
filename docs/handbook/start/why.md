@@ -28,21 +28,9 @@ to handle every one of those failures. Most applications never need the scale
 these services were built for. They pay for it anyway.
 
 TinyStore replaces the stack with a directory that belongs to the
-application:
-
-```tree
-data/
-├── sql/
-│   └── chat.db    your SQL databases, one file each
-├── kv.db          sessions, codes, counters, limits, settings
-├── jobs.db        background jobs and schedules
-├── blobs/         uploaded files
-├── search.db      search indexes
-├── records.db     logs and events
-└── metrics.db     metrics
-```
-
-You open the whole directory with one call, and every engine opens from it:
+application, with a file per engine: [What is in the
+directory](directory.md#what-is-in-the-directory) lists them. You open the
+whole directory with one call, and every engine opens from it:
 
 ```ts
 import { open } from '@tinyshed/tinystore'
@@ -116,9 +104,11 @@ language: `not found`, `conflict`, `limit`, `invalid` and a few more.
   PostgreSQL plans complex queries better, and Redis on its own answers a
   single key faster than a write that waits for the disk. TinyStore makes the
   whole workload of one application cheap, and it removes the network hops
-  between the services.
-- **It is young.** The first release came out in October 2026, and `0.3` is
-  the newest. Until `1.0`, a minor release may still change the API.
+  between the services. [Benchmarks](../production/benchmarks.md) measures
+  where it wins and where it loses.
+- **It is young.** The first release came out in October 2026. Until `1.0`,
+  a minor release may still change the API, and [its
+  notes](../../releases/README.md) say what changed.
 
 ## Why this design?
 
@@ -135,18 +125,14 @@ server. TinyStore runs it in a specific way: one writer per file, writes from
 many callers grouped into one disk sync, and readers that never block the
 writer. [Under the hood](../../README.md#under-the-hood) explains each choice.
 
-**Why a file per engine.** SQLite lets one connection write a file at a time.
-If logs, jobs and sessions shared a file, a burst of log lines would make a
-sign-in wait. With a file per engine, no engine ever waits for another
-engine's writer. When you do want two engines to commit together, such as a
-job and the row it is about, you open the job's queue inside your SQL
-database, and the two share that database's file.
+**Why a file per engine.** A burst of log lines never makes a sign-in wait,
+and each engine keeps the durability it needs: see [A file per
+engine](directory.md#a-file-per-engine).
 
-**Why one core in Rust.** The first versions of TinyStore were written in Go,
-and the Bun and Python SDKs had to repeat parts of it: the logger, the
-config, the console format. Each copy drifted. Now one core does everything,
-and every language reaches it through the same wire protocol. A feature is
-written once and appears in every SDK with the same behaviour.
+**Why one core in Rust.** A feature is written once and behaves the same in
+every SDK. The first versions copied parts of a Go engine into each SDK, and
+the copies drifted: see [One core, four
+languages](../inside/one-core.md#why-this-design).
 
 ## See also
 

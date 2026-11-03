@@ -201,18 +201,18 @@ fn download(chat_id: i64, path: &str) -> Result<Option<(FileInfo, StoredFile)>, 
 }
 ```
 
-The ETag is the SHA-256 of the file's bytes, already quoted as HTTP wants
-it. A browser that has the file sends it back in `If-None-Match`, and the
-server answers `304` without sending a byte. Go's `http.ServeContent` also
-answers range requests, so a video seeks without downloading all of it. In
-TypeScript a range is `file.slice(start, end)`.
+The ETag is the quoted SHA-256 of the file's bytes, so a browser that sends
+it back in `If-None-Match` gets a `304` without a byte of the file. A video
+that seeks asks for a range: [Serving files](../../guides/blobs/serving.md)
+shows ranges and caching in each language.
 
 > [!WARNING]
 > **Serve uploads as attachments**
-> A content type comes from the user. A file uploaded as `text/html` or
-> `image/svg+xml` and served inline from your own domain runs its scripts
-> there, with your users' cookies. Send `content-disposition: attachment`,
-> serve uploads from another domain, or set the content type yourself.
+> A file uploaded as `text/html` and served inline from your own domain runs
+> its scripts there, with your users' cookies. Send `content-disposition:
+> attachment`, as the code above does, or see [Serve uploads
+> safely](../../guides/blobs/serving.md#serve-uploads-safely) for the other
+> ways.
 
 ## Delete a chat's files
 
@@ -233,10 +233,9 @@ attachments.folder("chats").folder(chat_id).clear()?;
 ```
 
 `clear` removes the folder and everything in it, for every reader at once,
-however many files it holds. A folder is whole path segments, never a prefix
-of text: `folder('chats', 7)` never touches chat 70's files. An empty or
-missing id is refused, so a bug can never turn this call into "delete every
-chat".
+however many files it holds. `folder('chats', 7)` never touches chat 70's
+files, and a missing id is refused, so a bug can never turn this call into
+"delete every chat" ([Folders](../../guides/blobs/uploads.md#folders)).
 
 To see how much a user stores, `usage()` on a folder returns the number of
 files and their bytes.
@@ -275,48 +274,40 @@ as a file of its own under `blobs/objects/`. You never choose: the call is the
 same.
 
 **Why a path is not a file name on disk.** Files are stored under numbers,
-and the path is only a key. So `Photo.jpg` and `photo.jpg` are two files on
-Windows and macOS too, `CON` is a path like any other, and no path can climb
-out of its folder (contract BLOB-08). Moving a store from Linux to Windows
-changes nothing.
+so a path is only a key, and moving a store from Linux to Windows changes
+nothing: see [Paths](../../guides/blobs/uploads.md#paths).
 
-**Why a whole read is checked.** A disk can return bytes that changed since
-they were written, and nothing in the file system says so. TinyStore hashes a
-file as it reads it and compares the hash with the one taken at the write. It
-holds the last bytes back until they match, so a damaged file fails with a
-`corrupt` error before its end instead of reaching a user as good (contract
-BLOB-02). A scrub in the background reads every file over 30 days and names
-the ones that changed.
+**Why a whole read is checked.** A disk, a cable or a controller can change
+a byte, and a file system rarely notices. Without a check, the program
+serves the damaged file as good, and the backup made tonight copies the
+damage. SHA-256 is computed while the bytes stream anyway, so the check
+costs the hash and nothing else. The last bytes are held back until the hash
+matches, because a check after the last byte would come too late: the client
+would already have a whole, wrong file. Held back, damage becomes a body cut
+short, which every client treats as a failed download. [Checked
+reads](../../guides/blobs/integrity.md#checked-reads) and [the
+scrub](../../guides/blobs/integrity.md#the-scrub) say how it works.
 
-**Why bytes are never changed in place.** A replaced file writes new bytes
-and switches the path to them in one commit. A reader that opened the old
-version keeps reading it to the end, even while the file is replaced or
-deleted (contract BLOB-03). This is also why a copy is free: `copy` adds a
-path that names the same bytes, and the bytes go when the last path that
-names them goes.
+**Why bytes are never changed in place.** A replaced file writes new bytes,
+so a reader that opened the old version keeps reading it to the end ([A file
+stays what it was at
+`get`](../../guides/blobs/serving.md#a-file-stays-what-it-was-at-get)), and
+a copy costs a row ([Copies and
+expiry](../../guides/blobs/copies-and-expiry.md)).
 
 **Why there is no quota per folder.** Two uploads that each check a quota can
 together pass it, unless every upload takes a lock. `usage` counts, and the
 program decides what a plan allows. The store does keep one limit itself: a
-write that would leave the disk with less than 1 GiB free is refused, so a
-full disk never breaks the store's other files.
-
-## Limits and defaults
-
-| What                      | Limit                                                      |
-|---------------------------|------------------------------------------------------------|
-| a file                    | none, unless `maxFileSize` sets one                        |
-| a path, with its folders  | 1 KiB and 16 segments                                      |
-| a content type            | 256 bytes                                                  |
-| `meta`                    | 2 KiB in all                                               |
-| a page of `list`          | 1,000 files                                                |
-| free disk the store keeps | 1 GiB, `keepFree` on the store                             |
-| memory of an upload       | a few buffers of 64 KiB to 1 MiB, whatever the file's size |
+write that would leave the disk with less free space than the store keeps,
+1 GiB unless set, is refused, so a full disk never breaks the store's other
+files.
 
 ## See also
 
 - [Messages](messages.md): the database that names a message and its chat.
 - [One directory, many engines](../start/directory.md#what-is-in-the-directory):
   where `blobs/` sits in the store.
+- [Limits and defaults](../production/limits.md#blobs): every bound of
+  Blobs, from a path's length to the size of `meta`.
 - [Blobs API reference](../../reference/bun/blobs.md): every call of files,
   folders and uploads.
