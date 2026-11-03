@@ -4,7 +4,13 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
-- **[TinyStore 0.5.1](v0.5.1.md)** · 2 November 2026\n  Search keeps its postings in segments: an import of millions of documents
+- **[TinyStore 0.6.0](v0.6.0.md)** · 3 November 2026\
+  An audit that commits with the database change, what a stream's events
+  carry, a gauge corrected after the fact, config entries, a plugin's settings
+  chosen by its name, settings without SQLite, a Rust program's own MCP
+  server and one rule for colours.
+- **[TinyStore 0.5.1](v0.5.1.md)** · 2 November 2026\
+  Search keeps its postings in segments: an import of millions of documents
   in minutes, faster searches, and a dropped index's pages back to the disk.
 - **[TinyStore 0.5.0](v0.5.0.md)** · 1 November 2026\
   Every word as a prefix, the other keyboard layout, where each hit matched,
