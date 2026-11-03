@@ -259,6 +259,8 @@ for group in page.all() {
 - The answer goes group by group, each group's buckets in time order. A page
   ends only between two whole buckets. A group that a page cuts has
   `more: true`, and the next page starts with the rest of its buckets.
+  `next`, walking a page and writes between pages work as for [a read in
+  pages](reading.md#read-a-long-range-in-pages).
 - Each bucket is computed from every series of its group, as without
   `limit`. A `rate` or an `increase` in the first bucket of a page starts from
   the sample before it, and the edge of a page never makes a bucket
@@ -268,8 +270,6 @@ for group in page.all() {
   error.
 - Pages don't lift the 1,000 series that a query may find, because a bucket
   needs every series of its group at once. Use `where` to find fewer.
-- `next`, walking a page and what happens to writes between pages work as
-  for [a read in pages](reading.md#read-a-long-range-in-pages).
 
 ## Samples you don't store
 

@@ -55,18 +55,11 @@ let span = tracing::info_span!("request", request_id = %request_id).entered(); /
 
 ## What a line is
 
-A line is an event named `log` of the logger's stream:
-
-| Part      | From                                                              |
-|-----------|-------------------------------------------------------------------|
-| `message` | the text                                                          |
-| `level`   | `debug`, `info`, `warn` or `error`                                |
-| `fields`  | what the call gave                                                |
-| `context` | what `with` gave (`bind` in Python, `With` in Go, a span in Rust) |
-
-A field whose value is `undefined` in TypeScript is left out of the line and
-of what is kept, as `JSON.stringify` and pino leave it out. `null` is kept as
-`null`, and so are Python's `None` and Go's `nil`.
+A line is an event named `log` of the logger's stream, with the call's
+`level`, its text as the `message` and what it gave as the `fields`. What
+`with` gave is the `context` (`bind` in Python, `With` in Go, a span in
+Rust). [What an event carries](events.md#what-an-event-carries) lists each
+part.
 
 A key that a nested `with` gives again takes the new value where the outer
 one stood, as an object spread does: the line prints it once, the event keeps
@@ -148,8 +141,8 @@ the store, at any depth:
 - A key is split into words, and a name hides it when the name's words stand
   together in it: `'api key'` hides `apiKey`, `api_key` and `API-KEY`;
   `'token'` hides `bot_token` and not `tokens_used`.
-- `secrets` is the usual names: passwords, tokens, keys, cookies and the
-  like.
+- `secrets` is the usual names: passwords, tokens, keys, cookies,
+  `authorization` and the like.
 - A URL's password inside any value is hidden too, unless
   `keepUrlPasswords`.
 - `replace: (key, value) => value` runs on each field before it is hidden,
@@ -162,16 +155,16 @@ the store, at any depth:
 
 ## Options
 
-| Option    | Unless given                        | Does                                                                                                         |
-|-----------|-------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| `level`   | every level                         | the least level kept and printed, or `{ store, console }`; see [A quiet console](console.md#a-quiet-console) |
-| `console` | `pretty` on a terminal, else `json` | how a line is printed; `off` prints none and keeps it                                                        |
-| `redact`  | nothing hidden                      | the names of secrets                                                                                         |
-| `source`  | none                                | adds the function, file and line of the call                                                                 |
-| `buffer`  | 1,024 lines                         | the lines held between writes                                                                                |
-| `keep`    | the stream's                        | how long the stream keeps its events, 14 days unless set                                                     |
+A logger also takes `level`, the least level kept and printed, which can
+[print less than it keeps](console.md#a-quiet-console), and the options of
+[Console output](console.md#choosing-the-format), which say how a line looks.
 
-How lines look on the console is [Console output](console.md).
+| Option   | Unless given   | Does                                                     |
+|----------|----------------|----------------------------------------------------------|
+| `redact` | nothing hidden | the names of secrets                                     |
+| `source` | none           | adds the function, file and line of the call             |
+| `buffer` | 1,024 lines    | the lines held between writes                            |
+| `keep`   | the stream's   | how long the stream keeps its events, 14 days unless set |
 
 A store's logger reads its options through the config `log` too: a change of
 its level in any process sets it for every logger of the store, as
@@ -198,8 +191,8 @@ log.event("signup", &Signup { plan: "pro" });
 ```
 
 `event` writes an event with a name of its own, as a line is written: at
-once, and dropped under load. A product analytics click can be lost; an audit
-entry is `append`'s.
+once, and dropped under load. [Logger or `append`?](events.md#logger-or-append)
+says which to use.
 
 ## See also
 

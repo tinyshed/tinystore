@@ -70,9 +70,10 @@ let steps = store.all_events()?.list().since(Duration::from_hours(24)).trace_id(
 16:42:25.310  worker  log            receipt sent      { order: 41 }
 ```
 
-A trace id rarely repeats, so the store finds its blocks through a bloom
-filter of each block's traces without reading the others: one request out of
-millions is cheap to find.
+One request out of millions is cheap to find, because the store opens only
+the blocks that may hold its trace, as [Reading only what can
+match](../../handbook/inside/how-logs-and-metrics-pack.md#reading-only-what-can-match)
+explains.
 
 ## Across processes
 

@@ -66,12 +66,13 @@ where an append inside a transaction waits until the commit.
 
 - If the transaction rolls back, its events never reach the stream.
 - If the transaction commits, its events are in the stream when `db.tx`
-  returns, and a read finds them at once.
+  returns, and a read finds them at once, unless the stream refuses them
+  then, as the warning below shows.
 - If the process crashes after the commit and before the events reach the
-  stream, they wait in the database's file. The store writes them when the
-  database's stream is opened again, or within a minute by its background
-  maintenance. Each event is written once, even if a crash comes in the
-  middle of that move (contract REC-13).
+  stream, or the stream refused them, they wait in the database's file. The
+  store writes them when the database's stream is opened again, or within a
+  minute by its background maintenance. Each event is written once, even if
+  a crash comes in the middle of that move (contract REC-13).
 
 The events of one transaction reach the stream in one append, in the order
 the transaction appended them.
@@ -79,7 +80,8 @@ the transaction appended them.
 ## In a batch
 
 A batch carries an event too, with `appending`. The event commits with the
-batch's statements, and it reaches the stream before the batch returns.
+batch's statements, and it reaches the stream before the batch returns,
+unless the stream refuses it then, as in a transaction.
 
 ```ts
 await db.batch([
@@ -150,9 +152,9 @@ db.tx(|tx| {
 })?;
 ```
 
-Inside the transaction, `append` returns whether the event will be written:
-`false` when the stream holds its id already, or the transaction appended an
-event with that id before.
+Inside the transaction, `append` returns whether the event will be written,
+as [an append sent again](events.md#an-append-sent-again) does. It also
+returns `false` for an id that the transaction appended before.
 
 An event's time is taken at the append, inside the transaction, unless you
 give `at`. The move keeps it. If the event waited longer than its stream's
@@ -177,7 +179,7 @@ retention would have, and the store logs it once.
 > **If the move fails**
 > When the stream refuses the events after the commit, for example on a full
 > disk, the transaction still returns its result: the change committed. The
-> events stay in the database's file, the store logs the failure once, and
+> events wait in the database's file, the store logs the failure once, and
 > maintenance writes them within a minute after the disk has room.
 
 ## Where the events wait

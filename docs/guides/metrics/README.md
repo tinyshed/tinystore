@@ -52,21 +52,23 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 
 ## What it guarantees
 
-- A sample is kept bit for bit: `-0`, NaN payloads and infinities included.
-- An aggregate is exact and rounded once, whatever blocks the samples were
-  packed into; buckets of any width add up to the range.
+- A sample is kept bit for bit: `-0`, NaN payloads and infinities included
+  (MET-01).
+- An aggregate is exact whatever blocks the samples were packed into, and
+  [buckets](aggregates.md#buckets-add-up-to-the-range) of any width add up to
+  the range (MET-04).
 - A query is bounded before it starts, and fails `limit` rather than answer
-  less. Given `limit`, it answers a page and `next` instead. For data that
-  doesn't change between them, the pages give exactly the whole answer
-  (MET-17).
+  less. Given `limit`, it answers [in pages](reading.md#read-a-long-range-in-pages)
+  that give exactly the whole answer while the data doesn't change (MET-17).
 - Processes that count into one counter count into one total, and a send
-  repeated after a lost connection counts once.
+  repeated after a lost connection counts once (MET-09).
 - An ingest sent again changes nothing, even after the store packed its
   samples (MET-16).
-- A gauge's past changes only through `replace`, which swaps a range of
-  samples in one write. A read sees the old range or the new one, never half
-  of each (MET-19).
-- An aggregate of series that you hold in memory, in Rust, gives what a query
+- A gauge's past changes only through
+  [`replace`](ingesting.md#correcting-a-gauge-after-the-fact), in one write
+  that a read sees whole or not at all (MET-19).
+- An aggregate of [series that you hold in
+  memory](aggregates.md#samples-you-dont-store), in Rust, gives what a query
   of the same samples in a store gives (MET-18).
 - Not promised: `ingest` refuses a sample with a new value behind what its
   series has packed, and a counter's packed samples never change (NOT-08).
@@ -90,8 +92,9 @@ format.
 ## Async Rust
 
 In Rust, the `async` feature adds `tinystore::aio::metrics`, whose reads
-and writes you await. This section shows only Rust, because Bun, Node and
-Python already await every call, and in Go a call blocks its goroutine.
+and writes you await. [Rust with async](../../handbook/start/rust-async.md)
+has what every engine shares: where a call runs, a dropped future, timeouts
+and closing.
 
 ```rust
 use std::time::{Duration, SystemTime};
@@ -136,14 +139,10 @@ you add `.await`:
 The values are the blocking module's own types, so `tinystore::aio::metrics`
 exports `Series`, `Op`, `Description` and the others under the same names.
 
-None of these calls commits, syncs the disk or waits on your executor's
-thread (contract STORE-10). A write runs on the store's own threads and
-waits there for its commit. Once its future is polled, the write commits
-even if you drop the future (contract DUR-11). When an ingest has to wait
-for the store's memory, it waits without holding one of the store's
-threads, so ingests that wait for memory don't hold up your reads. A read
-runs on the store's threads too. When you drop its future, it stops where
-it is, even while it waits for a reader or for memory (contract STORE-09):
+When an ingest has to wait for the store's memory, it waits without holding
+one of the store's threads, so ingests that wait for memory don't hold up
+your reads. A read whose future you drop stops even while it waits for a
+reader or for memory, so a timeout bounds it:
 
 ```rust
 let month = stats.query().name("cpu").since(Duration::from_hours(30 * 24));

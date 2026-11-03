@@ -1,10 +1,8 @@
 # Repair
 
-A disk can change a byte. When a read meets a segment or a waiting row whose
-bytes no longer read, it fails `corrupt` and names what broke, rather than
-answering without it. `damaged` lists what the store has met that no longer
-reads, and `drop` removes it, so the reads over it work again. Packing and
-merging go past a damaged segment meanwhile (contract ERR-07).
+A disk can change a byte. When a read of the Records engine meets bytes that
+no longer read, it fails `corrupt` and names what broke, rather than
+answering without it. `damaged` lists the damage, and `drop` removes it.
 
 ```ts
 for (const damage of await store.events().damaged()) {
@@ -41,7 +39,7 @@ for damage in events.damaged()? {
 2. Every later read over the same range fails the same way. A read of other
    streams, or of another time of the same stream, is not affected.
 3. Packing and merging skip the damaged segment and go on with the rest, so
-   new events keep being written and packed.
+   new events keep being written and packed (contract ERR-07).
 4. `damaged` lists every damage the store has met: a head row, which held
    events not packed yet, or a segment; its stream, its events' oldest and
    newest times, and what broke.
@@ -58,6 +56,7 @@ another directory, read the range from it, and append what matters into the
 live store before `drop`:
 
 ```ts
+const audit = store.events('audit') // the live stream
 const old = await open('./restored', { private: true })
 const lost = await old.events('audit').list({ from: damage.first, to: new Date(damage.last.getTime() + 1), limit: 10_000 })
 await audit.append(lost.events.map(e => ({ name: e.name, fields: e.fields, at: e.at })))

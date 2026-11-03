@@ -120,9 +120,11 @@ as, a number as a number.
   that was not there must not read every event.
 
 The time, the stream, the level, the trace and a `where` on a value that
-rarely repeats, a request's id, skip the blocks that cannot match without
-reading them. `search` reads every event the rest of the query leaves, so give
-it a range.
+rarely repeats, a request's id, skip the blocks that cannot match, as
+[Reading only what can
+match](../../handbook/inside/how-logs-and-metrics-pack.md#reading-only-what-can-match)
+explains. `search` reads every event the rest of the query leaves, so give it
+a range.
 
 ## Pages
 
@@ -166,22 +168,18 @@ let page = audit.list().since(Duration::from_mins(1)).page()?; // cart.created, 
   they come in the reverse order.
 - Two appends that run at the same time come in the order the store wrote
   them, and every read gives that same order.
-- A store that TinyStore v0.1.0 wrote is the exception. Events that v0.1.0
-  packed keep the order that v0.1.0 gave them, which is not always the order
-  they were appended. In one stream, a late event may come before or after the
-  stream's other events of its time. Events of different streams come in the
-  order of the blocks they were packed in. This order stays the same from one
-  read to the next. Events appended after you upgrade come after them, in the
-  order they were appended.
+- Events that TinyStore v0.1.0 packed are the exception. They keep the order
+  that v0.1.0 gave them, the same on every read, which is not always the
+  order they were appended (contract NOT-12). Events appended after you
+  upgrade come after them, in the order they were appended.
 
 ### Which events are late
 
 TinyStore packs late events apart from the others, so that they don't force
 it to rewrite what it packed, as [How logs and metrics
 pack](../../handbook/inside/how-logs-and-metrics-pack.md) explains. A read
-still gives them in the order they were appended. A
-[tail](tail-and-poll.md#tail) gives the late events of an `append` after its
-other events.
+still gives them in the order they were appended, and a
+[tail](tail-and-poll.md#tail) as they were written.
 
 An event is late when its `at` is more than ten seconds behind the store's
 clock, and also more than ten seconds behind the newest on-time event that
@@ -199,8 +197,7 @@ If an append runs at the same time as another append to its stream, or while
 TinyStore packs or drops events of the stream, either may count as the earlier
 one. Until the store opens again, an append that fails counts as none.
 
-So an event appended without `at` is never late, and neither is an event
-less than ten seconds behind the store's clock.
+So an event appended without `at` is never late.
 
 ## Count, top and aggregate
 
@@ -291,9 +288,9 @@ page's filter menu offers. A key's values are `top`'s, and a stream's names
 ## What a stream's events carry
 
 `fields` says which names a stream's events have and which keys their fields
-hold, with how many events carry each and what kinds of value it holds. It
-doesn't read the packed events to answer, so a program can draw a chart of a
-stream it has never seen, such as orders paid per day summed by `amount`.
+hold, with how many events carry each and what kinds of value it holds. So a
+program can draw a chart of a stream it has never seen, such as orders paid
+per day summed by `amount`.
 
 ```ts
 const orders = await store.events().fields('orders')
@@ -350,18 +347,17 @@ however many there are. The events that wait to be packed, at most an hour's
 worth, are read from their rows, so `fields` takes longer on a stream that
 has many events waiting.
 
-> A store that 0.5.1 or an earlier release wrote has packed events without counts.
-> After the store opens, its maintenance counts them, 16 segments per minute.
-> Until then, `fields` leaves those events out.
-
-## From a shell
-
-`tinystore logs ./data --since 1h --level warn` reads the same lines beside the
-program or server that holds the directory, and `tinystore logs ./data -f`
-follows them as they arrive.
+> [!NOTE]
+> **A store from 0.5.1 or before**
+> Events that 0.5.1 or an earlier release packed have no counts. The store's
+> maintenance counts them after it opens, as [0.6.0's
+> notes](../../releases/v0.6.0.md#what-a-streams-events-carry) say, and until
+> then `fields` leaves those events out.
 
 ## See also
 
 - [Records](README.md): the engine's overview.
 - [Traces](traces.md): one request's events across streams.
 - [Tail and poll](tail-and-poll.md): events as they arrive.
+- [`tinystore logs`](../cli/status-and-logs.md#logs): the same lines from a
+  shell, beside the program or server that holds the directory.

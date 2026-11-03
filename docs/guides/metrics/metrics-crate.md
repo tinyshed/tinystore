@@ -27,9 +27,9 @@ metrics::histogram!("http_request_ms").record(started.elapsed().as_secs_f64() * 
   longest, and has no percentile.
 - A process has one global recorder, which the crate lets be set once: a
   program that opens two stores, as a test may, records into the first.
-- A call never waits and never writes: the recorder's series are written with
-  the instruments every 15 seconds, at `stats.flush()` and when the store
-  closes.
+- A call never waits and never writes: the recorder's series are written
+  when the instruments' are, as [Flush and
+  tests](instruments.md#flush-and-tests) says.
 
 Name the store's handle something other than `metrics`, `stats` here, so the
 crate's macros and the store's calls read apart.
@@ -53,10 +53,9 @@ let _timing = latency.start(); // recorded when it drops
 
 Both write the same series, and every read finds both.
 
-A timing from `start()` records when it drops, so it is kept in a name:
-`let _timing = latency.start()`. `let _ = latency.start()` records at once,
-since Rust drops a value thrown away on purpose; clippy's
-`let_underscore_must_use` catches it.
+A timing from `start()` records when it drops, and Rust drops
+`let _ = latency.start()` at once, so it records at once. Clippy's
+`let_underscore_must_use` catches that mistake.
 
 ## See also
 

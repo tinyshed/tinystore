@@ -190,8 +190,8 @@ stats.gauge_func("queue_depth", move || sms.depth()).labels(&[("queue", "sms")])
   stays whole.
 - A counter's or a timer's series that nothing sent for an hour leaves the
   store's memory; sent again, it starts a new run with its zero.
-- A store holds at most 100,000 series, unless it was opened with more, as
-  [Ingesting](ingesting.md#how-many-series) shows.
+- A store caps its series too, as [How many
+  series](ingesting.md#how-many-series) in Ingesting says.
 
 Keep labels to what a chart groups by: a route, a status, a queue. A user's
 id, a request's id or a URL with ids in it belongs in [records](../records/README.md).

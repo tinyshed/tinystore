@@ -76,9 +76,9 @@ in the Handbook logs a chat's requests and reads them back.
 
 With the `async` feature, `tinystore::aio::Store` opens the same streams,
 and each call that reads or writes returns a future. The calls have the same
-names as in the blocking API. This section shows Rust only, because in Bun,
-Node and Python every call is already awaited, and in Go a call blocks its
-goroutine, which costs little.
+names as in the blocking API. [Rust with
+async](../../handbook/start/rust-async.md) has what every engine shares:
+opening, where a call runs, a dropped future, timeouts and closing.
 
 ```rust title="blocking.rs"
 use tinystore::Store;
@@ -106,11 +106,6 @@ while let Some(event) = found.next().await {
 }
 ```
 
-Opening the store and a stream stays a plain call that you make once at
-start, because the first open may migrate `records.db`. `append` returns
-after the event is written, as in the blocking API. Every read runs on the
-store's own threads, so your executor's thread never waits for the disk.
-
 | Blocking                                             | Async                                      | Where it runs                                           | If you drop the future after its first poll |
 |------------------------------------------------------|--------------------------------------------|---------------------------------------------------------|---------------------------------------------|
 | `append`, `append_all`, `event(...).append`          | the same, awaited                          | checked in the poll, committed on the store's threads   | the events are still written                |
@@ -130,9 +125,9 @@ a memory budget and no room for the events, the append waits for memory
 without holding a thread. It fails with a limit error (`ErrorKind::Limit`)
 after ten seconds, as the blocking call does.
 
-A tail waits on no thread: each append wakes it, and its stream ends when the
-store closes. To wait with a bound, use your runtime's timeout. The tail
-stays open after a timeout:
+Each append wakes a tail, and its stream ends when the store closes. To wait
+with a bound, use your runtime's timeout. The tail stays open after a
+timeout:
 
 ```rust
 let mut tail = store.all_events()?.list().streams(["api"]).min_level(Level::WARN).tail()?;
@@ -167,10 +162,8 @@ loop {
 out.flush().await?; // the lines ended so far are written
 ```
 
-The logger stays as it is: a line goes to a buffer and never waits. A store
-opened without background work runs `tinystore::records::maintain` on
-`store.blocking()`. [Rust with async](../../handbook/start/rust-async.md) has
-the rest of the async API: dropping a future, timeouts and closing.
+A store opened without background work runs `tinystore::records::maintain`
+on `store.blocking()`.
 
 ## Reference
 

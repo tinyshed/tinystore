@@ -72,9 +72,8 @@ let slow = store
 | `tinystore_disk_free_bytes`           | gauge   |        | the disk's free space under the directory             |
 | `tinystore_background_failures_total` | counter | `task` | failures of the store's periodic work                 |
 
-`file` is `kv`, `jobs`, `records`, `metrics`, `search`, and `sql/<name>` for a
-database: the first 32 databases a store opens are named, and every one after
-them counts into `sql/__overflow`.
+`file` is `kv`, `jobs`, `records`, `metrics`, `search`, and `sql/<name>` for
+each of the first 32 databases a store opens, `sql/__overflow` for the rest.
 
 ## The machine
 
@@ -127,12 +126,16 @@ SQL, no job's id, no path.
 
 ## Cost
 
-Off, a write pays one check of an empty cell. On, in a write-heavy run of
-kv's `set` of 20,000 keys from 1, 8 and 64 threads, the median of five passes,
-`durability: os` (Windows 11 Pro, AMD Ryzen 7 7700, 31 GiB, release build,
-19 October 2026), one thread ran within 1 % of off, and with more threads the
-passes moved 6 % either way, on not the slower of the two. Linux and macOS
-were not measured.
+Off, a write pays one check of an empty cell. To measure the cost when it is
+on, kv's `set` wrote 20,000 keys from 1, 8 and 64 threads with
+`durability: os`, three runs of the median of five passes each. They ran on
+Windows 11 Pro, an AMD Ryzen 7 7700 with 31 GiB, rustc 1.99.0 and a release
+build, on 19 October 2026. On one thread, a store that measured itself was
+within 1 % of one that didn't. On more threads
+the runs moved up to 6 % either way between passes, and the store that
+measured itself was not the slower. Linux and macOS were not measured. [The
+report](https://github.com/tinyshed/research/blob/main/tinystore/plan/self-metrics.md#cost)
+has every run.
 
 ```sh
 cargo test --release -p tinystore --lib probe::probe_tests::sets_measured_and_not -- --ignored --nocapture

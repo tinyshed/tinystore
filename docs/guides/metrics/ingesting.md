@@ -40,9 +40,9 @@ stats.ingest(&[Series::gauge("cpu").label("host", "web-1").sample(at, 0.42).samp
 - One call is written whole or not at all. A refused series names itself by
   its labels, so the call can be sent again without it.
 - `ingest` returns once the samples are written, and a read finds them at
-  once. A crash of the program loses none; a power loss may take the last
-  ones, since the metrics' file commits as `os` unless the store opened
-  `full`.
+  once. A crash of the program loses none. A power loss may take the last
+  ones, as [the durability of
+  `metrics.db`](../../handbook/start/directory.md#a-file-per-engine) says.
 - `samples` takes pairs, and `times` with `values` take the same as two
   columns: unix milliseconds or dates, and numbers.
 
@@ -73,22 +73,23 @@ millisecond.
 - Samples may come in any order. A time given twice keeps the later value,
   until the store has packed that stretch of the series.
 - After that, a sample with a new value behind what its series has packed
-  fails with a too old error, and the whole call fails with it. A packed
-  counter's increase would change otherwise (NOT-08). The same sample sent
-  again is accepted, as [the next section](#an-ingest-sent-again) shows. To
-  change a gauge's packed samples, use
-  [`replace`](#correcting-a-gauge-after-the-fact).
+  fails the whole call. A packed counter's increase would change otherwise
+  (NOT-08). The same sample sent again changes nothing, as [the next
+  section](#an-ingest-sent-again) shows. To change a gauge's packed samples,
+  use [`replace`](#correcting-a-gauge-after-the-fact).
 - A series that comes back after a day away sends its backlog: what it has
   packed follows its own newest sample, not the clock.
 - A time is taken from as long ago as its name keeps to ten minutes ahead of
-  the store's clock.
+  the store's clock. Outside that, the call fails with a too old or too new
+  error, even for a sample sent again. [A window for every
+  time](../../handbook/inside/time-and-errors.md#a-window-for-every-time)
+  says why.
 
 ## An ingest sent again
 
-A job step runs at least once. If a collector's worker crashes after
-`ingest` and before its step finishes, the next attempt sends the same
-samples again. That second call changes nothing, even after the store has
-packed those samples:
+A [job](../jobs/README.md#what-it-guarantees) runs at least once, so a
+collector's retry may send the same samples again. That second call changes
+nothing, even after the store has packed those samples:
 
 ```ts
 await store.metrics.ingest(revenue) // three hours of samples, read from a database
@@ -119,7 +120,6 @@ stats.ingest(&[revenue])?; // the step's next attempt: nothing changes
   `ErrorKind::TooOld` in Rust). The error's `what` names the sample's time,
   `at`, and the time before which its series is packed, `packed`. To write
   the rest, send that series again without its samples before `packed`.
-- A sample older than its name keeps is too old, sent again or not.
 - `ingest` can't change a value after the fact, such as yesterday's revenue
   after a refund. For a gauge, `replace` can, as the next section shows.
 
@@ -279,17 +279,16 @@ metrics: line 12, `node_load1{host="web-1} 0.42`: label host: a value without it
 ```
 
 A series that the store refuses, such as one with a label that starts with
-`__`, names itself by its labels, as it does in `ingest`. A text is written
-whole, in one write, so it may hold more than one `ingest`: up to 100,000
-samples, enough for kube-state-metrics or cadvisor on a busy cluster. While
-a large text is written, other writes of metrics wait behind it.
+`__`, names itself by its labels, as in `ingest`. A text is written whole, in
+one write, so it may hold more samples than one `ingest`: enough for
+kube-state-metrics or cadvisor on a busy cluster. While a large text is
+written, other writes of metrics wait behind it.
 
-Bun, Node, Python and Go send a small text in one message. A text larger than
-one message, 2 MiB, goes in pieces, and the store holds all of it in memory,
-counted in its `memory` budget, until the text is written whole or refused.
-Nothing is written before the last piece arrives, so a call that is cancelled
-or loses its connection before then writes nothing. A text over 32 MiB is a
-limit error (`LimitError`, `ErrLimit`) before the store keeps any of it.
+Bun, Node, Python and Go send a text over 2 MiB in pieces. The store holds the
+pieces in its `memory` budget and writes nothing until the last one arrives,
+so a call cancelled or cut off before then writes nothing. A text over 32 MiB
+fails with a limit error (`LimitError`, `ErrLimit`) before the store keeps any
+of it.
 
 ## Limits
 
@@ -334,15 +333,17 @@ let store = Store::open("./data", Options { max_series: 1_000_000, ..Options::de
 tinystore serve ./data --max-series 1000000
 ```
 
-A series costs `metrics.db` about 283 bytes before its samples pile up: 56 its
-labels' postings, 53 its state, 51 its row, 46 the index of its identity, 40
-its first head, 35 the indexes by name and by work due. The store keeps
-nothing of it in memory. A million series of four labels, one sample each,
-took 283 MB of pages and 126 seconds to write 2,000 an ingest, where 100,000
-took 28 MB and 5.6 seconds: each new series costs more as the indexes grow.
-Measured on an AMD Ryzen 7 7700 under Windows 11, Rust 1.99, `--release`, with
-`TINYSTORE_SERIES=1000000 cargo test --release -p tinystore --lib --
-metrics::ingest::tests::what_a_series_costs_the_file --ignored --nocapture`.
+Before its samples pile up, a series costs `metrics.db` the postings of its
+labels, its state, its row, the index of its identity, its first head, and
+its place in the indexes by name and by work due. The store keeps none of it
+in memory. Each new series takes longer to write than the one before, as the
+indexes grow. To measure it on your machine, this test writes as many series
+as `TINYSTORE_SERIES` says and prints what each b-tree of the file costs per
+series:
+
+```sh
+TINYSTORE_SERIES=1000000 cargo test --release -p tinystore --lib -- metrics::ingest::tests::what_a_series_costs_the_file --ignored --nocapture
+```
 
 ## See also
 

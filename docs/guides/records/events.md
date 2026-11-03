@@ -38,8 +38,9 @@ clicks.append_all(batch)?; // NewEvent::new(name).fields(&props).at(time), all o
 ```
 
 - `append` returns once the event is written, and a read finds it at once.
-  A crash of the program loses none. A power loss may take the last ones,
-  since the events' file commits as `os` unless the store opened `full`.
+  A crash of the program loses none. A power loss may take the last ones, as
+  [the durability of `records.db`](../../handbook/start/directory.md#a-file-per-engine)
+  says.
 - Appends from many callers share a commit.
 - A list is written whole or not at all, and a refused event names its place
   in the list and its name.
@@ -62,8 +63,9 @@ clicks.append_all(batch)?; // NewEvent::new(name).fields(&props).at(time), all o
 
 A value comes back as it was spelled: `1.2300`, `-0`, the order of the keys
 come back byte for byte. In TypeScript an integer past 2⁵³ reads as a
-`bigint`, and a field whose value is `undefined` is left out, as
-`JSON.stringify` leaves it out. `null` stays `null`.
+`bigint`, and a field whose value is `undefined` is left out of the event and
+of a logger's line, as `JSON.stringify` and pino leave it out. `null` stays
+`null`, and so do Python's `None` and Go's `nil` (contract LOG-09).
 
 `append` hides nothing: `redact` is a logger's. Leave out what may hold a
 secret before appending.
@@ -71,7 +73,9 @@ secret before appending.
 ## Time
 
 `at` is now unless given. It is taken from as long ago as the stream keeps,
-to ten minutes ahead of the store's clock:
+to ten minutes ahead of the store's clock, and [A window for every
+time](../../handbook/inside/time-and-errors.md#a-window-for-every-time) says
+why. Outside that, the append fails:
 
 ```text
 events audit: event 0 "x": more than 10 minutes ahead of the store's clock: too new
@@ -101,10 +105,9 @@ phone set ahead cannot write the future.
 
 ## An append sent again
 
-A job step runs at least once. If a worker crashes after `append` and before
-its step finishes, the next attempt appends the same event again. Give the
-event an id, such as a webhook's delivery id, and the second append writes
-nothing:
+A [job](../jobs/README.md#what-it-guarantees) runs at least once, so a retry
+may append the same event again. Give the event an id, such as a webhook's
+delivery id, and the second append writes nothing:
 
 ```ts
 const deploys = store.events('deploys')

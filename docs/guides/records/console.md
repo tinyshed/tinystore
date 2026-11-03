@@ -2,7 +2,9 @@
 
 A logger prints each line to standard error, pretty on a terminal and as JSON
 anywhere else, so a developer reads it and a log collector parses it. Every
-language prints the same bytes for the same line.
+language prints the same bytes for the same line, so one collector parses a
+program written in two. Every SDK's tests print the lines of one shared file
+byte for byte (contract LOG-03).
 
 ```log
 16:42:24.094 INFO  api  signed in  user=42
@@ -105,8 +107,6 @@ let log = store.logger("api").level(levels).layer()?;
 - Without a `console` part, the console prints what the store keeps. When the
   config `log` changes the level, the console follows it. A `console` part
   set in the code, or `LOG_CONSOLE_LEVEL`, stays as it is.
-- A logger of the console alone takes one level, because it only prints.
-  `LOG_CONSOLE_LEVEL` still sets what it prints, as the next section shows.
 
 ## The environment wins
 
@@ -206,12 +206,6 @@ In TypeScript and Python it loads nothing native. Go's package `console`
 imports neither the store nor cgo. In Rust the crate's `console` feature
 builds it alone, without a store or SQLite. Swapping `logger('app')` for
 `store.logger('app')` later keeps the lines too, with no other change.
-
-## Same bytes everywhere
-
-A line printed is the same bytes in TypeScript, Python, Go and Rust: one file
-of the repository holds the lines every SDK's tests print byte for byte. A
-program in two languages behind one log collector parses one format.
 
 ## See also
 
