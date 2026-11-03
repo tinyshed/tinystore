@@ -237,7 +237,7 @@
         }
       ],
       "group": "Look",
-      "more": "Without --write it reads beside the program or server that holds the directory. With it, a store no one            holds is opened here; one a server holds is written through it, once, and there a statement that gives            rows back is refused; one a program holds inside its own process is refused.",
+      "more": "Without --write it reads beside the program or server that holds the directory. With it, a store no one holds is opened here; one a server holds is written through it, once, and there a statement that gives rows back is refused; one a program holds inside its own process is refused.",
       "name": "sql",
       "takes": "[dir] <db> \"<query>\""
     },

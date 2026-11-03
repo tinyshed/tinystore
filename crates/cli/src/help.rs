@@ -262,7 +262,9 @@ pub(crate) const SQL: Command = Command {
         "tinystore sql ./data app \"select count(*) from users\"",
         "tinystore sql ./data app \"delete from users where id = 7\" --write",
     ],
-    more: "Without --write it reads beside the program or server that holds the directory. With it, a store no one            holds is opened here; one a server holds is written through it, once, and there a statement that gives            rows back is refused; one a program holds inside its own process is refused.",
+    more: "Without --write it reads beside the program or server that holds the directory. With it, a store no one \
+           holds is opened here; one a server holds is written through it, once, and there a statement that gives \
+           rows back is refused; one a program holds inside its own process is refused.",
 };
 
 pub(crate) const SEARCH: Command = Command {
