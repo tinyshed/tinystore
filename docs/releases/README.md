@@ -4,6 +4,10 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.7.0](v0.7.0.md)** · 3 November 2026\
+  Secrets kept out of a committed settings file, settings with no value in
+  every language, and MCP calls that run side by side, stop when cancelled
+  and await on a Rust program's own runtime.
 - **[TinyStore 0.6.0](v0.6.0.md)** · 3 November 2026\
   An audit that commits with the database change, what a stream's events
   carry, a gauge corrected after the fact, config entries, a plugin's settings
