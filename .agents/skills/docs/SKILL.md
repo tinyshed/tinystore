@@ -72,18 +72,49 @@ table.
    question, such as `## Refund uses` or `## What a crash loses`. Headings
    are also link anchors: if you rename one, the build tells you which links
    to fix.
-5. **`## Limits and defaults`**: a table, if the feature has any.
+5. **`## Limits and defaults`**: a table, if the feature has any, in a
+   guide. A chapter of the book links to its guide's table or to
+   [Limits and defaults](../../../docs/handbook/production/limits.md) rather
+   than repeating the numbers.
 6. **`## Why this design?`**: in a chapter of the book, the decisions a
-   reader would not guess, each a bold question and a paragraph: what the
-   obvious alternative was, what goes wrong with it, and what TinyStore does
-   instead. A newcomer skips it; an engineer reads it first. A number in it
-   carries its environment and its report, as everywhere.
+   reader would not guess that no guide or page of Under the hood explains,
+   each a bold question and a paragraph: what the obvious alternative was,
+   what goes wrong with it, and what TinyStore does instead. A reason that
+   another page already gives is one sentence and a link to it. A newcomer
+   skips it; an engineer reads it first. A number in it carries its
+   environment and its report, as everywhere.
 7. **`## See also`**: the next pages to read, and the design document in
    research for why it works this way.
 
 Use a callout only for something that can lose data, surprise the reader or
 stop a program, such as a limit, a rejected value or an operation that is not
 atomic. Never use one for emphasis. Most pages need one callout or none.
+
+## One fact, one place
+
+Every fact has one page that owns it, and every other page links there. The
+docs grew by a tenth in copies of what another page already said, and copies
+drift: an audit in November 2026 found a chapter promising what its guide had
+stopped saying. Before you write a sentence, grep `docs/` for the fact. If it
+is there, link to it, or move it to its owner and link from both.
+
+| A fact of                                          | Lives in                                                                                    |
+|----------------------------------------------------|---------------------------------------------------------------------------------------------|
+| how an engine's call behaves, its rules and errors | that feature's guide page                                                                   |
+| why a mechanism works as it does                   | its page of Under the hood                                                                  |
+| a bound or a default                               | the guide's limits table and `production/limits.md`, never a chapter of the book            |
+| async Rust: where a call runs, a dropped future    | `handbook/start/rust-async.md`; an engine's README keeps only its table of names and a link |
+| durability, `full` and `os`                        | `handbook/start/directory.md`                                                               |
+| the command line's shared rules: who writes, pages | `guides/cli/README.md`                                                                      |
+| a promise                                          | `CONTRACTS.md`, cited by its id                                                             |
+
+The book tells the story of the chat and links to the guides for the rules.
+A guide links to Under the hood for the mechanism. Standing alone, as agents
+need, means a page names its engine, opens its handles and links what it
+relies on: it does not mean it restates another page.
+
+A version a page pins, `version = "0.7"` or `tinystore:0.7`, is the newest
+release's, and the site's tests fail on an older one.
 
 ## Code first
 
@@ -555,7 +586,8 @@ git grep -n -i -E '\b(simply|just|easy|easily|powerful|seamless)\b' -- docs/
 - [ ] the lead makes sense on its own and names the engine
 - [ ] the first code block works in all four languages, or the page says why not
 - [ ] every call is checked against its source, and each option's spellings appear once
-- [ ] limits and defaults are in a table
+- [ ] limits and defaults are in a table, in a guide
+- [ ] every fact on the page is said nowhere else: grep `docs/` for it, and link
 - [ ] nothing that isn't built is described as working
 - [ ] the page's item in `docs/README.md` is a link
 - [ ] every sentence reads well the first time
