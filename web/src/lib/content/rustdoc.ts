@@ -498,7 +498,8 @@ class Types {
 			case 'dyn_trait':
 				return `dyn ${(inner.traits as Json[]).map(t => this.#poly(t)).join(' + ')}${inner.lifetime === null ? '' : ` + ${inner.lifetime}`}`
 			case 'qualified_path':
-				return inner.trait === null
+				// `D::Value` names its trait by the bound on `D`, which rustdoc leaves without a path
+				return inner.trait === null || shortPath(inner.trait.path) === ''
 					? `${this.type(inner.self_type)}::${inner.name}`
 					: `<${this.type(inner.self_type)} as ${shortPath(inner.trait.path)}>::${inner.name}`
 			case 'function_pointer':

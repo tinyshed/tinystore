@@ -226,7 +226,7 @@ commit, each in a savepoint of it: one that fails rolls back alone.
 pub fn batch<I>(&self, writes: I) -> Result<Vec<Done>>
 where
     I: IntoIterator,
-    <I as >::Item: Into<Write>,
+    I::Item: Into<Write>,
 ```
 
 Runs writes known before they run as one, all of them or none, in one
@@ -341,7 +341,7 @@ let db = store
 pub fn and<I>(conditions: I) -> Sql
 where
     I: IntoIterator,
-    <I as >::Item: Into<Sql>,
+    I::Item: Into<Sql>,
 ```
 
 Conditions joined with `and`, in parentheses, for a group inside an `or`;
@@ -403,7 +403,7 @@ A list for `in (…)`, as one JSON value SQLite reads with `json_each`.
 pub fn or<I>(conditions: I) -> Sql
 where
     I: IntoIterator,
-    <I as >::Item: Into<Sql>,
+    I::Item: Into<Sql>,
 ```
 
 Conditions joined with `or`, in parentheses; an empty `or` finds nothing.
@@ -802,7 +802,7 @@ pub fn exec(&self, statement: impl Into<Sql>) -> Result<Done>
 ### Tx.with
 
 ```rust
-pub fn with<'h, H: TxHandle>(&self, handle: &'h H) -> <H as >::InTx
+pub fn with<'h, H: TxHandle>(&self, handle: &'h H) -> H::InTx
 ```
 
 The calls of a bucket or a queue opened from this database, inside the
@@ -941,7 +941,7 @@ answer.
 pub fn batch<I>(&self, writes: I) -> impl Future<Output = Result<Vec<Done>>> + Send + 'static
 where
     I: IntoIterator,
-    <I as >::Item: Into<Write>,
+    I::Item: Into<Write>,
 ```
 
 Runs writes known before they run as one, all of them or none, as

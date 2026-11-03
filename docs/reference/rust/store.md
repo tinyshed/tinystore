@@ -629,7 +629,7 @@ A transaction of the store, given to the function `Store::tx` runs.
 ### Tx.with
 
 ```rust
-pub fn with<'h, H: TxHandle>(&self, handle: &'h H) -> <H as >::InTx
+pub fn with<'h, H: TxHandle>(&self, handle: &'h H) -> H::InTx
 ```
 
 The calls of `handle` inside this transaction: what they read sees what
