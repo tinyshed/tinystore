@@ -27,7 +27,8 @@
 //! [`search`], [`records`], [`metrics`] and [`backup`]. A bucket, a queue or
 //! a table's index kept in a database opens from [`sql::Database`]. Opening
 //! a store or a handle stays a plain call, made once at start, since a first
-//! open may migrate a file.
+//! open may migrate a file. [`mcp`] is a program's own MCP server, awaited,
+//! whose tools await; with `mcp` alone it needs no store.
 //!
 //! # One store, two APIs
 //!
@@ -114,10 +115,16 @@
 //! writes. A store whose last handle is dropped closes on the dropping
 //! thread, which may be the executor's: await `close` instead.
 
+#[cfg(any(feature = "jobs", feature = "mcp"))]
+mod handlers;
+#[cfg(any(feature = "store", feature = "mcp"))]
 mod oneshot;
+#[cfg(feature = "store")]
 mod run;
+#[cfg(feature = "store")]
 mod store;
 
+#[cfg(feature = "store")]
 pub use store::Store;
 
 #[cfg(feature = "backup")]
@@ -134,6 +141,8 @@ pub mod jobs;
 pub mod kv;
 #[cfg(feature = "locks")]
 pub mod locks;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 #[cfg(feature = "metrics")]
 pub mod metrics;
 #[cfg(feature = "records")]

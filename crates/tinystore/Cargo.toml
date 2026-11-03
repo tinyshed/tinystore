@@ -57,9 +57,10 @@ wire = ["kv"]
 # with: the protocol's own messages, so its bytes keep one writer; it
 # promises nothing to a program, and the documentation leaves it out
 client = ["wire"]
-# the Rust async API, tinystore::aio, for the engines built beside it: futures
-# that wake through a Waker, so that any executor runs them, and no runtime
-async = ["store", "dep:futures-core"]
+# the Rust async API, tinystore::aio, for what is built beside it: the store
+# and its engines, and the MCP server with mcp; futures that wake through a
+# Waker, so that any executor runs them, and no runtime, nor any store of its own
+async = ["dep:futures-core"]
 # the words nearest a misspelt one, which config names for a key it does
 # not know and the command line for a command; it stands on no store
 typos = ["dep:fst", "dep:levenshtein_automata"]

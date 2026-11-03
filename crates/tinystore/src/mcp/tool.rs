@@ -1,5 +1,5 @@
-//! A tool an agent calls: its name, what it does, the JSON Schema of what it
-//! takes, its mark and the code that answers it.
+//! A tool an agent calls: its card, which says its name, what it does, the
+//! JSON Schema of what it takes and its mark, and the code that answers it.
 
 use std::error::Error as StdError;
 use std::fmt;
@@ -13,7 +13,8 @@ use crate::CancellationToken;
 /// the tool's error.
 pub(crate) type Answer = Result<Value, Box<dyn StdError + Send + Sync>>;
 
-type Handler = Arc<dyn Fn(&Value, &CancellationToken) -> Answer + Send + Sync>;
+/// A handler that answers on the thread that calls it.
+pub(crate) type Blocking = Arc<dyn Fn(&Value, &CancellationToken) -> Answer + Send + Sync>;
 
 /// What a tool does to what it reaches. The host reads it as MCP's
 /// annotations, and asks its person before a tool that is not `Reads`.
@@ -33,6 +34,41 @@ impl Mark {
             Mark::Writes => "writes",
             Mark::Removes => "removes",
         }
+    }
+}
+
+/// What the server knows of a tool apart from its handler, whichever form
+/// the handler takes: what it lists and what its allow list reads.
+#[derive(Clone, Debug)]
+pub(crate) struct Card {
+    pub(crate) name: String,
+    description: String,
+    schema: Value,
+    pub(crate) mark: Mark,
+}
+
+impl Card {
+    pub(crate) fn new(mark: Mark, name: &str, description: &str, schema: Value) -> Card {
+        Card { name: name.to_owned(), description: description.to_owned(), schema, mark }
+    }
+
+    pub(crate) fn schema(&self) -> &Value {
+        &self.schema
+    }
+
+    /// The tool as `tools/list` gives it, with MCP's annotations of its mark.
+    pub(crate) fn listed(&self) -> Value {
+        let annotations = match self.mark {
+            Mark::Reads => json!({ "readOnlyHint": true, "openWorldHint": false }),
+            Mark::Writes => json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }),
+            Mark::Removes => json!({ "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }),
+        };
+        json!({
+            "name": self.name,
+            "description": self.description,
+            "inputSchema": self.schema,
+            "annotations": annotations,
+        })
     }
 }
 
@@ -64,11 +100,8 @@ impl Mark {
 /// ```
 #[derive(Clone)]
 pub struct Tool {
-    pub(crate) name: String,
-    description: String,
-    schema: Value,
-    pub(crate) mark: Mark,
-    handler: Handler,
+    pub(crate) card: Card,
+    pub(crate) handler: Blocking,
 }
 
 impl Tool {
@@ -79,7 +112,7 @@ impl Tool {
         schema: Value,
         handler: impl Fn(&Value, &CancellationToken) -> Answer + Send + Sync + 'static,
     ) -> Tool {
-        Tool::marked(Mark::Reads, name, description, schema, Arc::new(handler))
+        Tool { card: Card::new(Mark::Reads, name, description, schema), handler: Arc::new(handler) }
     }
 
     /// A tool that writes and removes nothing, offered only when the allow
@@ -90,7 +123,7 @@ impl Tool {
         schema: Value,
         handler: impl Fn(&Value, &CancellationToken) -> Answer + Send + Sync + 'static,
     ) -> Tool {
-        Tool::marked(Mark::Writes, name, description, schema, Arc::new(handler))
+        Tool { card: Card::new(Mark::Writes, name, description, schema), handler: Arc::new(handler) }
     }
 
     /// A tool that deletes something or replaces what was there, offered only
@@ -101,40 +134,13 @@ impl Tool {
         schema: Value,
         handler: impl Fn(&Value, &CancellationToken) -> Answer + Send + Sync + 'static,
     ) -> Tool {
-        Tool::marked(Mark::Removes, name, description, schema, Arc::new(handler))
-    }
-
-    fn marked(mark: Mark, name: &str, description: &str, schema: Value, handler: Handler) -> Tool {
-        Tool { name: name.to_owned(), description: description.to_owned(), schema, mark, handler }
-    }
-
-    pub(crate) fn schema(&self) -> &Value {
-        &self.schema
-    }
-
-    /// The tool as `tools/list` gives it, with MCP's annotations of its mark.
-    pub(crate) fn listed(&self) -> Value {
-        let annotations = match self.mark {
-            Mark::Reads => json!({ "readOnlyHint": true, "openWorldHint": false }),
-            Mark::Writes => json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }),
-            Mark::Removes => json!({ "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }),
-        };
-        json!({
-            "name": self.name,
-            "description": self.description,
-            "inputSchema": self.schema,
-            "annotations": annotations,
-        })
-    }
-
-    pub(crate) fn call(&self, arguments: &Value, token: &CancellationToken) -> Answer {
-        (self.handler)(arguments, token)
+        Tool { card: Card::new(Mark::Removes, name, description, schema), handler: Arc::new(handler) }
     }
 }
 
 impl fmt::Debug for Tool {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Tool").field("name", &self.name).field("mark", &self.mark).finish_non_exhaustive()
+        f.debug_struct("Tool").field("name", &self.card.name).field("mark", &self.card.mark).finish_non_exhaustive()
     }
 }
 
@@ -148,7 +154,11 @@ impl Tools {
     /// The same tools, each name after `prefix`: `store_` makes `logs`
     /// `store_logs`, so that they sit beside a program's own without a clash.
     pub fn prefix(self, prefix: &str) -> Tools {
-        Tools(self.0.into_iter().map(|tool| Tool { name: format!("{prefix}{}", tool.name), ..tool }).collect())
+        let prefixed = |mut tool: Tool| {
+            tool.card.name = format!("{prefix}{}", tool.card.name);
+            tool
+        };
+        Tools(self.0.into_iter().map(prefixed).collect())
     }
 }
 

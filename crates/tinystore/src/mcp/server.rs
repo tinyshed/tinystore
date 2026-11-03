@@ -15,39 +15,29 @@ use std::thread;
 
 use serde_json::Value;
 
-use super::session::{Asked, Call, Session};
-use super::tool::{Answer, Tool};
+use super::session::{Asked, Session, Setup};
+use super::tool::{Answer, Blocking, Card, Tool};
 use crate::sync::lock;
-use crate::text::panic_message;
-use crate::{Error, Result};
+use crate::{CancellationToken, Error, Result};
 
 /// An MCP server being built: its name, its tools and its allow list; it
 /// answers with [`serve`](Server::serve).
 #[derive(Debug)]
 #[must_use = "a server answers with serve()"]
 pub struct Server {
-    pub(super) name: String,
-    pub(super) version: String,
-    pub(super) instructions: Option<String>,
-    pub(super) tools: Vec<Tool>,
-    pub(super) allowed: Option<String>,
+    setup: Setup,
+    tools: Vec<Tool>,
 }
 
 impl Server {
     pub(super) fn new(name: &str, version: &str) -> Server {
-        Server {
-            name: name.to_owned(),
-            version: version.to_owned(),
-            instructions: None,
-            tools: Vec::new(),
-            allowed: None,
-        }
+        Server { setup: Setup::new(name, version), tools: Vec::new() }
     }
 
     /// What the agent is told the server is for. The server adds a sentence
     /// of its own: which tools write, or that nothing does.
     pub fn instructions(mut self, text: &str) -> Server {
-        self.instructions = Some(text.to_owned());
+        self.setup.instructions = Some(text.to_owned());
         self
     }
 
@@ -65,7 +55,7 @@ impl Server {
     /// program's `--write` gives them: none, `all`, or names with commas
     /// between, as `dashboard_save,dashboard_delete`.
     pub fn allow<'a>(mut self, given: impl Into<Option<&'a str>>) -> Server {
-        self.allowed = given.into().map(str::to_owned);
+        self.setup.allowed = given.into().map(str::to_owned);
         self
     }
 
@@ -85,9 +75,11 @@ impl Server {
     /// [`serve`](Server::serve) on any input and output, as a test drives it.
     #[doc(hidden)]
     pub fn serve_on(self, input: impl BufRead, output: impl Write + Send) -> Result<()> {
-        let session = Session::of(self)?;
+        let (cards, handlers): (Vec<Card>, Vec<Blocking>) =
+            self.tools.into_iter().map(|tool| (tool.card, tool.handler)).unzip();
+        let session = Session::of(self.setup, cards)?;
         let answers = Lines::to(output);
-        let (session, lines) = (&session, &answers);
+        let (session, handlers, lines) = (&session, &handlers, &answers);
         let read = thread::scope(|calls| {
             for line in input.lines() {
                 let line = line.map_err(|error| Error::io("mcp: stdin", error))?;
@@ -95,8 +87,8 @@ impl Server {
                     Asked::Answer(answer) => answer.iter().for_each(|answer| lines.write(answer)),
                     Asked::Call(call) => {
                         calls.spawn(move || {
-                            let answered = ran(&call);
-                            session.finished(call, answered).iter().for_each(|answer| lines.write(answer));
+                            let ran = ran(&handlers[call.tool], &call.arguments, &call.token);
+                            session.finished(call, ran).iter().for_each(|answer| lines.write(answer));
                         });
                     }
                 }
@@ -114,19 +106,17 @@ impl Server {
     }
 }
 
-/// Runs `call`'s handler on this thread under the call's token, so that every
-/// read it makes through a store stops once the call is cancelled. A handler
-/// that panics answers its call as the tool's error, and the server goes on.
-fn ran(call: &Call<'_>) -> Answer {
+/// Runs a call's handler on this thread under the call's token, so that
+/// every read it makes through a store stops once the call is cancelled; a
+/// panic is caught, for the session to answer as the tool's error.
+pub(crate) fn ran(handler: &Blocking, arguments: &Value, token: &CancellationToken) -> thread::Result<Answer> {
     // the server keeps nothing a handler's panic could leave half-changed
-    let handled = AssertUnwindSafe(|| call.token.run(|| call.tool.call(&call.arguments, &call.token)));
-    panic::catch_unwind(handled)
-        .unwrap_or_else(|panicked| Err(format!("{} panicked: {}", call.tool.name, panic_message(&*panicked)).into()))
+    panic::catch_unwind(AssertUnwindSafe(|| token.run(|| handler(arguments, token))))
 }
 
 /// Where the answers go, each a line written whole under one lock and flushed
 /// at once, in the order they are ready. The first failure stops it.
-struct Lines<W> {
+pub(crate) struct Lines<W> {
     output: Mutex<Output<W>>,
 }
 
@@ -137,11 +127,11 @@ struct Output<W> {
 }
 
 impl<W: Write> Lines<W> {
-    fn to(output: W) -> Lines<W> {
+    pub(crate) fn to(output: W) -> Lines<W> {
         Lines { output: Mutex::new(Output { to: output, failed: None }) }
     }
 
-    fn write(&self, answer: &Value) {
+    pub(crate) fn write(&self, answer: &Value) {
         let mut output = lock(&self.output);
         if output.failed.is_some() {
             return;
@@ -153,13 +143,13 @@ impl<W: Write> Lines<W> {
         }
     }
 
-    fn stopped(&self) -> bool {
+    pub(crate) fn stopped(&self) -> bool {
         lock(&self.output).failed.is_some()
     }
 
     /// What `serve` returns of its writing: a host that has gone is no
     /// failure, since nobody is left to answer.
-    fn ended(&self) -> Result<()> {
+    pub(crate) fn ended(&self) -> Result<()> {
         match lock(&self.output).failed.take() {
             Some(error) if error.kind() != io::ErrorKind::BrokenPipe => Err(Error::io("mcp: stdout", error)),
             _ => Ok(()),

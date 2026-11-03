@@ -16,26 +16,25 @@
 //! a cancel that took it before it began, by the worker's drop, or by the
 //! loop's own close, which gives back the jobs no handler began.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, Weak};
-use std::task::{Context, Poll, Wake, Waker};
+use std::sync::{Arc, Weak};
+use std::task::{Context, Poll};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::queue::Queue;
 use super::run::Run;
+use crate::aio::handlers::{self, Handlers};
 use crate::jobs::{self, Answers, Ended, Hand, How, Lease, Outcome, Remote, RemoteWork};
-use crate::sync::lock;
 use crate::{Error, Result};
 
 /// What a job's handler said of it, a panic aside: its outcome, or the text
 /// of its error, which retries it.
-type Answering = Pin<Box<dyn Future<Output = std::result::Result<Outcome, String>> + Send>>;
+type Answering = handlers::Handler<std::result::Result<Outcome, String>>;
 
 /// The handler called on a job's value, once the worker begins it.
 type Begin = Box<dyn FnOnce(Run) -> Answering + Send>;
@@ -216,16 +215,8 @@ struct Driver {
     queue: Queue<()>,
     /// Handlers it runs at once at most.
     local: usize,
-    running: HashMap<u64, Handling>,
-    last_slot: u64,
-}
-
-/// A handler under way: its job, and its future, polled when its own waker
-/// woke.
-struct Handling {
-    lease: Arc<Lease>,
-    answering: Answering,
-    waker: Waker,
+    /// The handlers under way, each with its job.
+    running: Handlers<Arc<Lease>, std::result::Result<Outcome, String>>,
 }
 
 impl Driver {
@@ -250,8 +241,7 @@ impl Driver {
             answers: Answers::default(),
             queue: Queue { queue: queue.queue.retyped(), pool: Arc::clone(&queue.pool) },
             local,
-            running: HashMap::new(),
-            last_slot: 0,
+            running: Handlers::default(),
         }
     }
 
@@ -263,12 +253,15 @@ impl Driver {
         let blocking = &self.queue.queue;
         let remote =
             jobs::start_remote(&blocking.jobs, &blocking.state, work).map_err(|error| blocking.fail(None, error))?;
-        let mut shared = self.shared.lock();
-        if shared.ended.is_some() {
-            drop(shared);
-            remote.ended();
-        } else {
+        let ended_first = self.shared.with(|shared| {
+            if shared.ended.is_some() {
+                return Some(remote);
+            }
             shared.remote = Some(remote);
+            None
+        });
+        if let Some(remote) = ended_first {
+            remote.ended();
         }
         Ok(())
     }
@@ -276,15 +269,11 @@ impl Driver {
     /// Polls the handlers whose wakers woke, begins the jobs handed over while
     /// a handler is free, and ends once the loop did.
     fn drive(&mut self, context: &mut Context<'_>) -> Poll<Result<usize>> {
-        let (woken, ended) = {
-            let mut shared = self.shared.lock();
-            shared.waker = Some(context.waker().clone());
-            (std::mem::take(&mut shared.woken), shared.ended.take())
-        };
+        let (woken, ended) = self.shared.look(context.waker(), |shared| shared.ended.take());
         if let Some(ran) = ended {
             self.phase = Phase::Ended;
             // what is left is what the loop let go after the queue's timeout and a grace
-            self.running.clear();
+            self.running.stop(|_| true);
             return Poll::Ready(ran);
         }
         for slot in woken {
@@ -307,8 +296,7 @@ impl Driver {
         if self.running.len() >= self.local {
             return None;
         }
-        let mut shared = self.shared.lock();
-        if shared.halted { None } else { shared.ready.pop_front() }
+        self.shared.with(|shared| if shared.halted { None } else { shared.ready.pop_front() })
     }
 
     /// Begins a job and polls its handler a first time; one a cancel took
@@ -318,31 +306,15 @@ impl Driver {
         if !run.begin() {
             return self.answers.answer(lease, None);
         }
-        let answering = match catch_unwind(AssertUnwindSafe(|| begin(run))) {
-            Ok(answering) => answering,
-            Err(panic) => return self.answer(lease, Err(panic)),
-        };
-        self.last_slot += 1;
-        let slot = self.last_slot;
-        let waker = Waker::from(Arc::new(Slot { number: slot, shared: Arc::downgrade(&self.shared) }));
-        self.running.insert(slot, Handling { lease, answering, waker });
-        self.poll_handler(slot);
+        if let Some((lease, ran)) = self.running.begin(lease, || begin(run), &self.shared) {
+            self.answer(lease, ran);
+        }
     }
 
     /// Polls one handler with its own waker, and answers its job once it ends,
     /// a panic among its ends.
     fn poll_handler(&mut self, slot: u64) {
-        let Some(handling) = self.running.get_mut(&slot) else {
-            return;
-        };
-        let mut context = Context::from_waker(&handling.waker);
-        let ran = match catch_unwind(AssertUnwindSafe(|| handling.answering.as_mut().poll(&mut context))) {
-            Ok(Poll::Pending) => return,
-            Ok(Poll::Ready(answer)) => Ok(answer),
-            Err(panic) => Err(panic),
-        };
-        if let Some(Handling { lease, answering, .. }) = self.running.remove(&slot) {
-            drop(answering);
+        if let Some((lease, ran)) = self.running.poll(slot) {
             self.answer(lease, ran);
         }
     }
@@ -408,29 +380,22 @@ impl Drop for Driver {
             return;
         }
         self.shared.halt();
-        for (_, Handling { lease, answering, .. }) in self.running.drain() {
-            drop(answering);
+        for lease in self.running.stop(|_| true) {
             let how = (!lease.cancelled()).then(|| How::Retry { at: None, cause: DROPPED.to_owned() });
             self.answers.answer(lease, how);
         }
     }
 }
 
-/// What the worker's future and its loop share: the jobs handed over and not
-/// begun, the handlers woken, the task to wake, and the loop while it runs.
-#[derive(Default)]
-struct Shared {
-    state: Mutex<SharedState>,
-}
+/// What the worker's future and its loop share, beside the handlers woken
+/// and the task to wake: the jobs handed over and not begun, and the loop
+/// while it runs.
+type Shared = handlers::Shared<SharedState>;
 
 #[derive(Default)]
 struct SharedState {
     /// The jobs handed over and not yet begun, in the order handed.
     ready: VecDeque<(Arc<Lease>, Begin)>,
-    /// The slots whose handler's waker woke since the worker's last poll.
-    woken: Vec<u64>,
-    /// The waker of the task that polls the worker.
-    waker: Option<Waker>,
     /// It begins no job more, and the loop gives back the ones handed.
     halted: bool,
     /// How the loop ended, once it did, until the worker's poll takes it.
@@ -440,29 +405,14 @@ struct SharedState {
 }
 
 impl Shared {
-    fn lock(&self) -> std::sync::MutexGuard<'_, SharedState> {
-        lock(&self.state)
-    }
-
     /// Begins no job more, and has the loop take no job more.
     fn halt(&self) {
-        let mut state = self.lock();
-        state.halted = true;
-        if let Some(remote) = &state.remote {
-            remote.halt();
-        }
-    }
-
-    /// Wakes the task that polls the worker, outside the lock.
-    fn wake(&self, change: impl FnOnce(&mut SharedState)) {
-        let waker = {
-            let mut state = self.lock();
-            change(&mut state);
-            state.waker.take()
-        };
-        if let Some(waker) = waker {
-            waker.wake();
-        }
+        self.with(|state| {
+            state.halted = true;
+            if let Some(remote) = &state.remote {
+                remote.halt();
+            }
+        });
     }
 }
 
@@ -471,7 +421,7 @@ impl Shared {
 fn loop_ended(shared: Arc<Shared>) -> Ended {
     Box::new(move |ran| {
         let mut remote = None;
-        shared.wake(|state| {
+        shared.post(|state| {
             state.ended = Some(ran);
             remote = state.remote.take();
         });
@@ -494,12 +444,12 @@ impl Hand for Handing {
         if lease.cancelled() {
             return Err(None);
         }
-        let Some(shared) = self.shared.upgrade().filter(|shared| !shared.lock().halted) else {
+        let Some(shared) = self.shared.upgrade().filter(|shared| !shared.with(|state| state.halted)) else {
             return Err(Some(How::GiveBack));
         };
         let begin = (self.make)(&lease).map_err(Some)?;
         let mut handed = Some((lease, begin));
-        shared.wake(|state| {
+        shared.post(|state| {
             if !state.halted {
                 state.ready.extend(handed.take());
             }
@@ -514,35 +464,11 @@ impl Hand for Handing {
         let Some(shared) = self.shared.upgrade() else {
             return Vec::new();
         };
-        let ready = {
-            let mut state = shared.lock();
+        let ready = shared.with(|state| {
             state.halted = true;
             std::mem::take(&mut state.ready)
-        };
+        });
         ready.into_iter().map(|(lease, _)| lease).collect()
-    }
-}
-
-/// One handler's waker: it marks its slot woken and wakes the worker's task,
-/// so that the worker polls that handler alone.
-struct Slot {
-    number: u64,
-    shared: Weak<Shared>,
-}
-
-impl Wake for Slot {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        if let Some(shared) = self.shared.upgrade() {
-            shared.wake(|state| {
-                if !state.woken.contains(&self.number) {
-                    state.woken.push(self.number);
-                }
-            });
-        }
     }
 }
 

@@ -155,17 +155,70 @@ Tool::reads("dashboard_check", "Runs each panel's query.", panels, |args, token|
 - If a closure panics, its call fails with the panic's message, such as
   `dashboard_check panicked: no panel 7`, and the server goes on.
 
+## Async Rust
+
+If your program runs on tokio or another async runtime, serve your tools
+from `tinystore::aio::mcp` with the `async` feature. There a tool's closure
+returns a future, so it can await your own async work, such as a query
+through `sqlx` or `tokio-postgres`. TinyStore brings no runtime: you await
+`serve()` on yours.
+
+```sh
+cargo add tinystore --no-default-features --features mcp,async
+```
+
+```rust
+use serde_json::json;
+use tinystore::aio::mcp::{self, Tool};
+
+let pool = sqlx::PgPool::connect(&url).await?;
+let sql = json!({ "type": "object", "properties": { "sql": { "type": "string" } }, "required": ["sql"] });
+
+mcp::server("dashbin", env!("CARGO_PKG_VERSION"))
+    .tool(Tool::reads("query", "Rows of a read-only statement.", sql, move |args, _| {
+        let pool = pool.clone();
+        async move {
+            let sql = args["sql"].as_str().ok_or("query takes sql")?;
+            let rows = sqlx::query(sql).fetch_all(&pool).await?;
+            Ok(json!({ "rows": rows.len() }))
+        }
+    }))
+    .serve()
+    .await?; // answers stdin until it closes
+```
+
+- The closure takes the arguments and the token by value, and returns a
+  future that owns what it awaits with. Clone what your calls share, such as
+  a pool, into each future.
+- Calls run side by side. The future of `serve` polls each call's future on
+  the task that awaits it, so the server spawns nothing.
+- A blocking tool, a `tinystore::mcp::Tool` or one of `mcp::read_tools(&store)`,
+  mounts on the same server. Each of its calls runs on a thread of its own,
+  so it doesn't hold up the others.
+- When the host cancels a call, the server drops the call's future and
+  writes no answer (contract MCP-08). Dropping the future stops whatever it
+  awaits. A statement it started on another database stops being awaited,
+  but that database may run it until its own timeout.
+- Reads through a TinyStore store stop too, even a read that you hand to
+  `tokio::spawn`, because the server polls each future under the call's
+  token (contract MCP-07).
+- With `mcp` and `async` and no engine, your program links no SQLite
+  (contract MCP-09).
+- `serve` reads stdin on a thread of its own and writes stdout on another.
+  If you drop the future of `serve` while stdin is still open, its reading
+  thread waits until the next line arrives or stdin closes.
+
 ## Limits and defaults
 
-| What                          | Value                                               |
-|-------------------------------|-----------------------------------------------------|
-| Transport                     | stdin and stdout, one JSON-RPC 2.0 message per line |
-| Protocol version              | the client's, or `2025-06-18` when it names none    |
-| Methods                       | `initialize`, `ping`, `tools/list`, `tools/call`    |
-| Calls that run at once        | no limit, each on a thread of its own               |
-| A store tool's list           | 200 items at most, `logs` 50 by default             |
-| Two tools with the same name  | refused by `serve` with an `Invalid` error          |
-| A schema that isn't an object | refused by `serve` with an `Invalid` error          |
+| What                          | Value                                                          |
+|-------------------------------|----------------------------------------------------------------|
+| Transport                     | stdin and stdout, one JSON-RPC 2.0 message per line            |
+| Protocol version              | the client's, or `2025-06-18` when it names none               |
+| Methods                       | `initialize`, `ping`, `tools/list`, `tools/call`               |
+| Calls that run at once        | no limit: a thread per blocking call, a future per awaited one |
+| A store tool's list           | 200 items at most, `logs` 50 by default                        |
+| Two tools with the same name  | refused by `serve` with an `Invalid` error                     |
+| A schema that isn't an object | refused by `serve` with an `Invalid` error                     |
 
 ## See also
 

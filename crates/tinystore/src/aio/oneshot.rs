@@ -59,6 +59,7 @@ impl<T> Answer<T> {
 
     /// Whether the future still waits: a read whose future is gone need not
     /// run at all.
+    #[cfg(feature = "store")]
     pub(crate) fn is_awaited(&self) -> bool {
         self.slot.as_ref().is_some_and(|slot| !matches!(*lock(slot), State::Gone))
     }

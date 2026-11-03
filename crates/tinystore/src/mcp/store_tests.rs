@@ -125,11 +125,11 @@ fn a_cancelled_call_stops_its_reads_of_the_store() {
     let store = held(dir.path());
     store.database("app").open().unwrap();
     // sql_query as the store's tools give it, telling the test how it ended
-    let query = mcp::read_tools(&store).0.into_iter().find(|tool| tool.name == "sql_query").unwrap();
+    let query = mcp::read_tools(&store).0.into_iter().find(|tool| tool.card.name == "sql_query").unwrap();
     let ((started, starts), (ended, endings)) = (mpsc::channel(), mpsc::channel());
-    let watched = Tool::reads("sql_query", "Rows of a query.", query.schema().clone(), move |given, token| {
+    let watched = Tool::reads("sql_query", "Rows of a query.", query.card.schema().clone(), move |given, token| {
         started.send(()).unwrap();
-        let answered = query.call(given, token);
+        let answered = (query.handler)(given, token);
         ended.send(answered.as_ref().map_err(ToString::to_string).err()).unwrap();
         answered
     });

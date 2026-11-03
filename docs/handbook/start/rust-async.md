@@ -209,7 +209,8 @@ be your executor's thread. Await `close` instead.
 
 ## Each engine's calls
 
-Each engine's guide shows its awaited calls in a section named Async Rust:
+Each engine's guide shows its awaited calls in a section named Async Rust,
+and so does the guide to your own MCP server:
 
 | Engine   | Guide                                                  | What you await                              |
 |----------|--------------------------------------------------------|---------------------------------------------|
@@ -224,6 +225,7 @@ Each engine's guide shows its awaited calls in a section named Async Rust:
 | Records  | [Records](../../guides/records/README.md#async-rust)   | appends, reads, counts, a tail as a stream  |
 | Metrics  | [Metrics](../../guides/metrics/README.md#async-rust)   | ingest, queries, pages, descriptions        |
 | Backup   | [Backup](../../guides/backup/README.md#async-rust)     | a backup's write                            |
+| MCP      | [MCP](../../guides/cli/mcp-server.md#async-rust)       | your MCP server, its tools' handlers        |
 
 ## Why this design?
 

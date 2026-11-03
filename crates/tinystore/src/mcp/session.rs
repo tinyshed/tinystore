@@ -1,22 +1,44 @@
 //! The protocol, apart from how a call runs: what each message asks, which
-//! tools the allow list offers, the calls under way by their ids, and whether
-//! a call that has finished is answered. The session runs no handler itself:
-//! `Server::serve_on` runs each call it hands out on a thread of its own.
+//! tools the allow list offers, the calls under way by their ids, and the
+//! answer a call that has finished gets, or none. The session knows each
+//! tool by its card and runs no handler: the server that drives it holds the
+//! handlers and runs each call it hands out, on a thread of its own as
+//! `mcp::Server` does, or as a future the program's runtime polls as
+//! `aio::mcp::Server` does.
+
+use std::thread;
 
 use serde_json::{Value, json};
 
 use super::given::meant;
-use super::server::Server;
-use super::tool::{Answer, Mark, Tool};
+use super::tool::{Answer, Card, Mark};
 use crate::cancel::Tokens;
+use crate::text::panic_message;
 use crate::{CancellationToken, Error, Result};
 
 /// The protocol's version this server speaks when a client names none.
 const PROTOCOL: &str = "2025-06-18";
 
+/// What a server says of itself, and its allow list as the program's
+/// `--write` gave it.
+#[derive(Debug)]
+pub(crate) struct Setup {
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) instructions: Option<String>,
+    pub(crate) allowed: Option<String>,
+}
+
+impl Setup {
+    pub(crate) fn new(name: &str, version: &str) -> Setup {
+        Setup { name: name.to_owned(), version: version.to_owned(), instructions: None, allowed: None }
+    }
+}
+
 /// A server whose tools and allow list were checked, answering.
-pub(super) struct Session {
-    server: Server,
+pub(crate) struct Session {
+    setup: Setup,
+    cards: Vec<Card>,
     /// The tools that write or remove which the allow list names.
     writes: Vec<String>,
     /// The token of each call under way, by its id as JSON text, so that
@@ -25,32 +47,34 @@ pub(super) struct Session {
 }
 
 /// What a message asks of the server.
-pub(super) enum Asked<'s> {
+pub(crate) enum Asked {
     /// What to answer now: nothing, to a notification.
     Answer(Option<Value>),
     /// A call of a tool the server offers, to run and then give to
     /// [`Session::finished`].
-    Call(Call<'s>),
+    Call(Call),
 }
 
 /// A call under way.
-pub(super) struct Call<'s> {
+pub(crate) struct Call {
     id: Value,
-    pub(super) tool: &'s Tool,
-    pub(super) arguments: Value,
+    /// Where the tool's card is among the session's, and so its handler
+    /// among the server's.
+    pub(crate) tool: usize,
+    pub(crate) arguments: Value,
     /// Cancelled once the host gives up on the call.
-    pub(super) token: CancellationToken,
+    pub(crate) token: CancellationToken,
 }
 
 impl Session {
-    pub(super) fn of(server: Server) -> Result<Session> {
-        check_tools(&server)?;
-        let writes = allowed(&server.tools, server.allowed.as_deref())?;
-        Ok(Session { server, writes, running: Tokens::default() })
+    pub(crate) fn of(setup: Setup, cards: Vec<Card>) -> Result<Session> {
+        check_tools(&setup.name, &cards)?;
+        let writes = allowed(&cards, setup.allowed.as_deref())?;
+        Ok(Session { setup, cards, writes, running: Tokens::default() })
     }
 
     /// What one line, a message, asks.
-    pub(super) fn received(&self, line: &str) -> Asked<'_> {
+    pub(crate) fn received(&self, line: &str) -> Asked {
         if line.trim().is_empty() {
             return Asked::Answer(None);
         }
@@ -77,20 +101,29 @@ impl Session {
         Asked::Answer(Some(answer(id, result)))
     }
 
-    /// The answer to a call whose handler has returned, or none once the call
-    /// was cancelled: its host has given up on it, and MCP's spec asks that
-    /// it get no answer.
-    pub(super) fn finished(&self, call: Call<'_>, answered: Answer) -> Option<Value> {
+    /// The answer to a call whose handler has returned, or panicked, which
+    /// is the tool's error; none once the call was cancelled: its host has
+    /// given up on it, and MCP's spec asks that it get no answer.
+    pub(crate) fn finished(&self, call: Call, ran: thread::Result<Answer>) -> Option<Value> {
         // a cancel reached the token before the call left, or it finds nothing and is ignored
-        self.running.finish(&call.id.to_string(), &call.token);
+        self.dropped(&call);
         if call.token.is_cancelled() {
             return None;
         }
+        let answered = ran.unwrap_or_else(|panicked| {
+            Err(format!("{} panicked: {}", self.cards[call.tool].name, panic_message(&*panicked)).into())
+        });
         Some(answer(call.id, called(answered)))
     }
 
+    /// A call that leaves unanswered, its future dropped once it was
+    /// cancelled.
+    pub(crate) fn dropped(&self, call: &Call) {
+        self.running.finish(&call.id.to_string(), &call.token);
+    }
+
     /// Cancels every call under way, once nobody is left to read an answer.
-    pub(super) fn cancel_all(&self) {
+    pub(crate) fn cancel_all(&self) {
         self.running.cancel_all();
     }
 
@@ -102,8 +135,8 @@ impl Session {
         }
     }
 
-    fn offers(&self, tool: &Tool) -> bool {
-        tool.mark == Mark::Reads || self.writes.contains(&tool.name)
+    fn offers(&self, card: &Card) -> bool {
+        card.mark == Mark::Reads || self.writes.contains(&card.name)
     }
 
     fn initialized(&self, params: &Value) -> Value {
@@ -111,7 +144,7 @@ impl Session {
         json!({
             "protocolVersion": version,
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": self.server.name, "version": self.server.version },
+            "serverInfo": { "name": self.setup.name, "version": self.setup.version },
             "instructions": self.instructions(),
         })
     }
@@ -125,29 +158,29 @@ impl Session {
             writes => {
                 let changes = if writes.len() == 1 { "changes" } else { "change" };
                 let only = format!("Only {} {changes} anything", in_english(writes));
-                let reads = self.server.tools.iter().any(|tool| tool.mark == Mark::Reads);
+                let reads = self.cards.iter().any(|card| card.mark == Mark::Reads);
                 if reads { format!("{only}; every other tool only reads.") } else { format!("{only}.") }
             }
         };
-        match &self.server.instructions {
+        match &self.setup.instructions {
             Some(given) => format!("{given} {writing}"),
             None => writing,
         }
     }
 
     fn listed(&self) -> Value {
-        let tools: Vec<Value> = self.server.tools.iter().filter(|tool| self.offers(tool)).map(Tool::listed).collect();
+        let tools: Vec<Value> = self.cards.iter().filter(|card| self.offers(card)).map(Card::listed).collect();
         json!({ "tools": tools })
     }
 
     /// A call to run, or why the tool is refused, answered at once as the
     /// tool's own error.
-    fn call(&self, id: Value, params: &Value) -> Asked<'_> {
+    fn call(&self, id: Value, params: &Value) -> Asked {
         let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-        let refused = match self.server.tools.iter().find(|tool| tool.name == name) {
+        let refused = match self.cards.iter().position(|card| card.name == name) {
             None => format!("no tool {name}"),
-            Some(tool) if !self.offers(tool) => {
-                let (does, program) = (tool.mark.verb(), &self.server.name);
+            Some(tool) if !self.offers(&self.cards[tool]) => {
+                let (does, program) = (self.cards[tool].mark.verb(), &self.setup.name);
                 format!("{name} {does}, and {program} mcp was not started with --write {name}")
             }
             Some(tool) => return self.started(id, tool, params),
@@ -157,7 +190,7 @@ impl Session {
 
     /// The call of `tool`, under way from now; refused while a call of the
     /// same id still is, since their answers could not be told apart.
-    fn started<'s>(&'s self, id: Value, tool: &'s Tool, params: &Value) -> Asked<'s> {
+    fn started(&self, id: Value, tool: usize, params: &Value) -> Asked {
         // only the thread that reads the messages starts a call, so none takes the id between
         if self.running.holds(&id.to_string()) {
             let still = format!("a call of id {id} is still running");
@@ -196,15 +229,15 @@ fn in_english(names: &[String]) -> String {
 
 /// Refuses two tools of one name, which a call could not tell apart, and a
 /// schema that is not an object's, which MCP's hosts refuse.
-fn check_tools(server: &Server) -> Result<()> {
-    for (at, tool) in server.tools.iter().enumerate() {
-        if server.tools[..at].iter().any(|before| before.name == tool.name) {
-            return Err(Error::invalid(format!("mcp server {}: two tools named {}", server.name, tool.name)));
+fn check_tools(server: &str, cards: &[Card]) -> Result<()> {
+    for (at, card) in cards.iter().enumerate() {
+        if cards[..at].iter().any(|before| before.name == card.name) {
+            return Err(Error::invalid(format!("mcp server {server}: two tools named {}", card.name)));
         }
-        if tool.schema().get("type").and_then(Value::as_str) != Some("object") {
+        if card.schema().get("type").and_then(Value::as_str) != Some("object") {
             return Err(Error::invalid(format!(
                 "mcp tool {}: its input schema is a JSON Schema of an object, as {{\"type\": \"object\"}}",
-                tool.name
+                card.name
             )));
         }
     }
@@ -213,9 +246,9 @@ fn check_tools(server: &Server) -> Result<()> {
 
 /// The tools that write or remove which `given` names: `all`, or their names
 /// with commas between. A name of none is refused with the nearest.
-fn allowed(tools: &[Tool], given: Option<&str>) -> Result<Vec<String>> {
+fn allowed(cards: &[Card], given: Option<&str>) -> Result<Vec<String>> {
     let writes: Vec<&str> =
-        tools.iter().filter(|tool| tool.mark != Mark::Reads).map(|tool| tool.name.as_str()).collect();
+        cards.iter().filter(|card| card.mark != Mark::Reads).map(|card| card.name.as_str()).collect();
     let named: Vec<&str> = match given {
         None => return Ok(Vec::new()),
         Some("all") => writes.clone(),

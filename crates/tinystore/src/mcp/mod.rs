@@ -31,17 +31,21 @@
 //! # }
 //! ```
 //!
+//! Each call runs on a thread of its own. A program on an async runtime
+//! serves the same protocol with tools that await, through
+//! `tinystore::aio::mcp` and the `async` feature.
+//!
 //! The modules below the server's own are the reads tinystore's tools make
 //! and the JSON they answer, which the command line's `--json` prints too:
 //! hidden, since they promise a program nothing.
 
 #[cfg(test)]
-mod fixture;
-mod server;
-mod session;
+pub(crate) mod fixture;
+pub(crate) mod server;
+pub(crate) mod session;
 #[cfg(feature = "store")]
 mod store;
-mod tool;
+pub(crate) mod tool;
 
 #[doc(hidden)]
 pub mod given;

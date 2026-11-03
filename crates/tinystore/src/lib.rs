@@ -55,7 +55,7 @@ pub mod metrics;
 pub mod pipe;
 #[cfg(feature = "store")]
 mod polled;
-#[cfg(any(feature = "wire", feature = "async"))]
+#[cfg(any(feature = "wire", all(feature = "async", feature = "store")))]
 mod pool;
 #[cfg(feature = "store")]
 mod probe;
@@ -80,7 +80,7 @@ mod sync;
 #[cfg(all(test, any(feature = "channels", feature = "locks", feature = "jobs", feature = "mcp")))]
 mod testing;
 mod text;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", feature = "store"))]
 mod timer;
 #[cfg(any(feature = "kv", feature = "jobs", feature = "sql"))]
 mod transaction;

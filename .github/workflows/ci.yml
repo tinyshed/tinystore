@@ -53,20 +53,20 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # the library built with each engine alone, the console alone, config's loader alone, the wire alone,
-      # the async API alone and beside each engine, MCP alone and beside each engine it serves, and every
+      # the async API alone and beside each engine, MCP alone, beside each engine it serves and awaited, and every
       # engine with async and without the wire: a program links what it opens and nothing else
       - name: Lint the library's features alone
         shell: bash
         run: |
-          for features in console kv config-load config locks channels jobs sql blobs records metrics system search wire kv,backup kv,channels kv,replication kv,replication,replication-tls async kv,async config,async locks,async channels,async jobs,async sql,async blobs,async records,async metrics,async search,async mcp mcp,records mcp,kv mcp,jobs mcp,sql mcp,search kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication,async; do
+          for features in console kv config-load config locks channels jobs sql blobs records metrics system search wire kv,backup kv,channels kv,replication kv,replication,replication-tls async kv,async config,async locks,async channels,async jobs,async sql,async blobs,async records,async metrics,async search,async mcp mcp,records mcp,kv mcp,jobs mcp,sql mcp,search mcp,async mcp,async,sql kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication,async; do
             cargo clippy -p tinystore --no-default-features --features "$features" --all-targets --locked -- -D warnings
           done
 
-      # a program that only logs, or only loads its settings, links no SQLite: just no-sqlite
-      - name: Link no SQLite with the console or config-load alone
+      # a program that only logs, only loads its settings, or serves its own MCP tools links no SQLite: just no-sqlite
+      - name: Link no SQLite with the console, config-load or MCP alone
         shell: bash
         run: |
-          for features in console config-load; do
+          for features in console config-load config-load,mcp,async; do
             if cargo tree -p tinystore --no-default-features --features "$features" -e normal --prefix none --locked | grep rusqlite; then
               echo "::error::the library with $features alone links SQLite"
               exit 1
