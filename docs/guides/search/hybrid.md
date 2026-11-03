@@ -110,8 +110,8 @@ half scored far above the rest counts the same as one barely ahead. In the
 `search-hybrid` research round (the bge-m3 model on Amazon's products and
 twelve StackExchange forums, 600 judged questions each), the scaled sum
 ranked better than fusion by rank in all four comparisons, so it is the
-default. The [research reports](https://github.com/tinyshed/research/tree/main/tinystore/reports)
-have every number and the command that reproduces it.
+default. [Its report](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-hybrid-2026-10-16.md)
+has every number and the command that reproduces it.
 
 **Why each half's best hundred.** Scaling needs a best and a worst. A hundred
 is more than a page ever shows, and few enough that both halves stay exact

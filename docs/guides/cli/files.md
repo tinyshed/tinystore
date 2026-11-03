@@ -1,9 +1,9 @@
 # files
 
 `tinystore files` puts, gets, lists and deletes a store's files from a shell,
-with no SDK. `put` and `delete` write through the server that holds the
-directory, or start one. `get` and `list` read beside the program or server
-that holds the directory.
+with no SDK. `put` and `delete` write through a server, as
+[every write](README.md#who-writes) of the command line does. `get` and `list`
+read beside the program or server that holds the directory.
 
 ```sh
 tinystore files ./data put avatars users/42/avatar.png ./avatar.png
@@ -62,10 +62,10 @@ users/43/avatar.png    9.1 KiB  26 Oct 14:35:51  image/png
 ```
 
 - A second word lists the paths that start with it.
-- `--limit` sets how many a page holds, 100 when not given. When there are
-  more, stderr says what `--after` reads on.
+- A page holds 100 files unless `--limit` says, 1000 at most, and `--after`
+  reads the next, as [Pages](README.md#pages) says.
 - `--json` gives a line per file, with its size, ETag, type and times whole
-  and UTC, and a last line `{"next": "…"}` when there are more.
+  and UTC.
 
 ## Delete a file
 
@@ -79,14 +79,6 @@ deleted users/42/avatar.png from files avatars
 
 A path that holds no file says `files avatars holds no users/42/avatar.png`
 and exits 0.
-
-## Who writes
-
-`put` and `delete` write as every write of the command line does: through
-`tinystore serve` or an SDK's sidecar when one holds the directory, or a
-sidecar they start, which stops 30 seconds after its last client. A directory
-that a program opened `embedded` is refused, since no other process can write
-to it. See [metrics: who writes](metrics.md#who-writes).
 
 ## See also
 

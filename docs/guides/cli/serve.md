@@ -94,14 +94,14 @@ only errors on stderr and keeps every line from `info` in the file.
 ## In a container
 
 ```sh
-docker run -v /srv/chat:/data -p 7443:7443 ghcr.io/tinyshed/tinystore:0.3 \
+docker run -v /srv/chat:/data -p 7443:7443 ghcr.io/tinyshed/tinystore:0.7 \
   serve /data --listen tls://0.0.0.0:7443 --tls-cert /data/cert.pem --tls-key /data/key.pem --tokens /data/tokens.txt
 ```
 
 ## Nodes
 
-`--node-listen`, `--from` and `--node-config` make the store a node that
-copies files from another or serves its own to others. See [Nodes](nodes.md).
+`--node-listen`, `--from` and `--node-config` each make the store a node:
+see [Nodes](nodes.md).
 
 ## Stop
 

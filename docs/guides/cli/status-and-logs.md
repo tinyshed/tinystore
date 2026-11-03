@@ -75,10 +75,11 @@ grows with your users, or which stream keeps too much.
 The bytes leave out SQLite's pages, its indexes and its free space, so the
 names under a file add up to less than the file.
 
-> **`--names` reads every name whole.** It scans each bucket, queue, set of
-> files, stream and index, one name per read, so on a big store it takes
-> longer than `status`. Plain `status`, Tab completion and the MCP server's
-> status tool read only the names, as before.
+> [!NOTE]
+> **`--names` reads every name whole**
+> It scans each bucket, queue, set of files, stream and index, one name per
+> read, so on a big store it takes longer than `status`. Plain `status`, Tab
+> completion and the MCP server's status tool read only the names.
 
 With `--json`, each name becomes an object with its `name`, `count` and
 `bytes`. A bucket adds its `role`. A stream and a metric add `keep`, `oldest`
@@ -117,8 +118,8 @@ tinystore logs ./data --stream api --grep "connection reset"
 | `--stream <name>` | one stream, as `api`                                           |
 | `--json`          | one JSON object a line                                         |
 
-`logs` prints a line as the logger's console does, in the same bytes every
-language prints, so `-f` in a terminal reads like the program's own output.
+`logs` prints a line as the logger's [console](../records/console.md) does,
+so `-f` in a terminal reads like the program's own output.
 `-f` is a [tail](../records/tail-and-poll.md): a reader slower than the
 writers is told how many lines it skipped.
 
@@ -129,10 +130,8 @@ tinystore status ./data --json | jq '.files[] | select(.bytes > 1e9)'
 tinystore logs ./data --since 1h --level error --json | jq -r '.msg' | sort | uniq -c
 ```
 
-A terminal gets colour and words, a pipe gets plain lines, and `--json` gives
-what a script parses. Colour follows the rule every logger keeps: on a
-terminal, or in a pipe where `FORCE_COLOR` asks, and never under `NO_COLOR` or
-`TERM=dumb` ([colours](../records/console.md#colours)).
+A pipe gets plain lines, and `--json` gives what a script parses, as
+[How it behaves](README.md#how-it-behaves) says.
 
 ## See also
 

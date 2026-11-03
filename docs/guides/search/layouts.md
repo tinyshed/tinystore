@@ -42,9 +42,9 @@ let found = courses.search("rhbgnj").prefix().run()?;
 found.corrected // Some("крипто")
 ```
 
-`layouts / layouts / Layouts / layouts` names the layouts that the index's
-readers type with. Today these are `ru`, the Russian ЙЦУКЕН, and `en`, the US
-QWERTY. The search reads the text in the other layout of the two.
+`layouts / layouts / Layouts / layouts` names the two layouts that the
+index's readers type with, `ru` and `en` today. The search reads the text in
+the other one.
 
 ## Which words are read in the other layout
 
@@ -106,8 +106,8 @@ the [rules of typos](typos.md#the-rules). `corrected` shows both:
 `informatoin rhbgnj` reads as `information крипто`.
 
 Layouts work with `typoTolerance` turned off as well. Opening the index with
-other layouts, or without them, applies at once: nothing in the index is
-written again.
+other layouts, or without them, applies at once, as
+[What each change costs](rebuilds.md#what-each-change-costs) lists.
 
 ## Limits and defaults
 

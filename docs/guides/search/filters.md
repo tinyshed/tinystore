@@ -116,13 +116,9 @@ quietly ask for every document without one. `missing(field)` asks for those.
 
 </div>
 
-## Filters and words
-
-A filter alone ranks nothing: a search needs words or a vector, and
-`search({ where })` with neither finds no hits. To list documents by a field,
-a shop's products of one brand in name order, keep them in a table and query
-it with [SQL](../sql/tables.md), or index the table and search it with
-[a table's index](table-index.md).
+A filter alone finds nothing: a search needs words or a vector. To list
+documents by a field, keep them in a table, as
+[Listing what it holds](README.md#listing-what-it-holds) shows.
 
 ## How a filter runs
 

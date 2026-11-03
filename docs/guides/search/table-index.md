@@ -220,12 +220,10 @@ name.
 
 ## Async Rust
 
-This section is only about Rust. In Bun, Node and Python every call is
-already awaited, and in Go a call blocks its goroutine.
-
 With the `async` feature, a database opened from `tinystore::aio::Store`
 opens its index with the same builder. Its search, `status` and `ready`
-return futures:
+return futures, as [Rust with async](../../handbook/start/rust-async.md)
+describes:
 
 ```rust
 let articles = db
@@ -239,8 +237,7 @@ let found = articles.search("хлеба").run().await?; // blocking: articles.se
 ```
 
 Each hit's row is read on the store's own threads, in the snapshot that its
-search read, so the row type must be `Send + 'static`. If you drop a search's
-future, the search stops and frees its reader at once. If you drop `ready`,
+search read, so the row type must be `Send + 'static`. If you drop `ready`,
 it stops waiting, and the table's rows are still read in the background.
 
 Inside a transaction a search stays blocking, as every call in a transaction

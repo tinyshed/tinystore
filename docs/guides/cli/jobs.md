@@ -1,10 +1,10 @@
 # jobs
 
 `tinystore jobs` adds, lists and cancels a store's jobs from a shell, with
-no SDK. `add` and `cancel` write through the server that holds the directory,
-or start one. `list` reads a queue beside the program or server that holds the
-directory. No worker runs in the command: a job runs in the program whose
-worker takes its queue.
+no SDK. `add` and `cancel` write through a server, as
+[every write](README.md#who-writes) of the command line does. `list` reads a
+queue beside the program or server that holds the directory. No worker runs
+in the command: a job runs in the program whose worker takes its queue.
 
 ```sh
 tinystore jobs ./data add emails '{"to": "ada@example.com"}' --id welcome-42 --delay 1m
@@ -61,10 +61,9 @@ welcome-43  scheduled  26 Oct 14:40:00  attempt 0
   narrows them to the ids that start with it.
 - `--state` lists one state alone: `scheduled`, `waiting`, `running`, `done`
   or `failed`.
-- `--limit` sets how many a page holds, 100 when not given. When there are
-  more, stderr says what `--after` reads on.
-- `--json` gives a line per job, its time whole and UTC, and a last line
-  `{"next": "…"}` when there are more.
+- A page holds 100 jobs unless `--limit` says, 1000 at most, and `--after`
+  reads the next, as [Pages](README.md#pages) says.
+- `--json` gives a line per job, its time whole and UTC.
 
 ## Cancel a job
 
@@ -78,14 +77,6 @@ cancelled welcome-42 in queue emails
 
 A job that is gone, or never was, says `queue emails holds no job welcome-42`
 and exits 0.
-
-## Who writes
-
-`add` and `cancel` write as every write of the command line does: through
-`tinystore serve` or an SDK's sidecar when one holds the directory, or a
-sidecar they start, which stops 30 seconds after its last client. A directory
-that a program opened `embedded` is refused, since no other process can write
-to it. See [metrics: who writes](metrics.md#who-writes).
 
 ## See also
 

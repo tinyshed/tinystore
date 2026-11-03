@@ -2,7 +2,7 @@
 
 A word that matches nothing in the index is read as the nearest word the
 index holds, and `corrected` says what the search read in fact, so the page
-can show "Showing results for running shoes".
+can show "Showing results for running shoes" and offer what was typed.
 
 ```ts
 const { hits, corrected } = await products.search({ text: 'runing shoos' })
@@ -39,17 +39,18 @@ An edit is a letter added, dropped or changed, or two neighbours swapped:
 
 - A word that matches something is never changed (contract SRCH-09). `bots`
   finds documents with `bots`, even when `boots` is far more common.
-- With [`prefix`](prefix.md), the last word is never changed while it begins
-  a word the index holds: `cardi` is typed halfway, not misspelt.
-- A word typed with the wrong keyboard layout on is no typo: an index with
-  [`layouts`](layouts.md) reads `rhbgnj` as `крипто` before it corrects.
+- With [`prefix`](prefix.md#typos-and-a-prefix), a last word that begins a
+  word the index holds is not a typo.
+- An index with [`layouts`](layouts.md#typos-and-layouts) reads a word in the
+  other keyboard layout before it corrects typos.
 - Each word is corrected on its own: `runing shoes` keeps `shoes` and reads
   `running`.
 - A word is near only words of its own script: a Latin typo is never read as
   a Cyrillic word.
-- Chinese, Japanese and Thai text has no spaces, so the index reads it as
-  overlapping pairs of characters. When two neighbouring pairs are both
-  corrected, the search reads both, and `corrected` shows the first.
+- Chinese, Japanese and Thai text is read as
+  [overlapping pairs](fields.md#words-in-any-language). When two neighbouring
+  pairs are both corrected, the search reads both, and `corrected` shows the
+  first.
 - A search's words are any, not all: a document with one of them is a hit,
   ranked below those with more.
 
@@ -74,7 +75,8 @@ parts, err := search.OpenIndex[Part](store, "parts", search.FieldNames("sku", "n
 let parts = store.index::<Part>("parts").fields(["sku", "name"]).typo_tolerance(false).open()?;
 ```
 
-Turning it on or off applies at once: nothing in the index is written again.
+Turning it on or off applies at once, as
+[What each change costs](rebuilds.md#what-each-change-costs) lists.
 
 ## Where the words come from
 
@@ -94,10 +96,6 @@ loses a hit the user typed for.
 **Why five and nine letters.** Short words sit one edit from many others:
 `cat`, `car`, `cut`, `cot`. Correcting them reads noise. The thresholds are
 the ones Meilisearch uses, so a search box behaves as people already expect.
-
-**Why say `corrected`.** A search that silently searches for something else
-leaves the user wondering why the hits do not hold their word. Saying what
-was searched lets the page say so, and offer the original.
 
 ## See also
 

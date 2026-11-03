@@ -26,8 +26,8 @@ arguments `mcp` and the store's directory.
 | `sql_query`   | `database`, `query`                             | the rows of one statement that reads                      |
 | `search_list` | nothing                                         | the store's search indexes, with their documents          |
 
-- Every tool reads beside the program or server that holds the directory,
-  without its lock and without writing a byte.
+- Every tool reads as [every read](README.md#how-it-behaves) of the command
+  line does, beside whoever holds the directory (contract CLI-01).
 - `sql_query` runs on a read-only connection: a statement that writes is
   refused.
 - `jobs_list` with `state: 'failed'` and no prefix gives a queue's failed
@@ -50,8 +50,8 @@ anything into the chat.
 ## Writing
 
 An agent that can write can also write the wrong thing, confidently, and a
-prompt injection in a log line it reads can ask it to. So `mcp` reads unless
-told otherwise, and writing is given an operation at a time:
+prompt injection in a log line it reads can ask it to. So `--write` names
+each tool that writes:
 
 ```sh
 tinystore mcp ./data --write kv_set,jobs_add   # these two, and no other
@@ -76,9 +76,8 @@ tinystore mcp ./data --write all               # every tool below
   where it removes or replaces something, so the agent's host asks its person
   for each, as Claude Code does for any tool not yet allowed.
 - A tool `--write` doesn't name is not offered, and a call of it is refused.
-- They write as the command line's writes do: through the server that holds
-  the directory, or a sidecar they start. A directory a program opened
-  `embedded` is refused.
+- They write as [every write](README.md#who-writes) of the command line
+  does.
 - A flag is no boundary for an agent that also has a shell: it can run
   `tinystore kv set` itself. Give an agent `--write` where its host decides
   what it may run, not as a sandbox.

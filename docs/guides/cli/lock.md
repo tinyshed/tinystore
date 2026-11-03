@@ -32,9 +32,11 @@ tinystore lock hold: lock cron: key nightly-backup is held by another; --wait st
 
 ## The lease
 
-The key is held through the server that holds the directory, or a sidecar
-`lock hold` starts, with a lease that lasts `--ttl`, 30 seconds when not
-given. `lock hold` renews it every third of `--ttl` while the command runs.
+The key is held through a server, as [Who writes](README.md#who-writes) says,
+with a lease that lasts `--ttl`. The command line's `--ttl` is 30 seconds when
+not given, while an SDK's `ttl` is 10 seconds. `lock hold` renews the lease
+while the command runs, as
+[Leases over a connection](../locks/leases.md#how-a-lease-is-kept) explains.
 
 - A lease that is lost, revoked at `--max-hold` or not renewed in time
   because the server went away, stops the command, since another may hold the
@@ -51,8 +53,8 @@ tinystore lock hold: the lease was lost, so the command was stopped: another may
   renewed.
 - If `lock hold` itself is killed, the key is free once the lease runs out,
   `--ttl` after its last renewal.
-- Locks live in the memory of the process that holds the store, so every
-  holder must reach the same server (NOT-03).
+- Every holder must reach the same server, because
+  [locks live in memory](../locks/holding.md#locks-live-in-memory) (NOT-03).
 
 ## See also
 

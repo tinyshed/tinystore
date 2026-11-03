@@ -111,12 +111,12 @@ across two.
 
 The index needs no language setting. Every field's text is read the same way:
 
-| Step                    | What it does                                                 |
-|-------------------------|--------------------------------------------------------------|
-| normalised              | NFKC, lower case, Latin accents off: `Café` is `cafe`        |
-| cut into words          | by Unicode's word rules, for every script                    |
-| Cyrillic                | each Russian word also by its stem: `хлеба` finds `хлеб`     |
-| Chinese, Japanese, Thai | as overlapping pairs of characters, which need no dictionary |
+| Step                    | What it does                                                                                         |
+|-------------------------|------------------------------------------------------------------------------------------------------|
+| normalised              | NFKC, lower case, Latin accents off, `ё` as `е`, full-width letters as narrow ones: `Café` is `cafe` |
+| cut into words          | by Unicode's word rules, for every script                                                            |
+| Cyrillic                | each Russian word also by its stem: `хлеба` finds `хлеб`                                             |
+| Chinese, Japanese, Thai | as overlapping pairs of characters, which need no dictionary                                         |
 
 A search's text is read the same way, so `CAFÉ`, `cafe` and `café` find the
 same documents.
@@ -139,9 +139,8 @@ page2, err := products.Search(ctx, "shoes", search.Limit(20), search.Offset(20))
 let page2 = products.search("shoes").limit(20).offset(20).run()?;
 ```
 
-A search gives the best 10 unless `limit` says. `limit` and `offset`
-together reach 1,000 at most: a person never reads further, and an exact top
-1,000 stays cheap.
+`limit` and `offset` together stop at 1,000: a person never reads further,
+and an exact top 1,000 stays cheap.
 
 ## Limits
 

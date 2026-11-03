@@ -45,14 +45,14 @@ the index serves now, which `status()` says.
 
 ## What each change costs
 
-| What changed                                | What happens                                                     |
-|---------------------------------------------|------------------------------------------------------------------|
-| a field's weight, `typoTolerance`, `hybrid` | at once: nothing is written again                                |
-| a field or a filter removed                 | at once from searches; its keys dropped in the background        |
-| a field or a filter added                   | read from the kept documents in the background, then switched in |
-| `recall` added or removed                   | clusters built or dropped in the background; searches stay exact |
-| `vectors` added                             | at once: documents have none until they are set again            |
-| the vectors' dimensions, `vectors` left out | `invalid`: the store cannot make your model's vectors            |
+| What changed                                           | What happens                                                     |
+|--------------------------------------------------------|------------------------------------------------------------------|
+| a field's weight, `typoTolerance`, `hybrid`, `layouts` | at once: nothing is written again                                |
+| a field or a filter removed                            | at once from searches; its keys dropped in the background        |
+| a field or a filter added                              | read from the kept documents in the background, then switched in |
+| `recall` added or removed                              | clusters built or dropped in the background; searches stay exact |
+| `vectors` added                                        | at once: documents have none until they are set again            |
+| the vectors' dimensions, `vectors` left out            | `invalid`: the store cannot make your model's vectors            |
 
 A weight is read by each search as it runs, which is why it is free. A field
 added needs every document's words, which is why it is read again.
@@ -154,19 +154,13 @@ another version of the program may open it again. A handle of a dropped
 index is refused from then on, and opening the name again makes a new, empty
 index.
 
-Background work removes a dropped index's rows, and `search.db` gives their
-pages back to the disk once they have stayed free for ten minutes, 4 MiB
-every ten seconds. A `search.db` that a release before 0.5.1 made gives its
-pages back only after one vacuum of the whole file, which maintenance runs
-while the file holds at most 8 MiB of data, as [SQLite as TinyStore runs it](../../handbook/inside/sqlite.md#free-pages-given-back-to-the-disk)
+Background work removes a dropped index's rows, and gives their pages back
+to the disk, as
+[Free pages given back to the disk](../../handbook/inside/sqlite.md#free-pages-given-back-to-the-disk)
 explains.
 
-Beside a running server, the command line lists and drops them too:
-
-```sh
-tinystore search list ./data
-tinystore search drop ./data products
-```
+The [command line](../cli/kv-sql-schema.md#search) lists the indexes beside a
+running server, and drops one while no program holds the store.
 
 ## See also
 

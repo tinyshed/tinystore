@@ -55,8 +55,8 @@ the tool's mark:
 | `Tool::removes` | deletes something or replaces what it had | `readOnlyHint: false`, `destructiveHint: true`  |
 
 The host reads the mark and asks its person before it runs a tool that writes
-or removes, as Claude Code does for any tool not yet allowed. Every tool also
-says `openWorldHint: false`.
+or removes, as [AI agents](mcp.md#writing) shows. Every tool also says
+`openWorldHint: false`.
 
 The closure takes the call's arguments as a `serde_json::Value` and the
 call's token, which [Slow calls and cancels](#slow-calls-and-cancels) is

@@ -144,8 +144,8 @@ let next = store.index::<Doc>("docs-v2").fields(["title", "text"]).vectors(1536)
 store.drop_index("docs")?;
 ```
 
-`vectors` added to an index of words applies at once: its documents have no
-vector until they are set again.
+[Rebuilds](rebuilds.md#what-each-change-costs) says what adding `vectors` to
+an index of words does.
 
 ## Limits
 
@@ -155,6 +155,10 @@ vector until they are set again.
 | `recall`   | above 0 and below 1                         |
 | a vector   | finite numbers, not all zeros               |
 | stored     | about 4.5 KiB of pages for 1,024 dimensions |
+
+The stored size is from the `search-vectors` research round: a million
+bge-m3 vectors of 1,024 dimensions, each a row of its own in SQLite's pages
+([report](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-vectors-2026-10-16.md)).
 
 ## See also
 

@@ -1,10 +1,11 @@
 # kv, sql and schema
 
-Three commands look inside a store's data while its program runs: `kv` reads a
-bucket, `sql` runs a query on a database, `schema` shows a database's tables.
-`migrate` applies a database's migrations from a shell. Each reads beside the
-program or server that holds the directory, without writing a byte, unless
-told to write. `kv set` and `kv delete` write a key.
+These commands look inside a store's data while its program runs: `kv` reads
+a bucket, `sql` runs a query on a database, `schema` shows a database's
+tables, and `search` lists the store's indexes. They read as
+[every read](README.md#how-it-behaves) of the command line does, and write
+only when told: `kv set`, `kv delete`, `sql --write` and `search drop`.
+`migrate` applies a database's migrations from a shell.
 
 ## kv
 
@@ -48,14 +49,11 @@ deleted 42 from bucket sessions
 - `-` reads the value from stdin, without the line end `echo` adds. Use it for
   JSON in Windows PowerShell 5.1, which drops the quotes inside an argument.
 - `--ttl 1h` expires the key an hour from now.
-- An encrypted bucket is written encrypted, and `--database` writes a bucket
-  kept in a database's file.
+- An encrypted bucket is written encrypted.
 - A set or a delete sent twice leaves the same as once.
 
-They write through the server that holds the directory, or start a sidecar
-that stops 30 seconds after its last client, as
-[metrics ingest](metrics.md#who-writes) does. A directory that a program opened
-`embedded` is refused, since no other process can write to it.
+They write through a server, as [every write](README.md#who-writes) of the
+command line does.
 
 ## sql
 
@@ -104,10 +102,9 @@ tinystore migrate ./data shop ./migrations
 ```
 
 It applies the migrations the database has not applied, in one transaction,
-and refuses a database that applied an edited, renamed or missing file, as
-opening it from a program does. No program may hold the directory meanwhile:
-run it in a deploy before the program starts. See
-[Migrations](../sql/migrations.md).
+and checks the applied ones as opening the database from a program does: see
+[Migrations](../sql/migrations.md). No program may hold the directory
+meanwhile, so run it in a deploy before the program starts.
 
 ## search
 
@@ -121,8 +118,11 @@ tinystore search drop ./data posts
   products  3 documents · never opened
 ```
 
-An index no program opens any more is kept until it is dropped, since another
-version of the program may open it again.
+`list` reads beside the program or server that holds the directory. `drop`
+needs a directory that no program or server holds, as `migrate` does. While
+one holds it, drop the index through it with `dropIndex`. An index no program
+opens any more is kept until it is dropped, as
+[Listing and dropping](../search/rebuilds.md#listing-and-dropping) explains.
 
 ## See also
 

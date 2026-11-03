@@ -2,11 +2,11 @@
 
 `tinystore` is the one command a person types. It serves a store to other
 processes and machines, shows what a store holds and logs while its program
-runs, backs it up, and steers the nodes of a network. The npm package and the
-Python wheel install it. A Go program's author installs it with
-`go install tinyshed.org/tinystore/cmd/tinystore`, which fetches the
-release's binary at its first run, as a store's first open does. For Rust it
-comes from the release's archive or the `ghcr.io/tinyshed/tinystore` image.
+runs, backs it up, and steers the nodes of a network. The npm package, the
+Python wheel and Go's `go install` give it, as
+[Install](../../handbook/start/first-store.md#install) shows. For Rust,
+`cargo install tinystore-cli` builds it, or take it from the release's archive
+or the `ghcr.io/tinyshed/tinystore` image.
 
 ```sh
 tinystore status ./data                        # what the store holds, who serves it
@@ -90,20 +90,68 @@ waits for no server (contract CLI-07).
   and `mcp` read a directory beside the process that serves it, without its
   lock and without writing a byte (contract CLI-01).
 - **A terminal gets colour and words, a pipe gets plain lines, a script asks
-  `--json`.** Colour by the rule every logger keeps: on a terminal, or where
-  `FORCE_COLOR` asks, never under `NO_COLOR` or `TERM=dumb`.
+  `--json`.** Colour follows the rule every logger keeps: on a terminal, or
+  where `FORCE_COLOR` asks, never under `NO_COLOR` or `TERM=dumb`
+  ([colours](../records/console.md#colours)).
 - **A mistake names the next command.** A misspelt command or flag is told
   the nearest one, `did you mean backup?` (contract CLI-02), and exits 2; a
   failure while running exits 1.
-- **A write goes through a server.** `kv set`, `metrics ingest` and every
-  other write go through the server that holds the directory, or a sidecar
-  the command starts, and are refused where a program holds the directory
-  inside its own process (contract CLI-05).
 - **A pipe may close early.** When the program reading the output stops, as
   `| head -5` does once it has its lines, the command stops too, quietly, and
   exits 0 (contract CLI-04).
 - **A dangerous step refuses when unsure.** `node promote` refuses while a
   node it took its files from still serves them, unless `--force`.
+
+## Who writes
+
+`kv set`, `metrics ingest` and the other commands of the Write group go
+through the server that holds the directory, or a sidecar the command starts
+(contract CLI-05):
+
+| Who holds `./data`                    | What a write does                                                           |
+|---------------------------------------|-----------------------------------------------------------------------------|
+| `tinystore serve` or an SDK's sidecar | writes through it                                                           |
+| nothing                               | starts a sidecar, which stops 30 seconds after its last client, and says so |
+| a program that opened it `embedded`   | refuses and exits 1                                                         |
+
+```text
+tinystore kv set: started a server for ./data; it stops 30 s after the last client
+```
+
+Several commands can write at once: the first one starts the sidecar, and the
+others write through it. A program that opened the store `embedded` keeps it
+inside its own process, so no other process can write to it:
+
+```text
+tinystore kv set: a program holds ./data inside its own process, so no other process can write to it
+  open it in that program with a sidecar, or let `tinystore serve ./data` hold it
+```
+
+A directory without a store is refused, and nothing is created in it. Run the
+program or `tinystore serve` there once to make the store.
+
+Some commands open the store themselves instead of reaching a server.
+`sql --write` does so when no program holds the directory, and writes through
+the server when one does. `migrate`, `search drop`, `node promote` and
+`node demote` need a directory that no program or server holds.
+
+| What                  | Value                                 |
+|-----------------------|---------------------------------------|
+| a sidecar's idle time | 30 seconds after its last client      |
+| the wait for a server | 15 seconds to start, 10 for an answer |
+
+## Pages
+
+A command that lists, such as `jobs list`, `files list`, `events list` or
+`metrics read`, prints one page. `--limit` sets how many a page holds, where
+the command takes it. When more follow, stderr says which `--after` value
+reads the next page. With `--json`, the last line is `{"next": "…"}`, whose
+value `--after` takes:
+
+```sh
+next=$(tinystore metrics ./data read ping_rtt_ms --since 30d --json | tail -1 | jq -r .next)
+tinystore metrics ./data read ping_rtt_ms --since 30d --json --after "$next"
+```
 
 ## In these guides
 

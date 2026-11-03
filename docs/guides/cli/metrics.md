@@ -4,8 +4,8 @@
 SDK. `names`, `read` and `aggregate` read beside the program or server that
 holds the directory. `ingest` writes the Prometheus text that an exporter
 serves, or that a script keeps printing. `replace` corrects a gauge's samples
-over a range, and `delete` removes a series. All three write through the
-server that holds the directory, or start one.
+over a range, and `delete` removes a series. All three write through a
+server, as [every write](README.md#who-writes) of the command line does.
 
 ```sh
 tinystore metrics ./data names
@@ -13,8 +13,7 @@ tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h
 tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target
 curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
 ping … | awk '…' | tinystore metrics ./data ingest -f
-printf '2026-11-02T00:00Z 900
-' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-02T00:00Z --to 2026-11-03T00:00Z
+printf '2026-11-02T00:00Z 900\n' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-02T00:00Z --to 2026-11-03T00:00Z
 tinystore metrics ./data delete ping_rtt_ms target=poland
 ```
 
@@ -31,8 +30,8 @@ ping_rtt_ms      gauge        6 series  keep 30d    newest 2s ago
 ```
 
 `--json` gives one object per name, with its unit, help and times in UTC. A
-store with many names prints the first 1000; the last line says which name
-`--after` starts the next page at.
+page holds 1000 names, and `--after` reads the next, as [Pages](README.md#pages)
+says.
 
 ## Read samples
 
@@ -60,11 +59,9 @@ ping_rtt_ms{target="poland"}   26 Oct 14:32–14:33 Europe/Moscow · 46 samples
   for a prefix. Give `--where` again for more labels.
 - `--gaps 5s` marks every place where a series had no sample for longer than
   five seconds. Without it, `read` guesses nothing about a series' step.
-- `read` prints a page of 1000 samples at most. `--limit` changes the page
-  size, up to 100,000. When there are more samples, `read` prints
-  `--after <next> reads on` on stderr. Run the same command with that
-  `--after` to get the next page. The next page reads the same range as the
-  first, even with `--since`.
+- `read` prints a page of 1000 samples at most, and `--limit` takes up to
+  100,000. The next page, read with `--after` as [Pages](README.md#pages)
+  says, covers the same range as the first, even with `--since`.
 
 `--json` prints one object per sample, its time in UTC:
 
@@ -73,13 +70,7 @@ ping_rtt_ms{target="poland"}   26 Oct 14:32–14:33 Europe/Moscow · 46 samples
 ```
 
 A value that JSON can't hold, `NaN` or an infinity, comes as text: `"NaN"`,
-`"+Inf"`, `"-Inf"`. When there is another page, the last line is
-`{"next":"…"}`. Pass its value to `--after` to read on:
-
-```sh
-next=$(tinystore metrics ./data read ping_rtt_ms --since 30d --json | tail -1 | jq -r .next)
-tinystore metrics ./data read ping_rtt_ms --since 30d --json --after "$next"
-```
+`"+Inf"`, `"-Inf"`.
 
 ## Aggregate
 
@@ -94,15 +85,15 @@ ping_rtt_ms max every 10m   26 Oct 13:40–14:40 Europe/Moscow
   13:50:00      30.8   1012.5     39.7
 ```
 
-- `--op` is `count`, `sum`, `avg`, `min`, `max`, `increase`, `rate`, `delta`,
-  `first`, `last`, or `p` and a rank, such as `p95`.
+- `--op` takes any of the [ops](../metrics/aggregates.md#ops), such as `max`,
+  `increase` or `p95`.
 - `--every 10m` makes a bucket every ten minutes. Without it, the range is
   one bucket.
 - `--by target` makes a group, a column, per value of the label.
 - A terminal gets a table. When the columns don't fit, each bucket gets a line
   of its own. `--json` gives one object per bucket.
-- `aggregate` prints a page of 1000 buckets at most. `--limit` and `--after`
-  work as they do for `read`. A page always ends between two whole buckets.
+- A page holds 1000 buckets unless `--limit` says, and always ends between
+  two whole buckets.
 
 ## Write a scrape or a file
 
@@ -121,11 +112,12 @@ wrote 1834 samples to ./data
   `# EOF`.
 - A sample that the text gives no time gets the time the text was read. A
   write whose answer was lost is sent again with the same times, so it
-  changes nothing the second time.
+  [changes nothing](../metrics/ingesting.md#an-ingest-sent-again) the second
+  time.
 - If stdin is still open after 5 seconds, `ingest` says that a stream that
   does not end needs `-f`.
-- A name's kind comes from the text's `# TYPE` line. A name with no
-  `# TYPE` is a gauge.
+- A name's kind comes from its `# TYPE` line, as
+  [From Prometheus](../metrics/ingesting.md#from-prometheus) lists.
 - `--label instance=web-1` adds a label to every series. Give it again for
   more labels.
 - `--keep 30d` sets how long each name of the text keeps its samples, as the
@@ -172,9 +164,7 @@ tinystore metrics ingest: ping_rtt_ms came with no # TYPE, so it is a gauge; --k
 ## Correct a gauge's range
 
 ```sh
-printf '2026-11-01T00:00Z 1000
-2026-11-02T00:00Z 900
-' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-01T00:00Z --to 2026-11-03T00:00Z
+printf '2026-11-01T00:00Z 1000\n2026-11-02T00:00Z 900\n' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-01T00:00Z --to 2026-11-03T00:00Z
 ```
 
 ```text
@@ -182,12 +172,11 @@ replaced revenue{shop="msk"} from 2026-11-01T00:00:00Z to 2026-11-03T00:00:00Z w
 ```
 
 `replace` reads one sample per line on stdin: its time, as `--from` takes
-one, then its value. When stdin ends, the range from `--from` up to `--to`
-holds exactly those samples, as the SDKs' `replace` leaves it. A time on
-stdin takes its value, a time that wasn't there is added, and a time that
-isn't on stdin is deleted, even after the store packed it. `--to` is now
-unless you give it. Only a gauge can be replaced, and a line that can't be
-read fails the command before anything is written.
+one, then its value. When stdin ends, the range from `--from` up to `--to`,
+now unless given, holds exactly those samples, as
+[Correcting a gauge after the fact](../metrics/ingesting.md#correcting-a-gauge-after-the-fact)
+explains. Only a gauge can be replaced. A line that can't be read fails the
+command before anything is written.
 
 ## Delete a series
 
@@ -200,33 +189,9 @@ deleted ping_rtt_ms{target="poland"}
 ```
 
 `delete` removes the one series whose labels are exactly the ones given, as
-the SDKs' `delete` does. A name alone names its series without labels, so
-`delete ping_rtt_ms` removes nothing from a metric whose series all have a
-`target`.
-
-## Who writes
-
-| Who holds `./data`                    | What a write does                                                           |
-|---------------------------------------|-----------------------------------------------------------------------------|
-| `tinystore serve` or an SDK's sidecar | writes through it                                                           |
-| nothing                               | starts a sidecar, which stops 30 seconds after its last client, and says so |
-| a program that opened it `embedded`   | refuses and exits 1                                                         |
-
-```text
-tinystore metrics ingest: started a server for ./data; it stops 30 s after the last client
-```
-
-Several commands can write at once: the first one starts the sidecar, and the
-others write through it. A program that opened the store `embedded` keeps it
-inside its own process, so no other process can write to it:
-
-```text
-tinystore metrics ingest: a program holds ./data inside its own process, so no other process can write to it
-  open it in that program with a sidecar, or let `tinystore serve ./data` hold it
-```
-
-A directory without a store is refused, and nothing is created in it. Run the
-program or `tinystore serve` there once to make the store.
+[Removing a series](../metrics/reading.md#removing-a-series) says. A name
+alone names its series without labels, so `delete ping_rtt_ms` removes
+nothing from a metric whose series all have a `target`.
 
 ## Limits and defaults
 
@@ -235,8 +200,6 @@ program or `tinystore serve` there once to make the store.
 | a name's keep, when none given | 30 days                                              |
 | the largest text               | 32 MiB or 100,000 samples, sent in pieces past 2 MiB |
 | a batch of `-f`                | a second of lines, or 10,000 lines                   |
-| a sidecar's idle time          | 30 seconds after its last client                     |
-| the wait for a server          | 15 seconds to start, 10 for an answer                |
 
 ## See also
 

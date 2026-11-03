@@ -1,10 +1,11 @@
 # Nodes
 
-A store becomes a node when `serve` is given `--node-listen` or `--from`: it
-keeps a log of each file it writes, serves those files to other nodes, and
-copies the files of the node it takes from. Every file has one home that
-writes it; copies read locally and pass their writes home. The commands here
-start nodes, show how they stand, and move a home when one is gone.
+A store becomes a node when `serve` is given `--node-listen`, `--from` or
+`--node-config`: it keeps a log of each file it writes, serves those files to
+other nodes, and copies the files of the node it takes from. Every file has
+one home that writes it; copies read locally and pass their writes home. The
+commands here start nodes, show how they stand, and move a home when one is
+gone.
 
 ```sh
 # the home
@@ -29,10 +30,9 @@ roots = "/etc/tinystore/ca.pem"
 | `--from <host:port>`        | a node it copies from; again for the next to try |
 | `--node-config <file.toml>` | the rest of what the node is                     |
 
-The config's rarer keys: `files`, `token-file`, `catalog`, `advertise`,
-`synchronous`, `synchronous-with`, `failover`, `insecure` and `[tls]`'s
-`cert`, `key` and `roots`. A link beyond its own machine takes TLS unless
-`insecure = true`.
+The config's other keys are `files`, `catalog`, `synchronous`,
+`synchronous-with`, `failover` and `insecure`. A link beyond its own machine
+takes TLS unless `insecure = true`.
 
 ## node status
 

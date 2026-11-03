@@ -58,17 +58,17 @@ updated config chat to version 4: model.max_tokens=2048
 - `path=value` is read by the setting's kind, as an environment variable is:
   `2048` an integer, `30s` a span, `a,b` a list. `path:=json` gives JSON as
   it is.
-- Only a setting the declaration marks live changes, and its rules check the
-  value. A setting that isn't live is refused, and so is a misspelt one,
-  with its nearest:
+- Only a [live](../config/live.md#only-what-is-live-changes) setting changes,
+  and its rules check the value. A misspelt setting is refused with its
+  nearest:
 
 ```text
 tinystore config update: config chat: no setting model.max_tokns; did you mean model.max_tokens?
 ```
 
-- It goes through the server that holds the directory, or a sidecar it
-  starts, so every program holding the config takes the change at once, as
-  `config.update` in a program does.
+- It writes through a server, as [every write](README.md#who-writes) of the
+  command line does, so every program holding the config takes the change at
+  once, as `config.update` in a program does.
 
 ## Reset
 
@@ -77,8 +77,9 @@ tinystore config ./data reset chat model.max_tokens
 tinystore config ./data reset chat
 ```
 
-A setting it resets goes back to what each program's declaration, files and
-environment give. Without a path it drops every change of the config.
+`reset` removes a change, and each program's declaration, files and
+environment give the setting again. Without a path it removes every change of
+the config.
 
 ## See also
 

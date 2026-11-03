@@ -160,10 +160,10 @@ first, because escaping changes the offsets.
   This happens to the overlapping pairs that Chinese, Japanese and Thai text
   is read in: `東京タワー` is marked as one range.
 
-Search reads text in lower case, without accents, with `ё` as `е` and
-full-width letters as narrow ones. The ranges still point into the text as
-you stored it, so `Ёлка`, `CAFÉ` and `ＴＯＫＹＯ` are marked whole, even where
-they take more or fewer characters than the words the index read.
+The ranges point into the text as you stored it, not as the index
+[read it](fields.md#words-in-any-language). So `Ёлка`, `CAFÉ` and `ＴＯＫＹＯ`
+are marked whole, even where they take more or fewer characters than the
+words the index read.
 
 ## Each language counts its own way
 

@@ -2,8 +2,9 @@
 
 `tinystore events` writes and reads a store's events from a shell, with no
 SDK. `append` writes one event given in words, or another program's output
-on stdin, a line per event. `list` reads a stream beside the program or server
-that holds the directory.
+on stdin, a line per event. It writes through a server, as
+[every write](README.md#who-writes) of the command line does. `list` reads a
+stream beside the program or server that holds the directory.
 
 ```sh
 tinystore events ./data append audit role.changed user:=42 role=admin
@@ -48,16 +49,9 @@ appended 1834 lines to worker
 ```
 
 Without an event's name, `append` reads stdin until it ends and writes it as
-the SDKs' `lines()` does:
-
-- Each line becomes an event at the time it arrived.
-- A stack trace or a traceback is joined into one event with its lines.
-- A JSON line becomes an event named `json`, and a `key=value` line one named
-  `logfmt`, their keys its fields. Other text becomes an event named `log`.
-- The level is found where common loggers write it.
-
-The server never waits for a slow disk: a line that doesn't fit the writer's
-buffer is dropped and counted, and the last line says how many:
+the SDKs' `lines()` does. [Other programs' output](../records/other-programs.md)
+says what each line becomes, and why a line that doesn't fit the writer's
+buffer is dropped and counted. The last line says how many:
 `appended 1834 lines to worker, 2 of them dropped`.
 
 `--id`, `--at` and `--level` name one event, so they are refused with stdin.
@@ -82,19 +76,11 @@ tinystore events ./data list audit --since 1h --where user:=42
   `42`. Give `--where` again for more fields.
 - `--level warn` keeps `warn` and above.
 - `--since`, `--from` and `--to` take the same values as `metrics read`.
-  Without them, `list` reads the last hour.
-- A page holds 100 events unless `--limit` says. When there are more, the
-  last line says which `--after` value reads the next page.
+- `--limit` and `--after` read a long stream a page at a time, as
+  [Pages](README.md#pages) says.
 
 A stream the store doesn't hold is named as missing, and a read beside the
 holder makes nothing.
-
-## Who writes
-
-`append` writes through the server that holds the directory, or starts a
-sidecar that stops 30 seconds after its last client, as
-[metrics](metrics.md#who-writes) does. A directory that a program opened
-`embedded` is refused, because no other process can write to it.
 
 ## Limits and defaults
 
@@ -109,5 +95,4 @@ sidecar that stops 30 seconds after its last client, as
 ## See also
 
 - [Events](../records/events.md): the same events from a program.
-- [Other programs' output](../records/other-programs.md): what a line becomes.
 - [status and logs](status-and-logs.md): every stream's lines, followed live.

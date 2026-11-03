@@ -2,8 +2,8 @@
 
 `tinystore channels` publishes a message and listens to a channel from a
 shell, with no SDK. A channel lives in the memory of the process that holds
-the store, so both go through the server that holds the directory, or a
-sidecar they start, and nothing is read beside it.
+the store, so both go through a server, as [every write](README.md#who-writes)
+of the command line does, and nothing is read beside it.
 
 ```sh
 tinystore channels ./data publish chat-events '{"kind": "reload"}'
@@ -24,9 +24,8 @@ published to chat-events under room-42
 - A message is JSON. `-` reads it from stdin.
 - `--under room-42` sends it to a branch of the channel, its owners written
   as `42/devices`.
-- Every subscription listening now receives it, and no one else ever will: a
-  message published while no one listens is gone, as the
-  [channels guide](../channels/README.md) says.
+- Only the subscriptions listening now receive it, as
+  [the channels guide](../channels/README.md#what-it-guarantees) says.
 - It is sent once. A message whose answer was lost may have been delivered,
   and sending it again would deliver it twice.
 

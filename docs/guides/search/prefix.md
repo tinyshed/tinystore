@@ -49,8 +49,8 @@ may still be typing it:
 | `crypt,`           | `crypt` whole: a mark ends a word as a space does          |
 | `c`                | `c` whole: one letter would begin half the words of a page |
 
-A word is read as Search reads every word: in lower case, accents off, `ё` as
-`е`. `Crypt` and `crypt` are the same prefix, in any script.
+A prefix is read as [every word](fields.md#words-in-any-language) is, so
+`Crypt` and `crypt` are the same prefix, in any script.
 
 ## Every word
 
@@ -99,9 +99,8 @@ first because it holds a word that starts with `лин` and one that starts with
 and `Проектирование технологических линий` comes first.
 
 - Each word of two letters or more is read as the start of a word, whatever
-  follows it. A space does not make it whole.
-- Only the first eight such words are read this way. The words after them are
-  read whole.
+  follows it. A space does not make it whole. Only the first eight are read
+  this way, and the rest whole.
 - A document holds a word of the text when it holds that word, its stem, or a
   longer word that starts with it.
 - The documents that hold a word for each word of the text come first, and
@@ -146,5 +145,14 @@ typos](typos.md#the-rules), and its prefix is then that word.
 | prefixes with `'every'`      | the first 8 words of two letters or more |
 
 A prefix reads the postings of every word it begins before the search scores,
-so a short prefix on an index of many documents reads more than a whole word
-would. The 64 most held words bound it.
+up to the 64 above, so a short prefix on an index of many documents reads
+more than a whole word would.
+
+## See also
+
+- [Search](README.md): the engine's overview.
+- [Typos](typos.md) and [Keyboard layouts](layouts.md): the other ways a
+  search reads what was typed.
+- [Fields and weights](fields.md): how words are read.
+- [How search finds](../../handbook/inside/how-search-finds.md) in the
+  Handbook.
