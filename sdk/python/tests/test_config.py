@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 import pytest
 
 import tinystore
-from tinystore import Entries, Given, Items, Origin, Range, Secret, entries, env, file, live, secret
+from tinystore import Entries, Given, Items, Origin, Range, Secret, chosen_by, entries, env, file, live, secret
 from tinystore._time import ms, spelled
 from tinystore.config import env_name
 from ways import until
@@ -243,6 +243,85 @@ async def test_an_entry_takes_each_field_from_the_layers_and_a_variable_one_fiel
 
     with pytest.raises(tinystore.InvalidError, match="an entry is a dataclass of settings"):
         await store.config("texts", [Texts])
+
+
+@dataclass(kw_only=True)
+class Pg:
+    host: str = "localhost"
+    port: Annotated[int, Range(1, 65535)] = 5432
+    database: str
+    password: Secret = secret()  # noqa: RUF009
+
+
+@dataclass(kw_only=True)
+class Mysql:
+    host: str = "localhost"
+    port: int = 3306
+    password: Secret = secret()  # noqa: RUF009
+
+
+@dataclass
+class Stripe:
+    key: Secret = secret()  # noqa: RUF009
+
+
+@dataclass(kw_only=True)
+class Instance:
+    plugin: str
+    settings: Pg | Mysql | Stripe = chosen_by("plugin", {"postgres": Pg, "mysql": Mysql, "stripe": Stripe})  # noqa: RUF009
+
+
+@dataclass
+class Plugins:
+    instance: Entries[Instance] = entries()  # noqa: RUF009
+
+
+def _aimee(settings: str) -> str:
+    return f'[instance.aimee]\nplugin = "postgres"\n[instance.aimee.settings]\n{settings}\n'
+
+
+# contract: CFG-14, CFG-13, CFG-06
+async def test_an_entrys_settings_are_read_checked_masked_and_named_by_the_group_its_plugin_chooses(
+    store: tinystore.Store, directory: Path
+) -> None:
+    misspelt = directory / "misspelt.toml"
+    misspelt.write_text(_aimee('hots = "127.0.0.1"\ndatabase = "aimee"\npassword = "s3cret"'))
+    with pytest.raises(tinystore.InvalidError) as hots:
+        await store.config("plugins", [Plugins, file(misspelt)])
+    assert "instance.aimee.settings.hots: no such setting; did you mean instance.aimee.settings.host?" in str(
+        hots.value
+    )
+
+    toml = directory / "plugins.toml"
+    toml.write_text(_aimee('host = "127.0.0.1"\ndatabase = "aimee"\npassword = "s3cret"'))
+    port = {"DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT": "15432"}
+    config = await store.config("plugins", [Plugins, file(toml), env("DASHBIN", from_=port)])
+    settings = config.value.instance["aimee"].settings
+    assert isinstance(settings, Pg)
+    assert (settings.host, settings.port, settings.database) == ("127.0.0.1", 15432, "aimee")
+    assert settings.password.reveal() == "s3cret"
+    lines = {line.path: line for line in config.explain()}
+    assert lines["instance.aimee.settings.password"].value == "***"
+    assert lines["instance.aimee.settings.port"].from_ == "DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT"
+    assert "s3cret" not in repr(list(config.explain()))
+    defaulted = await store.config("plugins-default", [Plugins, file(toml)])
+    assert cast("Pg", defaulted.value.instance["aimee"].settings).port == 5432
+
+    typo = {"DASHBIN_INSTANCE_AIMEE_PLUGIN": "postgress"}
+    with pytest.raises(tinystore.InvalidError) as refused:
+        await store.config("plugins", [Plugins, file(toml), env("DASHBIN", from_=typo)])
+    named = '"postgress" is not one of mysql, postgres, stripe; did you mean postgres?'
+    assert f"DASHBIN_INSTANCE_AIMEE_PLUGIN: {named}" in str(refused.value)
+
+    mysql = {"DASHBIN_INSTANCE_AIMEE_PLUGIN": "mysql", "DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD": "p"}
+    switched = await store.config("plugins-switched", [Plugins, file(toml), env("DASHBIN", from_=mysql)])
+    chosen = switched.value.instance["aimee"].settings
+    assert isinstance(chosen, Mysql)
+    assert (chosen.host, chosen.port) == ("localhost", 3306)
+    assert switched.explain().notes == [
+        f"instance.aimee.settings: what {toml} gave as postgres is dropped: instance.aimee.plugin is mysql, "
+        "from DASHBIN_INSTANCE_AIMEE_PLUGIN"
+    ]
 
 
 @dataclass(kw_only=True)

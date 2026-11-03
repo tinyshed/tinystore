@@ -8,14 +8,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::ConfigBuilder;
+#[cfg(doc)]
+use super::Declaration;
 use super::hub::{Change, Hub, Kept, Written};
 #[cfg(any(test, feature = "wire", feature = "records"))]
 use super::{Config, data, handle, resolve};
+use super::{ConfigBuilder, IntoDeclaration};
 use crate::kv::{Kv, next_version};
 use crate::limits::CONFIG_BYTES;
 #[cfg(feature = "async")]
@@ -46,12 +46,10 @@ const MOST_KEPT: i64 = CONFIG_BYTES.bound as i64;
 impl Store {
     /// The program's settings as one typed value. `declaration` is every
     /// setting with its default, a `serde` struct whose fields may be marked
-    /// `Secret`, `Required` or `Live`; the layers the builder adds go over it
-    /// in the order written.
-    pub fn config<T>(&self, name: &str, declaration: T) -> ConfigBuilder<T>
-    where
-        T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    {
+    /// `Secret`, `Required` or `Live`, or a [`Declaration`] as data, read as
+    /// a `serde_json::Value`; the layers the builder adds go over it in the
+    /// order written.
+    pub fn config<D: IntoDeclaration>(&self, name: &str, declaration: D) -> ConfigBuilder<D::Value> {
         ConfigBuilder { store: Some(self.clone()), ..super::load(name, declaration) }
     }
 }

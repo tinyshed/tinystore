@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::declaration::{Declaration, Keys, Kind, Node, Rules, Setting, did_you_mean};
+use super::declaration::{Choices, ChosenAt, Declaration, Keys, Kind, Node, Rules, Setting, Shape, did_you_mean};
 use super::explain::Origin;
-use super::files::{Walked, walk_entries};
+use super::files::{Picked, Walked, walk_entries};
 use super::rules;
 use crate::typos::meant;
 
@@ -101,11 +101,13 @@ impl From<&str> for Env {
 }
 
 /// What the environment gave: each setting's value by its path, with the
-/// variable and where its text came from, the entries a map's variable made,
-/// and the variables with the prefix that name no setting.
+/// variable and where its text came from, each value of a chosen group's
+/// setting the same way, the entries a map's variable made, and the
+/// variables with the prefix that name no setting.
 #[derive(Debug, Default)]
 pub(super) struct Read {
     pub(super) given: Vec<(String, Value, Origin)>,
+    pub(super) picked: Vec<(Picked, Origin)>,
     pub(super) entries: Vec<(String, String)>,
     pub(super) unused: Vec<Unused>,
 }
@@ -136,8 +138,9 @@ type Variables = HashMap<String, (String, Option<String>)>;
 ///
 /// A map of entries' own variable, `APP_INSTANCE` as JSON, is read first, so
 /// that a field's variable, `APP_INSTANCE_AIMEE_PASSWORD`, also reaches an
-/// entry it made.
-pub(super) fn read(env: &Env, declaration: &Declaration, keys: &Keys) -> Result<Read, Vec<String>> {
+/// entry it made. A chosen group's settings are read as the group its
+/// chooser's variable picks, else as `before` says the layers before did.
+pub(super) fn read(env: &Env, declaration: &Declaration, keys: &Keys, before: &Choices) -> Result<Read, Vec<String>> {
     let variables = variables(env)?;
     let mut read = Read::default();
     let mut problems = Vec::new();
@@ -148,10 +151,11 @@ pub(super) fn read(env: &Env, declaration: &Declaration, keys: &Keys) -> Result<
         match variable(env, &variables, &name, &WHOLE_MAP) {
             Ok(None) => {}
             Ok(Some((Value::Object(map), from))) => {
-                let mut walked = Walked::default();
+                let mut walked = Walked::after(before);
                 walk_entries(entries, &map, &path, &mut walked);
                 problems.extend(walked.problems.into_iter().map(|problem| format!("{from}: {problem}")));
                 read.given.extend(walked.given.into_iter().map(|(path, value)| (path, value, from.clone())));
+                read.picked.extend(walked.picked.into_iter().map(|picked| (picked, from.clone())));
                 for (path, key) in walked.entries {
                     keys.entry(path.clone()).or_default().insert(key.clone());
                     read.entries.push((path, key));
@@ -162,16 +166,64 @@ pub(super) fn read(env: &Env, declaration: &Declaration, keys: &Keys) -> Result<
         }
         maps.push(name);
     }
-    let names = names(env, declaration, &keys)?;
+    let here = Here { env, variables: &variables, given: &read.given };
+    let chosen = chosen_here(declaration, &keys, before, &here);
+    let shape = Shape { entries: keys, chosen };
+    let names = names(env, declaration, &shape)?;
     for (path, (name, setting)) in &names {
         match variable(env, &variables, name, setting) {
             Ok(None) => {}
-            Ok(Some((value, from))) => read.given.push((path.clone(), value, from)),
+            Ok(Some((value, from))) => read.take(&shape.chosen, path, value, from),
             Err(problem) => problems.push(problem),
         }
     }
     read.unused = unused(env, &variables, &names, &maps);
     if problems.is_empty() { Ok(read) } else { Err(problems) }
+}
+
+/// What this environment gives a setting before its variables are read
+/// one by one: its own variable, else what the map's JSON variable gave it.
+struct Here<'a> {
+    env: &'a Env,
+    variables: &'a Variables,
+    given: &'a [(String, Value, Origin)],
+}
+
+impl Here<'_> {
+    /// The value here of the setting at `path`; none for a text that does
+    /// not read, which is refused where it is read as its setting.
+    fn value(&self, declaration: &Declaration, path: &str) -> Option<Value> {
+        let setting = declaration.setting(path)?;
+        let own = variable(self.env, self.variables, &self.env.name_of(path), setting).ok().flatten();
+        let from_map = || self.given.iter().rev().find(|(given, ..)| given == path).map(|(_, value, _)| value.clone());
+        own.map(|(value, _)| value).or_else(from_map)
+    }
+}
+
+/// The group each chosen group's settings are read as here: the one its
+/// chooser here names, else the one the layers before chose, else its
+/// chooser's default.
+fn chosen_here(declaration: &Declaration, keys: &Keys, before: &Choices, here: &Here<'_>) -> Choices {
+    let picked = |at: &ChosenAt<'_>| match here.value(declaration, &at.chooser) {
+        Some(value) => at.chosen.named(Some(&value)).map(|(name, _)| name.to_owned()),
+        None => before.get(&at.path).cloned().or_else(|| at.default.map(str::to_owned)),
+    };
+    declaration.chosen(keys).into_iter().filter_map(|at| Some((at.path.clone(), picked(&at)?))).collect()
+}
+
+impl Read {
+    /// Takes a variable's value of the setting at `path`, kept with the group
+    /// it was read as when it is a setting of a chosen group.
+    fn take(&mut self, chosen: &Choices, path: &str, value: Value, from: Origin) {
+        let under = |node: &String| path.strip_prefix(node.as_str()).is_some_and(|rest| rest.starts_with('.'));
+        match chosen.iter().find(|(node, _)| under(node)) {
+            Some((node, group)) => {
+                let picked = Picked { node: node.clone(), group: group.clone(), path: path.to_owned(), value };
+                self.picked.push((picked, from));
+            }
+            None => self.given.push((path.to_owned(), value, from)),
+        }
+    }
 }
 
 /// What a map of entries' own variable is read as: a map given as JSON, whose
@@ -199,11 +251,11 @@ fn parsed(setting: &Setting, text: &str) -> Result<Value, String> {
 fn names<'a>(
     env: &Env,
     declaration: &'a Declaration,
-    keys: &Keys,
+    shape: &Shape,
 ) -> Result<BTreeMap<String, (String, &'a Setting)>, Vec<String>> {
     let mut problems = Vec::new();
     let mut names = BTreeMap::new();
-    for (path, setting) in declaration.settings_of(keys) {
+    for (path, setting) in declaration.settings_of(shape) {
         names.insert(path.clone(), (env.name_of(&path), setting));
     }
     for (path, _) in &env.names {

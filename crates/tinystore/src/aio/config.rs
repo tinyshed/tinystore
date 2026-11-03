@@ -57,7 +57,7 @@ use serde::de::DeserializeOwned;
 
 use super::oneshot::Answer;
 use super::run;
-use crate::config::{Env, Explained, File, Snapshot};
+use crate::config::{Env, Explained, File, IntoDeclaration, Snapshot};
 use crate::pool::Pool;
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
@@ -73,10 +73,7 @@ pub struct ConfigBuilder<T> {
 impl super::Store {
     /// The program's settings as one typed value, declared as
     /// [`crate::Store::config`] declares them, its changes awaited.
-    pub fn config<T>(&self, name: &str, declaration: T) -> ConfigBuilder<T>
-    where
-        T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    {
+    pub fn config<D: IntoDeclaration>(&self, name: &str, declaration: D) -> ConfigBuilder<D::Value> {
         ConfigBuilder { builder: self.blocking().config(name, declaration), pool: Arc::clone(self.pool()) }
     }
 }

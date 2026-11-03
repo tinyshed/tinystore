@@ -49,17 +49,22 @@ func entryMaps(group *setting, path string) []string {
 	return found
 }
 
-// settingPaths is every setting's path, as the core names its variable, and
-// every map of entries'.
+// settingPaths is every setting's path, as the core names its variable,
+// every map of entries' and every chosen group's.
 func settingPaths(group *setting, path string) []string {
 	var found []string
 	for _, node := range group.group {
 		at := joinPath(path, node.key)
-		if node.kind == kindGroup {
+		switch node.kind {
+		case kindGroup:
 			found = append(found, settingPaths(node, at)...)
-			continue
+		case kindChosen:
+			for _, chosen := range node.choices {
+				found = append(found, settingPaths(chosen, at)...)
+			}
+		default:
+			found = append(found, at)
 		}
-		found = append(found, at)
 	}
 	return found
 }

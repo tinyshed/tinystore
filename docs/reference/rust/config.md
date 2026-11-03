@@ -11,15 +11,14 @@ impl Store
 ### Store.config
 
 ```rust
-pub fn config<T>(&self, name: &str, declaration: T) -> ConfigBuilder<T>
-where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+pub fn config<D: IntoDeclaration>(&self, name: &str, declaration: D) -> ConfigBuilder<D::Value>
 ```
 
 The program's settings as one typed value. `declaration` is every
 setting with its default, a `serde` struct whose fields may be marked
-`Secret`, `Required` or `Live`; the layers the builder adds go over it
-in the order written.
+`Secret`, `Required` or `Live`, or a `Declaration` as data, read as
+a `serde_json::Value`; the layers the builder adds go over it in the
+order written.
 
 ## aio::Store
 
@@ -30,13 +29,60 @@ impl aio::Store
 ### aio::Store.config
 
 ```rust
-pub fn config<T>(&self, name: &str, declaration: T) -> ConfigBuilder<T>
-where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+pub fn config<D: IntoDeclaration>(&self, name: &str, declaration: D) -> ConfigBuilder<D::Value>
 ```
 
 The program's settings as one typed value, declared as
 `crate::Store::config` declares them, its changes awaited.
+
+## Declaration
+
+```rust
+pub struct Declaration { /* private fields */ }
+```
+
+A program's settings declared as data, the JSON every SDK sends, for
+settings whose shape the program learns only as it runs, such as the
+settings of a plugin it loads. A config opened with one reads the same
+layers, rules, secrets and `explain` as one declared by a type, and gives
+its value as a `serde_json::Value`.
+
+```rust
+use serde_json::json;
+use tinystore::config::{self, Declaration, Env};
+
+let postgres = json!({
+    "host": { "kind": "text", "default": "localhost" },
+    "port": { "kind": "integer", "default": 5432, "min": 1, "max": 65535 },
+    "password": { "kind": "text", "secret": true, "required": true },
+});
+let stripe = json!({ "key": { "kind": "text", "secret": true, "required": true } });
+let declaration = Declaration::from_json(json!({
+    "instance": { "entries": {
+        "plugin": { "kind": "text", "required": true },
+        "settings": { "chosenBy": "plugin", "groups": { "postgres": postgres, "stripe": stripe } },
+    } },
+}))?;
+let variables = [
+    ("DASHBIN_INSTANCE", r#"{ "aimee": { "plugin": "postgres" } }"#),
+    ("DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD", "s3cret"),
+];
+let config = config::load("dashbin", declaration).env(Env::prefix("DASHBIN").from(variables)).open()?;
+assert_eq!(config.get()["instance"]["aimee"]["settings"]["port"], 5432);
+```
+
+A setting is `{ "kind": …, "default": … }`, its kind `text`, `integer`,
+`number`, `boolean`, `duration`, `object`, `any` or `{ "list": … }`, with
+`required`, `secret`, `live`, `min`, `max` and `oneOf` beside it; a group
+is `{ "group": { … } }`, a map of entries `{ "entries": { … } }`, and a
+group a setting beside it chooses `{ "chosenBy": "plugin", "groups": { … } }`.
+A declaration that means nothing is refused here, naming where.
+
+### Declaration.from_json
+
+```rust
+pub fn from_json(declaration: Value) -> Result<Declaration>
+```
 
 ## Env
 
@@ -447,12 +493,20 @@ ignoring it and saying so in the log.
 pub fn open(self) -> Result<Config<T>>
 ```
 
+## IntoDeclaration
+
+```rust
+pub trait IntoDeclaration
+```
+
+What a config is declared with: a value of the program's type, whose
+settings it is read as, or a `Declaration` as data, whose settings are
+read as a `serde_json::Value`.
+
 ## load
 
 ```rust
-pub fn load<T>(name: &str, declaration: T) -> ConfigBuilder<T>
-where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+pub fn load<D: IntoDeclaration>(name: &str, declaration: D) -> ConfigBuilder<D::Value>
 ```
 
 A program's settings read once from its declaration, its files and the

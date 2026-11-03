@@ -97,8 +97,9 @@ fn check_group(group: &Group, map: &Map<String, Value>, path: &str) -> Result<Va
                 Some(default) => default.clone(),
                 None => continue,
             },
-            // a declaration refuses entries in a list's item
+            // a declaration refuses entries and a chosen group in a list's item
             (Node::Entries(_), _) => return Err(format!(".{at}: a list's item holds no entries")),
+            (Node::Chosen(_), _) => return Err(format!(".{at}: a list's item holds no chosen group")),
         };
         checked.insert(key.clone(), value);
     }
@@ -109,7 +110,8 @@ fn check_rules(kind: &Kind, rules: &Rules, value: &Value) -> Result<(), String> 
     if let (Some(allowed), Value::String(text)) = (&rules.one_of, value)
         && !allowed.contains(text)
     {
-        return Err(format!("{} is not one of {}", shown(value), allowed.join(", ")));
+        let near = did_you_mean(meant(text, allowed));
+        return Err(format!("{} is not one of {}{near}", shown(value), allowed.join(", ")));
     }
     let measured = match (kind, value) {
         (Kind::List(_), Value::Array(items)) => Some(items.len() as f64),

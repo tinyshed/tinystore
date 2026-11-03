@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 use yaml_rust2::{Yaml, YamlLoader};
 
-use super::declaration::{Declaration, Entries, Group, Node, did_you_mean, entry_path, joined, shown};
+use super::declaration::{Choices, Chosen, Declaration, Entries, Group, Node, did_you_mean, entry_path, joined, shown};
 use super::rules;
 use crate::typos::meant;
 
@@ -79,17 +79,20 @@ impl From<PathBuf> for File {
     }
 }
 
-/// What a file gave: each setting's value by its path and the entries it
-/// made, or that it was absent.
+/// What a file gave: each setting's value by its path, each value of a
+/// chosen group's setting, and the entries it made, or that it was absent.
 #[derive(Debug, Default)]
 pub(super) struct Read {
     pub(super) given: Vec<(String, Value)>,
+    pub(super) picked: Vec<Picked>,
     pub(super) entries: Vec<(String, String)>,
     pub(super) absent: bool,
 }
 
-/// What `file` gives the settings of `declaration`, or every problem with it.
-pub(super) fn read(file: &File, declaration: &Declaration) -> Result<Read, Vec<String>> {
+/// What `file` gives the settings of `declaration`, each chosen group's read
+/// as its chooser in the file picks it, else as `before` says the layers
+/// before it did, or every problem with it.
+pub(super) fn read(file: &File, declaration: &Declaration, before: &Choices) -> Result<Read, Vec<String>> {
     let name = file.shown();
     let read = match &file.sent {
         Some(sent) => check_size(sent.clone()),
@@ -102,13 +105,13 @@ pub(super) fn read(file: &File, declaration: &Declaration) -> Result<Read, Vec<S
         Err(why) => return Err(vec![format!("{name}: {why}")]),
     };
     let tree = parse(&file.path, &text).map_err(|why| vec![format!("{name}: {why}")])?;
-    let mut walked = Walked::default();
+    let mut walked = Walked::after(before);
     walk(&declaration.root, &tree, "", &mut walked);
     let problems: Vec<String> = walked.problems.into_iter().map(|problem| format!("{name}: {problem}")).collect();
     if !problems.is_empty() {
         return Err(problems);
     }
-    Ok(Read { given: walked.given, entries: walked.entries, absent: false })
+    Ok(Read { given: walked.given, picked: walked.picked, entries: walked.entries, absent: false })
 }
 
 fn past_size(size: u64) -> String {
@@ -271,17 +274,43 @@ fn closes(bytes: &[u8], mut at: usize) -> bool {
     false
 }
 
-/// What a layer's tree gave: each setting's value by its path, each entry it
-/// made by the path of its map and its key, and what no setting takes.
+/// What a layer's tree gave: each setting's value by its path, each value
+/// of a chosen group's setting, each entry it made by the path of its map
+/// and its key, and what no setting takes.
 #[derive(Debug, Default)]
 pub(super) struct Walked {
+    /// The group each chosen group was read as by the layers before this
+    /// one, which its settings are read as unless this layer chooses.
+    pub(super) before: Choices,
     pub(super) given: Vec<(String, Value)>,
+    pub(super) picked: Vec<Picked>,
     pub(super) entries: Vec<(String, String)>,
     pub(super) problems: Vec<String>,
 }
 
+impl Walked {
+    /// A walk of a layer read after the layers that chose `before`.
+    pub(super) fn after(before: &Choices) -> Walked {
+        Walked { before: before.clone(), ..Walked::default() }
+    }
+}
+
+/// A value a layer gave a setting of a chosen group, with the group it was
+/// read as: kept only if that group is the one its chooser picks once every
+/// layer is read.
+#[derive(Clone, Debug)]
+pub(super) struct Picked {
+    /// The chosen group's path.
+    pub(super) node: String,
+    pub(super) group: String,
+    pub(super) path: String,
+    pub(super) value: Value,
+}
+
 /// What a layer's tree gives each setting, and what it gives that no setting
-/// takes. A null declares nothing, as an empty YAML key does.
+/// takes. A null declares nothing, as an empty YAML key does. A chosen
+/// group's settings are read as the group its chooser in the tree picks,
+/// else as the layers before it chose.
 pub(super) fn walk(group: &Group, tree: &Map<String, Value>, path: &str, walked: &mut Walked) {
     for (key, value) in tree {
         let at = joined(path, key);
@@ -293,7 +322,10 @@ pub(super) fn walk(group: &Group, tree: &Map<String, Value>, path: &str, walked:
             }
             (Some(Node::Group(inner)), Value::Object(map)) => walk(inner, map, &at, walked),
             (Some(Node::Entries(entries)), Value::Object(map)) => walk_entries(entries, map, &at, walked),
-            (Some(Node::Group(_) | Node::Entries(_)), other) => {
+            (Some(Node::Chosen(chosen)), Value::Object(map)) => {
+                walk_chosen(chosen, map, &Stand { group, tree, path, at: &at }, walked);
+            }
+            (Some(Node::Group(_) | Node::Entries(_) | Node::Chosen(_)), other) => {
                 walked.problems.push(format!("{at}: {} is not a group of settings", shown(other)));
             }
             (Some(Node::Setting(setting)), value) => match rules::check(setting, value) {
@@ -303,6 +335,42 @@ pub(super) fn walk(group: &Group, tree: &Map<String, Value>, path: &str, walked:
             },
         }
     }
+}
+
+/// Where a chosen group stands in a layer's tree: the group it is a setting
+/// of, what the layer gave that group, that group's path, and its own.
+struct Stand<'a> {
+    group: &'a Group,
+    tree: &'a Map<String, Value>,
+    path: &'a str,
+    at: &'a str,
+}
+
+/// What a layer gives a chosen group's settings, each kept with the group it
+/// was read as: the one its chooser in the layer names, else the one the
+/// layers before chose, else its chooser's default. A chooser the layer gives
+/// that names no group is refused where its own value is read.
+fn walk_chosen(chosen: &Chosen, map: &Map<String, Value>, stand: &Stand<'_>, walked: &mut Walked) {
+    let given = stand.tree.get(&chosen.by).filter(|value| !value.is_null());
+    let default = || chosen.picked(&Map::new(), stand.group).map(|(name, _)| name.to_owned());
+    let name = match given {
+        Some(given) => chosen.named(Some(given)).map(|(name, _)| name.to_owned()),
+        None => walked.before.get(stand.at).cloned().or_else(default),
+    };
+    let Some(name) = name else {
+        if given.is_none() {
+            let chooser = joined(stand.path, &chosen.by);
+            walked.problems.push(format!("{}: given before {chooser}, which chooses its group", stand.at));
+        }
+        return;
+    };
+    let mut inner = Walked::default();
+    walk(&chosen.groups[&name], map, stand.at, &mut inner);
+    walked.problems.extend(inner.problems);
+    let at = stand.at;
+    let picked =
+        inner.given.into_iter().map(|(path, value)| Picked { node: at.to_owned(), group: name.clone(), path, value });
+    walked.picked.extend(picked);
 }
 
 /// What a map of entries gives each field of each entry it names, over what

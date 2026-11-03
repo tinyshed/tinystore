@@ -75,6 +75,20 @@ def entries[T](given: Mapping[str, T] | None = None, /) -> Entries[T]: ...
 
 A map of entries' default: none, or the entries the declaration gives, ``{"local": Site(...)}``.
 
+## chosen_by
+
+```python
+def chosen_by(by: str, groups: Mapping[str, type], /) -> Any: ...
+```
+
+A field whose settings are those of one of ``groups``, the one the field ``by`` beside it names.
+
+``settings: Postgres | Stripe = chosen_by("plugin", {"postgres": Postgres, "stripe": Stripe})``
+reads an instance's settings as a ``Postgres`` when its ``plugin`` is "postgres". Each group
+is a dataclass whose fields are settings of their own; a field of a group not chosen is
+refused, and so is a ``plugin`` that names no group. A layer after the one that chose a group
+may choose another: then what the layers gave the first is dropped, and explain says so.
+
 ## Range
 
 ```python

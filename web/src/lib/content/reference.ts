@@ -71,7 +71,7 @@ const sources: Record<string, Sources> = {
 	locks: { go: 'locks', bun: ['locks'], python: ['locks'] },
 	config: {
 		go: '',
-		goFiles: ['config.go', 'config_declare.go', 'config_layers.go'],
+		goFiles: ['config.go', 'config_declare.go', 'config_layers.go', 'config_json.go'],
 		bun: ['config'],
 		python: ['config'],
 	},

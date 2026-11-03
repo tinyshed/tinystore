@@ -64,6 +64,10 @@ interface Described extends Rules {
 	secret?: boolean
 	/** of a map of entries, each entry's group; its kind is 'object', as an older release reads it */
 	entries?: Group
+	/** of a chosen group, the key of the setting beside it whose value names its group */
+	chosenBy?: string
+	/** of a chosen group, each group by the name its chooser gives it; its kind is 'object' too */
+	groups?: Record<string, Group>
 }
 
 /**
@@ -93,6 +97,16 @@ export interface Setting<
 export interface Entries<G> extends Setting<Readonly<Record<string, Value<G>>>> {
 	/** what an object in code gives each entry; nothing at run time */
 	readonly '~entries': G
+}
+
+/**
+ * A group whose settings are those of one of `G`, the one a text setting
+ * beside it names, as `chosenBy` declares one: each of `G`'s groups read as
+ * its settings are.
+ */
+export interface Chosen<G> extends Setting<Value<G[keyof G]>> {
+	/** what an object in code gives the group; nothing at run time */
+	readonly '~chosen': G
 }
 
 /** A setting's text that prints as *** wherever it goes; `reveal` gives it. */
@@ -166,15 +180,17 @@ export type Changes<D> = {
 export type Overlay<D> = {
 	readonly [K in keyof D]?: D[K] extends Entries<infer G>
 		? Readonly<Record<string, Overlay<G>>>
-		: D[K] extends Setting<infer V, boolean, boolean, boolean>
-			? V extends Secret
-				? string
-				: V
-			: D[K] extends readonly unknown[]
-				? Value<D[K]>
-				: D[K] extends object
-					? Overlay<D[K]>
-					: Value<D[K]>
+		: D[K] extends Chosen<infer G>
+			? Overlay<G[keyof G]>
+			: D[K] extends Setting<infer V, boolean, boolean, boolean>
+				? V extends Secret
+					? string
+					: V
+				: D[K] extends readonly unknown[]
+					? Value<D[K]>
+					: D[K] extends object
+						? Overlay<D[K]>
+						: Value<D[K]>
 }
 
 /** A file a config reads: TOML, YAML or JSON by its extension. */
@@ -528,10 +544,43 @@ export function entries<G extends object>(item: G, options: EntriesOptions<G> = 
 	return setting(described) as unknown as Entries<G>
 }
 
-/** A mark around a map of entries, which marks none of them. */
+/**
+ * A group whose settings are those of one of `groups`, the one the text
+ * setting beside it, `by`, names: `settings: chosenBy('plugin', { postgres,
+ * stripe })` reads an instance's settings as postgres's when its `plugin` is
+ * 'postgres'. Its fields are settings of their own, with their own marks; a
+ * field of a group not chosen is refused, and so is a `plugin` that names no
+ * group. A layer after the one that chose a group may choose another: then
+ * what the layers gave the first is dropped, and explain says so.
+ */
+export function chosenBy<const G extends Readonly<Record<string, object>>>(
+	by: string,
+	groups: G,
+): Chosen<G> {
+	const named = Object.entries(groups)
+	if (typeof by !== 'string' || by === '' || !isPlainObject(groups) || named.length === 0) {
+		throw new InvalidError(
+			"a chosen group: chosenBy('plugin', { postgres: { host: String }, stripe: { key: secret(String) } })",
+		)
+	}
+	const declared: Record<string, Group> = {}
+	for (const [name, group] of named) {
+		if (!isPlainObject(group) || describedOf(group) !== undefined) {
+			throw new InvalidError(`chosenBy: ${name} is a group of settings, not a setting`)
+		}
+		declared[name] = declaredGroup(group, name)
+	}
+	const described = { kind: 'object' as const, default: {}, chosenBy: by, groups: declared }
+	return setting(described) as unknown as Chosen<G>
+}
+
+/** A mark around a map of entries or a chosen group, which marks none of their settings. */
 function refuseEntries(inner: Described): void {
 	if (inner.entries !== undefined) {
 		throw new InvalidError('entries take no mark: each of their fields carries its own')
+	}
+	if (inner.groups !== undefined) {
+		throw new InvalidError('a chosen group takes no mark: each of its settings carries its own')
 	}
 }
 
@@ -635,11 +684,15 @@ function plainItem(first: unknown): Item {
 	}
 }
 
-/** Every setting's path, as the core names its variable, and every map of entries'. */
+/** Every setting's path, as the core names its variable, every map of entries' and every chosen group's. */
 function paths(group: Group, path: string): string[] {
 	return Object.entries(group).flatMap(([key, node]) => {
 		const at = path === '' ? key : `${path}.${key}`
-		return 'group' in node ? paths(node.group, at) : [at]
+		if ('group' in node) {
+			return paths(node.group, at)
+		}
+		const chosen = Object.values(node.groups ?? {}).flatMap(inner => paths(inner, at))
+		return node.groups === undefined ? [at] : [...new Set(chosen)]
 	})
 }
 
@@ -772,12 +825,23 @@ function fileVariables(text: string): [string, string][] {
 	return found
 }
 
-/** A value as the program reads it: a duration spelled, a secret wrapped, all of it frozen. */
+/**
+ * A value as the program reads it: a duration spelled, a secret wrapped, a
+ * chosen group as the group its chooser names, all of it frozen.
+ */
 function viewed(group: Group, value: unknown): unknown {
 	const source = (isPlainObject(value) ? value : {}) as Record<string, unknown>
 	const out: Record<string, unknown> = {}
 	for (const [key, node] of Object.entries(group)) {
-		out[key] = 'group' in node ? viewed(node.group, source[key]) : viewedSetting(node, source[key])
+		if ('group' in node) {
+			out[key] = viewed(node.group, source[key])
+		} else if (node.groups !== undefined) {
+			const name = source[node.chosenBy ?? '']
+			const chosen = typeof name === 'string' ? node.groups[name] : undefined
+			out[key] = viewed(chosen ?? {}, source[key])
+		} else {
+			out[key] = viewedSetting(node, source[key])
+		}
 	}
 	return Object.freeze(out)
 }

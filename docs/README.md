@@ -162,6 +162,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 
 - [Overview](guides/config/README.md)
 - [Layers and files](guides/config/layers.md)
+- [Settings whose shape is known at run time](guides/config/runtime.md)
 - [Secrets and required settings](guides/config/secrets.md)
 - [Live settings](guides/config/live.md)
 - [Watching](guides/config/watching.md)

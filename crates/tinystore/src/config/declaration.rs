@@ -1,14 +1,16 @@
 //! A declaration as the core reads it, whichever language wrote it: its
 //! groups and settings, and of each setting its kind, rules, default and
 //! marks. A Rust program's comes from its value serialized with the marks
-//! (`marks::marked`); an SDK's comes over the wire as data, which `data`
-//! reads.
+//! (`marks::marked`), or as data, the JSON an SDK sends over the wire, which
+//! `data` reads.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use serde_json::{Map, Value, json};
 
 use super::marks::{ENTRIES, ENTRIES_GIVEN, ENTRIES_ITEM, LIVE, REQUIRED, SECRET, SECRET_REQUIRED};
+use crate::Error;
 
 /// The longest path of a setting, its keys joined by dots.
 pub(super) const MOST_PATH: usize = 256;
@@ -20,11 +22,62 @@ pub(crate) type Group = BTreeMap<String, Node>;
 /// of their map.
 pub(crate) type Keys = BTreeMap<String, BTreeSet<String>>;
 
+/// The name of the group each chosen group's chooser picked, by the chosen
+/// group's path.
+pub(crate) type Choices = BTreeMap<String, String>;
+
+/// What the layers made of a declaration whose shape they decide: the
+/// entries of each map, and the group each chooser picked.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Shape {
+    pub(crate) entries: Keys,
+    pub(crate) chosen: Choices,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Node {
     Group(Group),
     Setting(Setting),
     Entries(Entries),
+    Chosen(Chosen),
+}
+
+/// A group whose settings are those of one of `groups`, the one a text
+/// setting beside it names: an instance's `settings` are the group of the
+/// plugin its `plugin` names. That chooser takes no value but a group's name.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Chosen {
+    pub(crate) by: String,
+    pub(crate) groups: BTreeMap<String, Group>,
+}
+
+impl Chosen {
+    /// The group `siblings` choose, the settings of the group the chosen one
+    /// stands in, as a layer gave them: its chooser's value there, else the
+    /// chooser's default in `group`.
+    pub(crate) fn picked<'a>(&'a self, siblings: &Map<String, Value>, group: &Group) -> Option<(&'a str, &'a Group)> {
+        let default = match group.get(&self.by) {
+            Some(Node::Setting(chooser)) => chooser.default.as_ref(),
+            _ => None,
+        };
+        self.named(siblings.get(&self.by).filter(|value| !value.is_null()).or(default))
+    }
+
+    /// The group a chooser's value names, and its name.
+    pub(crate) fn named(&self, value: Option<&Value>) -> Option<(&str, &Group)> {
+        let (name, group) = self.groups.get_key_value(value?.as_str()?)?;
+        Some((name.as_str(), group))
+    }
+}
+
+/// A chosen group of a declaration, wherever the entries it stands in put it.
+pub(crate) struct ChosenAt<'a> {
+    pub(crate) path: String,
+    /// The path of the setting that chooses its group.
+    pub(crate) chooser: String,
+    pub(crate) chosen: &'a Chosen,
+    /// The group its chooser's default picks.
+    pub(crate) default: Option<&'a str>,
 }
 
 /// A map of named entries, each the group `item` declares, whose fields are
@@ -88,12 +141,55 @@ pub(crate) fn duration_millis(map: &Map<String, Value>) -> Option<u64> {
     (map.len() == 2).then(|| secs.saturating_mul(1000).saturating_add(nanos / 1_000_000))
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Declaration {
+/// A program's settings declared as data, the JSON every SDK sends, for
+/// settings whose shape the program learns only as it runs, such as the
+/// settings of a plugin it loads. A config opened with one reads the same
+/// layers, rules, secrets and `explain` as one declared by a type, and gives
+/// its value as a `serde_json::Value`.
+///
+/// ```
+/// use serde_json::json;
+/// use tinystore::config::{self, Declaration, Env};
+///
+/// # fn main() -> tinystore::Result<()> {
+/// let postgres = json!({
+///     "host": { "kind": "text", "default": "localhost" },
+///     "port": { "kind": "integer", "default": 5432, "min": 1, "max": 65535 },
+///     "password": { "kind": "text", "secret": true, "required": true },
+/// });
+/// let stripe = json!({ "key": { "kind": "text", "secret": true, "required": true } });
+/// let declaration = Declaration::from_json(json!({
+///     "instance": { "entries": {
+///         "plugin": { "kind": "text", "required": true },
+///         "settings": { "chosenBy": "plugin", "groups": { "postgres": postgres, "stripe": stripe } },
+///     } },
+/// }))?;
+/// let variables = [
+///     ("DASHBIN_INSTANCE", r#"{ "aimee": { "plugin": "postgres" } }"#),
+///     ("DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD", "s3cret"),
+/// ];
+/// let config = config::load("dashbin", declaration).env(Env::prefix("DASHBIN").from(variables)).open()?;
+/// assert_eq!(config.get()["instance"]["aimee"]["settings"]["port"], 5432);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// A setting is `{ "kind": …, "default": … }`, its kind `text`, `integer`,
+/// `number`, `boolean`, `duration`, `object`, `any` or `{ "list": … }`, with
+/// `required`, `secret`, `live`, `min`, `max` and `oneOf` beside it; a group
+/// is `{ "group": { … } }`, a map of entries `{ "entries": { … } }`, and a
+/// group a setting beside it chooses `{ "chosenBy": "plugin", "groups": { … } }`.
+/// A declaration that means nothing is refused here, naming where.
+#[derive(Clone, PartialEq)]
+pub struct Declaration {
     pub(crate) root: Group,
 }
 
 impl Declaration {
+    pub fn from_json(declaration: Value) -> crate::Result<Declaration> {
+        super::data::declaration(&declaration).map_err(|why| Error::invalid(format!("the declaration: {why}")))
+    }
+
     /// A Rust program's declaration: its value as `marks::marked` writes it.
     pub(crate) fn of_marked(value: &Value) -> Result<Declaration, String> {
         match value {
@@ -103,7 +199,8 @@ impl Declaration {
     }
 
     /// The node at a path of keys joined by dots, `limits.rps`, or a field of
-    /// an entry, `instance.aimee.settings.password`, whichever entry it is.
+    /// an entry, `instance.aimee.settings.password`, whichever entry it is,
+    /// and of a chosen group, of the first of its groups that has it.
     pub(crate) fn node(&self, path: &str) -> Option<&Node> {
         let mut keys = path.split('.');
         let mut node = self.root.get(keys.next()?)?;
@@ -112,6 +209,7 @@ impl Declaration {
                 Node::Group(group) => group.get(key)?,
                 // `key` names the entry, and the next key its field
                 Node::Entries(entries) => entries.item.get(keys.next()?)?,
+                Node::Chosen(chosen) => chosen.groups.values().find_map(|group| group.get(key))?,
                 Node::Setting(_) => return None,
             };
         }
@@ -127,20 +225,22 @@ impl Declaration {
     pub(crate) fn setting(&self, path: &str) -> Option<&Setting> {
         match self.node(path)? {
             Node::Setting(setting) => Some(setting),
-            Node::Group(_) | Node::Entries(_) => None,
+            Node::Group(_) | Node::Entries(_) | Node::Chosen(_) => None,
         }
     }
 
-    /// Every setting and its path, in the order of their keys; no entry's.
+    /// Every setting and its path, in the order of their keys; no entry's,
+    /// and no chosen group's.
     pub(crate) fn settings(&self) -> Vec<(String, &Setting)> {
-        self.settings_of(&Keys::new())
+        self.settings_of(&Shape::default())
     }
 
     /// Every setting and its path, in the order of their keys, the fields of
-    /// each entry `keys` names among them.
-    pub(crate) fn settings_of(&self, keys: &Keys) -> Vec<(String, &Setting)> {
+    /// each entry `shape` names and of each group it says was chosen among
+    /// them.
+    pub(crate) fn settings_of(&self, shape: &Shape) -> Vec<(String, &Setting)> {
         let mut settings = Vec::new();
-        collect(&self.root, "", keys, &mut settings);
+        collect(&self.root, "", shape, &mut settings);
         settings
     }
 
@@ -150,6 +250,31 @@ impl Declaration {
         entries_in(&self.root, "", &mut found);
         found
     }
+
+    /// Every chosen group, of each entry `keys` names too.
+    pub(crate) fn chosen(&self, keys: &Keys) -> Vec<ChosenAt<'_>> {
+        let mut found = Vec::new();
+        chosen_in(&self.root, "", keys, &mut found);
+        found
+    }
+
+    /// The group each chooser picks: its value as `value` gives it by its
+    /// path, else its default.
+    pub(crate) fn choose<'v>(&self, keys: &Keys, value: impl Fn(&str) -> Option<&'v Value>) -> Choices {
+        let picked = |at: &ChosenAt<'_>| match value(&at.chooser) {
+            Some(given) => at.chosen.named(Some(given)).map(|(name, _)| name.to_owned()),
+            None => at.default.map(str::to_owned),
+        };
+        self.chosen(keys).into_iter().filter_map(|at| Some((at.path.clone(), picked(&at)?))).collect()
+    }
+}
+
+/// A declaration as JSON, without a secret's default, which `Debug` would
+/// otherwise print.
+impl fmt::Debug for Declaration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Declaration").field(&self.to_json()).finish()
+    }
 }
 
 fn group_json(group: &Group) -> Value {
@@ -158,10 +283,19 @@ fn group_json(group: &Group) -> Value {
             Node::Group(inner) => json!({ "group": group_json(inner) }),
             Node::Setting(setting) => setting_json(setting),
             Node::Entries(entries) => entries_json(entries),
+            Node::Chosen(chosen) => chosen_json(chosen),
         };
         (key.clone(), value)
     });
     Value::Object(entries.collect())
+}
+
+/// A chosen group as a map given whole, for an older release, its groups
+/// beside it, which that release leaves out.
+fn chosen_json(chosen: &Chosen) -> Value {
+    let groups: Map<String, Value> =
+        chosen.groups.iter().map(|(name, group)| (name.clone(), group_json(group))).collect();
+    json!({ "kind": "object", "default": {}, "chosenBy": chosen.by, "groups": groups })
 }
 
 /// A map of entries as a map given whole, for an older release, which
@@ -177,6 +311,10 @@ fn without_secrets(group: &Group, value: &Value) -> Value {
     let kept = map.iter().filter_map(|(key, inner)| match group.get(key) {
         Some(Node::Setting(setting)) if setting.secret => None,
         Some(Node::Group(fields)) => Some((key.clone(), without_secrets(fields, inner))),
+        // a group no chooser picks cannot say which of its fields are secrets
+        Some(Node::Chosen(chosen)) => {
+            chosen.picked(map, group).map(|(_, fields)| (key.clone(), without_secrets(fields, inner)))
+        }
         _ => Some((key.clone(), inner.clone())),
     });
     Value::Object(kept.collect())
@@ -234,24 +372,30 @@ fn rules_json(rules: &Rules, map: &mut Map<String, Value>) {
 
 /// Where a group stands, which says which marks its settings may carry: a
 /// field of a list's item is neither live nor a secret, since a list is one
-/// setting; a field of an entry may be a secret, and is never live, since
-/// only the layers make an entry.
+/// setting; a field of an entry or of a chosen group may be a secret, and is
+/// never live, since only the layers make an entry or choose a group.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Place {
     Root,
     Item,
     Entry,
+    Chosen,
 }
 
-fn collect<'a>(group: &'a Group, path: &str, keys: &Keys, settings: &mut Vec<(String, &'a Setting)>) {
+fn collect<'a>(group: &'a Group, path: &str, shape: &Shape, settings: &mut Vec<(String, &'a Setting)>) {
     for (key, node) in group {
         let at = joined(path, key);
         match node {
-            Node::Group(inner) => collect(inner, &at, keys, settings),
+            Node::Group(inner) => collect(inner, &at, shape, settings),
             Node::Setting(setting) => settings.push((at, setting)),
             Node::Entries(entries) => {
-                for entry in keys.get(&at).into_iter().flatten() {
-                    collect(&entries.item, &joined(&at, entry), keys, settings);
+                for entry in shape.entries.get(&at).into_iter().flatten() {
+                    collect(&entries.item, &joined(&at, entry), shape, settings);
+                }
+            }
+            Node::Chosen(chosen) => {
+                if let Some(inner) = shape.chosen.get(&at).and_then(|name| chosen.groups.get(name)) {
+                    collect(inner, &at, shape, settings);
                 }
             }
         }
@@ -263,6 +407,25 @@ fn entries_in<'a>(group: &'a Group, path: &str, found: &mut Vec<(String, &'a Ent
         match node {
             Node::Group(inner) => entries_in(inner, &joined(path, key), found),
             Node::Entries(entries) => found.push((joined(path, key), entries)),
+            Node::Setting(_) | Node::Chosen(_) => {}
+        }
+    }
+}
+
+fn chosen_in<'a>(group: &'a Group, path: &str, keys: &Keys, found: &mut Vec<ChosenAt<'a>>) {
+    for (key, node) in group {
+        let at = joined(path, key);
+        match node {
+            Node::Group(inner) => chosen_in(inner, &at, keys, found),
+            Node::Entries(entries) => {
+                for entry in keys.get(&at).into_iter().flatten() {
+                    chosen_in(&entries.item, &joined(&at, entry), keys, found);
+                }
+            }
+            Node::Chosen(chosen) => {
+                let default = chosen.picked(&Map::new(), group).map(|(name, _)| name);
+                found.push(ChosenAt { path: at, chooser: joined(path, &chosen.by), chosen, default });
+            }
             Node::Setting(_) => {}
         }
     }
@@ -424,7 +587,7 @@ fn setting(value: &Value, path: &str, place: Place) -> Result<Setting, String> {
     }
     let default = match place {
         _ if marks.required => None,
-        Place::Root | Place::Entry => Some(unmarked(value)),
+        Place::Root | Place::Entry | Place::Chosen => Some(unmarked(value)),
         Place::Item => None,
     };
     Ok(Setting {

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use super::declaration::{Declaration, Group, Item, Kind, Node};
+use super::declaration::{Declaration, Group, Item, Kind, Node, Setting};
 use super::explain::Origin;
 use super::hub::{Change, Kept};
 use super::layers::{Base, Stacked, set};
@@ -117,12 +117,13 @@ impl<T: DeserializeOwned> Making<'_, T> {
     /// What broke the value the layers make, each named by its layer: every
     /// value a layer gave is put back to its default, then given again alone.
     fn culprits(&self, base: &Base, tree: &Value, why: &str) -> Vec<String> {
+        let settings: BTreeMap<String, &Setting> = self.declaration.settings_of(&base.shape).into_iter().collect();
         let given: Vec<(&String, &Stacked, &Value)> = base
             .stacks
             .iter()
             .filter_map(|(path, stack)| {
                 let last = stack.last().filter(|last| last.from != Origin::Declaration)?;
-                let default = self.declaration.setting(path)?.default.as_ref()?;
+                let default = settings.get(path)?.default.as_ref()?;
                 Some((path, last, default))
             })
             .collect();
@@ -138,7 +139,7 @@ impl<T: DeserializeOwned> Making<'_, T> {
             .filter_map(|(path, last, _)| {
                 let mut alone = clean.clone();
                 set(&mut alone, path, last.value.clone());
-                let secret = self.declaration.setting(path).is_some_and(|setting| setting.secret);
+                let secret = settings.get(path.as_str()).is_some_and(|setting| setting.secret);
                 let shown =
                     |why: String| if secret { "a secret that does not read as its type".to_owned() } else { why };
                 self.built(&alone).err().map(|why| named(&last.from, path, &shown(why)))
@@ -168,6 +169,11 @@ fn rust_view(declaration: &Declaration, tree: &Value) -> Value {
 fn view_group(group: &Group, tree: &mut Value) {
     let Value::Object(map) = tree else { return };
     for (key, node) in group {
+        // read before the value is borrowed to change it
+        let picked = match node {
+            Node::Chosen(chosen) => chosen.named(map.get(&chosen.by)).map(|(_, inner)| inner),
+            _ => None,
+        };
         let Some(value) = map.get_mut(key) else { continue };
         match node {
             Node::Group(inner) => view_group(inner, value),
@@ -177,6 +183,7 @@ fn view_group(group: &Group, tree: &mut Value) {
                     each.values_mut().for_each(|entry| view_group(&entries.item, entry));
                 }
             }
+            Node::Chosen(_) => picked.into_iter().for_each(|inner| view_group(inner, value)),
         }
     }
 }

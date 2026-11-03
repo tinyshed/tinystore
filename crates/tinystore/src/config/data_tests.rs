@@ -259,3 +259,122 @@ fn entries_sent_as_data_take_each_field_from_the_layers_and_kv_keeps_them_withou
         json!({ "kind": { "list": { "group": { "inner": { "kind": "object", "entries": {} } } } }, "default": [] });
     assert_eq!(refused(item), "instance[].inner: entries stand among settings, not in an entry or a list's item");
 }
+
+/// dashbin's instances as the SDKs write them: each entry's settings are the
+/// group of the plugin its `plugin` names.
+fn plugins() -> Value {
+    json!({
+        "instance": {
+            "kind": "object",
+            "default": {},
+            "entries": {
+                "plugin": { "kind": "text", "required": true },
+                "settings": {
+                    "kind": "object",
+                    "default": {},
+                    "chosenBy": "plugin",
+                    "groups": {
+                        "postgres": {
+                            "host": { "kind": "text", "default": "localhost" },
+                            "port": { "kind": "integer", "default": 5432 },
+                            "password": { "kind": "text", "secret": true, "required": true }
+                        },
+                        "stripe": { "key": { "kind": "text", "secret": true, "required": true } }
+                    }
+                }
+            }
+        }
+    })
+}
+
+// contract: CFG-14
+#[test]
+fn a_chosen_group_sent_as_data_reads_back_as_kv_keeps_it_and_an_older_release_reads_a_map() {
+    let read = declaration(&plugins()).unwrap();
+    assert!(read.setting("instance.aimee.settings.password").is_some_and(|setting| setting.secret));
+    let plugin = read.setting("instance.aimee.plugin").unwrap();
+    assert_eq!(plugin.rules.one_of, Some(vec!["postgres".to_owned(), "stripe".to_owned()]), "its groups' names");
+    let kept = read.to_json();
+    let settings = &kept["instance"]["entries"]["settings"];
+    assert_eq!((&settings["kind"], &settings["default"]), (&json!("object"), &json!({})), "a map given whole");
+    assert_eq!(kept["instance"]["entries"]["plugin"]["oneOf"], json!(["postgres", "stripe"]));
+    assert_eq!(declaration(&kept).unwrap(), read, "what kv.db keeps reads back the same");
+    let mut bare = plugins();
+    let bare_settings = bare["instance"]["entries"]["settings"].as_object_mut().unwrap();
+    bare_settings.remove("kind");
+    bare_settings.remove("default");
+    assert_eq!(declaration(&bare).unwrap(), read, "kind and default are an older release's alone");
+}
+
+// contract: CFG-14
+#[test]
+fn a_chosen_group_sent_refuses_what_means_nothing() {
+    let refused = |site: Value| declaration(&json!({ "instance": { "entries": site } })).unwrap_err();
+    let text = json!({ "kind": "text", "default": "a" });
+    let chosen = json!({ "chosenBy": "plugin", "groups": { "a": {} } });
+    assert_eq!(
+        refused(json!({ "plugn": text, "settings": chosen })),
+        "instance.*.settings: instance.*.plugin, which chooses its group, is no setting; did you mean instance.*.plugn?"
+    );
+    let secret = json!({ "kind": "text", "secret": true, "required": true });
+    assert_eq!(
+        refused(json!({ "plugin": secret, "settings": chosen })),
+        "instance.*.settings: instance.*.plugin chooses its group, so it is text, neither secret nor live"
+    );
+    let allowed = json!({ "kind": "text", "default": "a", "oneOf": ["a", "b"] });
+    assert_eq!(
+        refused(json!({ "plugin": allowed, "settings": chosen })),
+        r#"instance.*.plugin: "b" names none of the groups of instance.*.settings"#
+    );
+    let mysql = json!({ "kind": "text", "default": "mysql" });
+    assert_eq!(
+        refused(json!({ "plugin": mysql, "settings": chosen })),
+        r#"instance.*.plugin: its default: "mysql" is not one of a"#
+    );
+    let size = json!({ "kind": "integer", "default": 1, "live": true });
+    let live = json!({ "chosenBy": "plugin", "groups": { "a": { "size": size } } });
+    assert_eq!(
+        refused(json!({ "plugin": text, "settings": live })),
+        "instance.*.settings(a).size: a chosen group's field is not live: the layers give it"
+    );
+    assert_eq!(
+        refused(json!({ "plugin": text, "settings": { "chosenBy": "plugin" } })),
+        "instance.*.settings: its groups are a map from each value of plugin to its group"
+    );
+    let nested = json!({ "chosenBy": "plugin", "groups": { "a": { "inner": chosen } } });
+    assert_eq!(
+        refused(json!({ "plugin": text, "settings": nested })),
+        "instance.*.settings(a).inner: a chosen group stands among settings, not in a list's item or a chosen group"
+    );
+    let item = json!({ "kind": { "list": { "group": { "plugin": text, "settings": chosen } } }, "default": [] });
+    assert_eq!(
+        declaration(&json!({ "sites": item })).unwrap_err(),
+        "sites[].settings: a chosen group stands among settings, not in a list's item or a chosen group"
+    );
+}
+
+// contract: CFG-14, CFG-06
+#[test]
+fn a_chosen_group_sent_gives_its_value_as_data_read_as_the_group_its_chooser_names() {
+    let f = fixture();
+    let declared = json!({
+        "plugin": { "kind": "text", "default": "postgres" },
+        "settings": plugins()["instance"]["entries"]["settings"].clone(),
+        "instance": plugins()["instance"].clone()
+    });
+    let toml = "plugin = \"stripe\"\n[instance.aimee]\nplugin = \"postgres\"\n[instance.aimee.settings]\nport = 6432\n";
+    let variables = json!({ "APP_SETTINGS_KEY": "sk_test", "APP_INSTANCE_AIMEE_SETTINGS_PASSWORD": "s3cret" });
+    let layers = json!([
+        { "file": { "name": "dashbin.toml", "text": toml } },
+        { "env": { "prefix": "APP", "variables": variables } }
+    ]);
+    let sent = Sent { name: "dashbin", declaration: &declared, layers: &layers, strict: false, remember: true };
+    let config = f.store.config_sent(&sent).unwrap();
+    assert_eq!(config.get()["settings"], json!({ "key": "sk_test" }));
+    let aimee =
+        json!({ "plugin": "postgres", "settings": { "host": "localhost", "port": 6432, "password": "s3cret" } });
+    assert_eq!(config.get()["instance"]["aimee"], aimee);
+    let printed = config.explain().to_string();
+    assert!(printed.contains("settings.key") && !printed.contains("sk_test"), "{printed}");
+    assert!(!printed.contains("s3cret"), "{printed}");
+}

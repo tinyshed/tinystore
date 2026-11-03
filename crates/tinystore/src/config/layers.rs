@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::declaration::{Declaration, Keys, joined};
+use super::declaration::{Choices, Declaration, Shape, joined};
 use super::env::{self, Env};
 use super::explain::Origin;
-use super::files::{self, File, Walked};
+use super::files::{self, File, Picked, Walked};
 use super::rules::spelled;
 
 /// An object in code, a file or the environment, in the order the program
@@ -42,8 +42,9 @@ pub(super) struct Base {
     /// Each setting's values by its path, oldest first.
     pub(super) stacks: BTreeMap<String, Vec<Stacked>>,
     /// The keys of the entries the declaration and the layers made, by the
-    /// path of their map, every map of the declaration among them.
-    pub(super) entries: Keys,
+    /// path of their map, every map of the declaration among them, and the
+    /// group each chooser picked once every layer was read.
+    pub(super) shape: Shape,
     /// The optional files that were absent.
     pub(super) absent: Vec<String>,
     /// The variables with the prefix that name no setting.
@@ -51,6 +52,12 @@ pub(super) struct Base {
     /// The required settings no layer gave, of a config opened as the store
     /// keeps it, whose program gives them from its own files or environment.
     pub(super) left_out: Vec<String>,
+    /// What a layer gave a chosen group as a group its chooser did not pick
+    /// in the end, dropped, each said once.
+    pub(super) dropped: Vec<String>,
+    /// The values the layers gave chosen groups' settings, oldest first,
+    /// until the groups are chosen.
+    picked: Vec<(Picked, Origin)>,
 }
 
 impl Base {
@@ -66,16 +73,18 @@ impl Base {
         }
         let mut problems = base.declared_entries(declaration);
         for layer in layers {
-            if let Err(found) = base.take(layer, declaration) {
+            let before = base.choices(declaration);
+            if let Err(found) = base.take(layer, declaration, &before) {
                 problems.extend(found);
             }
         }
-        base.entry_defaults(declaration);
+        base.choose(declaration);
+        base.shaped_defaults(declaration);
         if required {
             problems.extend(base.missing(declaration, layers));
         } else {
             let given = |path: &String| base.stacks.get(path).is_some_and(|stack| !stack.is_empty());
-            let settings = declaration.settings_of(&base.entries).into_iter();
+            let settings = declaration.settings_of(&base.shape).into_iter();
             base.left_out =
                 settings.filter(|(path, setting)| setting.required && !given(path)).map(|(path, _)| path).collect();
         }
@@ -87,22 +96,54 @@ impl Base {
     fn declared_entries(&mut self, declaration: &Declaration) -> Vec<String> {
         let mut problems = Vec::new();
         for (path, entries) in declaration.entries() {
-            self.entries.entry(path.clone()).or_default();
+            self.shape.entries.entry(path.clone()).or_default();
             let mut walked = Walked::default();
             files::walk_entries(entries, &entries.given, &path, &mut walked);
-            problems.extend(walked.problems.into_iter().map(|problem| format!("the declaration: {problem}")));
-            self.made(walked.entries);
-            for (path, value) in walked.given {
-                self.push(path, Stacked { value, from: Origin::Declaration });
-            }
+            let found = std::mem::take(&mut walked.problems);
+            problems.extend(found.into_iter().map(|problem| format!("the declaration: {problem}")));
+            self.took(walked, &Origin::Declaration);
         }
         problems
     }
 
-    /// Each entry's fields that the declaration did not give: their defaults,
-    /// under what the layers gave them.
-    fn entry_defaults(&mut self, declaration: &Declaration) {
-        for (path, setting) in declaration.settings_of(&self.entries) {
+    /// The group each chooser picks with what the layers read so far gave it.
+    fn choices(&self, declaration: &Declaration) -> Choices {
+        declaration.choose(&self.shape.entries, |path| self.stacks.get(path)?.last().map(|stacked| &stacked.value))
+    }
+
+    /// Picks each chosen group's group, as its chooser is once every layer is
+    /// read, and keeps what the layers gave its settings as that group; what
+    /// they gave as another group is dropped, and said.
+    fn choose(&mut self, declaration: &Declaration) {
+        self.shape.chosen = self.choices(declaration);
+        let choosers: BTreeMap<String, String> =
+            declaration.chosen(&self.shape.entries).into_iter().map(|at| (at.path, at.chooser)).collect();
+        for (picked, from) in std::mem::take(&mut self.picked) {
+            let Some(group) = self.shape.chosen.get(&picked.node) else { continue };
+            if *group == picked.group {
+                self.push(picked.path, Stacked { value: picked.value, from });
+                continue;
+            }
+            let chooser = &choosers[&picked.node];
+            let by = self
+                .stacks
+                .get(chooser)
+                .and_then(|stack| stack.last())
+                .map_or(Origin::Declaration, |last| last.from.clone());
+            let note = format!(
+                "{}: what {from} gave as {} is dropped: {chooser} is {group}, from {by}",
+                picked.node, picked.group
+            );
+            if !self.dropped.contains(&note) {
+                self.dropped.push(note);
+            }
+        }
+    }
+
+    /// Each setting of an entry or a chosen group that the declaration did not
+    /// give: its default, under what the layers gave it.
+    fn shaped_defaults(&mut self, declaration: &Declaration) {
+        for (path, setting) in declaration.settings_of(&self.shape) {
             let Some(default) = &setting.default else { continue };
             let stack = self.stacks.entry(path).or_default();
             if stack.first().is_none_or(|first| first.from != Origin::Declaration) {
@@ -111,46 +152,54 @@ impl Base {
         }
     }
 
-    fn take(&mut self, layer: &Layer, declaration: &Declaration) -> Result<(), Vec<String>> {
+    /// Takes what a layer gives, each chosen group's settings read as
+    /// `before` says the layers before it chose, unless the layer chooses.
+    fn take(&mut self, layer: &Layer, declaration: &Declaration, before: &Choices) -> Result<(), Vec<String>> {
         match layer {
             Layer::Object { place, value } => {
-                let mut walked = Walked::default();
+                let mut walked = Walked::after(before);
                 files::walk(&declaration.root, value, "", &mut walked);
                 if !walked.problems.is_empty() {
                     let problems = walked.problems.into_iter();
                     return Err(problems.map(|problem| format!("layer {place}: {problem}")).collect());
                 }
-                self.made(walked.entries);
-                for (path, value) in walked.given {
-                    self.push(path, Stacked { value, from: Origin::Layer { place: *place } });
-                }
+                self.took(walked, &Origin::Layer { place: *place });
             }
             Layer::File(file) => {
-                let read = files::read(file, declaration)?;
+                let read = files::read(file, declaration, before)?;
                 if read.absent {
                     self.absent.push(file.shown());
                 }
-                self.made(read.entries);
-                for (path, value) in read.given {
-                    self.push(path, Stacked { value, from: Origin::File { path: file.shown() } });
-                }
+                let walked =
+                    Walked { given: read.given, picked: read.picked, entries: read.entries, ..Walked::default() };
+                self.took(walked, &Origin::File { path: file.shown() });
             }
             Layer::Env(env) => {
-                let read = env::read(env, declaration, &self.entries)?;
+                let read = env::read(env, declaration, &self.shape.entries, before)?;
                 self.unused.extend(read.unused);
                 self.made(read.entries);
                 for (path, value, from) in read.given {
                     self.push(path, Stacked { value, from });
                 }
+                self.picked.extend(read.picked);
             }
         }
         Ok(())
     }
 
+    /// Takes what a layer's tree gave, all of it from `from`.
+    fn took(&mut self, walked: Walked, from: &Origin) {
+        self.made(walked.entries);
+        for (path, value) in walked.given {
+            self.push(path, Stacked { value, from: from.clone() });
+        }
+        self.picked.extend(walked.picked.into_iter().map(|picked| (picked, from.clone())));
+    }
+
     /// Takes the entries a layer made, each by the path of its map and its key.
     fn made(&mut self, entries: Vec<(String, String)>) {
         for (path, key) in entries {
-            self.entries.entry(path).or_default().insert(key);
+            self.shape.entries.entry(path).or_default().insert(key);
         }
     }
 
@@ -163,7 +212,7 @@ impl Base {
     /// region in app.yaml`.
     fn missing(&self, declaration: &Declaration, layers: &[Layer]) -> Vec<String> {
         let mut missing = Vec::new();
-        for (path, setting) in declaration.settings_of(&self.entries) {
+        for (path, setting) in declaration.settings_of(&self.shape) {
             let value = self.stacks.get(&path).and_then(|stack| stack.last()).map(|stacked| &stacked.value);
             if setting.required && value.is_none_or(|value| value == "") {
                 missing.push(format!("{path} is required: {}", givers(&path, layers)));
@@ -173,14 +222,18 @@ impl Base {
     }
 
     /// The value the layers make: each setting's last value, in its group,
-    /// and every map of entries and entry, though no field of it was given.
+    /// and every map of entries, entry and chosen group, though no field of
+    /// it was given.
     pub(super) fn tree(&self) -> Value {
         let mut tree = Value::Object(Map::new());
-        for (path, keys) in &self.entries {
+        for (path, keys) in &self.shape.entries {
             set(&mut tree, path, Value::Object(Map::new()));
             for key in keys {
                 set(&mut tree, &joined(path, key), Value::Object(Map::new()));
             }
+        }
+        for path in self.shape.chosen.keys() {
+            set(&mut tree, path, Value::Object(Map::new()));
         }
         for (path, stack) in &self.stacks {
             if let Some(stacked) = stack.last() {

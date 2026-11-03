@@ -40,8 +40,11 @@
 //! [`load`], with no store and nothing written to disk. The `config-load`
 //! feature builds `load` alone, with no store and no SQLite; `config` adds
 //! `store.config` and the live settings.
+//!
+//! A program that learns the shape of some settings only as it runs, such
+//! as a plugin's, declares them as data, a [`Declaration`], and reads them
+//! as a `serde_json::Value`.
 
-#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
 mod data;
 mod declaration;
 mod env;
@@ -63,6 +66,7 @@ use std::fmt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+pub use declaration::Declaration;
 pub use env::Env;
 pub use explain::{Explained, Given, Line, Origin};
 pub use files::File;
@@ -94,10 +98,63 @@ pub struct ConfigBuilder<T> {
     /// config loaded without one.
     store: Option<Store>,
     name: String,
-    declaration: T,
+    declaration: Declared<T>,
     layers: Vec<Layer>,
     validate: Option<Validate<T>>,
     strict: bool,
+}
+
+/// What a config is declared with: a value of the program's type, whose
+/// settings it is read as, or a [`Declaration`] as data, whose settings are
+/// read as a `serde_json::Value`.
+#[diagnostic::on_unimplemented(
+    message = "a config is declared by a serde value that is Clone, Send and Sync, or by a config::Declaration",
+    label = "neither a Serialize + DeserializeOwned + Clone + Send + Sync value nor a Declaration"
+)]
+pub trait IntoDeclaration {
+    /// What the settings are read as.
+    type Value: Serialize + DeserializeOwned + Clone + Send + Sync + 'static;
+
+    #[doc(hidden)]
+    fn into_declared(self) -> Declared<Self::Value>;
+}
+
+impl<T> IntoDeclaration for T
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+{
+    type Value = T;
+
+    fn into_declared(self) -> Declared<T> {
+        Declared(Source::Typed(self))
+    }
+}
+
+impl IntoDeclaration for Declaration {
+    type Value = serde_json::Value;
+
+    fn into_declared(self) -> Declared<serde_json::Value> {
+        Declared(Source::Data(self))
+    }
+}
+
+/// A declaration as a config's builder keeps it until it opens.
+#[doc(hidden)]
+pub struct Declared<T>(Source<T>);
+
+enum Source<T> {
+    /// A value of the program's type, read with its marks when the config opens.
+    Typed(T),
+    Data(Declaration),
+}
+
+impl<T> fmt::Debug for Declared<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            Source::Typed(_) => f.write_str("Declared(a typed value)"),
+            Source::Data(declaration) => f.debug_tuple("Declared").field(declaration).finish(),
+        }
+    }
 }
 
 /// A program's settings read once from its declaration, its files and the
@@ -125,10 +182,8 @@ pub struct ConfigBuilder<T> {
 /// # Ok(())
 /// # }
 /// ```
-pub fn load<T>(name: &str, declaration: T) -> ConfigBuilder<T>
-where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-{
+pub fn load<D: IntoDeclaration>(name: &str, declaration: D) -> ConfigBuilder<D::Value> {
+    let declaration = declaration.into_declared();
     ConfigBuilder { store: None, name: name.to_owned(), declaration, layers: Vec::new(), validate: None, strict: false }
 }
 

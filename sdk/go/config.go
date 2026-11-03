@@ -249,6 +249,14 @@ type Config[T any] struct {
 //	config, err := tinystore.OpenConfig(ctx, store, "app", Settings{Port: 8080},
 //		tinystore.File("app.yaml"), tinystore.Env("APP", tinystore.Var("port", "PORT")))
 func OpenConfig[T any](ctx context.Context, store *Store, name string, defaults T, opts ...ConfigOption) (*Config[T], error) {
+	return openConfig[T](ctx, store, name, func() (*declared, error) { return declare(reflect.ValueOf(defaults)) }, opts)
+}
+
+// openConfig opens a config whose declaration declared reads, once its name
+// is checked: a struct's, or one as data.
+func openConfig[T any](
+	ctx context.Context, store *Store, name string, declared func() (*declared, error), opts []ConfigOption,
+) (*Config[T], error) {
 	var o configOptions
 	for _, opt := range opts {
 		opt.config(&o)
@@ -256,7 +264,7 @@ func OpenConfig[T any](ctx context.Context, store *Store, name string, defaults 
 	if err := core.CheckName(name, "config"); err != nil {
 		return nil, err
 	}
-	d, err := declare(reflect.ValueOf(defaults))
+	d, err := declared()
 	if err != nil {
 		return nil, core.Wrap(core.Invalid, err, "config %s", name)
 	}
@@ -349,7 +357,7 @@ func (c *Config[T]) Update(ctx context.Context, change func(*T), opts ...UpdateO
 		}
 		after := copied(c.declared, before)
 		change(&after)
-		changes := changesOf(c.declared.root, reflect.ValueOf(&before).Elem(), reflect.ValueOf(&after).Elem())
+		changes := changed(c.declared, &before, &after)
 		if changes == nil {
 			return nil, nil
 		}

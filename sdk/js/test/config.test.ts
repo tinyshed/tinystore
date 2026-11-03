@@ -14,6 +14,7 @@ import { envName, explainOrigin } from '../src/config.ts'
 import { parseDotenv } from '../src/dotenv.ts'
 import {
 	ConflictError,
+	chosenBy,
 	duration,
 	entries,
 	env,
@@ -206,6 +207,86 @@ for (const way of ways) {
 			expect(refused).toBeInstanceOf(InvalidError)
 			expect(String(refused)).toContain("instance.*.size: an entry's field is not live")
 			expect(() => required(entries(site) as never)).toThrow('entries take no mark')
+		})
+
+		// contract: CFG-14, CFG-13, CFG-06
+		test("an entry's settings are read, checked, masked and named by the group its plugin chooses", async () => {
+			const plugins = {
+				postgres: {
+					host: 'localhost',
+					port: int(5432, { min: 1, max: 65535 }),
+					database: required(String),
+					password: secret(String),
+				},
+				mysql: { host: 'localhost', port: int(3306), password: secret(String) },
+				stripe: { key: secret(String) },
+			}
+			const declared = {
+				instance: entries({ plugin: required(String), settings: chosenBy('plugin', plugins) }),
+			}
+			const aimee = (settings: string) =>
+				`[instance.aimee]\nplugin = "postgres"\n[instance.aimee.settings]\n${settings}\n`
+			const misspelt = join(dir, 'misspelt.toml')
+			writeFileSync(misspelt, aimee('hots = "127.0.0.1"\ndatabase = "aimee"\npassword = "s3cret"'))
+			const hots = await caught(store.config('plugins', [declared, file(misspelt)]))
+			expect(hots).toBeInstanceOf(InvalidError)
+			expect(String(hots)).toContain(
+				'instance.aimee.settings.hots: no such setting; did you mean instance.aimee.settings.host?',
+			)
+
+			const toml = join(dir, 'plugins.toml')
+			writeFileSync(toml, aimee('host = "127.0.0.1"\ndatabase = "aimee"\npassword = "s3cret"'))
+			const config = await store.config('plugins', [
+				declared,
+				file(toml),
+				env('DASHBIN', { from: { DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT: '15432' } }),
+			])
+			const settings = config.value.instance.aimee?.settings as Record<string, unknown> | undefined
+			expect([settings?.host, settings?.port, settings?.database]).toEqual([
+				'127.0.0.1',
+				15432,
+				'aimee',
+			])
+			expect(settings?.password).toBeInstanceOf(Secret)
+			const lines = Object.fromEntries(config.explain().map(line => [line.path, line]))
+			expect(lines['instance.aimee.settings.password']?.value).toBe('***')
+			expect(lines['instance.aimee.settings.port']?.from).toBe(
+				'DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT',
+			)
+			expect(JSON.stringify(config.explain())).not.toContain('s3cret')
+			const defaulted = await store.config('plugins-default', [declared, file(toml)])
+			const port = (defaulted.value.instance.aimee?.settings as { port?: number } | undefined)?.port
+			expect(port).toBe(5432)
+
+			const typo = await caught(
+				store.config('plugins', [
+					declared,
+					file(toml),
+					env('DASHBIN', { from: { DASHBIN_INSTANCE_AIMEE_PLUGIN: 'postgress' } }),
+				]),
+			)
+			expect(String(typo)).toContain(
+				'DASHBIN_INSTANCE_AIMEE_PLUGIN: "postgress" is not one of mysql, postgres, stripe; did you mean postgres?',
+			)
+
+			const switched = await store.config('plugins-switched', [
+				declared,
+				file(toml),
+				env('DASHBIN', {
+					from: {
+						DASHBIN_INSTANCE_AIMEE_PLUGIN: 'mysql',
+						DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD: 'p',
+					},
+				}),
+			])
+			const mysql = switched.value.instance.aimee?.settings as Record<string, unknown> | undefined
+			expect([mysql?.host, mysql?.port, mysql?.database]).toEqual(['localhost', 3306, undefined])
+			expect(switched.explain().notes).toEqual([
+				`instance.aimee.settings: what ${toml} gave as postgres is dropped: instance.aimee.plugin is mysql, from DASHBIN_INSTANCE_AIMEE_PLUGIN`,
+			])
+			expect(() => required(chosenBy('plugin', plugins) as never)).toThrow(
+				'a chosen group takes no mark',
+			)
 		})
 
 		// contract: CFG-09, CFG-06

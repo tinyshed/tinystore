@@ -40,6 +40,7 @@ const (
 	kindGroup    kind = "group"
 	kindSecret   kind = "secret"
 	kindEntries  kind = "entries"
+	kindChosen   kind = "chosen"
 )
 
 var (
@@ -57,12 +58,18 @@ type setting struct {
 	typ   reflect.Type
 	group []*setting // a group's, or a list item's group's
 	item  *setting   // a list's, or a map of entries' entry
+	// of a chosen group, the key of the setting beside it that names its
+	// group, and each group by its name
+	by      string
+	choices map[string]*setting
 }
 
-// declared is a declaration as the core reads it and what reads its values back.
+// declared is a declaration as the core reads it and what reads its values
+// back: a struct's, or one as data, read as a map (config_json.go).
 type declared struct {
-	root *setting
-	data map[string]any
+	root    *setting
+	data    map[string]any
+	dynamic bool
 }
 
 // declare reads the declaration of T, its defaults those given.
@@ -614,6 +621,10 @@ func valueOf[T any](d *declared, text json.RawMessage) (T, error) {
 	if err != nil {
 		return out, core.Wrap(core.Protocol, err, "a config's value that does not read")
 	}
+	if d.dynamic {
+		out, _ = dataOf(d.root, value).(T)
+		return out, nil
+	}
 	if err := read(d.root, value, reflect.ValueOf(&out).Elem()); err != nil {
 		return out, core.Wrap(core.Protocol, err, "a config's value that does not read as its declaration")
 	}
@@ -654,11 +665,27 @@ func sameJSON(a, b any) bool {
 
 // copied is a copy of v that shares nothing a change of it could reach.
 func copied[T any](d *declared, v T) T {
-	out, err := valueOf[T](d, mustJSON(wireOf(d.root, reflect.ValueOf(v))))
+	kept := any(nil)
+	if d.dynamic {
+		kept = wireOfData(d.root, v)
+	} else {
+		kept = wireOf(d.root, reflect.ValueOf(v))
+	}
+	out, err := valueOf[T](d, mustJSON(kept))
 	if err != nil {
 		return v
 	}
 	return out
+}
+
+// changed is what a change made of before, as the core takes a change.
+func changed[T any](d *declared, before, after *T) map[string]any {
+	if d.dynamic {
+		was, _ := any(*before).(map[string]any)
+		now, _ := any(*after).(map[string]any)
+		return changesOfData(d.root, was, now)
+	}
+	return changesOf(d.root, reflect.ValueOf(before).Elem(), reflect.ValueOf(after).Elem())
 }
 
 func mustJSON(value any) json.RawMessage {

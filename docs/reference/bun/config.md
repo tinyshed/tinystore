@@ -32,6 +32,19 @@ interface Entries<G> extends Setting<Readonly<Record<string, Value<G>>>> {
 A map of named entries, as `entries` declares one: each entry the group
 `G`, read as its settings are.
 
+## Chosen
+
+```ts
+interface Chosen<G> extends Setting<Value<G[keyof G]>> {
+    /** what an object in code gives the group; nothing at run time */
+    readonly '~chosen': G
+}
+```
+
+A group whose settings are those of one of `G`, the one a text setting
+beside it names, as `chosenBy` declares one: each of `G`'s groups read as
+its settings are.
+
 ## Secret
 
 ```ts
@@ -84,7 +97,7 @@ The live settings a change may name, each as the program reads it, at any depth.
 
 ```ts
 type Overlay<D> = {
-    readonly [K in keyof D]?: D[K] extends Entries<infer G> ? Readonly<Record<string, Overlay<G>>> : D[K] extends Setting<infer V, boolean, boolean, boolean> ? V extends Secret ? string : V : D[K] extends readonly unknown[] ? Value<D[K]> : D[K] extends object ? Overlay<D[K]> : Value<D[K]>
+    readonly [K in keyof D]?: D[K] extends Entries<infer G> ? Readonly<Record<string, Overlay<G>>> : D[K] extends Chosen<infer G> ? Overlay<G[keyof G]> : D[K] extends Setting<infer V, boolean, boolean, boolean> ? V extends Secret ? string : V : D[K] extends readonly unknown[] ? Value<D[K]> : D[K] extends object ? Overlay<D[K]> : Value<D[K]>
 }
 ```
 
@@ -360,6 +373,20 @@ settings of their own, with their own marks: a file gives an entry field
 by field, and `APP_INSTANCE_AIMEE_PASSWORD`, or its `_FILE`, one field of
 the entry `aimee` that a layer before it made. A map written as a value,
 `{}`, is one setting, given whole.
+
+## chosenBy
+
+```ts
+function chosenBy<const G extends Readonly<Record<string, object>>>(by: string, groups: G): Chosen<G>
+```
+
+A group whose settings are those of one of `groups`, the one the text
+setting beside it, `by`, names: `settings: chosenBy('plugin', { postgres,
+stripe })` reads an instance's settings as postgres's when its `plugin` is
+'postgres'. Its fields are settings of their own, with their own marks; a
+field of a group not chosen is refused, and so is a `plugin` that names no
+group. A layer after the one that chose a group may choose another: then
+what the layers gave the first is dropped, and explain says so.
 
 ## file
 

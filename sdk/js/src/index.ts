@@ -26,8 +26,10 @@ export type { Clock } from './clock.ts'
 export {
 	type Bounds,
 	type Changes,
+	type Chosen,
 	type Config,
 	type ConfigOptions,
+	chosenBy,
 	type DurationBounds,
 	duration,
 	type Entries,

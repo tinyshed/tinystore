@@ -50,7 +50,7 @@ fn a_variable_reads_as_its_settings_kind_and_one_that_does_not_is_named() {
         ("APP_DEBUG", "TRUE"),
         ("APP_NAME", " spaced "),
     ]);
-    let read = read(&env, &declared, &Keys::new()).unwrap();
+    let read = read(&env, &declared, &Keys::new(), &Choices::new()).unwrap();
     let given: Vec<(String, Value)> = read.given.into_iter().map(|(path, value, _)| (path, value)).collect();
     assert_eq!(
         given,
@@ -66,7 +66,7 @@ fn a_variable_reads_as_its_settings_kind_and_one_that_does_not_is_named() {
 }
 
 fn read_refused(env: &Env, declared: &Declaration) -> Vec<String> {
-    let mut refused = read(env, declared, &Keys::new()).unwrap_err();
+    let mut refused = read(env, declared, &Keys::new(), &Choices::new()).unwrap_err();
     refused.sort();
     refused
 }
@@ -80,7 +80,7 @@ fn a_name_given_a_setting_replaces_its_prefixed_one_and_two_settings_never_share
         ("APP_PORT", "1"),
         ("DATABASE_URL", "postgres://x"),
     ]);
-    let read = read(&env, &declared, &Keys::new()).unwrap();
+    let read = read(&env, &declared, &Keys::new(), &Choices::new()).unwrap();
     let shown: Vec<String> = read.given.iter().map(|(_, _, from)| from.to_string()).collect();
     assert_eq!(shown, ["DATABASE_URL", "PORT"]);
     let unused: Vec<String> = read.unused.iter().map(ToString::to_string).collect();
@@ -102,7 +102,9 @@ fn name_file_gives_its_files_text_without_its_last_newline_and_both_set_is_refus
     std::fs::write(&secret, "postgres://x\r\n").unwrap();
     let declared = declaration(json!({ "db": { "url": "" } }));
     let path = secret.display().to_string();
-    let read = read(&Env::prefix("APP").from([("APP_DB_URL_FILE", path.as_str())]), &declared, &Keys::new()).unwrap();
+    let read =
+        read(&Env::prefix("APP").from([("APP_DB_URL_FILE", path.as_str())]), &declared, &Keys::new(), &Choices::new())
+            .unwrap();
     let (_, value, from) = &read.given[0];
     let named = Origin::Env { variable: "APP_DB_URL_FILE".to_owned(), dotenv: None, file: Some(path.clone()) };
     assert_eq!((value, from), (&json!("postgres://x"), &named));
@@ -118,7 +120,7 @@ fn a_dotenv_files_variables_count_where_the_process_has_none() {
     std::fs::write(&file, "APP_PORT=1\nAPP_NAME=from-file\nAPP_PROT=2\n").unwrap();
     let declared = declaration(json!({ "port": 8080, "name": "" }));
     let env = Env::prefix("APP").files([file.clone(), dir.path().join("absent.env")]).from([("APP_PORT", "2")]);
-    let read = read(&env, &declared, &Keys::new()).unwrap();
+    let read = read(&env, &declared, &Keys::new(), &Choices::new()).unwrap();
     let given: Vec<(&str, &Value, &Origin)> =
         read.given.iter().map(|(path, value, from)| (path.as_str(), value, from)).collect();
     let shown = file.display().to_string();

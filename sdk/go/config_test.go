@@ -536,3 +536,95 @@ func TestAnEntryTakesEachFieldFromTheLayersAndAVariableOneFieldOfAnEntryALayerMa
 		says(t, err, "instance: a map is given whole, and explain would print the secret")
 	})
 }
+
+// plugins is dashbin's instances declared as data: each one's settings are
+// the group of the plugin its plugin names, a shape learnt once the plugins load.
+const plugins = `{
+	"instance": { "entries": {
+		"plugin": { "kind": "text", "required": true },
+		"settings": { "chosenBy": "plugin", "groups": {
+			"postgres": {
+				"host": { "kind": "text", "default": "localhost" },
+				"port": { "kind": "integer", "default": 5432, "min": 1, "max": 65535 },
+				"database": { "kind": "text", "required": true },
+				"password": { "kind": "text", "secret": true, "required": true },
+				"timeout": { "kind": "duration", "default": "30s" }
+			},
+			"mysql": {
+				"host": { "kind": "text", "default": "localhost" },
+				"port": { "kind": "integer", "default": 3306 },
+				"password": { "kind": "text", "secret": true, "required": true }
+			},
+			"stripe": { "key": { "kind": "text", "secret": true, "required": true } }
+		} }
+	} },
+	"rps": { "kind": "integer", "default": 100, "live": true }
+}`
+
+func aimee(settings string) []byte {
+	return []byte("[instance.aimee]\nplugin = \"postgres\"\n[instance.aimee.settings]\n" + settings + "\n")
+}
+
+// contract: CFG-14, CFG-13, CFG-06
+func TestAnEntrysSettingsAreReadCheckedMaskedAndNamedByTheGroupItsPluginChooses(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		dir := t.TempDir()
+		misspelt, toml := filepath.Join(dir, "misspelt.toml"), filepath.Join(dir, "plugins.toml")
+		ways.Must(0, os.WriteFile(misspelt, aimee("hots = \"127.0.0.1\"\ndatabase = \"aimee\"\npassword = \"s3cret\""), 0o600))
+		ways.Must(0, os.WriteFile(toml, aimee("host = \"127.0.0.1\"\ndatabase = \"aimee\"\npassword = \"s3cret\""), 0o600))
+		_, err := tinystore.OpenConfigJSON(ctx, store, "plugins", json.RawMessage(plugins), tinystore.File(misspelt))
+		says(t, err, "instance.aimee.settings.hots: no such setting; did you mean instance.aimee.settings.host?")
+
+		port := tinystore.EnvFrom(map[string]string{"DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT": "15432"})
+		config := ways.Must(tinystore.OpenConfigJSON(ctx, store, "plugins", json.RawMessage(plugins),
+			tinystore.File(toml), tinystore.Env("DASHBIN", port)))
+		settings := config.Get()["instance"].(map[string]any)["aimee"].(map[string]any)["settings"].(map[string]any)
+		if settings["host"] != "127.0.0.1" || settings["port"] != int64(15432) || settings["database"] != "aimee" {
+			t.Fatalf("aimee's settings %v", settings)
+		}
+		if settings["password"].(tinystore.Secret).Reveal() != "s3cret" || settings["timeout"] != 30*time.Second {
+			t.Fatalf("aimee's password and timeout %v %v", settings["password"], settings["timeout"])
+		}
+		lines := map[string]tinystore.Line{}
+		for _, line := range config.Explain() {
+			lines[line.Path] = line
+		}
+		if lines["instance.aimee.settings.password"].Value != "***" || lines["instance.aimee.settings.port"].From != "DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT" {
+			t.Fatalf("aimee's lines %+v %+v", lines["instance.aimee.settings.password"], lines["instance.aimee.settings.port"])
+		}
+		if shown := fmt.Sprintf("%v %v", config.Get(), config.Explain()); strings.Contains(shown, "s3cret") {
+			t.Fatalf("a secret printed: %s", shown)
+		}
+		defaulted := ways.Must(tinystore.OpenConfigJSON(ctx, store, "plugins-default", json.RawMessage(plugins), tinystore.File(toml)))
+		if got := defaulted.Get()["instance"].(map[string]any)["aimee"].(map[string]any)["settings"].(map[string]any)["port"]; got != int64(5432) {
+			t.Fatalf("the port's default %v", got)
+		}
+
+		typo := tinystore.EnvFrom(map[string]string{"DASHBIN_INSTANCE_AIMEE_PLUGIN": "postgress"})
+		_, err = tinystore.OpenConfigJSON(ctx, store, "plugins", json.RawMessage(plugins), tinystore.File(toml), tinystore.Env("DASHBIN", typo))
+		says(t, err, `DASHBIN_INSTANCE_AIMEE_PLUGIN: "postgress" is not one of mysql, postgres, stripe; did you mean postgres?`)
+
+		mysql := tinystore.EnvFrom(map[string]string{"DASHBIN_INSTANCE_AIMEE_PLUGIN": "mysql", "DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD": "p"})
+		switched := ways.Must(tinystore.OpenConfigJSON(ctx, store, "plugins-switched", json.RawMessage(plugins), tinystore.File(toml), tinystore.Env("DASHBIN", mysql)))
+		chosen := switched.Get()["instance"].(map[string]any)["aimee"].(map[string]any)["settings"].(map[string]any)
+		if chosen["host"] != "localhost" || chosen["port"] != int64(3306) || chosen["database"] != nil {
+			t.Fatalf("mysql's settings %v", chosen)
+		}
+		dropped := "instance.aimee.settings: what " + toml + " gave as postgres is dropped: instance.aimee.plugin is mysql, from DASHBIN_INSTANCE_AIMEE_PLUGIN"
+		if notes := switched.Notes(); len(notes) != 1 || notes[0] != dropped {
+			t.Fatalf("notes %q", notes)
+		}
+
+		ways.Must(0, config.Update(ctx, func(value *map[string]any) { (*value)["rps"] = int64(200) }))
+		if config.Get()["rps"] != int64(200) {
+			t.Fatalf("rps %v", config.Get()["rps"])
+		}
+		err = config.Update(ctx, func(value *map[string]any) {
+			(*value)["instance"].(map[string]any)["aimee"].(map[string]any)["plugin"] = "mysql"
+		})
+		says(t, err, "instance is not live: the layers give its entries")
+		_, err = tinystore.OpenConfigJSON(ctx, store, "plugins", json.RawMessage(`{ "port": { "kind": "integer" } }`))
+		says(t, err, "port: a setting has a default, or is required")
+	})
+}

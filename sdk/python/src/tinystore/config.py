@@ -142,6 +142,31 @@ def entries[T](given: Mapping[str, T] | None = None, /) -> Entries[T]:
     return dataclasses.field(default_factory=lambda: Entries(defaults))
 
 
+@dataclass(frozen=True, eq=False)
+class _Chosen:
+    """What chosen_by puts where a field's default goes: the field beside it that chooses, and its groups."""
+
+    by: str
+    groups: Mapping[str, type]
+
+
+def chosen_by(by: str, groups: Mapping[str, type], /) -> Any:
+    """A field whose settings are those of one of ``groups``, the one the field ``by`` beside it names.
+
+    ``settings: Postgres | Stripe = chosen_by("plugin", {"postgres": Postgres, "stripe": Stripe})``
+    reads an instance's settings as a ``Postgres`` when its ``plugin`` is "postgres". Each group
+    is a dataclass whose fields are settings of their own; a field of a group not chosen is
+    refused, and so is a ``plugin`` that names no group. A layer after the one that chose a group
+    may choose another: then what the layers gave the first is dropped, and explain says so.
+    """
+    if not by or not groups:
+        raise InvalidError('a chosen group: chosen_by("plugin", {"postgres": Postgres, "stripe": Stripe})')
+    for name, group in groups.items():
+        if not (dataclasses.is_dataclass(group) and isinstance(group, type)):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise InvalidError(f"chosen_by: {name} is a dataclass of settings, not {group!r}")
+    return _Chosen(by, dict(groups))
+
+
 @dataclass(frozen=True, slots=True)
 class Range:
     """The bounds of a number or a span: ``Annotated[int, Range(1, 65535)]``."""
@@ -346,18 +371,35 @@ def _declared(cls: type, path: str = "", instance: Any = None) -> _Declared:
     hints = typing.get_type_hints(cls, include_extras=True)
     group: dict[str, Any] = {}
     readers: dict[str, _Reader] = {}
+    chosen: dict[str, tuple[str, dict[str, _Declared]]] = {}
     for each in dataclasses.fields(cls):
         if not each.init:
             continue
         at = each.name if path == "" else f"{path}.{each.name}"
-        node, readers[each.name] = _node(hints[each.name], _default_of(each, instance), at)
+        default = _default_of(each, instance)
+        if isinstance(default, _Chosen):
+            group[each.name], chosen[each.name] = _chosen(default, at)
+            continue
+        node, readers[each.name] = _node(hints[each.name], default, at)
         group[each.name] = node
 
     def read(value: Any) -> Any:
         given = cast("dict[str, Any]", value) if isinstance(value, dict) else {}
-        return cls(**{key: reader(given.get(key)) for key, reader in readers.items()})
+        fields = {key: reader(given.get(key)) for key, reader in readers.items()}
+        for key, (by, groups) in chosen.items():
+            name = given.get(by)
+            picked = groups.get(name) if isinstance(name, str) else None
+            fields[key] = None if picked is None else picked.read(given.get(key))
+        return cls(**fields)
 
     return _Declared(group, read)
+
+
+def _chosen(chosen: _Chosen, path: str) -> tuple[dict[str, Any], tuple[str, dict[str, _Declared]]]:
+    """A chosen group: what an older release reads as a map given whole, its groups beside it."""
+    declared = {name: _declared(group, f"{path}({name})") for name, group in chosen.groups.items()}
+    groups = {name: each.group for name, each in declared.items()}
+    return {"kind": "object", "default": {}, "chosenBy": chosen.by, "groups": groups}, (chosen.by, declared)
 
 
 def _default_of(field: dataclasses.Field[Any], instance: Any) -> Any:
@@ -419,8 +461,11 @@ def _entries(base: Any, given: Any, path: str) -> tuple[dict[str, Any], _Reader]
 def _given_json(value: Any, path: str) -> Any:
     """An entry the declaration gives, as JSON writes it: a mark its default, a secret its text.
 
-    A field a layer must give is left out: its declaration's value is never counted as given.
+    A field a layer must give is left out: its declaration's value is never counted as given, nor a
+    chosen group the declaration leaves to its chooser.
     """
+    if isinstance(value, _Chosen):
+        return None
     if isinstance(value, _Mark):
         return None if value.default is _REQUIRED else _given_json(value.default, path)
     if isinstance(value, Secret):
@@ -546,11 +591,17 @@ def _json_of(value: Any, path: str) -> Any:
 
 
 def _paths(group: Mapping[str, Any], path: str) -> list[str]:
-    """Every setting's path, as the core names its variable, and every map of entries'."""
+    """Every setting's path, as the core names its variable, every map of entries' and every chosen group's."""
     found: list[str] = []
     for key, node in group.items():
         at = key if path == "" else f"{path}.{key}"
-        found.extend(_paths(node["group"], at) if "group" in node else [at])
+        if "group" in node:
+            found.extend(_paths(node["group"], at))
+        elif "groups" in node:
+            chosen = (each for inner in node["groups"].values() for each in _paths(inner, at))
+            found.extend(dict.fromkeys(chosen))
+        else:
+            found.append(at)
     return found
 
 

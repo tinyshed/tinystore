@@ -290,6 +290,10 @@ DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD_FILE=/run/secrets/aimee
   Go or a `BTreeMap` in Rust, is one setting, and a later layer replaces it
   whole.
 
+When the shape of an entry's settings depends on one of its fields, such as
+the plugin it uses, see
+[Settings whose shape is known at run time](runtime.md).
+
 ## Without a store
 
 A Rust program that only reads its settings at start, such as an agent that
@@ -340,5 +344,7 @@ settings to it.
 ## See also
 
 - [Config](README.md): the engine's overview.
+- [Settings whose shape is known at run time](runtime.md): a group a setting
+  chooses, and declarations as data.
 - [Secrets and required settings](secrets.md).
 - [Settings](../../handbook/chat/settings.md) in the Handbook.

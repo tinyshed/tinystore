@@ -88,6 +88,8 @@ These contracts are what does not.
 - **CFG-10** A config loaded without a store MUST read the same layers, rules and secrets as one opened from a store, write nothing to disk, and refuse a live setting when it opens, naming it.
 - **CFG-11** A map of entries MUST take each entry field by field: a later layer MUST merge into an entry an earlier one made rather than replace it, a variable named by the map, the entry's key and the field, or its `NAME_FILE`, MUST give that one field of an entry an earlier layer made, every field MUST keep its default, rules, `required` and `secret` in every entry and never be live, and two keys one variable would name MUST be refused.
 - **CFG-12** A program that only loads its settings, with the `config-load` feature alone, MUST link no store and no SQLite.
+- **CFG-13** A config declared as data, the JSON every SDK sends, MUST read the same layers, rules, secrets and `explain` as one declared by a type, and a declaration that means nothing MUST be refused when it opens, naming where.
+- **CFG-14** A group a text setting beside it chooses MUST be read, checked, masked and named as the group that setting names once every layer is read: a value that names no group MUST be refused naming the nearest, a field of a group not chosen MUST be refused, and what a layer gave a group that is not chosen MUST be dropped and said.
 
 ### Locks
 

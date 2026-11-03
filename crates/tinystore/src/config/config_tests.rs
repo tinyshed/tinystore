@@ -800,3 +800,196 @@ fn a_config_loaded_without_a_store_refuses_a_live_setting_by_its_path_and_a_miss
     let error = load("agent", Agent::default()).file("missing-agent.toml").open().unwrap_err();
     assert!(error.to_string().contains("missing-agent.toml"), "{error}");
 }
+
+/// `Settings` declared as data rather than by its type.
+fn settings_as_data() -> Declaration {
+    let declaration = json!({
+        "port": { "kind": "integer", "default": 8080 },
+        "origins": { "kind": { "list": { "kind": "text" } }, "default": ["localhost"] },
+        "timeout": { "kind": "duration", "default": "30s" },
+        "db": { "group": {
+            "url": { "kind": "text", "secret": true, "default": "postgres://local" },
+            "pool": { "kind": "integer", "default": 10 }
+        } },
+        "limits": { "group": {
+            "rps": { "kind": "integer", "default": 100, "live": true },
+            "burst": { "kind": "integer", "default": 10, "live": true }
+        } }
+    });
+    Declaration::from_json(declaration).unwrap()
+}
+
+// contract: CFG-13, CFG-06, CFG-09
+#[test]
+fn a_declaration_as_data_reads_the_layers_rules_secrets_and_explain_a_typed_one_does() {
+    let f = fixture();
+    let yaml = file(&f, "app.yaml", "port: 8000\norigins: [a.com, b.com]\n");
+    let secret = file(&f, "db", "postgres://user:password@host\n").display().to_string();
+    let variables = [("APP_PORT", "9000"), ("APP_DB_URL_FILE", secret.as_str()), ("APP_PROT", "1")];
+    let typed = f.store.config("typed", Settings::default()).file(yaml.as_path()).env(env(&variables)).open().unwrap();
+    let data = f.store.config("data", settings_as_data()).file(yaml.as_path()).env(env(&variables)).open().unwrap();
+    assert_eq!(data.explain(), typed.explain(), "every line and every note alike, the secret ***");
+    let read: Settings = serde_json::from_value((*data.get()).clone()).unwrap();
+    assert_eq!(read, *typed.get(), "a span reads as serde writes a Duration");
+
+    data.update(|value| value["limits"]["rps"] = json!(200)).unwrap();
+    assert_eq!(data.get()["limits"]["rps"], 200);
+    assert!(refused(data.update(|value| value["port"] = json!(1))).to_string().contains("port is not live"));
+    let error = refused(data.update(|value| value["db"]["url"] = json!("x"))).to_string();
+    assert!(error.contains("db.url is a secret, which only a layer gives"), "{error}");
+    let error = refused(f.store.config("data", settings_as_data()).env(env(&[("APP_PORT", "http")])).open());
+    assert!(error.to_string().contains(r#"APP_PORT: "http" is not a number"#), "{error}");
+    let error = refused(load("data", settings_as_data()).open());
+    assert!(error.to_string().contains("limits.burst is live"), "{error}");
+    let error = Declaration::from_json(json!({ "db": { "group": { "pool": { "kind": "integer" } } } })).unwrap_err();
+    assert!(error.to_string().starts_with("the declaration: db.pool: a setting has a default, or is required"));
+}
+
+/// dashbin's instances, whose settings are the group of the plugin each one's
+/// `plugin` names, a shape it learns once its plugins are loaded.
+fn plugins() -> Declaration {
+    let postgres = json!({
+        "host": { "kind": "text", "default": "localhost" },
+        "port": { "kind": "integer", "default": 5432, "min": 1, "max": 65535 },
+        "database": { "kind": "text", "required": true },
+        "user": { "kind": "text", "required": true },
+        "password": { "kind": "text", "secret": true, "required": true }
+    });
+    let mysql = json!({
+        "host": { "kind": "text", "default": "localhost" },
+        "port": { "kind": "integer", "default": 3306 },
+        "password": { "kind": "text", "secret": true, "required": true }
+    });
+    let stripe = json!({ "key": { "kind": "text", "secret": true, "required": true } });
+    Declaration::from_json(json!({
+        "instance": { "entries": {
+            "plugin": { "kind": "text", "required": true },
+            "settings": { "chosenBy": "plugin", "groups": { "postgres": postgres, "mysql": mysql, "stripe": stripe } }
+        } }
+    }))
+    .unwrap()
+}
+
+/// The issue's file, its host misspelt.
+const AIMEE: &str = r#"
+[instance.aimee]
+plugin = "postgres"
+[instance.aimee.settings]
+hots = "127.0.0.1"
+database = "aimee"
+user = "dashbin_ro"
+password = "s3cret"
+"#;
+
+fn instances(toml: &std::path::Path, variables: &[(&str, &str)]) -> Result<Config<Value>> {
+    let env = Env::prefix("DASHBIN").from(variables.iter().map(|&(name, value)| (name, value)));
+    load("dashbin", plugins()).file(toml).env(env).open()
+}
+
+// contract: CFG-14, CFG-13, CFG-03, CFG-06
+#[test]
+fn an_entrys_settings_are_read_checked_masked_and_named_by_the_group_its_plugin_chooses() {
+    let f = fixture();
+    let error = refused(instances(&file(&f, "misspelt.toml", AIMEE), &[])).to_string();
+    let hint = "instance.aimee.settings.hots: no such setting; did you mean instance.aimee.settings.host?";
+    assert!(error.contains(hint), "{error}");
+
+    let toml = file(&f, "dashbin.toml", &AIMEE.replace("hots", "host"));
+    let config = instances(&toml, &[]).unwrap();
+    let settings = json!({
+        "host": "127.0.0.1", "port": 5432, "database": "aimee", "user": "dashbin_ro", "password": "s3cret"
+    });
+    assert_eq!(config.get()["instance"]["aimee"]["settings"], settings, "the port's default applies");
+    let printed = config.explain().to_string();
+    assert!(printed.contains("instance.aimee.settings.password  ***") && !printed.contains("s3cret"), "{printed}");
+    assert!(config.explain().notes.is_empty(), "{:?}", config.explain().notes);
+
+    let secret = file(&f, "pg", "of-a-file\n").display().to_string();
+    let variables = [
+        ("DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT", "15432"),
+        ("DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD_FILE", secret.as_str()),
+    ];
+    let config = instances(&toml, &variables).unwrap();
+    assert_eq!(config.get()["instance"]["aimee"]["settings"]["port"], 15432);
+    assert_eq!(config.get()["instance"]["aimee"]["settings"]["password"], "of-a-file");
+    let password = line_of(&config, "instance.aimee.settings.password");
+    let from_file = env_origin("DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD_FILE", None, Some(&secret));
+    assert_eq!(
+        password.given,
+        [gave("***", from_file), gave("***", Origin::File { path: toml.display().to_string() })]
+    );
+    let error = refused(instances(&toml, &[("DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT", "70000")])).to_string();
+    assert!(error.contains("DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT: 70000 is above 65535"), "{error}");
+
+    let misnamed = file(&f, "misnamed.toml", &AIMEE.replace("hots", "host").replace("\"postgres\"", "\"postgress\""));
+    let error = refused(instances(&misnamed, &[])).to_string();
+    let named = r#""postgress" is not one of mysql, postgres, stripe; did you mean postgres?"#;
+    assert!(error.contains(&format!("instance.aimee.plugin: {named}")), "{error}");
+    let error = refused(instances(&toml, &[("DASHBIN_INSTANCE_AIMEE_PLUGIN", "postgress")])).to_string();
+    assert!(error.contains(&format!("DASHBIN_INSTANCE_AIMEE_PLUGIN: {named}")), "{error}");
+}
+
+// contract: CFG-14, CFG-03
+#[test]
+fn a_group_not_chosen_takes_no_field_and_each_group_has_its_own_required_fields() {
+    let f = fixture();
+    let stripe =
+        file(&f, "stripe.toml", "[instance.pay]\nplugin = \"stripe\"\n[instance.pay.settings]\nhost = \"a\"\n");
+    let error = refused(instances(&stripe, &[])).to_string();
+    assert!(error.contains("instance.pay.settings.host: no such setting"), "{error}");
+    let stripe = file(&f, "pay.toml", "[instance.pay]\nplugin = \"stripe\"\n");
+    let error = refused(instances(&stripe, &[])).to_string();
+    let missing = "instance.pay.settings.key is required: instance.pay.settings.key in";
+    assert!(error.contains(missing) && error.contains("set DASHBIN_INSTANCE_PAY_SETTINGS_KEY"), "{error}");
+    let config = instances(&stripe, &[("DASHBIN_INSTANCE_PAY_SETTINGS_KEY", "sk_test")]).unwrap();
+    assert_eq!(config.get()["instance"]["pay"], json!({ "plugin": "stripe", "settings": { "key": "sk_test" } }));
+    let unread = [("DASHBIN_INSTANCE_PAY_SETTINGS_KEY", "sk_test"), ("DASHBIN_INSTANCE_PAY_SETTINGS_HOST", "a")];
+    let notes = instances(&stripe, &unread).unwrap().explain().notes;
+    let said = "DASHBIN_INSTANCE_PAY_SETTINGS_HOST: a variable with the prefix that names no setting";
+    assert!(notes.iter().any(|note| note.starts_with(said)), "{notes:?}");
+}
+
+// contract: CFG-14
+#[test]
+fn a_later_layer_that_chooses_another_group_drops_what_earlier_layers_gave_the_first_and_says_so() {
+    let f = fixture();
+    let toml = file(&f, "dashbin.toml", &AIMEE.replace("hots", "host"));
+    let variables =
+        [("DASHBIN_INSTANCE_AIMEE_PLUGIN", "mysql"), ("DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD", "of-a-variable")];
+    let config = instances(&toml, &variables).unwrap();
+    let mysql = json!({ "host": "localhost", "port": 3306, "password": "of-a-variable" });
+    assert_eq!(config.get()["instance"]["aimee"]["settings"], mysql, "the file's postgres settings are not mysql's");
+    let dropped = format!(
+        "instance.aimee.settings: what {} gave as postgres is dropped: instance.aimee.plugin is mysql, from \
+         DASHBIN_INSTANCE_AIMEE_PLUGIN",
+        toml.display()
+    );
+    assert_eq!(config.explain().notes, [dropped]);
+    let back = [("DASHBIN_INSTANCE", r#"{"aimee":{"plugin":"mysql"}}"#), ("DASHBIN_INSTANCE_AIMEE_PLUGIN", "postgres")];
+    let config = instances(&toml, &back).unwrap();
+    assert_eq!(config.get()["instance"]["aimee"]["settings"]["database"], "aimee", "chosen again, the file's stay");
+
+    let declared = Declaration::from_json(json!({
+        "plugin": { "kind": "text", "default": "postgres" },
+        "settings": { "chosenBy": "plugin", "groups": {
+            "postgres": {
+                "port": { "kind": "integer", "default": 5432, "live": false },
+                "timeout": { "kind": "duration", "default": "30s" }
+            },
+            "stripe": { "key": { "kind": "text", "default": "sk_test" } }
+        } },
+        "rps": { "kind": "integer", "default": 100, "live": true }
+    }))
+    .unwrap();
+    let config = f.store.config("plugin", declared).open().unwrap();
+    let settings = json!({ "port": 5432, "timeout": { "secs": 30, "nanos": 0 } });
+    assert_eq!(config.get()["settings"], settings, "a span as serde writes a Duration");
+    let error = refused(config.update(|value| value["settings"]["port"] = json!(1))).to_string();
+    assert!(error.contains("settings is not live: the layers give it"), "{error}");
+    let error = refused(config.update(|value| value["plugin"] = json!("stripe"))).to_string();
+    assert!(error.contains("plugin is not live"), "{error}");
+}
+
+fn line_of(config: &Config<Value>, path: &str) -> Line {
+    config.explain().settings.into_iter().find(|line| line.path == path).unwrap()
+}

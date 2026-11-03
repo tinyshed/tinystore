@@ -3,25 +3,35 @@
 //! read itself, a file's text and its variables, since those belong to the
 //! program and not to the server.
 //!
+//! A Rust program's [`Declaration`] as data is this declaration too.
+//!
 //! ```text
 //! declaration  { "port": { "kind": "integer", "default": 8080, "min": 1 },
 //!                "db": { "group": { "url": { "kind": "text", "secret": true, "required": true } } },
 //!                "hosts": { "kind": { "list": { "kind": "text" } }, "default": [], "max": 20 },
-//!                "instance": { "kind": "object", "default": {}, "entries": { "host": { "kind": "text", "default": "" } } } }
+//!                "instance": { "kind": "object", "default": {}, "entries": { "host": { "kind": "text", "default": "" } } },
+//!                "plugin": { "kind": "text", "default": "postgres" },
+//!                "settings": { "kind": "object", "default": {}, "chosenBy": "plugin",
+//!                              "groups": { "postgres": { "port": { "kind": "integer", "default": 5432 } } } } }
 //! layers       [ { "object": { "port": 80 }, "place": 2 },
 //!                { "file": { "name": "app.yaml", "text": "port: 9000\n", "optional": false } },
 //!                { "env": { "prefix": "APP", "vars": { "port": "PORT" }, "variables": { "PORT": "3000" },
 //!                           "files": { "/run/secrets/db": "postgres://…" }, "dotenv": [] } } ]
 //! ```
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
-use super::declaration::{Declaration, Entries, Group, Item, Kind, Node, Place, Rules, Setting, declared_path, shown};
-use super::env::Env;
-use super::files::File;
+use super::declaration::{
+    Chosen, Declaration, Entries, Group, Item, Kind, Node, Place, Rules, Setting, declared_path, did_you_mean, joined,
+    shown,
+};
 use super::files::{Walked, walk_entries};
-use super::layers::Layer;
 use super::rules;
+#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
+use super::{env::Env, files::File, layers::Layer};
+use crate::typos::meant;
 
 /// The declaration an SDK sent, its defaults checked against their own
 /// kinds and rules and kept as the config keeps a value.
@@ -35,16 +45,85 @@ fn group(map: &Map<String, Value>, path: &str, place: Place) -> Result<Group, St
     for (key, value) in map {
         let at = declared_path(path, key)?;
         let node = value.as_object().ok_or_else(|| format!("{at}: {} is no setting", shown(value)))?;
-        let node = match (node.get("group"), node.get("entries")) {
-            (Some(Value::Object(inner)), _) => Node::Group(group(inner, &at, place)?),
-            (Some(other), _) => return Err(format!("{at}: a group of {} is no map", shown(other))),
-            (None, Some(Value::Object(item))) => Node::Entries(entries(node, item, &at, place)?),
-            (None, Some(other)) => return Err(format!("{at}: an entry of {} is no map", shown(other))),
-            (None, None) => Node::Setting(setting(node, &at, place)?),
+        let node = match (node.get("group"), node.get("entries"), node.get("chosenBy")) {
+            (Some(Value::Object(inner)), ..) => Node::Group(group(inner, &at, place)?),
+            (Some(other), ..) => return Err(format!("{at}: a group of {} is no map", shown(other))),
+            (None, Some(Value::Object(item)), _) => Node::Entries(entries(node, item, &at, place)?),
+            (None, Some(other), _) => return Err(format!("{at}: an entry of {} is no map", shown(other))),
+            (None, None, Some(by)) => Node::Chosen(chosen(node, by, &at, place)?),
+            (None, None, None) => Node::Setting(setting(node, &at, place)?),
         };
         settings.insert(key.clone(), node);
     }
+    link_choosers(&mut settings, path)?;
     Ok(settings)
+}
+
+/// A group whose settings a setting beside it chooses among `groups` by
+/// their names, each read as a group: never in a list's item or in another
+/// chosen group. A path inside one names its group: `settings(postgres).port`.
+fn chosen(map: &Map<String, Value>, by: &Value, path: &str, place: Place) -> Result<Chosen, String> {
+    if matches!(place, Place::Item | Place::Chosen) {
+        return Err(format!("{path}: a chosen group stands among settings, not in a list's item or a chosen group"));
+    }
+    let by = by.as_str().filter(|by| !by.is_empty());
+    let by = by.ok_or_else(|| format!("{path}: chosenBy is the key of the setting beside it that chooses"))?;
+    let groups = match map.get("groups") {
+        Some(Value::Object(groups)) if !groups.is_empty() => groups,
+        _ => return Err(format!("{path}: its groups are a map from each value of {by} to its group")),
+    };
+    let mut read = BTreeMap::new();
+    for (name, inner) in groups {
+        let at = format!("{path}({name})");
+        match inner {
+            Value::Object(inner) if !name.is_empty() => read.insert(name.clone(), group(inner, &at, Place::Chosen)?),
+            Value::Object(_) => return Err(format!("{path}: a group's name is not empty")),
+            other => return Err(format!("{at}: {} is no group", shown(other))),
+        };
+    }
+    Ok(Chosen { by: by.to_owned(), groups: read })
+}
+
+/// Checks each chosen group's chooser, a text setting beside it that is
+/// neither a secret nor live, and makes the names of its groups the only
+/// values it takes; a `oneOf` of its own names none but them.
+fn link_choosers(settings: &mut Group, path: &str) -> Result<(), String> {
+    let chosen: Vec<(String, String, Vec<String>)> = settings
+        .iter()
+        .filter_map(|(key, node)| match node {
+            Node::Chosen(chosen) => Some((key.clone(), chosen.by.clone(), chosen.groups.keys().cloned().collect())),
+            _ => None,
+        })
+        .collect();
+    let keys: Vec<String> = settings.keys().cloned().collect();
+    for (key, by, names) in chosen {
+        let (at, chooser_at) = (joined(path, &key), joined(path, &by));
+        let chooser = match settings.get_mut(&by) {
+            Some(Node::Setting(chooser)) if chooser.kind == Kind::Text && !chooser.secret && !chooser.live => chooser,
+            Some(_) => {
+                return Err(format!("{at}: {chooser_at} chooses its group, so it is text, neither secret nor live"));
+            }
+            None => {
+                let near = meant(&by, &keys).map(|near| joined(path, &near));
+                return Err(format!(
+                    "{at}: {chooser_at}, which chooses its group, is no setting{}",
+                    did_you_mean(near)
+                ));
+            }
+        };
+        match &chooser.rules.one_of {
+            Some(allowed) => {
+                if let Some(other) = allowed.iter().find(|allowed| !names.contains(allowed)) {
+                    return Err(format!("{chooser_at}: {other:?} names none of the groups of {at}"));
+                }
+            }
+            None => chooser.rules.one_of = Some(names),
+        }
+        if let Some(default) = &chooser.default {
+            rules::check(chooser, default).map_err(|why| format!("{chooser_at}: its default: {why}"))?;
+        }
+    }
+    Ok(())
 }
 
 /// A map of entries: its `kind` and `default` are what an older release
@@ -82,6 +161,9 @@ fn setting(map: &Map<String, Value>, path: &str, place: Place) -> Result<Setting
             return Err(refused("a list's item has no live or secret field"));
         }
         () if place == Place::Entry && live => return Err(refused("an entry's field is not live: the layers give it")),
+        () if place == Place::Chosen && live => {
+            return Err(refused("a chosen group's field is not live: the layers give it"));
+        }
         () if required && map.contains_key("default") => return Err(refused("a required setting has no default")),
         () if place != Place::Item && !required && !map.contains_key("default") => {
             return Err(refused("a setting has a default, or is required"));
@@ -149,11 +231,13 @@ fn rules_of(map: &Map<String, Value>) -> Result<Rules, String> {
 }
 
 /// The layers an SDK sent, in the order the program wrote them.
+#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
 pub(crate) fn layers(value: &Value) -> Result<Vec<Layer>, String> {
     let layers = value.as_array().ok_or_else(|| "layers are a list".to_owned())?;
     layers.iter().map(layer).collect()
 }
 
+#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
 fn layer(value: &Value) -> Result<Layer, String> {
     let map = value.as_object().ok_or_else(|| format!("{} is no layer", shown(value)))?;
     if let Some(object) = map.get("object") {
@@ -173,6 +257,7 @@ fn layer(value: &Value) -> Result<Layer, String> {
     Err(format!("{} is no layer: an object, a file or the environment", shown(value)))
 }
 
+#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
 fn env_layer(env: &Map<String, Value>) -> Result<Env, String> {
     let prefix = env.get("prefix").and_then(Value::as_str).unwrap_or_default();
     let mut sent = Env::prefix(prefix);
@@ -194,6 +279,7 @@ fn env_layer(env: &Map<String, Value>) -> Result<Env, String> {
 }
 
 /// A map of texts, none when absent.
+#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
 fn texts(map: &Map<String, Value>, name: &str) -> Result<Vec<(String, String)>, String> {
     match map.get(name) {
         None => Ok(Vec::new()),
@@ -208,10 +294,11 @@ fn texts(map: &Map<String, Value>, name: &str) -> Result<Vec<(String, String)>, 
     }
 }
 
+#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
 fn text(map: &Map<String, Value>, name: &str) -> Result<String, String> {
     map.get(name).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("{name} is missing"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "config"))]
 #[path = "data_tests.rs"]
 mod tests;

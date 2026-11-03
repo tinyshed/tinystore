@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::declaration::{Declaration, Kind, Setting, holds_secret, masked, unmarked};
+use super::declaration::{Declaration, Keys, Kind, Setting, holds_secret, masked, unmarked};
 #[cfg(all(feature = "config", any(test, feature = "wire")))]
 use super::declaration::{Group, Node, joined, shown};
 use super::explain::{Explained, Given, Line, Origin};
@@ -23,7 +23,7 @@ use super::resolve::{Making, Resolved, Validate, View};
 use super::rules::{self, described};
 #[cfg(all(feature = "config", feature = "async"))]
 use super::store::{Hook, Unpublished};
-use super::{ConfigBuilder, Store};
+use super::{ConfigBuilder, Source, Store};
 use crate::clock::from_unix_millis;
 use crate::limits::SETTING_BYTES;
 use crate::sync::lock;
@@ -141,7 +141,10 @@ where
 {
     let within = |error: Error| error.within(format!("config {}", builder.name));
     check_name("the", &builder.name).map_err(within)?;
-    let declaration = declared(&builder.declaration).map_err(within)?;
+    let declaration = match builder.declaration.0 {
+        Source::Typed(value) => declared(&value).map_err(within)?,
+        Source::Data(declaration) => declaration,
+    };
     if builder.store.is_none() {
         refuse_live(&declaration).map_err(within)?;
     }
@@ -492,6 +495,11 @@ where
                 return Err(Error::invalid(format!("{path} is not live: the layers give its entries")));
             }
         }
+        for chosen in self.declaration.chosen(&Keys::new()) {
+            if at(&before_tree, &chosen.path) != at(&after_tree, &chosen.path) {
+                return Err(Error::invalid(format!("{} is not live: the layers give it", chosen.path)));
+            }
+        }
         Ok(leaves)
     }
 
@@ -553,6 +561,7 @@ where
                 Some(Node::Entries(_)) => {
                     return Err(Error::invalid(format!("{at} is not live: the layers give its entries")));
                 }
+                Some(Node::Chosen(_)) => return Err(Error::invalid(format!("{at} is not live: the layers give it"))),
                 Some(Node::Setting(setting)) => {
                     let checked = self.checked(&at, setting, value)?;
                     leaves.push((at, checked));
@@ -566,7 +575,7 @@ where
         let current = lock(&self.current);
         let resolved = &current.resolved;
         let mut settings = Vec::new();
-        for (path, setting) in self.declaration.settings_of(&self.base.entries) {
+        for (path, setting) in self.declaration.settings_of(&self.base.shape) {
             let mut stack = self.base.stacks.get(&path).cloned().unwrap_or_default();
             if let Some(change) = resolved.applied.get(&path) {
                 let from = Origin::Change { version: change.version, at: from_unix_millis(change.at) };
@@ -580,6 +589,7 @@ where
         let mut notes: Vec<String> = self.base.absent.iter().map(|file| format!("{file}: absent")).collect();
         notes.extend(self.base.left_out.iter().map(|path| format!("{path}: required, given by the program alone")));
         notes.extend(self.base.unused.iter().map(ToString::to_string));
+        notes.extend(self.base.dropped.iter().cloned());
         notes.extend(resolved.ignored.iter().map(|(path, change, why)| ignored(path, change, why)));
         notes.extend(
             resolved.foreign.iter().map(|path| format!("{path}: a change of a setting this program does not declare")),
