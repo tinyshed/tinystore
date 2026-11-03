@@ -62,7 +62,12 @@ region      "eu"  APP_REGION
 
 `over` is newest first: the layer that won, then what it went over. An object
 in code is named by its place in the list, `layer 2`. Secrets show as `***`
-here too.
+here too. A setting with [no value](secrets.md#settings-with-no-value) shows
+as `unset`, from the declaration, until a layer gives it one:
+
+```text
+db.password  unset  the declaration
+```
 
 ## Each value as data
 

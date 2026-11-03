@@ -73,10 +73,12 @@ assert_eq!(config.get()["instance"]["aimee"]["settings"]["port"], 5432);
 
 A setting is `{ "kind": …, "default": … }`, its kind `text`, `integer`,
 `number`, `boolean`, `duration`, `object`, `any` or `{ "list": … }`, with
-`required`, `secret`, `live`, `min`, `max` and `oneOf` beside it; a group
-is `{ "group": { … } }`, a map of entries `{ "entries": { … } }`, and a
-group a setting beside it chooses `{ "chosenBy": "plugin", "groups": { … } }`.
-A declaration that means nothing is refused here, naming where.
+`required`, `secret`, `live`, `min`, `max` and `oneOf` beside it;
+`"default": null` declares one with no value, null until a layer gives
+it, as an `Option` left `None`. A group is `{ "group": { … } }`, a map of
+entries `{ "entries": { … } }`, and a group a setting beside it chooses
+`{ "chosenBy": "plugin", "groups": { … } }`. A declaration that means
+nothing is refused here, naming where.
 
 ### Declaration.from_json
 

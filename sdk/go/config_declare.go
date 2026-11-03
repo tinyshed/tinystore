@@ -58,6 +58,9 @@ type setting struct {
 	typ   reflect.Type
 	group []*setting // a group's, or a list item's group's
 	item  *setting   // a list's, or a map of entries' entry
+
+	// a pointer's, which is nil until a layer gives it; typ is what it points to
+	optional bool
 	// of a chosen group, the key of the setting beside it that names its
 	// group, and each group by its name
 	by      string
@@ -227,22 +230,29 @@ func bound(text string, spans bool, what string) (*float64, error) {
 }
 
 // declareSetting reads one field: a group of settings, or a setting as the core reads it.
+// A pointer is a setting with no value, nil until a layer gives it.
 func declareSetting(field reflect.StructField, given reflect.Value, path string, item bool) (*setting, map[string]any, error) {
-	t := field.Type
+	t, optional := field.Type, field.Type.Kind() == reflect.Pointer
+	if optional {
+		t = t.Elem()
+	}
 	spans := t == durationType || t.Kind() == reflect.Slice && t.Elem() == durationType
 	m, err := readMarks(field.Tag.Get("config"), path, spans)
 	if err != nil {
 		return nil, nil, err
 	}
-	node := &setting{typ: t}
+	node := &setting{typ: t, optional: optional}
 	if t.Implements(entriesType) {
-		if item || m.any() {
+		if item || m.any() || optional {
 			return nil, nil, core.Errorf(core.Invalid, "%s: entries take no mark and stand among settings, not in a list's item", path)
 		}
 		data, err := declareEntries(node, given, path)
 		return node, data, err
 	}
 	if t.Kind() == reflect.Struct && t != secretType {
+		if optional {
+			return nil, nil, core.Errorf(core.Invalid, "%s: a group is never nil; each of its settings may be", path)
+		}
 		if m.live || m.min != nil || m.max != nil || m.oneOf != nil || m.itemsMin != nil || m.itemsMax != nil {
 			return nil, nil, core.Errorf(core.Invalid, "%s: a group takes no rule; its settings do", path)
 		}
@@ -413,7 +423,7 @@ func kindOf(t reflect.Type, path string) (kind, error) {
 			return kindAny, nil
 		}
 	case reflect.Pointer:
-		return "", core.Errorf(core.Invalid, "%s: %s: a setting has one type; one a layer may leave out has a default", path, t)
+		return "", core.Errorf(core.Invalid, "%s: %s: only a setting is a pointer, nil until a layer gives it", path, t)
 	}
 	return "", core.Errorf(core.Invalid, "%s: %s is no type a config keeps", path, t)
 }
@@ -472,8 +482,14 @@ func tighter(given, implied *float64, pick func(a, b float64) float64) *float64 
 }
 
 // wireOf is a value as the core keeps it: a span its milliseconds, a secret
-// its text, a group by its settings' keys.
+// its text, a group by its settings' keys, and a nil pointer none.
 func wireOf(node *setting, v reflect.Value) any {
+	if node.optional {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
 	switch node.kind {
 	case kindGroup:
 		out := map[string]any{}
@@ -530,9 +546,19 @@ func exact(text []byte) (any, error) {
 	return value, err
 }
 
-// read sets v from a value the core sent, in the shape wireOf writes.
+// read sets v from a value the core sent, in the shape wireOf writes; none
+// leaves it as it is, a pointer nil.
 func read(node *setting, value any, v reflect.Value) error {
 	if value == nil {
+		return nil
+	}
+	if node.optional {
+		pointed, to := *node, reflect.New(node.typ)
+		pointed.optional = false
+		if err := read(&pointed, value, to.Elem()); err != nil {
+			return err
+		}
+		v.Set(to)
 		return nil
 	}
 	switch node.kind {

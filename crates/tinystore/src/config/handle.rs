@@ -34,6 +34,9 @@ use crate::{Error, ErrorKind, Result};
 const ATTEMPTS: usize = 8;
 /// The longest JSON one setting's change holds.
 const MOST_VALUE: usize = SETTING_BYTES.bound as usize;
+/// What `explain` shows of a setting with no value, which JSON's `null` would
+/// make look like one the declaration gave.
+const UNSET: &str = "unset";
 
 /// A program's settings as one typed value, read from memory, with the
 /// changes made while the program runs to the settings marked `Live`.
@@ -604,12 +607,15 @@ where
         Explained { settings, notes }
     }
 
-    /// A value the setting at `path` was given, as `explain` shows it: a
-    /// secret as `***`, and a secret that a map, a list or any value holds
-    /// inside as the program's type reads it, with `tree` the rest of the
-    /// settings.
+    /// A value the setting at `path` was given, as `explain` shows it: none
+    /// as `unset`, a secret as `***`, and a secret that a map, a list or any
+    /// value holds inside as the program's type reads it, with `tree` the
+    /// rest of the settings.
     fn shown(&self, path: &str, setting: &Setting, tree: &Value, value: &Value) -> String {
         let nests = matches!(setting.kind, Kind::Object | Kind::List(_) | Kind::Any);
+        if value.is_null() {
+            return UNSET.to_owned();
+        }
         if setting.secret {
             return "***".to_owned();
         }

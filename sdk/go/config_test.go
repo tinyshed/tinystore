@@ -252,6 +252,54 @@ func TestARequiredSettingIsGivenByALayerOrTheConfigDoesNotOpenNamingWhatWould(t 
 	})
 }
 
+// trusted is a database on trust or peer auth, which takes no password.
+type trusted struct {
+	DB struct {
+		Host     string            `json:"host"`
+		Password *tinystore.Secret `json:"password"`
+	} `json:"db"`
+	Port    *int           `json:"port" config:"min=1"`
+	Timeout *time.Duration `json:"timeout"`
+}
+
+// contract: CFG-15, CFG-06
+func TestASettingWithNoValueIsNilUntilALayerGivesItASecretTooAndExplainSaysUnset(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		toml := filepath.Join(t.TempDir(), "trusted.toml")
+		ways.Must(0, os.WriteFile(toml, []byte("[db]\nhost = \"db\"\n"), 0o600))
+		none := tinystore.EnvFrom(map[string]string{})
+		config := ways.Must(tinystore.OpenConfig(ctx, store, "trusted", trusted{}, tinystore.File(toml), tinystore.Env("APP", none)))
+		if value := config.Get(); value.DB.Password != nil || value.Port != nil || value.Timeout != nil {
+			t.Fatalf("value %+v", value)
+		}
+		for _, line := range config.Explain() {
+			if line.Path == "db.password" && (line.Value != "unset" || line.From != "the declaration") {
+				t.Fatalf("db.password %+v", line)
+			}
+		}
+
+		ways.Must(0, os.WriteFile(toml, []byte("[db]\npassword = \"s3cret\"\n"), 0o600))
+		given := tinystore.EnvFrom(map[string]string{"APP_PORT": "5432", "APP_TIMEOUT": "30s"})
+		config = ways.Must(tinystore.OpenConfig(ctx, store, "trusted-given", trusted{}, tinystore.File(toml), tinystore.Env("APP", given)))
+		value := config.Get()
+		if value.DB.Password == nil || value.DB.Password.Reveal() != "s3cret" || *value.Port != 5432 || *value.Timeout != 30*time.Second {
+			t.Fatalf("value %+v", value)
+		}
+		if explained := fmt.Sprint(config.Explain()); strings.Contains(explained, "s3cret") {
+			t.Fatalf("explain printed the secret: %s", explained)
+		}
+		_, err := tinystore.OpenConfig(ctx, store, "trusted-refused", trusted{}, tinystore.Env("APP", tinystore.EnvFrom(map[string]string{"APP_PORT": "0"})))
+		says(t, err, "APP_PORT: 0 is below 1")
+
+		declared := `{ "db": { "group": { "password": { "kind": "text", "secret": true, "default": null } } } }`
+		data := ways.Must(tinystore.OpenConfigJSON(ctx, store, "trusted-data", json.RawMessage(declared)))
+		if password := data.Get()["db"].(map[string]any)["password"]; password != nil {
+			t.Fatalf("password as data %v", password)
+		}
+	})
+}
+
 type port struct {
 	Port int `json:"port"`
 }
@@ -436,10 +484,15 @@ func TestADeclarationTheCoreCannotKeepIsRefusedWhereItIsWritten(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
 		type pointed struct {
-			Region *string `json:"region"`
+			Regions []*string `json:"regions"`
 		}
 		_, err := tinystore.OpenConfig(ctx, store, "refused", pointed{})
-		says(t, err, "one type")
+		says(t, err, "regions[]: *string: only a setting is a pointer, nil until a layer gives it")
+		type group struct {
+			DB *db `json:"db"`
+		}
+		_, err = tinystore.OpenConfig(ctx, store, "refused", group{})
+		says(t, err, "db: a group is never nil; each of its settings may be")
 		type livedSecret struct {
 			Key tinystore.Secret `json:"key" config:"live"`
 		}
@@ -625,6 +678,6 @@ func TestAnEntrysSettingsAreReadCheckedMaskedAndNamedByTheGroupItsPluginChooses(
 		})
 		says(t, err, "instance is not live: the layers give its entries")
 		_, err = tinystore.OpenConfigJSON(ctx, store, "plugins", json.RawMessage(`{ "port": { "kind": "integer" } }`))
-		says(t, err, "port: a setting has a default, or is required")
+		says(t, err, `port: a setting has a default, "default": null for none, or is required`)
 	})
 }

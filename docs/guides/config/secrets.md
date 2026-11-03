@@ -91,9 +91,9 @@ let pool = connect(config.get().db.url.reveal())?;
 - An error about a secret names its variable and never quotes its text.
 - A secret is text. It cannot be `live`: a value an admin page could set and
   read back is not a secret.
-- In Rust, `Option<Secret<String>>` is a secret that a layer may leave out,
-  such as the password of a database that takes none. It is `None` until a
-  layer gives it, and the value a layer gives is a secret like any other.
+- A secret may have [no value](#settings-with-no-value), such as the password
+  of a database that takes none: it is `null` until a layer gives it, and the
+  value a layer gives is a secret like any other.
 - A secret in each entry of a map is declared as a field of
   [entries](layers.md#entries), and is given and printed like any other
   secret. In Rust a `Secret` inside a plain `BTreeMap` or `Vec` prints as
@@ -145,21 +145,99 @@ config app: region is required: region in app.toml, or set APP_REGION: invalid
 | Go         | `config:"required"`                             | `tinystore.Secret`                                |
 | Rust       | `Required<T>`                                   | `Secret<T>`                                       |
 
+## Settings with no value
+
+Some settings have no sensible default and may stay unset: the password of a
+database that uses trust or peer authentication takes none. Declare such a
+setting with no value. It is `null` until a layer gives it, and a secret
+declared this way is still a secret:
+
+```ts
+const config = await store.config('pg', [
+	{
+		password: optional(secret(String)), // null until a layer gives it
+		port: optional(int({ min: 1 })),
+	},
+	file('pg.toml'),
+	env('PG'),
+])
+const password = config.value.password?.reveal() // undefined if no layer gave it
+```
+
+```python
+@dataclass
+class Pg:
+    password: Secret | None = None  # None until a layer gives it
+    port: Annotated[int, Range(min=1)] | None = None
+
+
+config = await store.config("pg", [Pg, file("pg.toml"), env("PG")])
+password = config.value.password.reveal() if config.value.password else None
+```
+
+```go
+type Pg struct {
+	Password *tinystore.Secret `json:"password"` // nil until a layer gives it
+	Port     *int              `json:"port" config:"min=1"`
+}
+
+config, err := tinystore.OpenConfig(ctx, store, "pg", Pg{}, tinystore.File("pg.toml"), tinystore.Env("PG"))
+if password := config.Get().Password; password != nil {
+	connect(password.Reveal())
+}
+```
+
+```rust
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Pg {
+    password: Option<Secret<String>>, // None until a layer gives it
+    port: Option<u16>,
+}
+
+let config = store.config("pg", Pg::default()).file("pg.toml").env("PG").open()?;
+let password = config.get().password.as_ref().map(|password| password.reveal().clone());
+```
+
+- A value that a layer gives is checked like any other. In Bun, Python and
+  Go above, `PG_PORT=0` fails with `PG_PORT: 0 is below 1`. In Rust the type
+  is the rule, so `PG_PORT=70000` fails because it doesn't fit a `u16`.
+- `explain` shows the setting as `unset`, from the declaration, until a layer
+  gives it a value. A secret that a layer gives shows as `***`.
+- A group of settings always has a value. Each of its settings may have none.
+- In a [declaration as data](runtime.md#a-declaration-as-data),
+  `"default": null` declares a setting with no value, of any kind:
+  `{ "kind": "text", "secret": true, "default": null }`.
+
+| Language   | No value                                                                    |
+|------------|-----------------------------------------------------------------------------|
+| TypeScript | `optional(String)`, `optional(secret(String))`, `optional(int({ min: 1 }))` |
+| Python     | `str \| None = None`, `Secret \| None = None`                               |
+| Go         | a pointer: `*string`, `*tinystore.Secret`, `*int`                           |
+| Rust       | `Option<T>`, and `Option<Secret<String>>` for a secret                      |
+| As data    | `"default": null`                                                           |
+
+In Rust, `Secret<Option<String>>` is refused when the config opens: write
+`Option<Secret<String>>`.
+
 ## Marks that nest
 
-`live` goes outermost, around a value, a rule or `required(…)`:
+`live` goes outermost, around a value, a rule, `required(…)` or `optional(…)`:
 
 | Written                      | Means                                              |
 |------------------------------|----------------------------------------------------|
 | `live(100)`                  | 100 by default, changes while running              |
 | `live(int(100, { min: 1 }))` | the same, at least 1                               |
 | `live(required(String))`     | a layer must give it at start; it may change later |
+| `live(optional(String))`     | `null` until a layer or a change gives it          |
+| `optional(secret(String))`   | a secret with no value until a layer gives it      |
 | `live(secret(…))`            | refused: a secret is never kept                    |
 | `required(secret(…))`        | refused: `secret(String)` is required already      |
 
 Read, `required` and `live` leave the type: `required(String)` reads as a
 `string`, `live(int(100))` as a `number`, and only a secret reads as a
-`Secret`, whose `reveal()` gives its text.
+`Secret`, whose `reveal()` gives its text. `optional` adds `null`:
+`optional(String)` reads as `string | null`.
 
 ## See also
 

@@ -72,6 +72,9 @@ group of settings, to any depth.
 | Go         | a struct value with `json` tags, `config:"required,live,min=1"` marks            |
 | Rust       | a `serde` value that is `Clone`, `Live<T>`, `Secret<T>` and `Required<T>` fields |
 
+A setting may also have [no value](secrets.md#settings-with-no-value) until
+a layer gives it, such as a password that a database doesn't need.
+
 An object after the declaration declares again settings the declaration
 has; a key it does not have is `invalid`. `false`, `null` and `undefined` in
 the list are skipped, so a layer can depend on a condition.

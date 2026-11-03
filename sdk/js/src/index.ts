@@ -50,6 +50,7 @@ export {
 	live,
 	type Overlay,
 	oneOf,
+	optional,
 	required,
 	Secret,
 	type Setting,

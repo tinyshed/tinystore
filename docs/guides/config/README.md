@@ -73,7 +73,7 @@ println!("{}", config.explain());
 |---------------------------------------------------------|---------------------------------------------------------------------------------------|
 | [Layers and files](layers.md)                           | objects, TOML, YAML and JSON files, the environment, entries, loading without a store |
 | [Settings whose shape is known at run time](runtime.md) | a group a setting chooses, such as a plugin's settings, and declarations as data      |
-| [Secrets and required settings](secrets.md)             | `secret`, `required`, `_FILE` variables                                               |
+| [Secrets and required settings](secrets.md)             | `secret`, `required`, `optional`, `_FILE` variables                                   |
 | [Live settings](live.md)                                | `live`, `update`, `reset`, `ifVersion`                                                |
 | [Watching](watching.md)                                 | `watch` in this process and others                                                    |
 | [Explain and validate](explain.md)                      | where a value came from, the program's own checks                                     |

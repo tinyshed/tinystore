@@ -251,7 +251,7 @@ export interface UpdateOptions {
 /** A setting's line of explain. */
 export interface ExplainLine {
 	readonly path: string
-	/** as JSON, a duration spelled, a secret as *** */
+	/** as JSON, a duration spelled, a secret as ***, unset for none */
 	readonly value: string
 	/** the layer that gave it: APP_PORT, app.yaml, layer 2, the declaration, a change */
 	readonly from: string
@@ -268,7 +268,7 @@ export interface ExplainLine {
 
 /** A value a setting was given, and where it came from. */
 export interface ExplainGiven {
-	/** as JSON, a duration spelled, a secret as *** */
+	/** as JSON, a duration spelled, a secret as ***, unset for none */
 	readonly value: string
 	readonly from: ExplainOrigin
 }
@@ -360,6 +360,11 @@ function kindOf(token: Token): Kind {
 	return token === String ? 'text' : token === Number ? 'number' : 'boolean'
 }
 
+/** What `required` and `optional` mark: a type, `String`, or a rule. */
+function ruleOf(given: Token | Setting<unknown, boolean, boolean, boolean>): Described | undefined {
+	return typeof given === 'function' ? { kind: kindOf(given) } : describedOf(given)
+}
+
 function bounds(rules: Bounds | undefined): Rules {
 	const out: Rules = {}
 	if (rules?.min !== undefined) {
@@ -391,7 +396,7 @@ export function required<V>(rule: Setting<V, false, false>): Setting<V>
 export function required(
 	given: Token | Setting<unknown, boolean, boolean, boolean>,
 ): Setting<unknown> {
-	const inner = typeof given === 'function' ? { kind: kindOf(given) } : describedOf(given)
+	const inner = ruleOf(given)
 	if (inner === undefined) {
 		throw new InvalidError('required takes String, Number, Boolean, or a rule without its default')
 	}
@@ -404,6 +409,32 @@ export function required(
 	}
 	const { default: _default, ...rest } = inner
 	return setting({ ...rest, required: true })
+}
+
+/**
+ * A setting with no value until a layer gives one: `optional(String)` reads as
+ * `string | null`, `optional(secret(String))` as `Secret | null`, and
+ * `optional(int({ min: 1 }))` as `number | null`. explain says it is unset.
+ */
+export function optional<T extends Token>(type: T): Setting<Of<T> | null>
+export function optional<V, S extends boolean>(
+	rule: Setting<V, false, boolean, S>,
+): Setting<V | null, false, true, S>
+export function optional(
+	given: Token | Setting<unknown, boolean, boolean, boolean>,
+): Setting<unknown, false, true, boolean> {
+	const inner = ruleOf(given)
+	if (inner?.live === true) {
+		throw new InvalidError('live is the outermost mark: live(optional(…))')
+	}
+	if (inner === undefined || inner.default !== undefined) {
+		throw new InvalidError(
+			'optional takes String, Number, Boolean, secret(String) or a rule without its default',
+		)
+	}
+	refuseEntries(inner)
+	const { required: _required, ...rest } = inner
+	return setting({ ...rest, default: null })
 }
 
 /**
@@ -853,7 +884,8 @@ function viewedSetting(described: Described, value: unknown): unknown {
 		return Object.freeze(Object.fromEntries(each.map(([key, entry]) => [key, viewed(item, entry)])))
 	}
 	if (described.secret === true) {
-		return new Secret(typeof value === 'string' ? value : '')
+		// one declared optional is null until a layer gives it
+		return value === null ? null : new Secret(typeof value === 'string' ? value : '')
 	}
 	return viewedKind(described.kind, value)
 }

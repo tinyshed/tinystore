@@ -346,6 +346,48 @@ async def test_a_required_setting_is_given_by_a_layer_or_the_config_does_not_ope
 
 
 @dataclass
+class TrustedDb:
+    """A database on trust or peer auth, which takes no password."""
+
+    host: str = "localhost"
+    password: Secret | None = None
+
+
+@dataclass
+class Trusted:
+    db: TrustedDb = field(default_factory=TrustedDb)
+    port: Annotated[int, Range(min=1)] | None = None
+    region: str | None = None
+
+
+# contract: CFG-15, CFG-06
+async def test_a_setting_with_no_value_is_none_until_a_layer_gives_it_a_secret_too_and_explain_says_unset(
+    store: tinystore.Store, directory: Path
+) -> None:
+    toml = directory / "trusted.toml"
+    toml.write_text('[db]\nhost = "db"\n')
+    config = await store.config("trusted", [Trusted, file(toml), env("APP", from_={})])
+    assert (config.value.db.password, config.value.port, config.value.region) == (None, None, None)
+    password = next(line for line in config.explain() if line.path == "db.password")
+    assert (password.value, password.from_) == ("unset", "the declaration")
+
+    toml.write_text('[db]\npassword = "s3cret"\n')
+    given = await store.config(
+        "trusted", [Trusted, file(toml), env("APP", from_={"APP_PORT": "5432", "APP_REGION": "1"})]
+    )
+    assert given.value.db.password is not None
+    assert (given.value.db.password.reveal(), given.value.port, given.value.region) == ("s3cret", 5432, "1")
+    assert "s3cret" not in repr(given.explain())
+    with pytest.raises(tinystore.InvalidError, match="APP_PORT: 0 is below 1"):
+        await store.config("trusted", [Trusted, env("APP", from_={"APP_PORT": "0"})])
+
+
+@dataclass
+class Maybe:
+    db: TrustedDb | None = None
+
+
+@dataclass
 class Port:
     port: int = 8080
 
@@ -569,14 +611,16 @@ async def test_a_list_checks_each_item_and_a_list_of_groups_fills_its_items_defa
 async def test_a_declaration_the_core_cannot_keep_is_refused_where_it_is_written(store: tinystore.Store) -> None:
     @dataclass
     class Unioned:
-        region: str | None = None
+        region: int | str = 0
 
     @dataclass
     class Plain:
         url: str = secret()  # pyright: ignore[reportAssignmentType]
 
-    with pytest.raises(tinystore.InvalidError, match="one type"):
+    with pytest.raises(tinystore.InvalidError, match=r"one type, and X \| None = None is one with no value"):
         await store.config("refused", [Unioned])
+    with pytest.raises(tinystore.InvalidError, match="a group is never None"):
+        await store.config("refused", [Maybe])
     with pytest.raises(tinystore.InvalidError, match="read as Secret"):
         await store.config("refused", [Plain])
     with pytest.raises(tinystore.InvalidError, match="declaration"):

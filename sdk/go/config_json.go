@@ -113,6 +113,8 @@ func dataOf(node *setting, value any) any {
 			given, ok := fields[inner.key]
 			switch {
 			case !ok:
+			case given == nil:
+				out[inner.key] = nil // a setting declared "default": null, which no layer gave
 			case inner.kind == kindChosen:
 				if group := inner.picked(fields); group != nil {
 					out[inner.key] = dataOf(group, given)

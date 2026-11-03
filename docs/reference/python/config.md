@@ -167,7 +167,7 @@ A kind from a newer server is kept as it was sent, and its text is the kind.
 ```python
 @dataclass(frozen=True, slots=True)
 class Given:
-    value: str  # as JSON, a span spelled, a secret as ***
+    value: str  # as JSON, a span spelled, a secret as ***, unset for none
     from_: Origin
 ```
 
@@ -179,7 +179,7 @@ A value a setting was given, and where it came from.
 @dataclass(frozen=True, slots=True)
 class Line:
     path: str
-    value: str  # as JSON, a span spelled, a secret as ***
+    value: str  # as JSON, a span spelled, a secret as ***, unset for none
     from_: str  # the layer that gave it: APP_PORT, app.yaml, layer 2, the declaration, a change
     over: str  # the values it went over, newest first
     given: tuple[Given, ...] = dataclasses.field(default=(), repr=False)  # Every value the setting was given, newest first: its own, then the ones it went over. from_ is str(given[0].from_). It is empty from a server before 0.1.1, and print(line) leaves it out.

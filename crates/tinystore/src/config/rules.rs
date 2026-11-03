@@ -14,6 +14,10 @@ const UNITS: [(&str, u64); 6] =
 /// A value a layer gave `setting`, as the setting keeps it, or why it is
 /// refused: `70000 is above 65535`.
 pub(crate) fn check(setting: &Setting, value: &Value) -> Result<Value, String> {
+    // one declared with no value takes none back, as a live change may give it
+    if value.is_null() && setting.default.as_ref().is_some_and(Value::is_null) {
+        return Ok(Value::Null);
+    }
     let value = check_kind(&setting.kind, value)?;
     check_rules(&setting.kind, &setting.rules, &value)?;
     Ok(value)

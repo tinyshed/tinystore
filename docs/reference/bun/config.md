@@ -190,7 +190,7 @@ interface UpdateOptions {
 ```ts
 interface ExplainLine {
     readonly path: string
-    /** as JSON, a duration spelled, a secret as *** */
+    /** as JSON, a duration spelled, a secret as ***, unset for none */
     readonly value: string
     /** the layer that gave it: APP_PORT, app.yaml, layer 2, the declaration, a change */
     readonly from: string
@@ -212,7 +212,7 @@ A setting's line of explain.
 
 ```ts
 interface ExplainGiven {
-    /** as JSON, a duration spelled, a secret as *** */
+    /** as JSON, a duration spelled, a secret as ***, unset for none */
     readonly value: string
     readonly from: ExplainOrigin
 }
@@ -310,6 +310,17 @@ function required<V>(rule: Setting<V, false, false>): Setting<V>
 ```
 
 A setting with no default: a layer must give it, or the config does not open.
+
+## optional
+
+```ts
+function optional<T extends Token>(type: T): Setting<Of<T> | null>
+function optional<V, S extends boolean>(rule: Setting<V, false, boolean, S>): Setting<V | null, false, true, S>
+```
+
+A setting with no value until a layer gives one: `optional(String)` reads as
+`string | null`, `optional(secret(String))` as `Secret | null`, and
+`optional(int({ min: 1 }))` as `number | null`. explain says it is unset.
 
 ## live
 

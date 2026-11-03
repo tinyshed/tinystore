@@ -153,8 +153,9 @@ type UpdateOption func(*int64)
 // overwrite a change it never showed.
 func IfVersion(version int64) UpdateOption { return func(v *int64) { *v = version } }
 
-// Line is a setting's line of Explain: its value as JSON, a span spelled and
-// a secret ***, the layer that gave it and the values it went over, newest first.
+// Line is a setting's line of Explain: its value as JSON, a span spelled, a
+// secret *** and none unset, the layer that gave it and the values it went
+// over, newest first.
 type Line struct {
 	Path, Value, From, Over string
 	// Given is every value the setting was given, newest first: its own, then
@@ -163,8 +164,8 @@ type Line struct {
 	Given []Given
 }
 
-// Given is a value a setting was given, as JSON, a span spelled and a secret
-// ***, and where it came from.
+// Given is a value a setting was given, as JSON, a span spelled, a secret
+// *** and none unset, and where it came from.
 type Given struct {
 	Value string
 	From  Origin

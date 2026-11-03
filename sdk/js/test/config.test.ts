@@ -24,6 +24,7 @@ import {
 	list,
 	live,
 	oneOf,
+	optional,
 	required,
 	Secret,
 	type Store,
@@ -95,6 +96,10 @@ describe('what every language reads alike', () => {
 		// @ts-expect-error a group is no setting
 		expect(() => live({ rps: 1 })).toThrow('a mark goes on a setting, not on a group')
 		expect(() => list(live(1) as never)).toThrow("a list's items are neither live nor secret")
+		// @ts-expect-error a live setting marks live outermost
+		expect(() => optional(live(1))).toThrow('live is the outermost mark: live(optional(…))')
+		expect(() => optional(int(8080))).toThrow('optional takes String, Number, Boolean')
+		expect(() => optional(secret(''))).toThrow('optional takes String, Number, Boolean')
 	})
 
 	test('an origin of a kind from a newer server keeps its kind, which is also its text', () => {
@@ -373,6 +378,45 @@ for (const way of ways) {
 			const config = await opening({ APP_REGION: 'eu', APP_WORKERS: '4', APP_TOKEN: 't' })
 			const token: Secret = config.value.token
 			expect([config.value.region, config.value.workers, token.reveal()]).toEqual(['eu', 4, 't'])
+		})
+
+		// contract: CFG-15, CFG-06
+		test('a setting with no value is null until a layer gives it, a secret too, and explain says unset', async () => {
+			// a database on trust or peer auth, which takes no password
+			const toml = join(dir, 'trusted.toml')
+			writeFileSync(toml, '[db]\nhost = "db"\n')
+			const declared = () => ({
+				db: { host: 'localhost', password: optional(secret(String)) },
+				port: optional(int({ min: 1 })),
+				region: optional(String),
+			})
+			const config = await store.config('trusted', [
+				declared(),
+				file(toml),
+				env('APP', { from: {} }),
+			])
+			const password: Secret | null = config.value.db.password
+			const region: string | null = config.value.region
+			expect([password, config.value.port, region]).toEqual([null, null, null])
+			const lines = Object.fromEntries(config.explain().map(line => [line.path, line]))
+			expect([lines['db.password']?.value, lines['db.password']?.from]).toEqual([
+				'unset',
+				'the declaration',
+			])
+
+			writeFileSync(toml, '[db]\npassword = "s3cret"\n')
+			const given = await store.config('trusted-given', [
+				declared(),
+				file(toml),
+				env('APP', { from: { APP_PORT: '5432', APP_REGION: '12345' } }),
+			])
+			expect(given.value.db.password?.reveal()).toBe('s3cret')
+			expect([given.value.port, given.value.region]).toEqual([5432, '12345'])
+			expect(JSON.stringify(given.explain())).not.toContain('s3cret')
+			const refused = await caught(
+				store.config('trusted-refused', [declared(), env('APP', { from: { APP_PORT: '0' } })]),
+			)
+			expect((refused as Error).message).toContain('APP_PORT: 0 is below 1')
 		})
 
 		test('a file absent is refused unless optional, and a key no setting has is named', async () => {

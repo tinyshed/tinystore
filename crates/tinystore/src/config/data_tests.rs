@@ -27,9 +27,13 @@ fn declared() -> Value {
     })
 }
 
+/// The config `name` as an SDK sends it, with its declaration and layers.
+fn sent(f: &Fixture, name: &str, declaration: &Value, layers: &Value) -> crate::Result<Config<Value>> {
+    f.store.config_sent(&Sent { name, declaration, layers, strict: false, remember: true })
+}
+
 fn opened(f: &Fixture, layers: &Value) -> crate::Result<Config<Value>> {
-    let declaration = declared();
-    f.store.config_sent(&Sent { name: "app", declaration: &declaration, layers, strict: false, remember: true })
+    sent(f, "app", &declared(), layers)
 }
 
 fn variables(pairs: &[(&str, &str)]) -> Value {
@@ -70,7 +74,10 @@ fn a_declaration_sent_refuses_what_means_nothing() {
         refused(json!({ "kind": "text", "required": true, "default": "a" })),
         "x: a required setting has no default"
     );
-    assert_eq!(refused(json!({ "kind": "text" })), "x: a setting has a default, or is required");
+    assert_eq!(
+        refused(json!({ "kind": "text" })),
+        r#"x: a setting has a default, "default": null for none, or is required"#
+    );
     assert_eq!(refused(json!({ "kind": "colour", "default": 1 })), r#"x: "colour" is no kind"#);
     assert_eq!(refused(json!({ "kind": "integer", "default": 0, "min": 1 })), "x: its default: 0 is below 1");
     let item = json!({ "kind": { "list": { "group": { "a": { "kind": "text", "live": true } } } }, "default": [] });
@@ -152,6 +159,84 @@ fn explain_gives_a_layer_sent_by_its_place_and_each_value_it_went_over() {
     assert_eq!(given("db.url"), [gave("***", env("DATABASE_URL_FILE", None, Some("/run/secrets/db")))]);
     let change = Origin::Change { version: 1, at: f.clock.now() };
     assert_eq!(given("limits.rps"), [gave("200", change), gave("100", Origin::Declaration)]);
+}
+
+/// The issue's postgres plugin, whose database on trust or peer auth takes
+/// no password, beside a setting with no value of every kind.
+fn trusted() -> Value {
+    json!({
+        "db": { "group": {
+            "host": { "kind": "text", "default": "localhost" },
+            "password": { "kind": "text", "secret": true, "default": null }
+        } },
+        "port": { "kind": "integer", "default": null, "min": 1 },
+        "ratio": { "kind": "number", "default": null },
+        "tls": { "kind": "boolean", "default": null },
+        "timeout": { "kind": "duration", "default": null },
+        "hosts": { "kind": { "list": { "kind": "text" } }, "default": null, "max": 2 },
+        "labels": { "kind": "object", "default": null },
+        "level": { "kind": "text", "default": null, "oneOf": ["info", "debug"] },
+        "rps": { "kind": "integer", "default": null, "live": true }
+    })
+}
+
+// contract: CFG-15, CFG-06, CFG-09
+#[test]
+fn a_setting_sent_with_no_value_is_null_until_a_layer_gives_one_and_explain_says_unset() {
+    let f = fixture();
+    let config = sent(&f, "trusted", &trusted(), &json!([])).unwrap();
+    let value = config.get();
+    let unset = ["port", "ratio", "tls", "timeout", "hosts", "labels", "level", "rps"];
+    assert_eq!((value["db"]["host"].clone(), value["db"]["password"].clone()), (json!("localhost"), Value::Null));
+    assert!(unset.iter().all(|path| value[path].is_null()), "{:?}", *value);
+    let explained = config.explain();
+    let line = |path: &str| explained.settings.iter().find(|line| line.path == path).unwrap().clone();
+    assert_eq!((line("db.password").value, line("db.password").from), ("unset".into(), "the declaration".into()));
+    assert_eq!(line("port").given, [Given { value: "unset".to_owned(), from: Origin::Declaration }]);
+
+    let layers = json!([
+        { "file": { "name": "trusted.toml", "text": "port = 5432\nhosts = [\"a\"]\n[db]\npassword = \"s3cret\"\n" } },
+        { "env": { "prefix": "APP", "variables": { "APP_TIMEOUT": "30s", "APP_LEVEL": "debug", "APP_TLS": "true" } } }
+    ]);
+    let config = sent(&f, "trusted", &trusted(), &layers).unwrap();
+    let value = config.get();
+    assert_eq!((value["port"].clone(), value["db"]["password"].clone()), (json!(5432), json!("s3cret")));
+    assert_eq!((value["timeout"].clone(), value["level"].clone()), (json!(30_000), json!("debug")));
+    let password = config.explain().settings.into_iter().find(|line| line.path == "db.password").unwrap();
+    assert_eq!((password.value, password.over), ("***".to_owned(), vec!["unset from the declaration".to_owned()]));
+    assert!(!format!("{:?}", config.explain()).contains("s3cret"));
+
+    let bad = |variables: Value| {
+        refused(sent(&f, "trusted", &trusted(), &json!([{ "env": { "prefix": "APP", "variables": variables } }])))
+    };
+    assert!(bad(json!({ "APP_PORT": "0" })).to_string().contains("APP_PORT: 0 is below 1"));
+    assert!(bad(json!({ "APP_HOSTS": "a,b,c" })).to_string().contains("APP_HOSTS: 3 items is above 2 items"));
+    assert!(bad(json!({ "APP_LEVEL": "verbose" })).to_string().contains(r#""verbose" is not one of info, debug"#));
+
+    config.update_data(config.get().version(), &json!({ "rps": 200 })).unwrap();
+    assert_eq!(config.get()["rps"], json!(200));
+    config.update_data(config.get().version(), &json!({ "rps": null })).unwrap();
+    assert_eq!(config.get()["rps"], Value::Null, "a live change gives back none");
+}
+
+// contract: CFG-15
+#[test]
+fn a_setting_sent_without_a_default_is_refused_naming_null_as_none() {
+    let issue = |password: Value| declaration(&json!({ "db": { "group": { "password": password } } }));
+    assert!(issue(json!({ "kind": "text", "secret": true, "default": null })).is_ok());
+    let error = issue(json!({ "kind": "text", "secret": true })).unwrap_err();
+    assert_eq!(error, r#"db.password: a setting has a default, "default": null for none, or is required"#);
+    let item =
+        json!({ "kind": { "list": { "group": { "port": { "kind": "integer", "default": null } } } }, "default": [{}] });
+    assert_eq!(
+        declaration(&json!({ "x": item })).unwrap().setting("x").unwrap().default,
+        Some(json!([{ "port": null }]))
+    );
+    let chooser = json!({
+        "plugin": { "kind": "text", "default": null },
+        "settings": { "chosenBy": "plugin", "groups": { "postgres": { "port": { "kind": "integer", "default": 5432 } } } }
+    });
+    assert!(declaration(&chooser).is_ok(), "a chooser with no value chooses no group until a layer names one");
 }
 
 #[test]
@@ -236,8 +321,7 @@ fn entries_sent_as_data_take_each_field_from_the_layers_and_kv_keeps_them_withou
         { "file": { "name": "dashbin.toml", "text": toml, "optional": false } },
         { "env": { "prefix": "APP", "variables": { "APP_INSTANCE_AIMEE_SETTINGS_PASSWORD": "s3cret" } } }
     ]);
-    let sent = Sent { name: "dashbin", declaration: &declared, layers: &layers, strict: false, remember: true };
-    let config = f.store.config_sent(&sent).unwrap();
+    let config = sent(&f, "dashbin", &declared, &layers).unwrap();
     let aimee =
         json!({ "plugin": "postgres", "settings": { "host": "127.0.0.1", "password": "s3cret", "timeout": 30_000 } });
     assert_eq!(config.get()["instance"]["aimee"], aimee);
@@ -368,8 +452,7 @@ fn a_chosen_group_sent_gives_its_value_as_data_read_as_the_group_its_chooser_nam
         { "file": { "name": "dashbin.toml", "text": toml } },
         { "env": { "prefix": "APP", "variables": variables } }
     ]);
-    let sent = Sent { name: "dashbin", declaration: &declared, layers: &layers, strict: false, remember: true };
-    let config = f.store.config_sent(&sent).unwrap();
+    let config = sent(&f, "dashbin", &declared, &layers).unwrap();
     assert_eq!(config.get()["settings"], json!({ "key": "sk_test" }));
     let aimee =
         json!({ "plugin": "postgres", "settings": { "host": "localhost", "port": 6432, "password": "s3cret" } });

@@ -300,7 +300,7 @@ class Given:
     """A value a setting was given, and where it came from."""
 
     value: str
-    """as JSON, a span spelled, a secret as ***"""
+    """as JSON, a span spelled, a secret as ***, unset for none"""
     from_: Origin
 
 
@@ -310,7 +310,7 @@ class Line:
 
     path: str
     value: str
-    """as JSON, a span spelled, a secret as ***"""
+    """as JSON, a span spelled, a secret as ***, unset for none"""
     from_: str
     """the layer that gave it: APP_PORT, app.yaml, layer 2, the declaration, a change"""
     over: str
@@ -417,17 +417,25 @@ def _node(hint: Any, default: Any, path: str) -> tuple[dict[str, Any], _Reader]:
     mark = default if isinstance(default, _Mark) else None
     given = default if mark is None else mark.default
     base, rules = _unannotated(hint, path)
+    base, optional = _without_none(base)
+    if optional:
+        base, inner_rules = _unannotated(base, path)
+        rules = {**rules, **inner_rules}
     if base is Entries or typing.get_origin(base) is Entries:
-        if mark is not None:
+        if mark is not None or optional:
             raise InvalidError(f"{path}: entries take no mark: each of their fields carries its own")
         return _entries(base, {} if given is _REQUIRED else given, path)
     if dataclasses.is_dataclass(base) and isinstance(base, type) and mark is None:
+        if optional:
+            raise InvalidError(f"{path}: a group is never None; each of its settings may be")
         declared = _declared(base, path, None if given is _REQUIRED else given)
         return {"group": declared.group}, declared.read
     is_secret = base is Secret or (mark is not None and mark.secret)
     if is_secret and base is not Secret:
         raise InvalidError(f"{path}: a secret is read as Secret: {path.rsplit('.', 1)[-1]}: Secret = secret()")
     kind, read = ("text", _secret_of) if is_secret else _kind(base, path)
+    if optional:
+        read = _or_none(read)
     described: dict[str, Any] = {"kind": kind, **rules}
     if typing.get_origin(base) is Literal:
         described["oneOf"] = list(typing.get_args(base))
@@ -498,6 +506,21 @@ def _unannotated(hint: Any, path: str) -> tuple[Any, dict[str, Any]]:
     return base, rules
 
 
+def _without_none(hint: Any) -> tuple[Any, bool]:
+    """``X | None``'s X, and whether None stood beside it: a setting with no value until a layer gives one."""
+    if typing.get_origin(hint) not in (types.UnionType, typing.Union):
+        return hint, False
+    args = typing.get_args(hint)
+    others = [each for each in args if each is not type(None)]
+    if len(others) != 1 or len(others) == len(args):
+        return hint, False
+    return others[0], True
+
+
+def _or_none(read: _Reader) -> _Reader:
+    return lambda value: None if value is None else read(value)
+
+
 def _bound(bound: float | timedelta | str, spans: bool, what: str) -> float:
     if spans:
         if isinstance(bound, timedelta | str):
@@ -533,7 +556,7 @@ def _kind(base: Any, path: str) -> tuple[Any, _Reader]:
         args = typing.get_args(base)
         return _list_kind(args[0] if args else Any, f"{path}[]")
     if origin in (types.UnionType, typing.Union):
-        raise InvalidError(f"{path}: {base}: a setting has one type; one a layer may leave out has a default")
+        raise InvalidError(f"{path}: {base}: a setting has one type, and X | None = None is one with no value")
     raise InvalidError(f"{path}: {base!r} is no type a config keeps")
 
 

@@ -894,7 +894,39 @@ fn a_declaration_as_data_reads_the_layers_rules_secrets_and_explain_a_typed_one_
     let error = refused(load("data", settings_as_data()).open());
     assert!(error.to_string().contains("limits.burst is live"), "{error}");
     let error = Declaration::from_json(json!({ "db": { "group": { "pool": { "kind": "integer" } } } })).unwrap_err();
-    assert!(error.to_string().starts_with("the declaration: db.pool: a setting has a default, or is required"));
+    assert!(error.to_string().starts_with("the declaration: db.pool: a setting has a default"), "{error}");
+}
+
+// contract: CFG-15, CFG-13, CFG-06
+#[test]
+fn a_setting_with_no_value_as_data_reads_and_explains_as_a_typed_option_left_none() {
+    let f = fixture();
+    let as_data = || {
+        let password = json!({ "kind": "text", "secret": true, "default": null });
+        let declaration =
+            json!({ "db": { "group": { "host": { "kind": "text", "default": "" }, "password": password } } });
+        Declaration::from_json(declaration).unwrap()
+    };
+    for (name, toml) in [("unset", "[db]\nhost = \"db\"\n"), ("given", "[db]\nhost = \"db\"\npassword = \"s3cret\"\n")]
+    {
+        let toml = file(&f, &format!("{name}.toml"), toml);
+        let typed = load("trusted", Trusted::default()).file(toml.as_path()).env(env(&[])).open().unwrap();
+        let data = load("trusted", as_data()).file(toml.as_path()).env(env(&[])).open().unwrap();
+        assert_eq!(data.explain(), typed.explain(), "{name}");
+        let read: Trusted = serde_json::from_value((*data.get()).clone()).unwrap();
+        assert_eq!(read.db.password.is_none(), typed.get().db.password.is_none(), "{name}");
+    }
+    let toml = file(&f, "unset.toml", "[db]\nhost = \"db\"\n");
+    let typed = load("trusted", Trusted::default()).file(toml).open().unwrap();
+    let password = typed.explain().settings.into_iter().find(|line| line.path == "db.password").unwrap();
+    assert_eq!((password.value.as_str(), password.from.as_str()), ("unset", "the declaration"));
+
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Proxy {
+        proxy: Option<String>,
+    }
+    let proxy = load("proxy", Proxy::default()).open().unwrap().explain().to_string();
+    assert_eq!(proxy.trim_end(), "proxy  unset  the declaration", "an Option left None says unset too");
 }
 
 /// dashbin's instances, whose settings are the group of the plugin each one's

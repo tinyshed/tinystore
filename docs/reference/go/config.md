@@ -214,7 +214,7 @@ type Given struct {
 }
 ```
 
-Given is a value a setting was given, as JSON, a span spelled and a secret \*\*\*, and where it came from.
+Given is a value a setting was given, as JSON, a span spelled, a secret \*\*\* and none unset, and where it came from.
 
 ## Line
 
@@ -228,7 +228,7 @@ type Line struct {
 }
 ```
 
-Line is a setting's line of Explain: its value as JSON, a span spelled and a secret \*\*\*, the layer that gave it and the values it went over, newest first.
+Line is a setting's line of Explain: its value as JSON, a span spelled, a secret \*\*\* and none unset, the layer that gave it and the values it went over, newest first.
 
 ### Line.String
 

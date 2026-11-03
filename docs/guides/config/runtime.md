@@ -176,22 +176,26 @@ program runs. A Rust or Go program declares its settings as JSON instead:
 `Declaration::from_json` in Rust, which `store.config` and `config::load`
 take, and `OpenConfigJSON` in Go.
 
-| In the JSON                                 | Declares                                                                   |
-|---------------------------------------------|----------------------------------------------------------------------------|
-| `"kind"`                                    | `text`, `integer`, `number`, `boolean`, `duration`, `object` or `any`      |
-| `"kind": { "list": { "kind": "text" } }`    | a list, whose items are values of a kind or a `{ "group": … }`             |
-| `"default"`                                 | the value when no layer gives one; a duration as `"30s"`                   |
-| `"required": true`                          | a setting that a layer must give, which has no default                     |
-| `"secret": true`                            | text that prints as `***`                                                  |
-| `"live": true`                              | a setting that changes while the program runs, with a store                |
-| `"min"`, `"max"`                            | the bounds of a number, a duration or the length of a list                 |
-| `"oneOf"`                                   | the texts that a setting accepts                                           |
-| `{ "group": { … } }`                        | a group of settings                                                        |
-| `{ "entries": { … } }`                      | a map of [entries](layers.md#entries), each the group of settings it names |
-| `{ "chosenBy": "plugin", "groups": { … } }` | a group that the text setting `plugin` beside it chooses by name           |
+| In the JSON                                 | Declares                                                                                          |
+|---------------------------------------------|---------------------------------------------------------------------------------------------------|
+| `"kind"`                                    | `text`, `integer`, `number`, `boolean`, `duration`, `object` or `any`                             |
+| `"kind": { "list": { "kind": "text" } }`    | a list, whose items are values of a kind or a `{ "group": … }`                                    |
+| `"default"`                                 | the value when no layer gives one; a duration as `"30s"`                                          |
+| `"default": null`                           | a setting with [no value](secrets.md#settings-with-no-value) until a layer gives one, of any kind |
+| `"required": true`                          | a setting that a layer must give, which has no default                                            |
+| `"secret": true`                            | text that prints as `***`                                                                         |
+| `"live": true`                              | a setting that changes while the program runs, with a store                                       |
+| `"min"`, `"max"`                            | the bounds of a number, a duration or the length of a list                                        |
+| `"oneOf"`                                   | the texts that a setting accepts                                                                  |
+| `{ "group": { … } }`                        | a group of settings                                                                               |
+| `{ "entries": { … } }`                      | a map of [entries](layers.md#entries), each the group of settings it names                        |
+| `{ "chosenBy": "plugin", "groups": { … } }` | a group that the text setting `plugin` beside it chooses by name                                  |
 
 A declaration that means nothing, such as a setting with neither a default
 nor `required`, is refused when it is read, and the error names the setting.
+Write `"default": null` for a setting that has no value until a layer gives
+one, such as a password that a database on trust authentication doesn't
+need: its value is `null`, and `explain` says it is `unset`.
 
 The value is data too. A Rust program gets a `serde_json::Value`, in which a
 duration is written as serde writes a `Duration`, so a chosen group's value

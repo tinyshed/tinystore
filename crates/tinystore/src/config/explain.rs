@@ -22,7 +22,8 @@ pub struct Explained {
 pub struct Line {
     /// The setting's path: `limits.rps`.
     pub path: String,
-    /// Its value as JSON, a span spelled as `30s`, a secret as `***`.
+    /// Its value as JSON, a span spelled as `30s`, a secret as `***`, and
+    /// `unset` when it has none.
     pub value: String,
     /// The layer that gave it: `APP_LIMITS_RPS`, `app.yaml`, `the
     /// declaration`, `a change, version 7, 2026-10-13 14:03:05 UTC`.
@@ -39,7 +40,8 @@ pub struct Line {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Given {
-    /// As JSON, a span spelled as `30s`, a secret as `***`.
+    /// As JSON, a span spelled as `30s`, a secret as `***`, and `unset` for
+    /// none.
     pub value: String,
     pub from: Origin,
 }

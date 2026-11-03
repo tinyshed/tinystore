@@ -166,18 +166,23 @@ fn setting(map: &Map<String, Value>, path: &str, place: Place) -> Result<Setting
         }
         () if required && map.contains_key("default") => return Err(refused("a required setting has no default")),
         () if place != Place::Item && !required && !map.contains_key("default") => {
-            return Err(refused("a setting has a default, or is required"));
+            return Err(refused(r#"a setting has a default, "default": null for none, or is required"#));
         }
         () => {}
     }
     let mut setting = Setting { kind, rules, default: None, required, live, secret };
-    if let Some(default) = map.get("default") {
-        // A rule's complaint quotes the value, which a secret's must not show.
-        let checked = rules::check(&setting, default).map_err(|why| match setting.secret {
-            true => refused("its default breaks a rule"),
-            false => refused(&format!("its default: {why}")),
-        });
-        setting.default = Some(checked?);
+    match map.get("default") {
+        // no value until a layer gives one, which is checked as any other
+        Some(Value::Null) => setting.default = Some(Value::Null),
+        Some(default) => {
+            // A rule's complaint quotes the value, which a secret's must not show.
+            let checked = rules::check(&setting, default).map_err(|why| match setting.secret {
+                true => refused("its default breaks a rule"),
+                false => refused(&format!("its default: {why}")),
+            });
+            setting.default = Some(checked?);
+        }
+        None => {}
     }
     Ok(setting)
 }
