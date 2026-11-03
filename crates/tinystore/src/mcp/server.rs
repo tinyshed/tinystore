@@ -3,28 +3,34 @@
 //! `initialize`, `ping`, `tools/list` and `tools/call`, and a notification
 //! with nothing. A tool that writes or removes is offered, and runs, only
 //! when the allow list names it.
+//!
+//! What each message asks and what is answered is the session's. Here each
+//! call runs on a thread of its own, scoped to `serve`, so that a `ping` or
+//! another call is answered while a slow one runs, and a cancel reaches it.
 
 use std::io::{self, BufRead, Write};
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::Mutex;
+use std::thread;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::given::meant;
-use super::tool::{Mark, Tool};
+use super::session::{Asked, Call, Session};
+use super::tool::{Answer, Tool};
+use crate::sync::lock;
+use crate::text::panic_message;
 use crate::{Error, Result};
-
-/// The protocol's version this server speaks when a client names none.
-const PROTOCOL: &str = "2025-06-18";
 
 /// An MCP server being built: its name, its tools and its allow list; it
 /// answers with [`serve`](Server::serve).
 #[derive(Debug)]
 #[must_use = "a server answers with serve()"]
 pub struct Server {
-    name: String,
-    version: String,
-    instructions: Option<String>,
-    tools: Vec<Tool>,
-    allowed: Option<String>,
+    pub(super) name: String,
+    pub(super) version: String,
+    pub(super) instructions: Option<String>,
+    pub(super) tools: Vec<Tool>,
+    pub(super) allowed: Option<String>,
 }
 
 impl Server {
@@ -66,152 +72,99 @@ impl Server {
     /// Answers stdin until it closes, or until stdout's reader leaves. Two
     /// tools of one name, a schema that is not an object's, or an allow list
     /// that names no tool that writes is `Invalid`, before anything is read.
+    ///
+    /// Each call runs on a thread of its own, so the server answers other
+    /// messages while it runs. A call its host cancels is told through its
+    /// token and gets no answer. Once stdin closes, `serve` waits for the
+    /// calls under way and writes their answers.
     pub fn serve(self) -> Result<()> {
-        self.serve_on(io::stdin().lock(), io::stdout().lock())
+        // std's Stdout, since its lock is not Send and each call's thread writes
+        self.serve_on(io::stdin().lock(), io::stdout())
     }
 
     /// [`serve`](Server::serve) on any input and output, as a test drives it.
     #[doc(hidden)]
-    pub fn serve_on(self, input: impl BufRead, mut output: impl Write) -> Result<()> {
+    pub fn serve_on(self, input: impl BufRead, output: impl Write + Send) -> Result<()> {
         let session = Session::of(self)?;
-        for line in input.lines() {
-            let line = line.map_err(|error| Error::io("mcp: stdin", error))?;
-            if line.trim().is_empty() {
-                continue;
+        let answers = Lines::to(output);
+        let (session, lines) = (&session, &answers);
+        let read = thread::scope(|calls| {
+            for line in input.lines() {
+                let line = line.map_err(|error| Error::io("mcp: stdin", error))?;
+                match session.received(&line) {
+                    Asked::Answer(answer) => answer.iter().for_each(|answer| lines.write(answer)),
+                    Asked::Call(call) => {
+                        calls.spawn(move || {
+                            let answered = ran(&call);
+                            session.finished(call, answered).iter().for_each(|answer| lines.write(answer));
+                        });
+                    }
+                }
+                if lines.stopped() {
+                    break;
+                }
             }
-            let Some(answer) = session.answer(&line) else { continue };
-            match writeln!(output, "{answer}").and_then(|()| output.flush()) {
-                Ok(()) => {}
-                // the host has gone: nobody is left to answer
-                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => return Ok(()),
-                Err(error) => return Err(Error::io("mcp: stdout", error)),
+            if lines.stopped() {
+                // the host has gone: nobody reads what the calls under way would answer
+                session.cancel_all();
             }
-        }
-        Ok(())
+            Ok(())
+        });
+        read.and(answers.ended())
     }
 }
 
-/// A server whose tools and allow list were checked, answering.
-struct Session {
-    server: Server,
-    /// The tools that write or remove which the allow list names.
-    writes: Vec<String>,
+/// Runs `call`'s handler on this thread under the call's token, so that every
+/// read it makes through a store stops once the call is cancelled. A handler
+/// that panics answers its call as the tool's error, and the server goes on.
+fn ran(call: &Call<'_>) -> Answer {
+    // the server keeps nothing a handler's panic could leave half-changed
+    let handled = AssertUnwindSafe(|| call.token.run(|| call.tool.call(&call.arguments, &call.token)));
+    panic::catch_unwind(handled)
+        .unwrap_or_else(|panicked| Err(format!("{} panicked: {}", call.tool.name, panic_message(&*panicked)).into()))
 }
 
-impl Session {
-    fn of(server: Server) -> Result<Session> {
-        check_tools(&server)?;
-        let writes = allowed(&server.tools, server.allowed.as_deref())?;
-        Ok(Session { server, writes })
+/// Where the answers go, each a line written whole under one lock and flushed
+/// at once, in the order they are ready. The first failure stops it.
+struct Lines<W> {
+    output: Mutex<Output<W>>,
+}
+
+struct Output<W> {
+    to: W,
+    /// Why writing stopped: the host's leaving, or a failure `serve` returns.
+    failed: Option<io::Error>,
+}
+
+impl<W: Write> Lines<W> {
+    fn to(output: W) -> Lines<W> {
+        Lines { output: Mutex::new(Output { to: output, failed: None }) }
     }
 
-    fn offers(&self, tool: &Tool) -> bool {
-        tool.mark == Mark::Reads || self.writes.contains(&tool.name)
-    }
-
-    /// The answer to one message; none to a notification.
-    fn answer(&self, line: &str) -> Option<Value> {
-        let message: Value = match serde_json::from_str(line) {
-            Ok(message) => message,
-            Err(error) => return Some(failure(Value::Null, -32700, &format!("not JSON: {error}"))),
-        };
-        let id = message.get("id").cloned()?;
-        let params = message.get("params").cloned().unwrap_or(Value::Null);
-        let result = match message.get("method").and_then(Value::as_str) {
-            Some("initialize") => self.initialized(&params),
-            Some("ping") => json!({}),
-            Some("tools/list") => {
-                let tools: Vec<Value> =
-                    self.server.tools.iter().filter(|tool| self.offers(tool)).map(Tool::listed).collect();
-                json!({ "tools": tools })
-            }
-            Some("tools/call") => self.call(&params),
-            Some(other) => return Some(failure(id, -32601, &format!("no method {other}"))),
-            None => return Some(failure(id, -32600, "a request names its method")),
-        };
-        Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
-    }
-
-    fn initialized(&self, params: &Value) -> Value {
-        let version = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL);
-        json!({
-            "protocolVersion": version,
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": self.server.name, "version": self.server.version },
-            "instructions": self.instructions(),
-        })
-    }
-
-    /// The program's instructions, and what of the server writes.
-    fn instructions(&self) -> String {
-        let writing = match &self.writes[..] {
-            [] => "Nothing here writes.".to_owned(),
-            writes => format!("Write with {} alone, each a change the program sees.", writes.join(", ")),
-        };
-        match &self.server.instructions {
-            Some(given) => format!("{given} {writing}"),
-            None => writing,
+    fn write(&self, answer: &Value) {
+        let mut output = lock(&self.output);
+        if output.failed.is_some() {
+            return;
+        }
+        let line = format!("{answer}\n");
+        let to = &mut output.to;
+        if let Err(error) = to.write_all(line.as_bytes()).and_then(|()| to.flush()) {
+            output.failed = Some(error);
         }
     }
 
-    /// A tool's answer as text, or what went wrong as the tool's own error.
-    fn call(&self, params: &Value) -> Value {
-        let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-        let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-        let answered = match self.server.tools.iter().find(|tool| tool.name == name) {
-            None => Err(format!("no tool {name}")),
-            Some(tool) if !self.offers(tool) => {
-                Err(format!("{name} writes, and {} mcp was not started with --write {name}", self.server.name))
-            }
-            Some(tool) => tool.call(&arguments).map_err(|error| error.to_string()),
-        };
-        match answered {
-            Ok(answer) => json!({ "content": [{ "type": "text", "text": answer.to_string() }] }),
-            Err(why) => json!({ "content": [{ "type": "text", "text": why }], "isError": true }),
+    fn stopped(&self) -> bool {
+        lock(&self.output).failed.is_some()
+    }
+
+    /// What `serve` returns of its writing: a host that has gone is no
+    /// failure, since nobody is left to answer.
+    fn ended(&self) -> Result<()> {
+        match lock(&self.output).failed.take() {
+            Some(error) if error.kind() != io::ErrorKind::BrokenPipe => Err(Error::io("mcp: stdout", error)),
+            _ => Ok(()),
         }
     }
-}
-
-fn failure(id: Value, code: i64, message: &str) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
-}
-
-/// Refuses two tools of one name, which a call could not tell apart, and a
-/// schema that is not an object's, which MCP's hosts refuse.
-fn check_tools(server: &Server) -> Result<()> {
-    for (at, tool) in server.tools.iter().enumerate() {
-        if server.tools[..at].iter().any(|before| before.name == tool.name) {
-            return Err(Error::invalid(format!("mcp server {}: two tools named {}", server.name, tool.name)));
-        }
-        if tool.schema().get("type").and_then(Value::as_str) != Some("object") {
-            return Err(Error::invalid(format!(
-                "mcp tool {}: its input schema is a JSON Schema of an object, as {{\"type\": \"object\"}}",
-                tool.name
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// The tools that write or remove which `given` names: `all`, or their names
-/// with commas between. A name of none is refused with the nearest.
-fn allowed(tools: &[Tool], given: Option<&str>) -> Result<Vec<String>> {
-    let writes: Vec<&str> =
-        tools.iter().filter(|tool| tool.mark != Mark::Reads).map(|tool| tool.name.as_str()).collect();
-    let named: Vec<&str> = match given {
-        None => return Ok(Vec::new()),
-        Some("all") => writes.clone(),
-        Some(list) => list.split(',').map(str::trim).collect(),
-    };
-    if let Some(unknown) = named.iter().find(|word| !writes.contains(word)) {
-        let offered =
-            if writes.is_empty() { "no tool here writes".to_owned() } else { format!("all, or {}", writes.join(", ")) };
-        return Err(Error::invalid(format!(
-            "--write {unknown}: no tool that writes{}; {offered}",
-            meant(unknown, &writes)
-        )));
-    }
-    Ok(writes.iter().filter(|name| named.contains(name)).map(|name| (*name).to_owned()).collect())
 }
 
 #[cfg(test)]

@@ -30,14 +30,17 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
         "limit": count("200 at most"),
     }));
     vec![
-        Tool::reads("kv_get", "One value of a kv bucket by its key.", schema(get, &["bucket", "key"]), move |given| {
-            Ok(value(&one, &Arguments { tool: "kv_get", given })?)
-        }),
+        Tool::reads(
+            "kv_get",
+            "One value of a kv bucket by its key.",
+            schema(get, &["bucket", "key"]),
+            move |given, _| Ok(value(&one, &Arguments { tool: "kv_get", given })?),
+        ),
         Tool::reads(
             "kv_list",
             "A kv bucket's keys and values, in key order.",
             schema(list, &["bucket"]),
-            move |given| Ok(values(&all, &Arguments { tool: "kv_list", given })?),
+            move |given, _| Ok(values(&all, &Arguments { tool: "kv_list", given })?),
         ),
     ]
 }

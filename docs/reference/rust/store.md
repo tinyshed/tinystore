@@ -52,6 +52,10 @@ let total: i64 = timed.run(|| db.scalar("select count(*) from events"))?;
 Only reads stop: a write runs to its end, and so does a read inside a
 transaction, which its own bound stops. Clones share the token.
 
+A program built with `mcp` and no store has no reads to stop: there the
+token is what an MCP tool's handler asks
+[`is_cancelled`](CancellationToken::is_cancelled).
+
 ### CancellationToken.new
 
 ```rust

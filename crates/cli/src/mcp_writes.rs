@@ -13,6 +13,7 @@
 use std::path::Path;
 
 use serde_json::{Value, json};
+use tinystore::CancellationToken;
 use tinystore::client::{Event, KvValue, NewJob};
 use tinystore::mcp::Tool;
 
@@ -44,7 +45,7 @@ pub(crate) fn tools(dir: &Path) -> Vec<Tool> {
             let (properties, required) = inputs(name);
             let takes = json!({ "type": "object", "properties": properties, "required": required });
             let dir = dir.to_owned();
-            let write = move |given: &Value| {
+            let write = move |given: &Value, _: &CancellationToken| {
                 written(&dir, name, &Arguments(given)).map_err(|refused| refused.to_string().into())
             };
             if removes { Tool::removes(name, does, takes, write) } else { Tool::writes(name, does, takes, write) }

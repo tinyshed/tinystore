@@ -54,12 +54,9 @@ fn status(dir: &Path) -> Tool {
     let dir = dir.to_owned();
     let does = "What the store holds: its files and their sizes, the server that serves it, and how its node stands.";
     let takes = json!({ "type": "object", "properties": {}, "required": [] });
-    Tool::reads(
-        "status",
-        does,
-        takes,
-        move |_| Ok(crate::status::json_of(&dir).map_err(|refused| refused.to_string())?),
-    )
+    Tool::reads("status", does, takes, move |_, _| {
+        Ok(crate::status::json_of(&dir).map_err(|refused| refused.to_string())?)
+    })
 }
 
 #[cfg(test)]

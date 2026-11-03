@@ -31,11 +31,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::sync::lock;
+#[cfg(feature = "store")]
 use crate::{Error, ErrorKind, Result};
 
 /// How many of SQLite's steps a reader runs between two looks at its call's
 /// tokens: a look reads a thread-local, and a thousand steps take
 /// microseconds.
+#[cfg(feature = "store")]
 pub(crate) const STEPS: std::ffi::c_int = 1000;
 
 /// Stops the reads of a call from another thread, at once or after a
@@ -66,6 +68,10 @@ pub(crate) const STEPS: std::ffi::c_int = 1000;
 ///
 /// Only reads stop: a write runs to its end, and so does a read inside a
 /// transaction, which its own bound stops. Clones share the token.
+///
+/// A program built with `mcp` and no store has no reads to stop: there the
+/// token is what an MCP tool's handler asks
+/// [`is_cancelled`](CancellationToken::is_cancelled).
 #[derive(Clone)]
 pub struct CancellationToken {
     inner: Arc<Inner>,
@@ -82,6 +88,7 @@ struct Inner {
 
 #[derive(Default)]
 struct Stops {
+    #[cfg(feature = "store")]
     next: u64,
     each: Vec<(u64, Stop)>,
 }
@@ -141,8 +148,8 @@ impl CancellationToken {
     }
 
     /// Whether `other` is a clone of this token.
-    #[cfg(feature = "wire")]
-    pub(crate) fn same(&self, other: &CancellationToken) -> bool {
+    #[cfg(any(feature = "wire", feature = "mcp"))]
+    fn same(&self, other: &CancellationToken) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
@@ -164,11 +171,68 @@ impl fmt::Debug for CancellationToken {
     }
 }
 
+/// The tokens of the calls under way, by the id a cancel names a call with: a
+/// wire stream's number, an MCP request's id.
+#[cfg(any(feature = "wire", feature = "mcp"))]
+pub(crate) struct Tokens<K> {
+    by_id: Mutex<std::collections::HashMap<K, CancellationToken>>,
+}
+
+#[cfg(any(feature = "wire", feature = "mcp"))]
+impl<K: Eq + std::hash::Hash> Tokens<K> {
+    /// A token for the call `id`, in place of any it had.
+    pub(crate) fn start(&self, id: K) -> CancellationToken {
+        let token = CancellationToken::new();
+        lock(&self.by_id).insert(id, token.clone());
+        token
+    }
+
+    /// Whether a call of `id` is under way.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn holds(&self, id: &K) -> bool {
+        lock(&self.by_id).contains_key(id)
+    }
+
+    /// Cancels the call `id`; nothing when none is under way.
+    pub(crate) fn cancel(&self, id: &K) {
+        if let Some(token) = lock(&self.by_id).get(id) {
+            token.cancel();
+        }
+    }
+
+    /// Lets the call `id` go, unless a call that took its id since put its
+    /// own token there. A cancel looks under the same lock: it reached the
+    /// token before, or finds nothing after.
+    pub(crate) fn finish(&self, id: &K, token: &CancellationToken) {
+        let mut by_id = lock(&self.by_id);
+        if by_id.get(id).is_some_and(|kept| kept.same(token)) {
+            by_id.remove(id);
+        }
+    }
+
+    /// Cancels every call under way and lets them go, as a connection's end
+    /// or a server's does.
+    pub(crate) fn cancel_all(&self) {
+        let tokens: Vec<CancellationToken> = lock(&self.by_id).drain().map(|(_, token)| token).collect();
+        tokens.iter().for_each(CancellationToken::cancel);
+    }
+}
+
+#[cfg(any(feature = "wire", feature = "mcp"))]
+impl<K> Default for Tokens<K> {
+    fn default() -> Self {
+        Tokens { by_id: Mutex::default() }
+    }
+}
+
 impl Inner {
     fn stopped(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst) || self.timeout.is_some_and(|(at, _)| Instant::now() >= at)
     }
+}
 
+#[cfg(feature = "store")]
+impl Inner {
     /// Why `what` stops, when the token has stopped.
     fn refusal(&self, what: impl FnOnce() -> String) -> Option<Error> {
         if self.cancelled.load(Ordering::SeqCst) {
@@ -210,10 +274,12 @@ impl Drop for Scope {
 
 /// What a read under way gave the tokens of its call, taken back when it is
 /// dropped: from then on a cancel no longer reaches it.
+#[cfg(feature = "store")]
 pub(crate) struct Given {
     stops: Vec<(Arc<Inner>, u64)>,
 }
 
+#[cfg(feature = "store")]
 impl Drop for Given {
     fn drop(&mut self) {
         for (inner, id) in &self.stops {
@@ -256,18 +322,21 @@ impl fmt::Debug for Captured {
 }
 
 /// Whether this thread's call runs under a token.
+#[cfg(feature = "store")]
 pub(crate) fn in_scope() -> bool {
     SCOPE.with(|scope| scope.try_borrow().is_ok_and(|scope| !scope.is_empty()))
 }
 
 /// Whether a token of this thread's call has stopped: what a reader's
 /// progress handler asks as SQLite steps, and true interrupts the statement.
+#[cfg(feature = "store")]
 pub(crate) fn stopped() -> bool {
     SCOPE.with(|scope| scope.try_borrow().is_ok_and(|scope| scope.iter().any(|inner| inner.stopped())))
 }
 
 /// Fails `what` as `Cancelled` when a token of this thread's call has
 /// stopped; `what` is built only then.
+#[cfg(feature = "store")]
 pub(crate) fn check(what: impl FnOnce() -> String) -> Result<()> {
     let refused = SCOPE.with(|scope| {
         let scope = scope.try_borrow().ok()?;
@@ -279,6 +348,7 @@ pub(crate) fn check(what: impl FnOnce() -> String) -> Result<()> {
 
 /// The soonest a token of this thread's call times out, which a read that
 /// waits wakes at.
+#[cfg(feature = "store")]
 pub(crate) fn deadline() -> Option<Instant> {
     SCOPE.with(|scope| {
         let scope = scope.try_borrow().ok()?;
@@ -288,6 +358,7 @@ pub(crate) fn deadline() -> Option<Instant> {
 
 /// Has every token of this thread's call run `stop` when it is cancelled,
 /// until what this returns is dropped; none when the call has no token.
+#[cfg(feature = "store")]
 pub(crate) fn on_cancel(stop: impl Fn() + Send + Sync + 'static) -> Option<Given> {
     let scope: Vec<Arc<Inner>> = SCOPE.with(|scope| scope.try_borrow().map(|scope| scope.clone()).unwrap_or_default());
     if scope.is_empty() {
@@ -301,6 +372,7 @@ pub(crate) fn on_cancel(stop: impl Fn() + Send + Sync + 'static) -> Option<Given
 /// A failure of `what` the call's own token caused, said as the token's:
 /// SQLite's interrupt reads `interrupted`, where the caller wants to know it
 /// was its cancel or its timeout.
+#[cfg(feature = "store")]
 pub(crate) fn named(error: Error, what: impl FnOnce() -> String) -> Error {
     if error.kind() != ErrorKind::Cancelled {
         return error;
@@ -308,6 +380,6 @@ pub(crate) fn named(error: Error, what: impl FnOnce() -> String) -> Error {
     check(what).err().unwrap_or(error)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "store"))]
 #[path = "cancel_tests.rs"]
 mod tests;

@@ -23,14 +23,14 @@ let name = json!({ "type": "object", "properties": { "name": { "type": "string" 
 mcp::server("dashbin", env!("CARGO_PKG_VERSION"))
     .instructions("Read dashbin's dashboards and the store under them.")
     .tools(mcp::read_tools(&store).prefix("store_")) // store_logs, store_kv_get, …
-    .tool(Tool::reads("dashboards_list", "The project's dashboards.", json!({ "type": "object" }), |_| {
+    .tool(Tool::reads("dashboards_list", "The project's dashboards.", json!({ "type": "object" }), |_, _| {
         Ok(json!([{ "name": "latency" }]))
     }))
-    .tool(Tool::writes("dashboard_save", "Saves a dashboard.", name.clone(), |args| {
+    .tool(Tool::writes("dashboard_save", "Saves a dashboard.", name.clone(), |args, _| {
         let name = args["name"].as_str().ok_or("dashboard_save takes name")?;
         Ok(json!({ "saved": name }))
     }))
-    .tool(Tool::removes("dashboard_delete", "Deletes a dashboard.", name, |_| Ok(json!({ "deleted": true }))))
+    .tool(Tool::removes("dashboard_delete", "Deletes a dashboard.", name, |_, _| Ok(json!({ "deleted": true }))))
     .allow(write.as_deref()) // None, "all", or "dashboard_save,dashboard_delete"
     .serve()?; // answers stdin until it closes
 ```
@@ -58,13 +58,14 @@ The host reads the mark and asks its person before it runs a tool that writes
 or removes, as Claude Code does for any tool not yet allowed. Every tool also
 says `openWorldHint: false`.
 
-The closure takes the call's arguments as a `serde_json::Value` and returns
-`Ok` with JSON, which the agent reads as text. If it returns an error, the
-call fails and the agent reads the error's message. So `?` works on any error
-type:
+The closure takes the call's arguments as a `serde_json::Value` and the
+call's token, which [Slow calls and cancels](#slow-calls-and-cancels) is
+about. It returns `Ok` with JSON, which the agent reads as text. If it returns
+an error, the call fails and the agent reads the error's message. So `?` works
+on any error type:
 
 ```rust
-Tool::reads("dashboard_get", "One dashboard.", name, |args| {
+Tool::reads("dashboard_get", "One dashboard.", name, |args, _| {
     let name = args["name"].as_str().ok_or("dashboard_get takes name")?;
     Err(format!("no dashboard {name}").into()) // the agent reads: no dashboard latency
 })
@@ -83,14 +84,15 @@ offered only when the list names it:
 | `all`                             | every tool                       |
 
 - A tool the list doesn't name is not in `tools/list`, and a call of it is
-  refused: `dashboard_delete writes, and dashbin mcp was not started with
+  refused: `dashboard_delete removes, and dashbin mcp was not started with
   --write dashboard_delete`. Its closure doesn't run.
 - A name that no tool that writes has is refused before the server answers
   anything. `serve` returns an `Invalid` error with the nearest name:
   `--write dashboard_sav: no tool that writes; did you mean dashboard_save?; all, or dashboard_save, dashboard_delete`.
 - The refusals name `--write` and `<name> mcp`, so give your flag that name.
-- The server adds one sentence to your instructions: which tools write, or
-  `Nothing here writes.`
+- The server adds one sentence to your instructions. It names the tools that
+  change anything, such as `Only dashboard_save changes anything; every other
+  tool only reads.`, or says `Nothing here writes.` when the list names none.
 
 > [!WARNING]
 > A flag is no boundary for an agent that also has a shell. If the agent can
@@ -116,6 +118,43 @@ clash with yours:
   `tinystore mcp` adds it as its own tool.
 - A tool that writes to the store is yours to write, with the mark it needs.
 
+## Slow calls and cancels
+
+Each call runs on a thread of its own, so a slow tool doesn't hold up the
+others. While one call runs, the server still answers `ping`, `tools/list` and
+other calls (contract MCP-05). It writes each answer when its call finishes,
+and the host matches answers to calls by their ids. When stdin closes, `serve`
+waits for the calls that are still running and writes their answers.
+
+When the agent's host gives up on a call, it sends `notifications/cancelled`.
+The server then cancels the call's token and writes no answer for it, as the
+MCP spec asks (contract MCP-06). The closure gets that token, a
+`tinystore::CancellationToken`, as its second argument:
+
+```rust
+Tool::reads("dashboard_check", "Runs each panel's query.", panels, |args, token| {
+    let mut checked = Vec::new();
+    for panel in args["panels"].as_array().ok_or("dashboard_check takes panels")? {
+        if token.is_cancelled() {
+            return Err("cancelled".into()); // nobody reads it: the host gave up on the call
+        }
+        checked.push(run_query(panel)?);
+    }
+    Ok(json!(checked))
+})
+```
+
+- Reads through a TinyStore store stop by themselves. The closure runs under
+  the token, so a read that is under way when the call is cancelled stops and
+  fails with a cancelled error, `ErrorKind::Cancelled` (contract MCP-07). The
+  tools of `mcp::read_tools` stop this way too.
+- Work outside the store, such as a query on another database, stops only if
+  your closure checks `token.is_cancelled()` and stops it.
+- A write through the store is not stopped. It runs to its end, even when its
+  call is cancelled.
+- If a closure panics, its call fails with the panic's message, such as
+  `dashboard_check panicked: no panel 7`, and the server goes on.
+
 ## Limits and defaults
 
 | What                          | Value                                               |
@@ -123,6 +162,7 @@ clash with yours:
 | Transport                     | stdin and stdout, one JSON-RPC 2.0 message per line |
 | Protocol version              | the client's, or `2025-06-18` when it names none    |
 | Methods                       | `initialize`, `ping`, `tools/list`, `tools/call`    |
+| Calls that run at once        | no limit, each on a thread of its own               |
 | A store tool's list           | 200 items at most, `logs` 50 by default             |
 | Two tools with the same name  | refused by `serve` with an `Invalid` error          |
 | A schema that isn't an object | refused by `serve` with an `Invalid` error          |

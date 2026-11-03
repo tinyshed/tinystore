@@ -12,7 +12,7 @@ pub mod backup;
 pub mod blobs;
 #[cfg(any(feature = "metrics", feature = "records"))]
 mod calendar;
-#[cfg(feature = "store")]
+#[cfg(any(feature = "store", feature = "mcp"))]
 mod cancel;
 #[cfg(feature = "channels")]
 pub mod channels;
@@ -75,9 +75,9 @@ pub mod sql;
 pub(crate) mod sqlite;
 #[cfg(feature = "store")]
 mod store;
-#[cfg(any(feature = "store", feature = "config-load"))]
+#[cfg(any(feature = "store", feature = "config-load", feature = "mcp"))]
 mod sync;
-#[cfg(all(test, any(feature = "channels", feature = "locks", feature = "jobs")))]
+#[cfg(all(test, any(feature = "channels", feature = "locks", feature = "jobs", feature = "mcp")))]
 mod testing;
 mod text;
 #[cfg(feature = "async")]
@@ -95,7 +95,7 @@ pub use wire::client;
 
 #[cfg(any(feature = "metrics", feature = "records"))]
 pub use calendar::Calendar;
-#[cfg(feature = "store")]
+#[cfg(any(feature = "store", feature = "mcp"))]
 pub use cancel::CancellationToken;
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
 pub use error::{Constraint, ConstraintKind, Error, ErrorKind, Result};

@@ -17,14 +17,14 @@
 //! mcp::server("dashbin", env!("CARGO_PKG_VERSION"))
 //!     .instructions("Read dashbin's dashboards and the store under them.")
 //!     .tools(mcp::read_tools(&store).prefix("store_")) // store_logs, store_kv_get, …
-//!     .tool(Tool::reads("dashboards_list", "The project's dashboards.", json!({ "type": "object" }), |_| {
+//!     .tool(Tool::reads("dashboards_list", "The project's dashboards.", json!({ "type": "object" }), |_, _| {
 //!         Ok(json!([{ "name": "latency" }]))
 //!     }))
-//!     .tool(Tool::writes("dashboard_save", "Saves a dashboard.", name.clone(), |given| {
+//!     .tool(Tool::writes("dashboard_save", "Saves a dashboard.", name.clone(), |given, _| {
 //!         let name = given["name"].as_str().ok_or("dashboard_save takes name")?;
 //!         Ok(json!({ "saved": name }))
 //!     }))
-//!     .tool(Tool::removes("dashboard_delete", "Deletes a dashboard.", name, |_| Ok(json!({ "deleted": true }))))
+//!     .tool(Tool::removes("dashboard_delete", "Deletes a dashboard.", name, |_, _| Ok(json!({ "deleted": true }))))
 //!     .allow(write.as_deref()) // none, "all", or "dashboard_save,dashboard_delete"
 //!     .serve()?; // answers stdin until it closes
 //! # Ok(())
@@ -35,7 +35,10 @@
 //! and the JSON they answer, which the command line's `--json` prints too:
 //! hidden, since they promise a program nothing.
 
+#[cfg(test)]
+mod fixture;
 mod server;
+mod session;
 #[cfg(feature = "store")]
 mod store;
 mod tool;

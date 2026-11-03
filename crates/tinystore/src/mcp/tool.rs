@@ -7,11 +7,13 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use crate::CancellationToken;
+
 /// What a tool answers: its JSON, or why it failed, which the agent reads as
 /// the tool's error.
 pub(crate) type Answer = Result<Value, Box<dyn StdError + Send + Sync>>;
 
-type Handler = Arc<dyn Fn(&Value) -> Answer + Send + Sync>;
+type Handler = Arc<dyn Fn(&Value, &CancellationToken) -> Answer + Send + Sync>;
 
 /// What a tool does to what it reaches. The host reads it as MCP's
 /// annotations, and asks its person before a tool that is not `Reads`.
@@ -23,9 +25,43 @@ pub(crate) enum Mark {
     Removes,
 }
 
-/// A tool an agent may call. Its handler takes the call's arguments and
-/// answers JSON, which the agent reads as text, or an error, which it reads as
-/// the tool's error with its message.
+impl Mark {
+    /// What a tool of this mark does, as a refusal says it.
+    pub(crate) fn verb(self) -> &'static str {
+        match self {
+            Mark::Reads => "reads",
+            Mark::Writes => "writes",
+            Mark::Removes => "removes",
+        }
+    }
+}
+
+/// A tool an agent may call. Its handler takes the call's arguments and its
+/// token, and answers JSON, which the agent reads as text, or an error, which
+/// it reads as the tool's error with its message.
+///
+/// The token is cancelled once the agent's host gives up on the call, and the
+/// server then writes no answer for it. Every read the handler makes through
+/// a store stops by itself, failing `Cancelled`, since the handler runs under
+/// the token; work of its own, as a statement on another database, asks
+/// [`is_cancelled`](CancellationToken::is_cancelled) and stops:
+///
+/// ```
+/// # use serde_json::{Value, json};
+/// # use tinystore::mcp::Tool;
+/// # fn ran(panel: &Value) -> Value { panel.clone() }
+/// let takes = json!({ "type": "object", "properties": { "panels": { "type": "array" } } });
+/// Tool::reads("dashboard_check", "Runs each panel's query.", takes, |given, token| {
+///     let mut checked = Vec::new();
+///     for panel in given["panels"].as_array().ok_or("dashboard_check takes panels")? {
+///         if token.is_cancelled() {
+///             return Err("cancelled".into()); // nobody reads it: the host gave up on the call
+///         }
+///         checked.push(ran(panel));
+///     }
+///     Ok(json!(checked))
+/// });
+/// ```
 #[derive(Clone)]
 pub struct Tool {
     pub(crate) name: String,
@@ -41,7 +77,7 @@ impl Tool {
         name: &str,
         description: &str,
         schema: Value,
-        handler: impl Fn(&Value) -> Answer + Send + Sync + 'static,
+        handler: impl Fn(&Value, &CancellationToken) -> Answer + Send + Sync + 'static,
     ) -> Tool {
         Tool::marked(Mark::Reads, name, description, schema, Arc::new(handler))
     }
@@ -52,7 +88,7 @@ impl Tool {
         name: &str,
         description: &str,
         schema: Value,
-        handler: impl Fn(&Value) -> Answer + Send + Sync + 'static,
+        handler: impl Fn(&Value, &CancellationToken) -> Answer + Send + Sync + 'static,
     ) -> Tool {
         Tool::marked(Mark::Writes, name, description, schema, Arc::new(handler))
     }
@@ -63,7 +99,7 @@ impl Tool {
         name: &str,
         description: &str,
         schema: Value,
-        handler: impl Fn(&Value) -> Answer + Send + Sync + 'static,
+        handler: impl Fn(&Value, &CancellationToken) -> Answer + Send + Sync + 'static,
     ) -> Tool {
         Tool::marked(Mark::Removes, name, description, schema, Arc::new(handler))
     }
@@ -91,8 +127,8 @@ impl Tool {
         })
     }
 
-    pub(crate) fn call(&self, arguments: &Value) -> Answer {
-        (self.handler)(arguments)
+    pub(crate) fn call(&self, arguments: &Value, token: &CancellationToken) -> Answer {
+        (self.handler)(arguments, token)
     }
 }
 

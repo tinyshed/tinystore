@@ -10,7 +10,7 @@ use super::tool::Tool;
 pub(super) fn tools(open: &Opener) -> Vec<Tool> {
     let open = Arc::clone(open);
     let description = "The store's search indexes, with their documents.";
-    vec![Tool::reads("search_list", description, schema(json!({}), &[]), move |_| {
+    vec![Tool::reads("search_list", description, schema(json!({}), &[]), move |_, _| {
         let listed = crate::search::list(&opened(&open)?)?;
         let shown: Vec<Value> = listed
             .iter()

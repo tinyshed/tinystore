@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use super::{ClientRun, Shared};
 use crate::CancellationToken;
-use crate::sync::lock;
 use crate::wire::protocol::Failure;
 use crate::wire::protocol::method::{self, Access};
 
@@ -15,10 +14,7 @@ impl Shared {
     /// ends as its END would end it, the jobs it held failing their attempt,
     /// and a watch cancelled ends.
     pub(super) fn cancel(self: &Arc<Self>, stream: u32) {
-        let read = lock(&self.reads).get(&stream).cloned();
-        if let Some(read) = read {
-            read.cancel();
-        }
+        self.reads.cancel(&stream);
         #[cfg(feature = "sql")]
         if self.sql.cancel(stream) {
             return;
@@ -78,9 +74,7 @@ impl Shared {
         if method::access(method) != Some(Access::Read) {
             return None;
         }
-        let token = CancellationToken::new();
-        lock(&self.reads).insert(stream, token.clone());
-        Some(token)
+        Some(self.reads.start(stream))
     }
 
     /// Runs `read` under its stream's token, then lets the token go, unless a
@@ -88,10 +82,7 @@ impl Shared {
     pub(super) fn read_under<T>(&self, stream: u32, token: Option<CancellationToken>, read: impl FnOnce() -> T) -> T {
         let Some(token) = token else { return read() };
         let answered = token.run(read);
-        let mut reads = lock(&self.reads);
-        if reads.get(&stream).is_some_and(|kept| kept.same(&token)) {
-            reads.remove(&stream);
-        }
+        self.reads.finish(&stream, &token);
         answered
     }
 }

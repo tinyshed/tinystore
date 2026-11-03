@@ -286,6 +286,9 @@ The server `tinystore mcp` runs, and a program's own through the `mcp` feature.
 - **MCP-02** Every tool MUST carry its mark: one that reads `readOnlyHint` true; one that writes `readOnlyHint` false and `destructiveHint` false; one that removes or replaces `destructiveHint` true.
 - **MCP-03** An allow list that names no tool that writes MUST be refused, with the nearest name of one, before the server answers anything.
 - **MCP-04** TinyStore's tools on a store MUST write nothing to it, a name it does not hold included, and a call MUST see what was committed before it.
+- **MCP-05** A message that follows a call, a `ping` or another call, MUST be answered while that call runs, without waiting for it.
+- **MCP-06** A call its host cancels with `notifications/cancelled` MUST get no answer, and its handler's token MUST be cancelled; a cancel of a call that is not running MUST be ignored.
+- **MCP-07** Every read a cancelled call makes through a store MUST stop with `Cancelled`.
 
 ## 10. What TinyStore does not promise
 

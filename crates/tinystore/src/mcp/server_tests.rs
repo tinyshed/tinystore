@@ -1,29 +1,14 @@
 use std::io::{self, Cursor, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 
 use serde_json::{Value, json};
 
 use super::*;
-use crate::ErrorKind;
+use crate::mcp::fixture::{Running, answers, call, cancelled, request};
 use crate::mcp::{self, Tool, Tools};
-
-/// What `server` answers to `messages`, a line each.
-fn answers(server: Server, messages: &[Value]) -> Vec<Value> {
-    let input: String = messages.iter().map(|message| format!("{message}\n")).collect();
-    let mut output = Vec::new();
-    server.serve_on(Cursor::new(input), &mut output).unwrap();
-    let output = String::from_utf8(output).unwrap();
-    output.lines().map(|line| serde_json::from_str(line).unwrap()).collect()
-}
-
-fn request(id: u64, method: &str, params: Value) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
-}
-
-fn call(id: u64, name: &str, arguments: Value) -> Value {
-    request(id, "tools/call", json!({ "name": name, "arguments": arguments }))
-}
+use crate::testing::{PATIENCE, holds_within};
+use crate::{CancellationToken, ErrorKind};
 
 fn named(listed: &Value) -> Vec<&str> {
     listed["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect()
@@ -35,14 +20,14 @@ fn dashbin(runs: &Arc<AtomicUsize>) -> Server {
     let object = json!({ "type": "object", "properties": { "name": { "type": "string" } } });
     let counted = |answer: Value| {
         let runs = Arc::clone(runs);
-        move |_: &Value| {
+        move |_: &Value, _: &CancellationToken| {
             runs.fetch_add(1, Ordering::SeqCst);
             Ok(answer.clone())
         }
     };
     mcp::server("dashbin", "1.4.0")
         .instructions("Read dashbin's dashboards.")
-        .tool(Tool::reads("dashboards_list", "The project's dashboards.", json!({ "type": "object" }), |_| {
+        .tool(Tool::reads("dashboards_list", "The project's dashboards.", json!({ "type": "object" }), |_, _| {
             Ok(json!([{ "name": "latency" }]))
         }))
         .tool(Tool::writes("dashboard_save", "Saves a dashboard.", object.clone(), counted(json!({ "saved": true }))))
@@ -110,6 +95,10 @@ fn a_tool_that_writes_is_offered_and_runs_only_when_the_allow_list_names_it() {
         refused["content"][0]["text"],
         "dashboard_save writes, and dashbin mcp was not started with --write dashboard_save"
     );
+    assert_eq!(
+        read[2]["result"]["content"][0]["text"],
+        "dashboard_delete removes, and dashbin mcp was not started with --write dashboard_delete"
+    );
     assert_eq!(runs.load(Ordering::SeqCst), 0, "a tool refused runs nothing");
 
     let read = answers(dashbin(&runs).allow("dashboard_save"), &messages);
@@ -120,12 +109,31 @@ fn a_tool_that_writes_is_offered_and_runs_only_when_the_allow_list_names_it() {
 
     let started =
         answers(dashbin(&runs).allow(Some("all")), &[request(1, "initialize", json!({})), messages[0].clone()]);
-    let instructions = started[0]["result"]["instructions"].as_str().unwrap();
-    assert!(
-        instructions.ends_with("Write with dashboard_save, dashboard_delete alone, each a change the program sees."),
-        "{instructions}"
-    );
     assert_eq!(named(&started[1]), ["dashboards_list", "dashboard_save", "dashboard_delete"]);
+}
+
+#[test]
+fn the_instructions_say_which_tools_change_anything_and_that_the_rest_only_read() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let told = |server: Server| {
+        let started = answers(server, &[request(1, "initialize", json!({}))]);
+        started[0]["result"]["instructions"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(
+        told(dashbin(&runs).allow("dashboard_save")),
+        "Read dashbin's dashboards. Only dashboard_save changes anything; every other tool only reads."
+    );
+    assert_eq!(
+        told(dashbin(&runs).allow("all")),
+        "Read dashbin's dashboards. Only dashboard_save and dashboard_delete change anything; every other tool only reads."
+    );
+    let object = json!({ "type": "object" });
+    let writes_alone = ["dashboard_save", "dashboard_delete", "dashboard_rename"]
+        .map(|name| Tool::writes(name, "Changes a dashboard.", object.clone(), |_, _| Ok(json!({}))));
+    assert_eq!(
+        told(mcp::server("dashbin", "1.4.0").tools(writes_alone).allow("all")),
+        "Only dashboard_save, dashboard_delete and dashboard_rename change anything."
+    );
 }
 
 // contract: MCP-02
@@ -170,12 +178,12 @@ fn an_allow_list_that_names_no_tool_that_writes_is_refused_before_anything_is_an
     let none = refused(mcp::server("dashbin", "1.4.0").allow("dashboard_save"));
     assert_eq!(none, "--write dashboard_save: no tool that writes; no tool here writes");
 
-    let twice =
-        dashbin(&runs).tool(Tool::reads("dashboards_list", "Again.", json!({ "type": "object" }), |_| Ok(json!([]))));
+    let twice = dashbin(&runs)
+        .tool(Tool::reads("dashboards_list", "Again.", json!({ "type": "object" }), |_, _| Ok(json!([]))));
     assert_eq!(refused(twice), "mcp server dashbin: two tools named dashboards_list");
     let shapeless =
         mcp::server("dashbin", "1.4.0")
-            .tool(Tool::reads("dashboards_list", "Its dashboards.", json!({}), |_| Ok(json!([]))));
+            .tool(Tool::reads("dashboards_list", "Its dashboards.", json!({}), |_, _| Ok(json!([]))));
     assert!(refused(shapeless).starts_with("mcp tool dashboards_list: its input schema is a JSON Schema of an object"));
 }
 
@@ -185,7 +193,7 @@ fn a_handlers_error_is_the_tools_error_with_its_text() {
         "dashboard_get",
         "One dashboard.",
         json!({ "type": "object" }),
-        |given| {
+        |given, _| {
             let name = given["name"].as_str().ok_or("dashboard_get takes name")?;
             Err(format!("no dashboard {name}").into())
         },
@@ -222,8 +230,61 @@ fn the_server_ends_quietly_once_its_host_has_gone() {
 
 #[test]
 fn a_prefix_names_each_tool_of_a_set_after_it() {
-    let tools = Tools(vec![Tool::reads("logs", "Its logs.", json!({ "type": "object" }), |_| Ok(json!([])))]);
+    let tools = Tools(vec![Tool::reads("logs", "Its logs.", json!({ "type": "object" }), |_, _| Ok(json!([])))]);
     let read =
         answers(mcp::server("dashbin", "1.4.0").tools(tools.prefix("store_")), &[request(1, "tools/list", json!({}))]);
     assert_eq!(named(&read[0]), ["store_logs"]);
+}
+
+/// A tool that reads until its call is cancelled, as a heavy statement does:
+/// it says when it starts, and once its token was cancelled.
+fn slow_read(started: mpsc::Sender<()>, told: mpsc::Sender<()>) -> Tool {
+    Tool::reads("slow_read", "Reads until it is cancelled.", json!({ "type": "object" }), move |_, token| {
+        started.send(()).unwrap();
+        holds_within(PATIENCE, "the slow call's token cancelled", || token.is_cancelled());
+        told.send(()).unwrap();
+        Ok(json!({ "read": "all of it" }))
+    })
+}
+
+// contract: MCP-05
+// contract: MCP-06
+#[test]
+fn a_ping_is_answered_while_a_slow_call_runs_and_a_cancelled_call_gets_no_answer() {
+    let ((started, starts), (told, tellings)) = (mpsc::channel(), mpsc::channel());
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut server = Running::start(dashbin(&runs).tool(slow_read(started, told)));
+    server.send(&call(1, "slow_read", json!({})));
+    starts.recv_timeout(PATIENCE).expect("the slow call started");
+
+    server.send(&request(2, "ping", json!({})));
+    assert_eq!(server.next(), json!({ "jsonrpc": "2.0", "id": 2, "result": {} }), "a ping waits for no call");
+    server.send(&call(3, "dashboards_list", json!({})));
+    assert_eq!(server.next()["result"]["content"][0]["text"], r#"[{"name":"latency"}]"#);
+    server.send(&call(1, "slow_read", json!({})));
+    assert_eq!(server.next()["error"]["message"], "a call of id 1 is still running");
+
+    server.send(&cancelled(3)); // finished: ignored
+    server.send(&cancelled(7)); // never called: ignored
+    server.send(&cancelled(1));
+    tellings.recv_timeout(PATIENCE).expect("the slow call's token was cancelled");
+    server.send(&request(4, "ping", json!({})));
+    assert_eq!(server.next()["id"], 4);
+    assert_eq!(server.close(), Vec::<Value>::new(), "the cancelled call got no answer");
+}
+
+#[test]
+fn a_handler_that_panics_fails_its_call_and_the_server_goes_on() {
+    let panicking = mcp::server("dashbin", "1.4.0").tool(Tool::reads(
+        "dashboard_get",
+        "One dashboard.",
+        json!({ "type": "object" }),
+        |_, _| panic!("no panel 7"),
+    ));
+    let read = answers(panicking, &[call(1, "dashboard_get", json!({})), request(2, "ping", json!({}))]);
+    assert_eq!(
+        (read[0]["result"]["isError"].as_bool(), read[0]["result"]["content"][0]["text"].as_str()),
+        (Some(true), Some("dashboard_get panicked: no panel 7"))
+    );
+    assert_eq!(read[1]["result"], json!({}));
 }

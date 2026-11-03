@@ -1,20 +1,11 @@
-use std::io::Cursor;
-
 use serde_json::{Value, json};
 
-use crate::mcp::{self, Server};
+use crate::mcp;
+use crate::mcp::fixture::answers;
 use crate::{Options, Store};
 
 fn held(dir: &std::path::Path) -> Store {
     Store::open(dir, Options { background: false, ..Options::default() }).unwrap()
-}
-
-/// What `server` answers to `messages`, a line each.
-fn answers(server: Server, messages: &[Value]) -> Vec<Value> {
-    let input: String = messages.iter().map(|message| format!("{message}\n")).collect();
-    let mut output = Vec::new();
-    server.serve_on(Cursor::new(input), &mut output).unwrap();
-    String::from_utf8(output).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 
 /// A tool's answer on `store`'s tools: its JSON, or its error's text.
@@ -40,7 +31,7 @@ fn a_programs_own_tools_and_the_stores_sit_in_one_list_the_stores_under_a_prefix
         "dashboards_list",
         "The project's dashboards.",
         json!({ "type": "object" }),
-        |_| Ok(json!([])),
+        |_, _| Ok(json!([])),
     ));
     let read = answers(
         server,
@@ -115,4 +106,41 @@ fn a_bucket_and_a_queue_a_program_opened_from_its_database_are_read_with_that_da
     assert_eq!(got["value"], "water weekly");
     let jobs = called(&store, "jobs_list", json!({ "queue": "reminders", "database": "plants" })).unwrap();
     assert_eq!((jobs[0]["id"].as_str(), jobs[0]["state"].as_str()), (Some("fern-1"), Some("scheduled")));
+}
+
+// contract: MCP-07
+#[cfg(feature = "sql")]
+#[test]
+fn a_cancelled_call_stops_its_reads_of_the_store() {
+    use std::sync::mpsc;
+
+    use crate::mcp::Tool;
+    use crate::mcp::fixture::{Running, call, cancelled, request};
+    use crate::testing::PATIENCE;
+
+    // counts to a billion, which takes minutes: a read only a cancel ends
+    const SLOW: &str = "with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000)
+        select count(*) from c";
+    let dir = tempfile::tempdir().unwrap();
+    let store = held(dir.path());
+    store.database("app").open().unwrap();
+    // sql_query as the store's tools give it, telling the test how it ended
+    let query = mcp::read_tools(&store).0.into_iter().find(|tool| tool.name == "sql_query").unwrap();
+    let ((started, starts), (ended, endings)) = (mpsc::channel(), mpsc::channel());
+    let watched = Tool::reads("sql_query", "Rows of a query.", query.schema().clone(), move |given, token| {
+        started.send(()).unwrap();
+        let answered = query.call(given, token);
+        ended.send(answered.as_ref().map_err(ToString::to_string).err()).unwrap();
+        answered
+    });
+
+    let mut server = Running::start(mcp::server("dashbin", "1.4.0").tool(watched));
+    server.send(&call(1, "sql_query", json!({ "database": "app", "query": SLOW })));
+    starts.recv_timeout(PATIENCE).expect("the query started");
+    server.send(&cancelled(1));
+    let why = endings.recv_timeout(PATIENCE).expect("the query stopped in time").expect("the query failed");
+    assert!(why.ends_with(": cancelled"), "{why}");
+    server.send(&request(2, "ping", json!({})));
+    assert_eq!(server.next()["id"], 2, "the cancelled call got no answer");
+    assert_eq!(server.close(), Vec::<Value>::new());
 }

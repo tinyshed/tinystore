@@ -1,5 +1,14 @@
 //! Text more than one part of the store writes or checks alike.
 
+/// What a caught panic said: a job's handler's, an MCP tool's.
+#[cfg(any(feature = "jobs", feature = "mcp"))]
+pub(crate) fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    match panic.downcast_ref::<&str>() {
+        Some(message) => message,
+        None => panic.downcast_ref::<String>().map_or("a panic without a message", String::as_str),
+    }
+}
+
 /// Bytes as lowercase hex, two digits each.
 #[cfg(any(feature = "kv", feature = "backup", feature = "console", feature = "sql", feature = "replication"))]
 pub(crate) fn hex(bytes: &[u8]) -> String {

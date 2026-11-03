@@ -16,7 +16,8 @@ fn said(output: &Output) -> String {
     format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))
 }
 
-/// The answers of `tinystore mcp` to `messages`, one a line.
+/// The answers of `tinystore mcp` to `messages`, in the order of their ids:
+/// calls run side by side, and each is answered as it finishes.
 fn answers(dir: &Path, flags: &[&str], messages: &[Value]) -> Vec<Value> {
     let mut mcp = Command::new(BINARY)
         .arg("mcp")
@@ -31,9 +32,10 @@ fn answers(dir: &Path, flags: &[&str], messages: &[Value]) -> Vec<Value> {
     let lines: String = messages.iter().map(|message| format!("{message}\n")).collect();
     stdin.write_all(lines.as_bytes()).unwrap();
     drop(stdin);
-    let read: Vec<Value> =
+    let mut read: Vec<Value> =
         BufReader::new(mcp.stdout.take().unwrap()).lines().map(|line| line.unwrap().parse().unwrap()).collect();
     mcp.wait().unwrap();
+    read.sort_by_key(|answer| answer["id"].as_u64());
     read
 }
 

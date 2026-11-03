@@ -530,8 +530,8 @@ pub(crate) fn answered(
         Ok(Ok(outcome)) => outcome.how(jobs.now()),
         Ok(Err(cause)) => How::Retry { at: None, cause },
         Err(panic) => {
-            let message = panic_message(&*panic);
-            queue.panics.observe(&queue.name, &message);
+            let message = crate::text::panic_message(&*panic);
+            queue.panics.observe(&queue.name, message);
             How::Retry { at: None, cause: format!("the handler panicked: {message}") }
         }
     })
@@ -560,14 +560,6 @@ pub(crate) fn read_value<V: DeserializeOwned>(jobs: &Jobs, lease: &Lease) -> Res
         (None, None) => Vec::new(),
     };
     values::decode(&encoded)
-}
-
-fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
-    panic
-        .downcast_ref::<&str>()
-        .map(|message| (*message).to_owned())
-        .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "a panic without a message".to_owned())
 }
 
 /// A worker running a queue's handlers on threads the store started for it.

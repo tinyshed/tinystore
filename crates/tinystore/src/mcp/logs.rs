@@ -20,7 +20,7 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
         "limit": count("how many of the last lines; 50 by default, 200 at most"),
     });
     let description = "The application's latest log lines and events, newest last.";
-    vec![Tool::reads("logs", description, schema(takes, &[]), move |given| {
+    vec![Tool::reads("logs", description, schema(takes, &[]), move |given, _| {
         Ok(latest(&open, &Arguments { tool: "logs", given })?)
     })]
 }

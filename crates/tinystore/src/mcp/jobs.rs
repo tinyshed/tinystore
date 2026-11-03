@@ -21,7 +21,7 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
     }));
     let description = "A queue's jobs that have ids, in the order of their ids, with their state, attempts and last \
                        error; or, with state failed and no prefix, its failed jobs, the last failed first.";
-    vec![Tool::reads("jobs_list", description, schema(takes, &["queue"]), move |given| {
+    vec![Tool::reads("jobs_list", description, schema(takes, &["queue"]), move |given, _| {
         Ok(page(&open, &Arguments { tool: "jobs_list", given })?)
     })]
 }

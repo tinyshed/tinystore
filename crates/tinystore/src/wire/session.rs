@@ -32,11 +32,12 @@ use super::records;
 use super::search;
 #[cfg(feature = "sql")]
 use super::sql;
+use crate::cancel::Tokens;
 use crate::kv::Handed;
 use crate::pipe::{Capability, Connect};
 use crate::pool::Pool;
 use crate::sync::lock;
-use crate::{CancellationToken, Result, Store};
+use crate::{Result, Store};
 
 mod cancel;
 mod credit;
@@ -121,7 +122,7 @@ struct Shared {
     runs: Mutex<HashMap<u32, ClientRun>>,
     /// The tokens of the reads the workers run, by stream, which a CANCEL of
     /// the stream or the connection's end cancels.
-    reads: Mutex<HashMap<u32, CancellationToken>>,
+    reads: Tokens<u32>,
     /// Numbers each run's asking, so that a wait that ends after its stream
     /// was cancelled, and its number named again, finds another run there.
     asked: AtomicU64,
@@ -221,7 +222,7 @@ impl Session {
             input: Mutex::new(Input::default()),
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
-            reads: Mutex::new(HashMap::new()),
+            reads: Tokens::default(),
             asked: AtomicU64::new(0),
             open: Mutex::new(HashMap::new()),
             outstanding: AtomicU64::new(0),
@@ -399,8 +400,7 @@ impl Session {
         drop(waiting);
         let runs = std::mem::take(&mut *self.shared.lock_runs());
         drop(runs);
-        let reads: Vec<CancellationToken> = lock(&self.shared.reads).drain().map(|(_, read)| read).collect();
-        reads.iter().for_each(CancellationToken::cancel);
+        self.shared.reads.cancel_all();
         #[cfg(feature = "jobs")]
         {
             for watch in self.shared.jobs.take_watches() {

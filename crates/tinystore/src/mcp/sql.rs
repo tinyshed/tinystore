@@ -22,7 +22,7 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
         "query": text("one statement that reads, as select count(*) from users"),
     });
     let description = "Rows of a read-only SQL query on one of the application's databases, sql/<database>.db.";
-    vec![Tool::reads("sql_query", description, schema(takes, &["database", "query"]), move |given| {
+    vec![Tool::reads("sql_query", description, schema(takes, &["database", "query"]), move |given, _| {
         let given = Arguments { tool: "sql_query", given };
         Ok(rows(&store_opened(&open)?, given.needed("database")?, given.needed("query")?, MOST)?)
     })]
