@@ -9,6 +9,7 @@ use std::fmt;
 
 use serde_json::{Map, Value, json};
 
+use super::layers::set;
 use super::marks::{ENTRIES, ENTRIES_GIVEN, ENTRIES_ITEM, LIVE, REQUIRED, SECRET, SECRET_REQUIRED};
 use crate::Error;
 
@@ -196,6 +197,18 @@ impl Declaration {
             Value::Object(map) => Ok(Declaration { root: group(map, "", Place::Root)? }),
             other => Err(format!("a declaration is a struct of settings, not {}", shown(other))),
         }
+    }
+
+    /// Makes a secret of each setting a Rust program's value leaves `None`
+    /// whose type holds one. `Option<Secret<String>>` serializes `None` as a
+    /// bare null, which says nothing of the `Secret` inside, so the setting
+    /// would read any value and print it. Each null setting is given text
+    /// once in the value as the config keeps it, and `reads_secret`, the
+    /// program's type reading that value at a path, says whether the text
+    /// became a secret.
+    pub(crate) fn find_optional_secrets(&mut self, marked: &Value, reads_secret: impl Fn(&Value, &str) -> bool) {
+        let probe = Probe { marked, reads_secret: &reads_secret };
+        probe.group(&mut self.root, "", &unmarked(marked));
     }
 
     /// The node at a path of keys joined by dots, `limits.rps`, or a field of
@@ -582,8 +595,11 @@ fn setting(value: &Value, path: &str, place: Place) -> Result<Setting, String> {
         return Err(format!("{path}: a mark goes on a setting, not on a group"));
     }
     let kind = kind(value, path)?;
-    if marks.secret && kind != Kind::Text {
-        return Err(format!("{path}: a secret is text"));
+    match kind {
+        _ if !marks.secret || kind == Kind::Text => {}
+        // `Secret::new(None)`, whose mark a probe never needs to find
+        Kind::Any => return Err(format!("{path}: a secret is text; one with no value is Option<Secret<String>>")),
+        _ => return Err(format!("{path}: a secret is text")),
     }
     let default = match place {
         _ if marks.required => None,
@@ -635,6 +651,53 @@ pub(crate) fn unmarked(value: &Value) -> Value {
         },
         Value::Array(items) => Value::Array(items.iter().map(unmarked).collect()),
         other => other.clone(),
+    }
+}
+
+/// The value at a path of keys joined by dots, through a map of entries'
+/// mark to its entries in a value written with its marks.
+pub(crate) fn at<'a>(tree: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.').try_fold(tree, |node, key| match node.get(ENTRIES) {
+        Some(entries) => entries.get(ENTRIES_GIVEN)?.get(key),
+        None => node.get(key),
+    })
+}
+
+/// What finds the secrets a Rust program's value leaves `None`: the value
+/// with its marks, and its type, which says whether text at a path of a
+/// value it reads is a secret.
+struct Probe<'a> {
+    marked: &'a Value,
+    reads_secret: &'a dyn Fn(&Value, &str) -> bool,
+}
+
+/// The key of the entry a probe makes in each map of entries.
+const PROBED: &str = "probed";
+
+impl Probe<'_> {
+    /// Each null setting of `group`, read in `tree`, a value the program's
+    /// type reads, which has the group at `path`.
+    fn group(&self, group: &mut Group, path: &str, tree: &Value) {
+        for (key, node) in group.iter_mut() {
+            let here = joined(path, key);
+            match node {
+                Node::Group(inner) => self.group(inner, &here, tree),
+                // an entry as its item's default makes it, read there
+                Node::Entries(entries) => {
+                    let entry = joined(&here, PROBED);
+                    let item = at(self.marked, &here).and_then(|map| map.get(ENTRIES)?.get(ENTRIES_ITEM));
+                    let mut with_entry = tree.clone();
+                    set(&mut with_entry, &entry, item.map(unmarked).unwrap_or_default());
+                    self.group(&mut entries.item, &entry, &with_entry);
+                }
+                Node::Setting(setting) if setting.kind == Kind::Any && setting.default == Some(Value::Null) => {
+                    if (self.reads_secret)(tree, &here) {
+                        (setting.kind, setting.secret) = (Kind::Text, true);
+                    }
+                }
+                Node::Setting(_) | Node::Chosen(_) => {}
+            }
+        }
     }
 }
 

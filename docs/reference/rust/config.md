@@ -426,7 +426,8 @@ serde and the logs, and whose text `reveal` gives. A secret is never kept,
 so that only a file or a variable gives it.
 
 `Secret::default()` holds no value, and a layer must give it;
-`Secret::new` gives it a default.
+`Secret::new` gives it a default. `Option<Secret<String>>` is a secret a
+layer may leave out: `None` until one gives it.
 
 ### Secret.new
 

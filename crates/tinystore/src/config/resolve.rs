@@ -5,13 +5,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use super::declaration::{Declaration, Group, Item, Kind, Node, Setting};
+use super::declaration::{Declaration, Group, Item, Kind, Node, Setting, at};
 use super::explain::Origin;
 use super::hub::{Change, Kept};
 use super::layers::{Base, Stacked, set};
+use super::marks::marked;
 use super::rules;
 
 /// A program's own check of its whole value, which says why it refuses one.
@@ -146,6 +148,19 @@ impl<T: DeserializeOwned> Making<'_, T> {
             })
             .collect();
         if found.is_empty() { vec![why.to_owned()] } else { found }
+    }
+}
+
+impl<T: Serialize + DeserializeOwned> Making<'_, T> {
+    /// `value` put at `path` of `tree` and read as the program's type, then
+    /// written back with its marks: what the type makes of that value, such
+    /// as where its secrets are. None when the value does not read as the
+    /// type, and null when the type writes nothing at `path`.
+    pub(super) fn written_at(&self, tree: &Value, path: &str, value: &Value) -> Option<Value> {
+        let mut probe = tree.clone();
+        set(&mut probe, path, value.clone());
+        let read = marked(&self.built(&probe).ok()?).ok()?;
+        Some(at(&read, path).cloned().unwrap_or(Value::Null))
     }
 }
 

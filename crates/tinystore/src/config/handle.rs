@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::declaration::{Declaration, Keys, Kind, Setting, holds_secret, masked, unmarked};
+use super::declaration::{Declaration, Keys, Kind, Setting, at, holds_secret, masked, unmarked};
 #[cfg(all(feature = "config", any(test, feature = "wire")))]
 use super::declaration::{Group, Node, joined, shown};
 use super::explain::{Explained, Given, Line, Origin};
@@ -210,9 +210,16 @@ where
 }
 
 /// The declaration a Rust program's value and its marks make.
-fn declared<T: Serialize>(declaration: &T) -> Result<Declaration> {
+fn declared<T: Serialize + DeserializeOwned>(declaration: &T) -> Result<Declaration> {
     let value = marked(declaration).map_err(|error| Error::invalid(format!("the declaration: {error}")))?;
-    Declaration::of_marked(&value).map_err(Error::invalid)
+    let mut declared = Declaration::of_marked(&value).map_err(Error::invalid)?;
+    let typed = declared.clone();
+    let making: Making<'_, T> = Making { declaration: &typed, validate: None, view: View::Rust };
+    let text = Value::from("");
+    declared.find_optional_secrets(&value, |tree, path| {
+        making.written_at(tree, path, &text).is_some_and(|read| holds_secret(&read))
+    });
+    Ok(declared)
 }
 
 /// One error that says every problem at once.
@@ -609,12 +616,10 @@ where
         if !nests || self.view != View::Rust {
             return shown_value(value, setting.kind == Kind::Duration);
         }
-        let mut probe = tree.clone();
-        set(&mut probe, path, value.clone());
-        match self.making().built(&probe).map(|built| marked(&built)) {
-            Ok(Ok(read)) => at(&read, path).map_or_else(|| value.to_string(), |read| masked(value, read).to_string()),
+        match self.making().written_at(tree, path, value) {
+            Some(read) => masked(value, &read).to_string(),
             // a value that does not read as the program's type cannot say where its secrets are
-            _ => "***".to_owned(),
+            None => "***".to_owned(),
         }
     }
 
@@ -694,11 +699,6 @@ fn line(path: String, stack: Vec<Stacked>, shown: impl Fn(&Value) -> String) -> 
 /// A value as the config keeps it: marks taken off, spans in milliseconds.
 fn plain<T: Serialize>(value: &T) -> Result<Value> {
     marked(value).map(|value| unmarked(&value)).map_err(|error| Error::invalid(error.to_string()))
-}
-
-/// The value at a path of keys joined by dots.
-fn at<'a>(tree: &'a Value, path: &str) -> Option<&'a Value> {
-    path.split('.').try_fold(tree, |node, key| node.get(key))
 }
 
 /// A config's watchers, and the one delivery that calls them in order.

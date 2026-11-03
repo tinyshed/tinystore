@@ -59,7 +59,8 @@ fn mark<S: Serializer, T: Serialize>(serializer: S, key: &str, value: &T) -> Res
 /// so that only a file or a variable gives it.
 ///
 /// `Secret::default()` holds no value, and a layer must give it;
-/// `Secret::new` gives it a default.
+/// `Secret::new` gives it a default. `Option<Secret<String>>` is a secret a
+/// layer may leave out: `None` until one gives it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Secret<T> {
     value: T,

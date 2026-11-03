@@ -266,6 +266,58 @@ fn a_secret_a_map_or_a_list_holds_inside_prints_as_stars_in_explain_and_no_chang
     assert_eq!(changes, 0, "a change that holds a secret keeps nothing");
 }
 
+/// A database on trust or peer auth, which takes no password.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Trusted {
+    db: TrustedDb,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct TrustedDb {
+    host: String,
+    password: Option<Secret<String>>,
+}
+
+// contract: CFG-06, CFG-13
+#[test]
+fn an_optional_secret_left_none_is_a_secret_whatever_layer_gives_it() {
+    let f = fixture();
+    let opened = |toml: &str, variables: &[(&str, &str)]| {
+        let toml = file(&f, "trusted.toml", toml);
+        f.store.config("trusted", Trusted::default()).file(toml).env(env(variables)).open()
+    };
+    let config = opened("[db]\nhost = \"db\"\npassword = \"s3cret\"\n", &[]).unwrap();
+    assert_eq!(config.get().db.password.as_ref().map(|password| password.reveal().as_str()), Some("s3cret"));
+    let printed = format!("{0}{0:?}", config.explain());
+    assert!(!printed.contains("s3cret") && printed.contains("***"), "{printed}");
+
+    let config = opened("[db]\nhost = \"db\"\n", &[("APP_DB_PASSWORD", "12345")]).unwrap();
+    let given = config.get().db.password.as_ref().map(|password| password.reveal().clone());
+    assert_eq!(given.as_deref(), Some("12345"), "a variable's text is a secret's text, never a number");
+    let error = refused(opened("[db]\npassword = 12345\n", &[])).to_string();
+    assert!(error.contains("db.password: a secret is text") && !error.contains("12345"), "{error}");
+
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Sites {
+        site: Entries<TrustedDb>,
+    }
+    let toml = file(&f, "sites.toml", "[site.aimee]\nhost = \"db\"\n[site.kazan]\nhost = \"db2\"\n");
+    let variables = [("APP_SITE_AIMEE_PASSWORD", "67890")];
+    let sites = f.store.config("sites", Sites::default()).file(toml).env(env(&variables)).open().unwrap();
+    let password = |site: &str| sites.get().site[site].password.as_ref().map(|password| password.reveal().clone());
+    assert_eq!((password("aimee").as_deref(), password("kazan")), (Some("67890"), None));
+    assert!(!sites.explain().to_string().contains("67890"), "{}", sites.explain());
+
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Inside {
+        password: Secret<Option<String>>,
+    }
+    let error = refused(f.store.config("inside", Inside { password: Secret::new(None) }).open()).to_string();
+    assert!(error.contains("password: a secret is text; one with no value is Option<Secret<String>>"), "{error}");
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Dashbin {

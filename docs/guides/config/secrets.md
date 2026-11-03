@@ -91,6 +91,9 @@ let pool = connect(config.get().db.url.reveal())?;
 - An error about a secret names its variable and never quotes its text.
 - A secret is text. It cannot be `live`: a value an admin page could set and
   read back is not a secret.
+- In Rust, `Option<Secret<String>>` is a secret that a layer may leave out,
+  such as the password of a database that takes none. It is `None` until a
+  layer gives it, and the value a layer gives is a secret like any other.
 - A secret in each entry of a map is declared as a field of
   [entries](layers.md#entries), and is given and printed like any other
   secret. In Rust a `Secret` inside a plain `BTreeMap` or `Vec` prints as
