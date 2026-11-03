@@ -219,9 +219,11 @@ fn declared<T: Serialize + DeserializeOwned>(declaration: &T) -> Result<Declarat
     let mut declared = Declaration::of_marked(&value).map_err(Error::invalid)?;
     let typed = declared.clone();
     let making: Making<'_, T> = Making { declaration: &typed, validate: None, view: View::Rust };
-    let text = Value::from("");
-    declared.find_optional_secrets(&value, |tree, path| {
-        making.written_at(tree, path, &text).is_some_and(|read| holds_secret(&read))
+    let (text, number) = (Value::from(""), Value::from(0));
+    declared.find_optional_texts(&value, |tree, path| {
+        // a type that takes a number there too, as `Option<serde_json::Value>`, keeps taking any value
+        let text_alone = making.written_at(tree, path, &number).is_none();
+        text_alone.then(|| making.written_at(tree, path, &text)).flatten()
     });
     Ok(declared)
 }

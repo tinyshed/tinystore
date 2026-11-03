@@ -924,6 +924,27 @@ fn a_setting_with_no_value_as_data_reads_and_explains_as_a_typed_option_left_non
     assert_eq!(proxy.trim_end(), "proxy  unset  the declaration", "an Option left None says unset too");
 }
 
+// contract: CFG-13, CFG-15
+#[test]
+fn an_option_of_text_left_none_reads_a_variable_as_text_and_one_of_a_number_as_a_number() {
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    #[serde(default)]
+    struct Account {
+        id: Option<String>,
+        port: Option<u16>,
+        extra: Option<Value>,
+    }
+    let variables = [("APP_ID", "123456"), ("APP_PORT", "8080"), ("APP_EXTRA", "[1, 2]")];
+    let config = load("account", Account::default()).env(env(&variables)).open().unwrap();
+    let account = config.get();
+    assert_eq!((account.id.as_deref(), account.port), (Some("123456"), Some(8080)));
+    assert_eq!(account.extra, Some(json!([1, 2])), "a type that takes any value still does");
+
+    let as_data = json!({ "id": { "kind": "text", "default": null } });
+    let data = load("account", Declaration::from_json(as_data).unwrap()).env(env(&[("APP_ID", "123456")])).open();
+    assert_eq!(data.unwrap().get()["id"], json!("123456"), "as data the same");
+}
+
 /// dashbin's instances, whose settings are the group of the plugin each one's
 /// `plugin` names, a shape it learns once its plugins are loaded.
 fn plugins() -> Declaration {

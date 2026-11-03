@@ -201,15 +201,17 @@ impl Declaration {
         }
     }
 
-    /// Makes a secret of each setting a Rust program's value leaves `None`
-    /// whose type holds one. `Option<Secret<String>>` serializes `None` as a
-    /// bare null, which says nothing of the `Secret` inside, so the setting
-    /// would read any value and print it. Each null setting is given text
-    /// once in the value as the config keeps it, and `reads_secret`, the
-    /// program's type reading that value at a path, says whether the text
-    /// became a secret.
-    pub(crate) fn find_optional_secrets(&mut self, marked: &Value, reads_secret: impl Fn(&Value, &str) -> bool) {
-        let probe = Probe { marked, reads_secret: &reads_secret };
+    /// Makes text of each setting a Rust program's value leaves `None` whose
+    /// type takes text alone, and a secret of one whose type holds a
+    /// `Secret`. `None` serializes as a bare null, which says nothing of the
+    /// type inside, so the setting would take any value: `APP_ID=123` as a
+    /// number its `Option<String>` refuses, and an `Option<Secret<String>>`'s
+    /// value unmasked. `read_text`, the program's type reading text at a path
+    /// of the value as the config keeps it, gives that text as the type
+    /// writes it back with its marks, or none when the type takes more than
+    /// text there.
+    pub(crate) fn find_optional_texts(&mut self, marked: &Value, read_text: impl Fn(&Value, &str) -> Option<Value>) {
+        let probe = Probe { marked, read_text: &read_text };
         probe.group(&mut self.root, "", &unmarked(marked));
     }
 
@@ -668,12 +670,12 @@ pub(crate) fn at<'a>(tree: &'a Value, path: &str) -> Option<&'a Value> {
     })
 }
 
-/// What finds the secrets a Rust program's value leaves `None`: the value
-/// with its marks, and its type, which says whether text at a path of a
-/// value it reads is a secret.
+/// What finds the texts and secrets a Rust program's value leaves `None`:
+/// the value with its marks, and its type, which reads text at a path of a
+/// value as it would read it.
 struct Probe<'a> {
     marked: &'a Value,
-    reads_secret: &'a dyn Fn(&Value, &str) -> bool,
+    read_text: &'a dyn Fn(&Value, &str) -> Option<Value>,
 }
 
 /// The key of the entry a probe makes in each map of entries.
@@ -696,8 +698,8 @@ impl Probe<'_> {
                     self.group(&mut entries.item, &entry, &with_entry);
                 }
                 Node::Setting(setting) if setting.kind == Kind::Any && setting.default == Some(Value::Null) => {
-                    if (self.reads_secret)(tree, &here) {
-                        (setting.kind, setting.secret) = (Kind::Text, true);
+                    if let Some(read) = (self.read_text)(tree, &here) {
+                        (setting.kind, setting.secret) = (Kind::Text, holds_secret(&read));
                     }
                 }
                 Node::Setting(_) | Node::Chosen(_) => {}
