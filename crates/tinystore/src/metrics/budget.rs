@@ -3,8 +3,8 @@
 //! buckets it answers. Past one is a `limit` that names it, never a smaller
 //! answer; `explain` says what a call would spend of each before it runs.
 
-use crate::Result;
 use crate::limits::{Limit, QUERY_ANSWER, QUERY_BYTES, QUERY_SAMPLES, QUERY_SERIES};
+use crate::{Error, Result};
 
 const SERIES: Limit = QUERY_SERIES;
 /// The bytes a query copies out of the file: labels, directories, clocks,
@@ -36,9 +36,17 @@ pub(super) struct Budget {
     /// A replace's budget, spent on what the range it replaces holds, whose
     /// refusal asks for a shorter range.
     replacing: bool,
+    /// An aggregate's page, which stops before every bound but a bucket's
+    /// own: its refusal asks for smaller buckets, never for pages.
+    paged: bool,
 }
 
 impl Budget {
+    /// The budget of an aggregate's page.
+    pub(super) fn paged() -> Budget {
+        Budget { paged: true, ..Budget::default() }
+    }
+
     /// The budget of a gauge's `replace`, bounded as a query is.
     pub(super) fn replacing() -> Budget {
         Budget { replacing: true, ..Budget::default() }
@@ -75,6 +83,23 @@ impl Budget {
         Ok(())
     }
 
+    /// The series of the groups an aggregate's page holds.
+    pub(super) fn take_group(&mut self, series: usize) -> Result<()> {
+        self.series = self.take(self.series, series, &SERIES)?;
+        Ok(())
+    }
+
+    /// The refusal of a group whose series alone pass what a query finds:
+    /// a page holds a group whole, since each bucket counts all of them.
+    pub(super) fn too_many(&self, series: usize) -> Error {
+        let refused = format!(
+            "a group past {} {}, which no page splits, since a bucket counts every series of its group: group `by` \
+             more labels, or find fewer series",
+            SERIES.bound, SERIES.name
+        );
+        SERIES.refuse(series as u64, refused)
+    }
+
     pub(super) fn take_bytes(&mut self, bytes: usize) -> Result<()> {
         self.bytes = self.take(self.bytes, bytes, &BYTES)?;
         Ok(())
@@ -94,7 +119,7 @@ impl Budget {
     /// Spends nothing more: what a page took of a group it then leaves out
     /// is given back, so that a bucket alone is tried with the whole bounds.
     pub(super) fn reset(&mut self) {
-        *self = Budget { planning: self.planning, ..Budget::default() };
+        *self = Budget { planning: self.planning, paged: self.paged, ..Budget::default() };
     }
 
     /// Whether `bytes` more copied and `samples` more decoded stay within
@@ -129,6 +154,11 @@ impl Budget {
         }
         let refused = if self.replacing {
             format!("a replace past {} {}: replace a shorter range, in several calls", bound.bound, bound.name)
+        } else if self.paged {
+            format!(
+                "a bucket past {} {}, which no page splits: a narrower `every`, a shorter range, or fewer series",
+                bound.bound, bound.name
+            )
         } else {
             format!(
                 "a query past {} {}: ask for less, a shorter range, a wider `every`, fewer series, or a page at a \

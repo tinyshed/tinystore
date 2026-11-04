@@ -321,7 +321,10 @@ impl Query {
     /// answer, and past a bound it is a `limit` error, naming the bound,
     /// never fewer buckets. With `limit` it is a page of that many buckets
     /// at most, which ends between two whole buckets of a group and gives
-    /// `next`; one bucket that alone passes a bound is still `limit`.
+    /// `next`; one bucket that alone passes a bound is still `limit`. A page
+    /// reads only the series of its own groups, so pages go past the series
+    /// a query finds a group at a time, and a group whose series alone pass
+    /// them is `limit` too.
     pub fn aggregate(&self, op: Op) -> Result<AggregatePage> {
         self.checked_aggregate(op).and_then(|aggregate| aggregate())
     }

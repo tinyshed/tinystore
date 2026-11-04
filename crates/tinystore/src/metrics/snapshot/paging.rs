@@ -3,10 +3,12 @@
 //! reaches it, and where the page stopped.
 //!
 //! A read stops before the part that would pass its `limit` or a bound. An
-//! aggregate's group shares what the page has left among its series, takes
-//! each as far as its share goes, and ends at the start of the bucket the
-//! first of them stopped in, so that every bucket it answers counts every
-//! series of the group.
+//! aggregate's page holds whole groups, chosen from every series the query
+//! finds, as many series as a query finds at most, so that pages go past
+//! that bound a group at a time. A group shares what the page has left among
+//! its series, takes each as far as its share goes, and ends at the start of
+//! the bucket the first of them stopped in, so that every bucket it answers
+//! counts every series of the group.
 //!
 //! ```text
 //! a group's series   a ──────────╳            a stopped inside 10:05's bucket
@@ -17,8 +19,9 @@
 
 use std::collections::BTreeMap;
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
+use super::chosen::{Choice, Chosen};
 use super::{GROUPS, GROUPS_AND_BEFORE, HEAD, Part, Reading, State, Taken, TakenHead, Want, from_the_chunk_before};
 use crate::metrics::aggregate::{Op, Shape};
 use crate::metrics::budget::Budget;
@@ -26,6 +29,7 @@ use crate::metrics::clock;
 use crate::metrics::directory::{Group, Row};
 use crate::metrics::engine::Engine;
 use crate::metrics::head;
+use crate::metrics::labels;
 use crate::metrics::matching::{self, Found};
 use crate::metrics::page::{GroupPlace, Paging, Place};
 use crate::metrics::query::Asked;
@@ -90,23 +94,48 @@ impl Engine {
         budget: &mut Budget,
     ) -> Result<(Vec<TakenGroup>, Option<GroupPlace>)> {
         self.snapshot(asked, Want::Buckets(shape), budget, |reading, asked| {
-            let found = matching::find(reading.connection, asked, reading.budget)?;
-            let groups = grouped(found, shape)?;
-            reading.groups_page(self, &groups, asked, shape, paging)
+            let most = reading.budget.series_limit();
+            let (groups, beyond) = match chosen(reading.connection, asked, shape, paging, most)? {
+                Choice::Groups(groups, beyond) => (groups, beyond),
+                Choice::TooMany(group, series) => return Err(reading.budget.too_many(series).within(named(&group))),
+            };
+            reading.budget.take_group(groups.values().map(Vec::len).sum())?;
+            let beyond = beyond.map(|group| GroupPlace { group, at: i64::MIN });
+            reading.groups_page(self, &groups, asked, shape, paging, beyond)
         })
     }
 }
 
-/// The series an aggregate found, by the group each falls in, the groups in
-/// the order of their names and labels.
-fn grouped(found: Vec<Found>, shape: &Shape) -> Result<BTreeMap<(String, Labels), Vec<Found>>> {
-    let mut groups: BTreeMap<(String, Labels), Vec<Found>> = BTreeMap::new();
-    for series in found {
-        shape.check(&series)?;
-        let group = shape.group_of(&series).map_err(|error| error.within(&series.kept))?;
-        groups.entry(group).or_default().push(series);
-    }
-    Ok(groups)
+/// The groups of an aggregate's page, from every series its query finds:
+/// each is checked against the `op`, and those of groups before the one
+/// where the page begins are left out.
+fn chosen(
+    connection: &Connection,
+    asked: &Asked,
+    shape: &Shape,
+    paging: &Paging,
+    most: usize,
+) -> Result<Choice<(String, Labels), Found>> {
+    let begins = paging.group_from().map(|place| &place.group);
+    let mut chosen = Chosen::new(most);
+    matching::find_every(connection, asked, |found| {
+        for series in found {
+            shape.check(&series)?;
+            let group = shape.group_of(&series).map_err(|error| error.within(&series.kept))?;
+            if begins.is_none_or(|begins| group >= *begins) {
+                chosen.add(group, series);
+            }
+        }
+        Ok(())
+    })?;
+    Ok(chosen.choice())
+}
+
+/// A group as Prometheus prints a series: `rpc_ms{fn="lookup"}`.
+fn named((name, labels): &(String, Labels)) -> String {
+    let mut named = String::new();
+    labels::format(&mut named, name, labels.iter()).ok();
+    named
 }
 
 impl Reading<'_, '_> {
@@ -137,9 +166,10 @@ impl Reading<'_, '_> {
         Ok((taken, None))
     }
 
-    /// The groups of an aggregate's page, from the one where it begins: each
-    /// whole while the page has room for it, and the one it stops in up to
-    /// the start of a bucket.
+    /// The groups chosen for an aggregate's page, from the one where it
+    /// begins: each whole while the page has room for it, and the one it
+    /// stops in up to the start of a bucket; past them the page ends at
+    /// `beyond`, the first group it could not hold.
     fn groups_page(
         &mut self,
         engine: &Engine,
@@ -147,14 +177,11 @@ impl Reading<'_, '_> {
         asked: &Asked,
         shape: &Shape,
         paging: &Paging,
+        beyond: Option<GroupPlace>,
     ) -> Result<(Vec<TakenGroup>, Option<GroupPlace>)> {
         let begins = paging.group_from();
-        let range = match begins {
-            Some(place) => groups.range(place.group.clone()..),
-            None => groups.range::<(String, Labels), _>(..),
-        };
         let (mut page, mut left) = (Vec::new(), paging.limit);
-        for (group, found) in range {
+        for (group, found) in groups {
             let at = begins.filter(|place| place.group == *group).map_or(i64::MIN, |place| place.at);
             let place = |at| Some(GroupPlace { group: group.clone(), at });
             if left == 0 {
@@ -171,7 +198,7 @@ impl Reading<'_, '_> {
                 return Ok((page, place(ended.end)));
             }
         }
-        Ok((page, None))
+        Ok((page, beyond))
     }
 
     /// One group of an aggregate's page from `at`, as many as `left` buckets:

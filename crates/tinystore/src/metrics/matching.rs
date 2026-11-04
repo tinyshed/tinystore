@@ -67,6 +67,34 @@ pub(super) fn find_from(
     Ok((labelled(connection, rows, budget)?, beyond))
 }
 
+/// Every series that meets every condition, in the order of their ids,
+/// handed to `take` as many at a time as a query finds, from one statement:
+/// a page of an aggregate chooses its groups from them and keeps only what
+/// it chose, so that it holds a batch and its page whatever the query finds.
+pub(super) fn find_every(
+    connection: &Connection,
+    asked: &Asked,
+    mut take: impl FnMut(Vec<Found>) -> Result<()>,
+) -> Result<()> {
+    let Some((finding, leaving)) = sets(connection, asked)? else { return Ok(()) };
+    if finding.is_empty() {
+        return Ok(());
+    }
+    let at_once = Budget::default().series_limit();
+    let (sql, values) = statement(&finding, &leaving, i64::MIN, i64::MAX);
+    let failed = |error| sql_error("match series", error);
+    let mut select = connection.prepare_cached(&sql).map_err(failed)?;
+    let mut rows = select.query(params_from_iter(values)).map_err(failed)?;
+    let mut batch = Vec::with_capacity(at_once);
+    while let Some(row) = rows.next().map_err(failed)? {
+        batch.push((row.get(0).map_err(failed)?, row.get(1).map_err(failed)?, row.get(2).map_err(failed)?));
+        if batch.len() == at_once {
+            take(labelled(connection, std::mem::take(&mut batch), &mut Budget::default())?)?;
+        }
+    }
+    if batch.is_empty() { Ok(()) } else { take(labelled(connection, batch, &mut Budget::default())?) }
+}
+
 /// The sets that find series, the smallest first, and those that leave
 /// series out; none when a set that finds series holds none.
 fn sets(connection: &Connection, asked: &Asked) -> Result<Option<(Vec<Set>, Vec<Set>)>> {
@@ -153,21 +181,7 @@ fn series_of(
     if finding.is_empty() {
         return Ok((Vec::new(), None));
     }
-    let mut values = vec![Value::Integer(from)];
-    let first = membership(&finding[0], "p", &mut values);
-    let mut filter = format!("select p.series_id from postings p where p.series_id >= ?1 and {first}");
-    for (set, negated) in finding[1..].iter().map(|set| (set, "")).chain(leaving.iter().map(|set| (set, "not "))) {
-        let member = membership(set, "q", &mut values);
-        filter.push_str(&format!(
-            " and {negated}exists (select 1 from postings q where {member} and q.series_id = p.series_id)"
-        ));
-    }
-    values.push(Value::Integer(budget.series_limit() as i64 + 1));
-    let sql = format!(
-        "select s.id, n.kind, s.label_ids from ({filter}) m join series s on s.id = m.series_id \
-         join names n on n.id = s.name order by s.id limit cast(?{} as integer)",
-        values.len()
-    );
+    let (sql, values) = statement(finding, leaving, from, budget.series_limit() as i64 + 1);
     let failed = |error| sql_error("match series", error);
     let mut select = connection.prepare_cached(&sql).map_err(failed)?;
     let mut rows = select.query(params_from_iter(values)).map_err(failed)?;
@@ -183,6 +197,28 @@ fn series_of(
         matched.push((id, row.get(1).map_err(failed)?, ids));
     }
     Ok((matched, None))
+}
+
+/// The statement that matches the rows of series from the id `from` on, `most`
+/// of them at most, and the values it binds. Its text names the sets alone,
+/// so that every call of the same sets runs one prepared program.
+fn statement(finding: &[Set], leaving: &[Set], from: i64, most: i64) -> (String, Vec<Value>) {
+    let mut values = vec![Value::Integer(from)];
+    let first = membership(&finding[0], "p", &mut values);
+    let mut filter = format!("select p.series_id from postings p where p.series_id >= ?1 and {first}");
+    for (set, negated) in finding[1..].iter().map(|set| (set, "")).chain(leaving.iter().map(|set| (set, "not "))) {
+        let member = membership(set, "q", &mut values);
+        filter.push_str(&format!(
+            " and {negated}exists (select 1 from postings q where {member} and q.series_id = p.series_id)"
+        ));
+    }
+    values.push(Value::Integer(most));
+    let sql = format!(
+        "select s.id, n.kind, s.label_ids from ({filter}) m join series s on s.id = m.series_id \
+         join names n on n.id = s.name order by s.id limit cast(?{} as integer)",
+        values.len()
+    );
+    (sql, values)
 }
 
 /// Each series' labels, read from the dictionary in one statement for the

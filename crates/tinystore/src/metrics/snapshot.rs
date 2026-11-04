@@ -31,6 +31,7 @@ use crate::compress::frame::Zstd;
 use crate::sqlite::sql_error;
 use crate::{Error, ErrorKind, Result};
 
+mod chosen;
 mod paging;
 
 pub(super) use paging::TakenGroup;

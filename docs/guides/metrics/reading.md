@@ -183,7 +183,10 @@ bound it would stop at, `answer` included.
 | samples decoded | 1,048,576                  |
 | an answer       | 100,000 samples or buckets |
 
-To read past these bounds, read in pages.
+To read past these bounds, read in pages. A `read`'s pages go past every one
+of them. An `aggregate`'s pages go past every one too, except what a single
+bucket or a single group needs, since a page never splits either: see
+[aggregate in pages](aggregates.md#aggregate-in-pages).
 
 ## Read a long range in pages
 

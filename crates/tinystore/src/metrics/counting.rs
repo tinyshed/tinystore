@@ -42,7 +42,7 @@ impl Engine {
         shape: &Shape,
         paging: Option<&Paging>,
     ) -> Result<(Vec<Aggregate>, Option<GroupPlace>)> {
-        let mut budget = Budget::default();
+        let mut budget = if paging.is_some() { Budget::paged() } else { Budget::default() };
         let (taken, stopped) = match paging {
             None => (grouped(self.take(asked, Want::Buckets(shape), &mut budget)?, shape)?, None),
             Some(paging) => self.take_groups(asked, shape, paging, &mut budget)?,

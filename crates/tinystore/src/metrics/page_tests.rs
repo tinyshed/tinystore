@@ -128,6 +128,7 @@ fn a_page_stops_before_the_samples_it_may_decode_rather_than_fail() {
     assert_eq!(samples, 1_100_000, "every hour's median, from pages that share the samples they decode");
     let one_bucket = query.clone().limit(10).aggregate(median).unwrap_err();
     assert_eq!(one_bucket.fact("limit"), Some("samples decoded"), "a bucket is never split");
+    assert!(!one_bucket.to_string().contains("`limit`"), "a page is not offered pages: {one_bucket}");
 }
 
 // contract: MET-17
@@ -142,8 +143,64 @@ fn a_page_goes_on_past_the_series_a_query_finds() {
     assert_eq!(query.read().unwrap_err().fact("limit"), Some("series"));
     let read = pages(&query, 100_000);
     assert_eq!(read.iter().map(|page| page.series.len()).collect::<Vec<_>>(), [1000, 1]);
-    let aggregate = query.clone().limit(10).aggregate(Op::Max).unwrap_err();
-    assert_eq!(aggregate.fact("limit"), Some("series"), "a bucket needs every series of its group at once");
+}
+
+/// The `_bucket` series of a latency histogram of `functions` functions,
+/// twelve bounds each, an hour of a sample a minute.
+fn latencies(f: &Fixture, functions: usize) {
+    let bounds = ["50", "100", "200", "400", "800", "1600", "3200", "6400", "12800", "25600", "51200", "+Inf"];
+    let first = f.now() - 59 * MINUTE;
+    for function in 0..functions {
+        let series = bounds.iter().enumerate().map(|(index, le)| {
+            let mut series = Series::histogram("rpc_ms_bucket").label("fn", format!("fn{function:03}")).label("le", le);
+            let counted = |minute: u32| f64::from(minute * (index as u32 + 1) + function as u32 % 5);
+            series.extend((0..60).map(|minute| (first + MINUTE * minute, counted(minute))));
+            series
+        });
+        f.metrics().ingest(&series.collect::<Vec<_>>()).unwrap();
+    }
+}
+
+// contract: MET-20
+#[test]
+fn an_aggregates_pages_go_past_the_series_a_query_finds_a_group_at_a_time() {
+    let f = fixture();
+    latencies(&f, 92);
+    let query = f.metrics().query().name("rpc_ms_bucket").since(2 * HOUR).by(&["fn"]).estimate();
+    let p95 = Op::Percentile(95.0);
+    assert_eq!(query.aggregate(p95).unwrap_err().fact("limit"), Some("series"), "1104 series in one call");
+    let alone = |query: &Query| -> Vec<Aggregate> {
+        let each = (0..92).map(|function| query.clone().filter("fn", format!("fn{function:03}")).aggregate(p95));
+        each.flat_map(|page| page.unwrap().groups).collect()
+    };
+    let whole = aggregate_pages(&query, p95, 100_000);
+    let groups: Vec<usize> = whole.iter().map(|page| page.groups.len()).collect();
+    assert_eq!(groups, [83, 9], "83 functions are 996 series, the most whole groups within 1000");
+    assert_eq!(joined_groups(&whole), alone(&query), "each group's buckets, as a call of it alone gives them");
+    for (query, limit) in [(query.clone(), 7), (query.clone().every(10 * MINUTE), 20)] {
+        assert_eq!(joined_groups(&aggregate_pages(&query, p95, limit)), alone(&query), "pages of {limit}");
+    }
+}
+
+// contract: MET-20
+#[test]
+fn a_group_past_the_series_a_query_finds_is_a_limit_and_the_groups_before_it_are_not() {
+    let f = fixture();
+    let now = f.now();
+    let host = |zone: &str, host: usize| Series::gauge("up").label("zone", zone).label("host", host).sample(now, 1.0);
+    let mut series: Vec<Series> = (0..1001).map(|index| host("b", index)).collect();
+    series.extend((0..5).map(|index| host("a", index)));
+    f.metrics().ingest(&series).unwrap();
+    let zones = f.metrics().query().name("up").since(HOUR).by(&["zone"]).limit(100);
+    let first = zones.aggregate(Op::Max).unwrap();
+    assert_eq!(first.groups.iter().map(|group| group.labels["zone"].as_str()).collect::<Vec<_>>(), ["a"]);
+    let too_many = zones.clone().after(&first.next.unwrap()).aggregate(Op::Max).unwrap_err();
+    let refused = too_many.to_string();
+    assert_eq!((too_many.kind(), too_many.fact("limit")), (ErrorKind::Limit, Some("series")));
+    assert!(refused.contains("up{zone=\"b\"}") && refused.contains("a group past 1000 series"), "{refused}");
+    assert!(!refused.contains("`limit`"), "a page is not offered pages: {refused}");
+    let one = f.metrics().query().name("up").since(HOUR).limit(100).aggregate(Op::Max).unwrap_err();
+    assert_eq!(one.fact("limit"), Some("series"), "a name's series are one group without `by`");
 }
 
 // contract: MET-17

@@ -268,8 +268,13 @@ for group in page.all() {
 - A bucket is never split. If one bucket alone passes a bound, such as a
   percentile over a year without `every`, the aggregate fails with a `limit`
   error.
-- Pages don't lift the 1,000 series that a query may find, because a bucket
-  needs every series of its group at once. Use `where` to find fewer.
+- A page reads the samples of its own groups alone, 1,000 series at most, so
+  pages go past the 1,000 series a query may find one group at a time. A
+  timer with 12 bounds, grouped `by` `fn` over 92 functions, is 1,104 series,
+  and its pages hold 83 functions, 996 series, and then 9. A group is never
+  split either: if one group alone has more than 1,000 series, the page that
+  reaches it fails with a `limit` error. Group `by` more labels, or use
+  `where` to find fewer.
 
 ## Samples you don't store
 
@@ -312,7 +317,7 @@ let paid = total.value(); // 1.0 for ten amounts of 0.1, where a float sum gives
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------|
 | `invalid` | an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket holding a NaN or an infinity; a counter below zero |
 | `invalid` | samples you hold: series of two names or kinds, or two samples of one series in the same millisecond                                 |
-| `limit`   | without `limit`, past 100,000 buckets; a bound of the query, which it names; one bucket that alone passes a bound                    |
+| `limit`   | without `limit`, past 100,000 buckets or a bound of the query, which it names; with it, one bucket or one group that passes a bound  |
 
 ## See also
 
