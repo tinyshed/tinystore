@@ -303,9 +303,9 @@ fn aggregate_pages(query: &Query, op: Op, limit: usize) -> Vec<AggregatePage> {
         place = went_on;
         pages.push(paged.clone().after(&next).aggregate(op).unwrap());
     }
-    for page in &pages {
-        assert!(page.groups.iter().map(|group| group.buckets.len()).sum::<usize>() <= limit);
-    }
+    let held: Vec<usize> = pages.iter().map(|page| page.groups.iter().map(|group| group.buckets.len()).sum()).collect();
+    assert!(held.iter().all(|&buckets| buckets <= limit), "{held:?}");
+    assert!(held[..held.len() - 1].iter().all(|&buckets| buckets > 0), "no page but the last is empty: {held:?}");
     pages
 }
 
@@ -397,6 +397,81 @@ fn aggregate_pages_of_a_calendar_go_across_a_change_of_the_clock() {
     for limit in [1, 2, 5] {
         assert_eq!(joined_groups(&aggregate_pages(&query, Op::Avg, limit)), whole, "days in pages of {limit}");
     }
+}
+
+/// Two hosts' requests and memory over the last ten hours, a sample a minute
+/// with long stretches of none: a, an hour from nine hours ago and a quarter
+/// from three, packed; b, the half hour before the last ten minutes, in its
+/// head.
+fn sparse(f: &Fixture) {
+    let minutes = |name: &str, host: &str, ago: Duration, count: u32| {
+        let first = f.now() - ago;
+        let mut series = match name {
+            "requests_total" => Series::counter(name),
+            _ => Series::gauge(name),
+        };
+        series = series.label("host", host);
+        series.extend((0..count).map(|minute| (first + MINUTE * minute, f64::from(minute * 3 + count % 7))));
+        series
+    };
+    for name in ["requests_total", "memory"] {
+        f.metrics().ingest(&[minutes(name, "a", 9 * HOUR, 60), minutes(name, "a", 3 * HOUR, 15)]).unwrap();
+    }
+    maintain(&f.store).unwrap();
+    for name in ["requests_total", "memory"] {
+        f.metrics().ingest(&[minutes(name, "b", 40 * MINUTE, 30)]).unwrap();
+    }
+}
+
+// contract: MET-21
+#[test]
+fn a_stretch_without_samples_costs_a_page_nothing() {
+    let f = fixture();
+    sparse(&f);
+    let cases = [
+        (f.metrics().query().name("memory").by(&["host"]), Op::Max),
+        (f.metrics().query().name("memory"), Op::Avg),
+        (f.metrics().query().name("requests_total").by(&["host"]), Op::Increase),
+        (f.metrics().query().name("requests_total").by(&["host"]), Op::Rate),
+    ];
+    for (query, op) in cases {
+        let query = query.since(10 * HOUR).every(MINUTE);
+        let whole = query.aggregate(op).unwrap().groups;
+        let buckets: usize = whole.iter().map(|group| group.buckets.len()).sum();
+        assert!(buckets >= 75, "{op}: every minute of samples is a bucket, of 600 in the range");
+        for limit in [1, 7, 30, 1000] {
+            let pages = aggregate_pages(&query, op, limit);
+            assert_eq!(joined_groups(&pages), whole, "{op} in pages of {limit}");
+            let held: Vec<usize> = pages.iter().map(|page| page.groups.iter().map(|g| g.buckets.len()).sum()).collect();
+            let (last, full) = held.split_last().unwrap();
+            assert!(full.iter().all(|&page| page == limit) && *last <= limit, "{op} in pages of {limit}: {held:?}");
+            assert_eq!(pages.len(), buckets.div_ceil(limit), "{op} in pages of {limit}");
+        }
+    }
+}
+
+// contract: MET-21
+#[test]
+fn a_gap_inside_dense_samples_shortens_a_page_and_empties_none() {
+    let f = fixture();
+    // two hours of a sample every ten seconds, packed, but for five minutes an hour in, inside a block
+    let first = f.now() - 2 * HOUR - 20 * MINUTE;
+    let at = |index: u32| first + 10 * SECOND * index;
+    let mut series = Series::gauge("cpu").label("host", "a");
+    series.extend((0..720).filter(|index| !(360..390).contains(index)).map(|index| (at(index), f64::from(index))));
+    f.metrics().ingest(&[series]).unwrap();
+    maintain(&f.store).unwrap();
+    f.pass(20 * MINUTE);
+    let query = f.metrics().query().name("cpu").since(3 * HOUR).every(MINUTE);
+    let whole = query.aggregate(Op::Avg).unwrap().groups;
+    assert_eq!(whole[0].buckets.len(), 115, "120 minutes but the 5 without samples");
+    for limit in [1, 7, 60, 100, 1000] {
+        assert_eq!(joined_groups(&aggregate_pages(&query, Op::Avg, limit)), whole, "pages of {limit}");
+    }
+    // the block that holds the gap is dense, so its five empty minutes count on the page that reads it
+    let held = |page: &AggregatePage| page.groups.iter().map(|group| group.buckets.len()).sum::<usize>();
+    let pages: Vec<usize> = aggregate_pages(&query, Op::Avg, 100).iter().map(held).collect();
+    assert_eq!(pages, [95, 20]);
 }
 
 // contract: MET-17

@@ -62,6 +62,11 @@ impl Chunk<'_> {
     pub(super) fn overlaps(&self, from: i64, to: i64) -> bool {
         self.head.end >= from && self.head.start < to
     }
+
+    /// Its samples' times onto `out`, their values left 0.
+    pub(super) fn times(&self, zstd: &mut Zstd, out: &mut Vec<Point>) -> Result<()> {
+        codec::decode_times_alone(zstd, &self.head, self.body, out).map_err(|error| error.within("a head's chunk"))
+    }
 }
 
 /// Splits a head into its chunks once its checksum, its count and its

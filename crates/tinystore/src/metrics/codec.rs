@@ -197,32 +197,63 @@ pub(super) fn encode(zstd: &mut Zstd, points: &[Point]) -> Result<(Head, Vec<u8>
 
 /// Decodes a body back onto `out`, after checking it against its head.
 pub(super) fn decode(zstd: &mut Zstd, head: &Head, body: &[u8], out: &mut Vec<Point>) -> Result<()> {
-    head.check()?;
-    if body.len() < HEADER + CHECKSUM || body.len() > MOST_STREAM + HEADER + CHECKSUM {
-        return Err(Error::corrupt("a run's body length"));
-    }
-    if body[0] != VERSION {
-        return Err(Error::corrupt("a run's version"));
-    }
-    let (framed, sum) = body.split_at(body.len() - CHECKSUM);
-    if Crc32::new().update(&head.key()).update(framed).finish().to_le_bytes() != sum {
-        return Err(Error::corrupt("a run's checksum"));
-    }
-    let flags = framed[1];
-    let stream = stream_of(zstd, flags, &framed[HEADER..])?;
-    let times = usize::from(u16::from_le_bytes([framed[2], framed[3]]));
-    let Some((time_bytes, value_bytes)) = stream.split_at_checked(times) else {
-        return Err(Error::corrupt("a run's times past its stream"));
-    };
+    let opened = Opened::of(zstd, head, body)?;
+    let (time_bytes, value_bytes) = opened.streams()?;
     let base = out.len();
     out.resize(base + head.count, Point::default());
     let run = &mut out[base..];
-    let decoded =
-        decode_times(head, flags & 3, time_bytes, run).and_then(|()| decode_values(head, flags, value_bytes, run));
+    let decoded = decode_times(head, opened.flags & 3, time_bytes, run)
+        .and_then(|()| decode_values(head, opened.flags, value_bytes, run));
     if decoded.is_err() {
         out.truncate(base);
     }
     decoded
+}
+
+/// Decodes a body's times alone onto `out`, each sample's value left 0: what
+/// a page of an aggregate counts its buckets by, before it decodes a value.
+pub(super) fn decode_times_alone(zstd: &mut Zstd, head: &Head, body: &[u8], out: &mut Vec<Point>) -> Result<()> {
+    let opened = Opened::of(zstd, head, body)?;
+    let (time_bytes, _) = opened.streams()?;
+    let base = out.len();
+    out.resize(base + head.count, Point::default());
+    let decoded = decode_times(head, opened.flags & 3, time_bytes, &mut out[base..]);
+    if decoded.is_err() {
+        out.truncate(base);
+    }
+    decoded
+}
+
+/// A body checked against its head, its stream expanded: the one reader of
+/// its envelope, which decoding a run and its times alone both start from.
+struct Opened<'b> {
+    flags: u8,
+    stream: Cow<'b, [u8]>,
+    times: usize,
+}
+
+impl<'b> Opened<'b> {
+    fn of(zstd: &mut Zstd, head: &Head, body: &'b [u8]) -> Result<Opened<'b>> {
+        head.check()?;
+        if body.len() < HEADER + CHECKSUM || body.len() > MOST_STREAM + HEADER + CHECKSUM {
+            return Err(Error::corrupt("a run's body length"));
+        }
+        if body[0] != VERSION {
+            return Err(Error::corrupt("a run's version"));
+        }
+        let (framed, sum) = body.split_at(body.len() - CHECKSUM);
+        if Crc32::new().update(&head.key()).update(framed).finish().to_le_bytes() != sum {
+            return Err(Error::corrupt("a run's checksum"));
+        }
+        let flags = framed[1];
+        let stream = stream_of(zstd, flags, &framed[HEADER..])?;
+        Ok(Opened { flags, stream, times: usize::from(u16::from_le_bytes([framed[2], framed[3]])) })
+    }
+
+    /// The bytes of its times and of its values.
+    fn streams(&self) -> Result<(&[u8], &[u8])> {
+        self.stream.split_at_checked(self.times).ok_or_else(|| Error::corrupt("a run's times past its stream"))
+    }
 }
 
 /// Packs values alone, for a block whose times its clock keeps and whose

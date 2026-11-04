@@ -259,6 +259,13 @@ for group in page.all() {
 - The answer goes group by group, each group's buckets in time order. A page
   ends only between two whole buckets. A group that a page cuts has
   `more: true`, and the next page starts with the rest of its buckets.
+- `limit` counts only buckets that hold samples, so a stretch with none costs
+  a page nothing. A page holds fewer than `limit` buckets only when it is the
+  last, when a bound stops it, when a short gap lies inside samples dense
+  enough to have one in every bucket, whose empty buckets count so that the
+  page needn't read every sample's time, or when a timer measured nothing in
+  a bucket: `avg`, `max` and percentiles leave that bucket out, though its
+  counters have samples there.
   `next`, walking a page and writes between pages work as for [a read in
   pages](reading.md#read-a-long-range-in-pages).
 - Each bucket is computed from every series of its group, as without

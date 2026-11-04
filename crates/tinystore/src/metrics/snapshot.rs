@@ -33,6 +33,7 @@ use crate::{Error, ErrorKind, Result};
 
 mod chosen;
 mod paging;
+mod sampled;
 
 pub(super) use paging::TakenGroup;
 

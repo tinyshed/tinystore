@@ -203,6 +203,7 @@ These contracts are what does not.
 - **MET-18** An aggregate of series a program holds MUST answer, bucket for bucket, what a query of the same samples in a store answers for the same range and buckets.
 - **MET-19** A gauge's `replace` of a range MUST leave the range holding exactly the samples given, each bit for bit, whether the store had packed the range or not, in one write that a read sees whole or not at all; an aggregate over the range MUST answer what a read of its samples gives; the same samples sent again MUST change nothing; a counter's or a histogram's MUST be refused `invalid`, a sample outside the range `invalid`, a range outside what the name keeps `too_old` or `too_new`, and what the range holds MUST be bounded as a query is.
 - **MET-20** An aggregate given `limit` MUST go past the series one query finds a group at a time: a page MUST hold whole groups of as many series as one query finds at most, decode the samples of those series alone, and give each group the buckets a call of that group alone gives; a group whose series alone pass that bound MUST be `limit`, refused without being offered pages, and the groups before it MUST NOT be.
+- **MET-21** An aggregate's page MUST count toward its `limit` only buckets that hold samples or lie inside a stored run of samples with one a bucket or more, so that a stretch without samples ends no page, and a page that is not the last MUST answer a bucket unless every bucket it reached is a timer's that measured nothing.
 
 ### Search
 

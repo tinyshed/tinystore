@@ -1033,11 +1033,12 @@ kind has not is `invalid`, and so is a bucket over a NaN, an infinity
 or a counter below zero. Without `limit` the page is the whole
 answer, and past a bound it is a `limit` error, naming the bound,
 never fewer buckets. With `limit` it is a page of that many buckets
-at most, which ends between two whole buckets of a group and gives
-`next`; one bucket that alone passes a bound is still `limit`. A page
-reads only the series of its own groups, so pages go past the series
-a query finds a group at a time, and a group whose series alone pass
-them is `limit` too.
+with samples at most, a stretch without any costing it nothing, which
+ends between two whole buckets of a group and gives `next`; one
+bucket that alone passes a bound is still `limit`. A page reads only
+the series of its own groups, so pages go past the series a query
+finds a group at a time, and a group whose series alone pass them is
+`limit` too.
 
 ### Query.latest
 

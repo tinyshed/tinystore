@@ -8,7 +8,8 @@
 //! that bound a group at a time. A group shares what the page has left among
 //! its series, takes each as far as its share goes, and ends at the start of
 //! the bucket the first of them stopped in, so that every bucket it answers
-//! counts every series of the group.
+//! counts every series of the group; or, sooner, at the first bucket with
+//! samples past the page's `limit`, which counts no bucket without any.
 //!
 //! ```text
 //! a group's series   a ──────────╳            a stopped inside 10:05's bucket
@@ -22,6 +23,7 @@ use std::collections::BTreeMap;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::chosen::{Choice, Chosen};
+use super::sampled::Sampled;
 use super::{GROUPS, GROUPS_AND_BEFORE, HEAD, Part, Reading, State, Taken, TakenHead, Want, from_the_chunk_before};
 use crate::metrics::aggregate::{Op, Shape};
 use crate::metrics::budget::Budget;
@@ -49,19 +51,40 @@ pub(in crate::metrics) struct TakenGroup {
 
 /// How far a page lets a series go: a part is taken while what the page
 /// decoded is under `decoded` and what it copies stays within `bytes`, and
-/// always within the query's bounds.
-#[derive(Clone, Copy, Debug)]
-struct Room {
+/// always within the query's bounds; on an aggregate's page, while it starts
+/// before the end the buckets `sampled` give the page.
+#[derive(Debug)]
+struct Room<'p, 's> {
     decoded: usize,
     bytes: usize,
+    sampled: Option<&'p mut Sampled<'s>>,
+    /// The series' first part on the page is still to come. Its times are
+    /// read even when it is dense, so that the first bucket the page holds
+    /// has samples and no page comes back empty.
+    first: bool,
+}
+
+impl Room<'_, '_> {
+    /// Where a series' window ends on the page: at `to`, or before where the
+    /// buckets met so far end the page.
+    fn end(&self, to: i64) -> i64 {
+        self.sampled.as_ref().map_or(to, |sampled| sampled.end().min(to))
+    }
 }
 
 /// One group of an aggregate's page: its series, where they end, and how
-/// many of the page's buckets that may take.
+/// many buckets with samples it holds, which the page's `limit` counts.
 struct Ended {
     members: Vec<Taken>,
     end: i64,
     buckets: usize,
+}
+
+/// What a page took of a group: its buckets up to where they end, or none,
+/// since it stopped at the start of the bucket it could not take.
+enum Paged {
+    Ended(Ended),
+    Stopped(i64),
 }
 
 impl Engine {
@@ -150,12 +173,12 @@ impl Reading<'_, '_> {
         limit: usize,
         from: Place,
     ) -> Result<(Vec<Taken>, Option<Place>)> {
-        let room = Room { decoded: limit, bytes: usize::MAX };
+        let mut room = Room { decoded: limit, bytes: usize::MAX, sampled: None, first: false };
         let mut taken = Vec::with_capacity(found.len());
         for found in found {
             let at = if found.id == from.series { from.at } else { i64::MIN };
             let mut series = Taken::of(engine, found, asked, at);
-            let stopped = self.fill_lazily(&mut series, asked.now, Want::Samples, room);
+            let stopped = self.fill_lazily(&mut series, asked.now, Want::Samples, &mut room);
             let stopped = stopped.map_err(|error| self.met(&series.found, error))?;
             let id = series.found.id;
             taken.push(series);
@@ -187,8 +210,10 @@ impl Reading<'_, '_> {
             if left == 0 {
                 return Ok((page, place(at)));
             }
-            let Some(ended) = self.group_page(engine, found, asked, shape, (at, left), page.is_empty())? else {
-                return Ok((page, place(at)));
+            let ended = match self.group_page(engine, found, asked, shape, (at, left))? {
+                Paged::Ended(ended) => ended,
+                Paged::Stopped(_) if !page.is_empty() => return Ok((page, place(at))),
+                Paged::Stopped(_) => self.one_bucket(engine, found, asked, shape, at)?,
             };
             left = left.saturating_sub(ended.buckets);
             let (name, labels) = group.clone();
@@ -201,11 +226,11 @@ impl Reading<'_, '_> {
         Ok((page, beyond))
     }
 
-    /// One group of an aggregate's page from `at`, as many as `left` buckets:
-    /// its series each taken as far as its share of what the page has left,
-    /// ending at the start of the bucket the first of them stopped in. None
-    /// when that leaves no whole bucket and the page holds a group already;
-    /// on a page of its own, one bucket alone is taken, or is `limit`.
+    /// One group of an aggregate's page from `at`, as many as `left` buckets
+    /// with samples: its series each taken as far as its share of what the
+    /// page has left, ending at the first bucket with samples past `left`, at
+    /// the range's end, or at the start of the bucket the first of them
+    /// stopped in; stopped there when that leaves no bucket with samples.
     fn group_page(
         &mut self,
         engine: &Engine,
@@ -213,35 +238,32 @@ impl Reading<'_, '_> {
         asked: &Asked,
         shape: &Shape,
         (at, left): (i64, usize),
-        alone: bool,
-    ) -> Result<Option<Ended>> {
+    ) -> Result<Paged> {
         let mut members = self.members(engine, found, asked, shape, at);
         let from = members.iter().map(|series| series.window.from).min().unwrap_or(asked.to);
         if from >= asked.to {
             // nothing of the group is left in the range
-            return Ok(Some(Ended { members: ended_at(members, asked.to), end: asked.to, buckets: 0 }));
+            return Ok(Paged::Ended(Ended { members: ended_at(members, asked.to), end: asked.to, buckets: 0 }));
         }
-        let most = shape.after_buckets(from, left, asked.to);
         let count = members.len();
         let share = (self.budget.decoded_left() / count, self.budget.bytes_left() / count);
-        let mut end = most;
+        let mut sampled = Sampled::new(shape, from, left, asked.to);
+        let mut stopped_at = asked.to;
         for series in &mut members {
-            series.window.to = most;
-            let room = Room { decoded: self.budget.decoded + share.0, bytes: self.budget.bytes + share.1 };
-            let stopped = self.fill_lazily(series, asked.now, Want::Buckets(shape), room);
+            series.window.to = sampled.end().min(stopped_at);
+            let (decoded, bytes) = (self.budget.decoded + share.0, self.budget.bytes + share.1);
+            let mut room = Room { decoded, bytes, sampled: Some(&mut sampled), first: true };
+            let stopped = self.fill_lazily(series, asked.now, Want::Buckets(shape), &mut room);
             if let Some(stopped) = stopped.map_err(|error| self.met(&series.found, error))? {
-                end = end.min(shape.bucket_of(stopped, from));
+                stopped_at = stopped_at.min(shape.bucket_of(stopped, from));
             }
         }
-        if end > from {
-            let buckets = shape.buckets_in(from, end);
-            return Ok(Some(Ended { members: ended_at(members, end), end, buckets }));
+        let end = sampled.end().min(stopped_at);
+        let buckets = sampled.before(end);
+        if buckets == 0 && end < asked.to {
+            return Ok(Paged::Stopped(end));
         }
-        drop(members);
-        if !alone {
-            return Ok(None);
-        }
-        self.one_bucket(engine, found, asked, shape, (at, from)).map(Some)
+        Ok(Paged::Ended(Ended { members: ended_at(members, end), end, buckets }))
     }
 
     /// A group's series, in the order its buckets join them, each over the
@@ -252,19 +274,17 @@ impl Reading<'_, '_> {
         found.into_iter().map(|series| Taken::of(engine, series, asked, at)).collect()
     }
 
-    /// The first bucket of a group alone, its series taken whole over it
-    /// with the query's bounds and nothing else on the page: past one, it is
-    /// `limit`, since a bucket is never split.
-    fn one_bucket(
-        &mut self,
-        engine: &Engine,
-        found: &[Found],
-        asked: &Asked,
-        shape: &Shape,
-        (at, from): (i64, i64),
-    ) -> Result<Ended> {
+    /// The first bucket with samples of a group alone on a page, taken with
+    /// the query's whole bounds; when even they stop before it, it is taken
+    /// whole, which passes one and is `limit`, since a bucket is never split.
+    fn one_bucket(&mut self, engine: &Engine, found: &[Found], asked: &Asked, shape: &Shape, at: i64) -> Result<Ended> {
         self.budget.reset();
-        let end = shape.after_buckets(from, 1, asked.to);
+        let stopped = match self.group_page(engine, found, asked, shape, (at, 1))? {
+            Paged::Ended(ended) => return Ok(ended),
+            Paged::Stopped(stopped) => stopped,
+        };
+        self.budget.reset();
+        let end = shape.after_buckets(stopped, 1, asked.to);
         let mut members = self.members(engine, found, asked, shape, at);
         for series in &mut members {
             series.window.to = end;
@@ -276,7 +296,7 @@ impl Reading<'_, '_> {
 
     /// A series' blocks and head a page takes for `want`, and the time it
     /// stopped at when it could not take them all.
-    fn fill_lazily(&mut self, taken: &mut Taken, now: i64, want: Want<'_>, room: Room) -> Result<Option<i64>> {
+    fn fill_lazily(&mut self, taken: &mut Taken, now: i64, want: Want<'_>, room: &mut Room) -> Result<Option<i64>> {
         let (id, window) = (taken.found.id, taken.window);
         let state = self.state(id, window, now, -1)?;
         taken.trimmed = state.trimmed;
@@ -303,7 +323,7 @@ impl Reading<'_, '_> {
     }
 
     /// Whether a page lets a series take a part of these costs.
-    fn admits(&self, room: Room, bytes: usize, decoded: usize) -> bool {
+    fn admits(&self, room: &Room, bytes: usize, decoded: usize) -> bool {
         let within = self.budget.decoded < room.decoded && self.budget.bytes.saturating_add(bytes) <= room.bytes;
         within && self.budget.fits(bytes, decoded)
     }
@@ -316,7 +336,7 @@ impl Reading<'_, '_> {
         taken: &mut Taken,
         shape: Option<(&Shape, Op)>,
         before: bool,
-        room: Room,
+        room: &mut Room,
     ) -> Result<Option<i64>> {
         let (id, window) = (taken.found.id, taken.window);
         let connection = self.connection;
@@ -326,6 +346,9 @@ impl Reading<'_, '_> {
         let mut rows = select.query(params![id, window.from, window.to, window.cutoff, room_left]).map_err(failed)?;
         while let Some(row) = rows.next().map_err(failed)? {
             let start: i64 = row.get(0).map_err(failed)?;
+            if start >= room.end(window.to) {
+                break;
+            }
             let length = usize::try_from(row.get::<_, i64>(3).map_err(failed)?).unwrap_or(usize::MAX);
             // a clock is paid at its most, so that one that does not fit never fails the page
             if !self.admits(room, length.saturating_add(clock::MOST_BYTES), 0) {
@@ -352,13 +375,13 @@ impl Reading<'_, '_> {
         row: &Row,
         shape: Option<(&Shape, Op)>,
         before: bool,
-        room: Room,
+        room: &mut Room,
     ) -> Result<Option<i64>> {
         let window = taken.window;
         let clock = self.clock(row.clock)?;
         let group = Group::decode(self.zstd, row, clock)?;
         for (slot, block) in group.blocks.into_iter().enumerate() {
-            if group.live >> slot & 1 == 0 || block.times.start >= window.to {
+            if group.live >> slot & 1 == 0 || block.times.start >= room.end(window.to) {
                 continue;
             }
             if block.times.end < window.from {
@@ -373,6 +396,20 @@ impl Reading<'_, '_> {
             if !self.admits(room, bytes, decoded) {
                 return Ok(Some(block.times.start.max(window.from)));
             }
+            if let Some(sampled) = room.sampled.as_deref_mut() {
+                let (from, end, count) = (block.times.start.max(window.from), block.times.end, block.times.count);
+                // a block answered whole lies in one bucket of the window
+                if whole {
+                    sampled.meet(block.times.start);
+                } else if room.first || !sampled.meet_run(from, end, count) {
+                    block.times.walk(|_, at| {
+                        if at >= window.from {
+                            sampled.meet(at)
+                        }
+                    })?;
+                }
+                room.first = false;
+            }
             taken.blocks.push(self.part(block, whole)?);
         }
         Ok(None)
@@ -381,9 +418,16 @@ impl Reading<'_, '_> {
     /// A series' head a page takes for `want`, chunk by chunk, and the start
     /// of the first chunk it could not take. Its bytes are copied whole, once
     /// the page has room for them.
-    fn head_lazily(&mut self, taken: &mut Taken, state: &State, want: Want<'_>, room: Room) -> Result<Option<i64>> {
+    fn head_lazily(
+        &mut self,
+        taken: &mut Taken,
+        state: &State,
+        want: Want<'_>,
+        room: &mut Room,
+    ) -> Result<Option<i64>> {
         let (id, extent, window) = (taken.found.id, state.extent, taken.window);
-        if extent.count == 0 || extent.end < window.from || extent.start >= window.to {
+        // a head past where the page's buckets end it is not copied at all
+        if extent.count == 0 || extent.end < window.from || extent.start >= room.end(window.to) {
             return Ok(None);
         }
         if !self.admits(room, state.head_len, 0) {
@@ -400,11 +444,25 @@ impl Reading<'_, '_> {
         };
         let mut stopped = None;
         for chunk in chunks.iter().filter(|chunk| chunk.overlaps(from, window.to)) {
+            if chunk.head.start >= room.end(window.to) {
+                break;
+            }
             if !self.admits(room, 0, chunk.head.count) {
                 stopped = Some(chunk.head.start.max(window.from));
                 break;
             }
             self.budget.take_decoded(chunk.head.count)?;
+            let in_window = chunk.head.end >= window.from;
+            if let Some(sampled) = room.sampled.as_deref_mut().filter(|_| in_window) {
+                let (from, end, count) = (chunk.head.start.max(window.from), chunk.head.end, chunk.head.count);
+                if room.first || !sampled.meet_run(from, end, count) {
+                    // a chunk's times alone, its values decoded after the read
+                    let mut times = Vec::with_capacity(count);
+                    chunk.times(self.zstd, &mut times)?;
+                    times.iter().filter(|point| point.at >= window.from).for_each(|point| sampled.meet(point.at));
+                }
+                room.first = false;
+            }
         }
         drop(chunks);
         taken.head = Some(TakenHead { extent, bytes, from });

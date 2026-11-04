@@ -132,6 +132,25 @@ fn a_value_no_scale_reproduces_is_refused_rather_than_rounded() {
 }
 
 #[test]
+fn times_alone_come_back_as_a_whole_decode_gives_them_and_a_corrupt_body_is_refused() {
+    let mut steady = even(240, |index| (index as f64).sin());
+    let jumpy: Vec<i64> = (0..240).map(|index| index / 2 * 101 + index % 2).collect();
+    let wandering = points(&jumpy, &vec![1.0; 240]);
+    steady[100].at += 1;
+    for run in [even(240, |index| index as f64), steady, wandering] {
+        let (head, body) = encode(&mut zstd(), &run).unwrap();
+        let mut times = vec![Point { at: 7, value: 7.0 }];
+        decode_times_alone(&mut zstd(), &head, &body, &mut times).unwrap();
+        let read: Vec<i64> = times[1..].iter().map(|point| point.at).collect();
+        assert_eq!(read, run.iter().map(|point| point.at).collect::<Vec<_>>(), "after what `out` held");
+        let mut broken = body.clone();
+        broken[body.len() / 2] ^= 0x10;
+        assert!(decode_times_alone(&mut zstd(), &head, &broken, &mut times).is_err(), "its checksum binds it");
+        assert_eq!(times.len(), 241, "a refused body appends nothing");
+    }
+}
+
+#[test]
 fn a_corrupt_body_is_refused() {
     let run = even(240, |index| (index as f64).sin());
     let (head, body) = encode(&mut zstd(), &run).unwrap();

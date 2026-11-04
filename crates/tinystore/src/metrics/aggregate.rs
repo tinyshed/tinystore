@@ -385,17 +385,6 @@ impl Shape {
         end.min(to)
     }
 
-    /// How many buckets begin in `[from, to)`, the one that holds `from`
-    /// among them.
-    pub(super) fn buckets_in(&self, from: i64, to: i64) -> usize {
-        let Some(grid) = &self.grid else { return 1 };
-        let (mut at, mut count) = (grid.start(from), 0);
-        while at < to {
-            (at, count) = (grid.end(at), count + 1);
-        }
-        count
-    }
-
     /// What the range leaves of the bucket that begins at `at`.
     ///
     /// ```text
