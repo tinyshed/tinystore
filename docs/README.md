@@ -223,6 +223,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 ## Releases
 
 - [All releases](releases/README.md)
+- [0.7.1](releases/v0.7.1.md)
 - [0.7.0](releases/v0.7.0.md)
 - [0.6.0](releases/v0.6.0.md)
 - [0.5.1](releases/v0.5.1.md)
