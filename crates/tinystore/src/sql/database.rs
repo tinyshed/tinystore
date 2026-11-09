@@ -12,8 +12,9 @@ use super::rows::{Answer, Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
+use crate::engine::DATABASES;
 #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
-use crate::engine::{DATABASES, SharedFile};
+use crate::engine::SharedFile;
 use crate::sqlite::Drafts;
 use crate::{Durability, Error, Result, Store, Transaction};
 
