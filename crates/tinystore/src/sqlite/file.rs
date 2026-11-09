@@ -15,7 +15,7 @@ use super::given::own;
 use super::group::{BEGIN, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
-use super::{Committed, Config, Left, Settle, Settlers, Tx, vacuum};
+use super::{Committed, Config, Drafts, Left, Settle, Settlers, Tx, drafts, vacuum};
 use crate::probe::FileProbe;
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
@@ -504,7 +504,7 @@ impl File {
         if self.is_copy() {
             return self.check_its_home_migrated(history, migrations);
         }
-        if self.migrated(history, migrations)? {
+        if self.migrated(history, migrations, None)? {
             return Ok(());
         }
         own_work(|| self.transaction(|tx| migrate::apply(tx, history, migrations)))
@@ -514,8 +514,8 @@ impl File {
     /// Whether the file holds every step of `history` already: a reader then
     /// answers, and no writer is taken, so that a file which takes no writes,
     /// as an old home's, still opens.
-    fn migrated(&self, history: &str, migrations: &[Migration]) -> Result<bool> {
-        match self.read(|connection| migrate::check_applied_steps(connection, history, migrations)) {
+    fn migrated(&self, history: &str, migrations: &[Migration], redo: Option<&str>) -> Result<bool> {
+        match self.read(|connection| migrate::check_applied_steps(connection, history, migrations, redo)) {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == ErrorKind::Unavailable => Ok(false),
             Err(error) => Err(error.within(self.describe())),
@@ -530,7 +530,7 @@ impl File {
     /// home's first commit arrives. The copy then reaches where its home
     /// stands now and checks again; a step still missing is the home's to run.
     fn check_its_home_migrated(&self, history: &str, migrations: &[Migration]) -> Result<()> {
-        let check = || self.read(|connection| migrate::check_applied_steps(connection, history, migrations));
+        let check = || self.read(|connection| migrate::check_applied_steps(connection, history, migrations, None));
         let checked = match (check(), &self.config.catch_up) {
             (Err(missing), Some(catch_up)) if missing.kind() == ErrorKind::Unavailable => match (catch_up.0)() {
                 Ok(()) => check(),
@@ -545,14 +545,36 @@ impl File {
     /// run and checked before the commit, as SQLite's procedure for changing a
     /// table asks: with them on, rebuilding a parent table deletes its
     /// children through `on delete cascade`, and nothing says so.
-    pub(crate) fn migrate_checked(&self, history: &str, migrations: &[Migration]) -> Result<()> {
+    ///
+    /// The newest may be drafts, named `….draft.sql`: the steps that
+    /// shipped commit first, and the drafts after them once the file is
+    /// copied to `drafts.copy`, unless one is applied already and the copy
+    /// was made before it. A draft that changed since refuses the file,
+    /// naming `drafts.command`, which asks `drafts.redo`: the file taken back
+    /// to the copy, and its drafts applied again. A draft that shipped under
+    /// its name without `.draft` has the copy removed.
+    ///
+    /// A file a node logs or copies takes no draft: taking it back would
+    /// write past the log, and its copies could not follow.
+    pub(crate) fn migrate_checked(
+        &self,
+        history: &str,
+        migrations: &[Migration],
+        drafts: Option<&Drafts>,
+    ) -> Result<()> {
         self.refuse_when_closed("a migration")?;
         self.refuse_inside_a_transaction("a migration", "would wait for the writer the transaction holds")?;
         self.refuse_while_polled("a migration")?;
+        let drafted = migrations.iter().any(|migration| migrate::is_draft(&migration.name));
+        if drafted && (self.is_copy() || logged(&self.capture).is_some()) {
+            let refused = format!("{history}: a draft in a file a node keeps, whose copies would not follow it back");
+            return Err(Error::invalid(refused).within(self.describe()));
+        }
         if self.is_copy() {
             return self.check_its_home_migrated(history, migrations);
         }
-        if self.migrated(history, migrations)? {
+        let redo = drafts.is_some_and(|drafts| drafts.redo);
+        if !redo && self.migrated(history, migrations, drafts.map(|drafts| drafts.command.as_str()))? {
             return Ok(());
         }
         let waiting = self.wait_for_the_writer("a migration")?;
@@ -561,14 +583,64 @@ impl File {
         let what = || format!("{}: {history}: foreign keys", self.describe());
         // foreign_keys cannot change inside a transaction, so it changes around one.
         execute(&connection, FOREIGN_KEYS_OFF).map_err(|error| sql_error(what(), error))?;
-        let applied = own_work(|| {
-            self.transaction_on(&connection, None, |tx| {
-                migrate::apply(tx, history, migrations)?;
-                migrate::check_foreign_keys(tx, history)
-            })
-        });
+        let applied = own_work(|| self.apply_on(&connection, history, migrations, drafts));
         let restored = execute(&connection, FOREIGN_KEYS_ON).map_err(|error| sql_error(what(), error));
         applied.map_err(|error| error.within(self.describe())).and(restored)
+    }
+
+    /// The steps of `history` the file lacks applied on its writer, held:
+    /// those that shipped in one transaction, the drafts in another.
+    fn apply_on(
+        &self,
+        connection: &Connection,
+        history: &str,
+        migrations: &[Migration],
+        drafts: Option<&Drafts>,
+    ) -> Result<()> {
+        let busy = self.config.busy_timeout;
+        // a list the open would refuse takes nothing back first
+        migrate::check_order(history, migrations)?;
+        if let Some(drafts) = drafts.filter(|drafts| drafts.redo)
+            && migrate::drafts_applied(connection, history)?
+        {
+            drafts::take_back(&self.path, &drafts.copy, busy)?;
+        }
+        let compared = migrate::compare(connection, history, migrations, drafts.map(|drafts| drafts.command.as_str()))?;
+        // without a copy to keep, a draft is a step as any other
+        let first_draft =
+            drafts.and_then(|_| migrations.iter().position(|migration| migrate::is_draft(&migration.name)));
+        let drafts_from = first_draft.unwrap_or(migrations.len()).max(compared.applied);
+        if compared.applied < drafts_from || !compared.shipped.is_empty() {
+            self.transaction_on(connection, None, |tx| {
+                migrate::ship(tx, history, &compared.shipped)?;
+                migrate::apply_steps(tx, history, &migrations[compared.applied..drafts_from])?;
+                migrate::check_foreign_keys(tx, history)
+            })?;
+        }
+        match (drafts, &migrations[drafts_from..]) {
+            (Some(drafts), new) if !new.is_empty() => {
+                if !compared.drafts_applied {
+                    drafts::keep(&self.path, &drafts.copy, busy)?;
+                }
+                self.apply_drafts(connection, history, new, drafts)
+            }
+            // no draft is applied and none comes: a copy left from before is no one's
+            (Some(drafts), _) if !compared.drafts_applied => drafts::remove(&drafts.copy),
+            _ => Ok(()),
+        }
+    }
+
+    /// Applies `new`, the drafts the file lacks, in a transaction of their
+    /// own, and says so once, since a draft is no file's to keep for good.
+    fn apply_drafts(&self, connection: &Connection, history: &str, new: &[Migration], drafts: &Drafts) -> Result<()> {
+        self.transaction_on(connection, None, |tx| {
+            migrate::apply_steps(tx, history, new)?;
+            migrate::check_foreign_keys(tx, history)
+        })?;
+        let names: Vec<&str> = new.iter().map(|migration| &*migration.name).collect();
+        let (file, copy) = (self.describe(), drafts.copy.display());
+        tracing::warn!(target: "tinystore", "{file}: applied the drafts {}; the file before them is {copy}", names.join(", "));
+        Ok(())
     }
 
     /// Closes the readers left unused for too long; the store runs it now and

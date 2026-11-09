@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use super::tx::{BOUND, HELD};
 use crate::engine::{Claim, Engine, Host, SharedFile};
-use crate::sqlite::{Config, File, Migration};
+use crate::sqlite::{Config, Drafts, File, Migration};
 use crate::sync::lock;
 use crate::{Clock, Durability, Error, Memory, Result, Store};
 
@@ -77,7 +77,7 @@ impl Databases {
         &self,
         store: &Store,
         name: &str,
-        migrations: Option<Vec<Migration>>,
+        migrations: Option<(Drafts, Vec<Migration>)>,
         durability: Option<Durability>,
     ) -> Result<Arc<Base>> {
         let mut open = lock(&self.open);
@@ -88,8 +88,8 @@ impl Databases {
                 let opened = base.durability;
                 return Err(Error::invalid(format!("open with durability {opened}, and asked for {asked}")));
             }
-            if let Some(migrations) = migrations {
-                base.file().migrate_checked(HISTORY, &migrations)?;
+            if let Some((drafts, migrations)) = migrations {
+                base.file().migrate_checked(HISTORY, &migrations, Some(&drafts))?;
             }
             return Ok(base);
         }
@@ -97,8 +97,8 @@ impl Databases {
         let config = config(durability.or(store.durability()));
         let durability = config.durability;
         let file = store.open_file(claim.name(), config)?;
-        if let Some(migrations) = migrations {
-            file.migrate_checked(HISTORY, &migrations)?;
+        if let Some((drafts, migrations)) = migrations {
+            file.migrate_checked(HISTORY, &migrations, Some(&drafts))?;
         }
         let base = Base {
             name: name.to_owned(),

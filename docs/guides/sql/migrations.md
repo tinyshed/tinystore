@@ -58,6 +58,8 @@ refused.
 | `0001` applied, the file since edited                 | fails: `0001_users.sql changed after it was applied` |
 | an applied one renamed, deleted or put before another | fails, naming it                                     |
 | more migrations than the folder                       | fails: an older program on a newer file              |
+| a draft applied, the file since edited                | fails, naming the command that applies it again      |
+| a draft applied, renamed without `.draft`             | records the new name and removes the copy            |
 
 The file keeps the name and the text of each migration it applied, in
 `_tinystore_migrations`, and each open compares them with the folder's. Line
@@ -66,7 +68,8 @@ endings do not count as an edit. A folder checked out on Windows with
 file whose migrations were applied from the same files with `\n`.
 
 The migrations that run at one open run in one transaction: the file has the
-old schema or the whole new one, never half (contract SQL-03). A statement
+old schema or the whole new one, never half (contract SQL-03). Drafts, below,
+run in a second one once the database is copied. A statement
 that fails names its file and stops the open:
 
 ```text
@@ -83,7 +86,59 @@ alter table orders add column note text;
 
 There are no "down" migrations. To undo a change, write the next migration
 that undoes it. During development, before anything is deployed, deleting
-the database's file and starting again is the fastest undo.
+the database's file and starting again is the fastest undo, or write the
+migration as a draft.
+
+## A migration still being written
+
+A migration you are still writing is a draft: add `.draft` to its name.
+
+```sql title="migrations/0003_orders_note.draft.sql"
+alter table orders add column note text;
+```
+
+A draft applies like any other migration, with two differences. Before the
+first draft applies, the store copies the database to
+`sql/<name>.before-drafts`. And if a draft changes after it ran, the open
+fails and names the command that applies it again:
+
+```text
+sql shop: …/sql/shop.db: migrations: the draft 0003_orders_note.draft.sql changed after it was applied: `tinystore migrate ./data shop ./migrations --redo-drafts` takes the database back to its copy from before its drafts and applies them again, losing what was written since
+```
+
+Stop the program and run it:
+
+```sh
+tinystore migrate ./data shop ./migrations --redo-drafts
+```
+
+```text
+● shop  took back 0003_orders_note.draft.sql, applied 0003_orders_note.draft.sql
+```
+
+The database is back to what it held before its first draft, with every
+draft applied again as it reads now. Rows written after the drafts are
+gone, and so is anything else the database's file holds, such as a bucket,
+a queue or an index opened from it. The bytes of its files, `db.files`, stay
+as they are. A program that gives its migrations as files rather than a
+folder sees `<migrations>` in the command: give the folder they come from.
+
+To ship a draft, drop `.draft` from its name and leave its text as it is.
+The next open records the new name and removes the copy, and from then on
+the migration is checked like any other:
+
+```text
+● shop  shipped 0003_orders_note.sql
+```
+
+- Drafts come after every migration that shipped: `0004_refunds.sql` after
+  `0003_orders_note.draft.sql` is refused, since taking the draft back would
+  take it back too.
+- The store never takes a draft back on its own: an edited draft only stops
+  the open (contract SQL-12). A draft that reaches production by mistake
+  costs a refused open, never the data written since.
+- A database that a node keeps for [replication](../../handbook/nodes/copies.md)
+  takes no draft, since its copies could not follow it back.
 
 ## Rebuilding a table
 

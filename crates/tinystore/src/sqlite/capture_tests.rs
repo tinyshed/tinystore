@@ -112,7 +112,7 @@ fn every_commit_of_every_kind_is_handed_once_and_rebuilds_the_file() {
     let path = dir.path().join("test.db");
     let kept = Arc::new(Kept::default());
     let file = open(&path, &kept);
-    file.migrate_checked("test", TABLE).unwrap();
+    file.migrate_checked("test", TABLE, None).unwrap();
     for i in 0..50 {
         insert(&file, &format!("grouped {i}")).unwrap();
     }
@@ -167,7 +167,7 @@ fn a_commit_its_observer_refuses_is_outcome_unknown_and_the_next_open_hands_it()
     let path = dir.path().join("test.db");
     let kept = Arc::new(Kept::default());
     let file = open(&path, &kept);
-    file.migrate_checked("test", TABLE).unwrap();
+    file.migrate_checked("test", TABLE, None).unwrap();
     insert(&file, "before").unwrap();
 
     kept.refusing.store(true, Ordering::SeqCst);
@@ -197,7 +197,7 @@ fn a_process_that_died_leaves_the_commits_its_observer_lost_to_the_next_open() {
     let path = dir.path().join("test.db");
     let kept = Arc::new(Kept::default());
     let file = open(&path, &kept);
-    file.migrate_checked("test", TABLE).unwrap();
+    file.migrate_checked("test", TABLE, None).unwrap();
     for i in 0..30 {
         insert(&file, &format!("row {i}")).unwrap();
     }
@@ -233,7 +233,7 @@ fn the_wal_is_checkpointed_only_after_its_commits_are_synced_and_starts_over() {
     let path = dir.path().join("test.db");
     let kept = Arc::new(Kept::default());
     let file = open(&path, &kept);
-    file.migrate_checked("test", TABLE).unwrap();
+    file.migrate_checked("test", TABLE, None).unwrap();
     let syncs = kept.syncs.load(Ordering::SeqCst);
     for i in 0..3000 {
         insert(&file, &format!("row {i:05} {}", "x".repeat(200))).unwrap();
@@ -255,7 +255,7 @@ fn a_wal_started_over_beside_the_store_is_a_gap() {
     let path = dir.path().join("test.db");
     let kept = Arc::new(Kept::default());
     let file = open(&path, &kept);
-    file.migrate_checked("test", TABLE).unwrap();
+    file.migrate_checked("test", TABLE, None).unwrap();
     insert(&file, "ours").unwrap();
     {
         let beside = rusqlite::Connection::open(&path).unwrap();
@@ -275,7 +275,7 @@ fn a_wal_header_and_frames_read_as_sqlite_recovers_them() {
     let path = dir.path().join("test.db");
     let kept = Arc::new(Kept::default());
     let file = open(&path, &kept);
-    file.migrate_checked("test", TABLE).unwrap();
+    file.migrate_checked("test", TABLE, None).unwrap();
     for i in 0..5 {
         insert(&file, &format!("row {i}")).unwrap();
     }

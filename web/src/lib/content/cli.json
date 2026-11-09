@@ -1069,11 +1069,18 @@
     {
       "does": "apply a database's migration files",
       "examples": [
-        "tinystore migrate ./data app ./migrations"
+        "tinystore migrate ./data app ./migrations",
+        "tinystore migrate ./data app ./migrations --redo-drafts"
       ],
-      "flags": [],
+      "flags": [
+        {
+          "means": "take the database back to its copy from before its drafts, losing what was written since, and apply them again",
+          "name": "--redo-drafts",
+          "value": ""
+        }
+      ],
       "group": "Develop",
-      "more": "It applies the files the database has not applied, in one transaction, and refuses one that applied an edited, renamed or missing file. No program may hold the directory meanwhile.",
+      "more": "It applies the files the database has not applied, those that shipped in one transaction and the drafts, named NNNN_name.draft.sql, in another once the database is copied, and refuses one that applied an edited, renamed or missing file. A draft edited since it was applied is applied again with --redo-drafts. No program may hold the directory meanwhile.",
       "name": "migrate",
       "takes": "<dir> <db> <migrations>"
     },

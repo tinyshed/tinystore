@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -12,7 +13,8 @@ use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
 #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
-use crate::engine::SharedFile;
+use crate::engine::{DATABASES, SharedFile};
+use crate::sqlite::Drafts;
 use crate::{Durability, Error, Result, Store, Transaction};
 
 impl Store {
@@ -27,7 +29,7 @@ impl Store {
     /// # }
     /// ```
     pub fn database(&self, name: &str) -> DatabaseBuilder {
-        DatabaseBuilder { store: self.clone(), name: name.to_owned(), migrations: None, durability: None }
+        DatabaseBuilder { store: self.clone(), name: name.to_owned(), migrations: None, durability: None, redo: false }
     }
 }
 
@@ -39,6 +41,7 @@ pub struct DatabaseBuilder {
     name: String,
     migrations: Option<Migrations>,
     durability: Option<Durability>,
+    redo: bool,
 }
 
 impl DatabaseBuilder {
@@ -46,6 +49,13 @@ impl DatabaseBuilder {
     /// has not, all in one transaction, and refuses a file that applied an
     /// edited, renamed or missing one, or more than the program has. Without
     /// them the file opens as it is.
+    ///
+    /// The newest may be drafts, named `0007_messages.draft.sql`: they apply
+    /// in a transaction of their own once the file is copied to
+    /// `sql/<name>.before-drafts`, and one edited since it was applied
+    /// refuses the file, naming `tinystore migrate --redo-drafts`, which
+    /// takes it back to the copy and applies them again. A draft renamed
+    /// without `.draft`, its text the same, has shipped, and the copy goes.
     pub fn migrations(mut self, migrations: impl Into<Migrations>) -> Self {
         self.migrations = Some(migrations.into());
         self
@@ -61,12 +71,28 @@ impl DatabaseBuilder {
         self
     }
 
+    /// Takes the database back to the copy kept from before its drafts, the
+    /// migrations named `….draft.sql`, and applies them again: what was
+    /// written since they were applied is gone. `tinystore migrate
+    /// --redo-drafts` asks it; a program that asks it of its own open loses
+    /// its data each time a draft changes, so it promises a program nothing.
+    #[doc(hidden)]
+    pub fn redo_drafts(mut self) -> Self {
+        self.redo = true;
+        self
+    }
+
     pub fn open(self) -> Result<Database> {
         let describe = super::engine::described(&self.name);
-        let durability = self.durability;
-        let opened = check_name(&self.name)
-            .and_then(|()| self.migrations.map(Migrations::load).transpose())
-            .and_then(|migrations| Databases::of(&self.store)?.open(&self.store, &self.name, migrations, durability));
+        let (durability, name) = (self.durability, &self.name);
+        let drafts = |migrations: &Migrations| Drafts {
+            copy: self.store.dir().join(DATABASES).join(format!("{name}.before-drafts")),
+            redo: self.redo,
+            command: redo_command(self.store.dir(), name, migrations),
+        };
+        let opened = check_name(name)
+            .and_then(|()| self.migrations.map(|migrations| Ok((drafts(&migrations), migrations.load()?))).transpose())
+            .and_then(|migrating| Databases::of(&self.store)?.open(&self.store, name, migrating, durability));
         opened.map(|base| Database { base }).map_err(|error| error.within(describe))
     }
 }
@@ -391,6 +417,21 @@ impl fmt::Debug for Database {
 /// cannot climb out of `sql/` or meet another on a file system that folds case.
 fn check_name(name: &str) -> Result<()> {
     crate::text::check_name("a database's", name)
+}
+
+/// The command that takes a database back to before its drafts and applies
+/// them again, as a refusal of an edited draft names it: its directory of
+/// migrations where the program gave one, a stand-in where it gave the files.
+fn redo_command(dir: &Path, name: &str, migrations: &Migrations) -> String {
+    let quoted = |path: &Path| {
+        let text = path.display().to_string();
+        if text.contains(char::is_whitespace) { format!("\"{text}\"") } else { text }
+    };
+    let folder = match migrations {
+        Migrations::Dir(folder) => quoted(folder),
+        Migrations::Files(_) => "<migrations>".to_owned(),
+    };
+    format!("tinystore migrate {} {name} {folder} --redo-drafts", quoted(dir))
 }
 
 /// Whether a statement may be a query: its first word, past spaces and

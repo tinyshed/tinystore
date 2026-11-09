@@ -32,6 +32,7 @@ mod connection;
 mod constraint;
 #[cfg(test)]
 pub(crate) mod division;
+mod drafts;
 mod file;
 mod given;
 mod group;
@@ -61,6 +62,7 @@ pub(crate) use connection::{
     execute_cached, given_sql_error, query_cached, quote_ident, read_copy, sql_error, unheard_warnings,
 };
 pub(crate) use constraint::named as name_constraint;
+pub(crate) use drafts::Drafts;
 #[cfg(feature = "replication")]
 pub(crate) use file::Switch;
 pub(crate) use file::{Begun, File, Mark, a_copy_takes_no_transaction, in_a_transaction, refuse_when_rolled_back};

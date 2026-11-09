@@ -107,6 +107,23 @@ and checks the applied ones as opening the database from a program does: see
 [Migrations](../sql/migrations.md). No program may hold the directory
 meanwhile, so run it in a deploy before the program starts.
 
+A draft, a migration named `….draft.sql`, applies in a transaction of its
+own once the database is copied. When a draft changed after it ran,
+`--redo-drafts` takes the database back to that copy, losing what was written
+since, and applies the drafts again:
+
+```sh
+tinystore migrate ./data shop ./migrations --redo-drafts
+```
+
+```text
+● shop  took back 0003_orders_note.draft.sql, applied 0003_orders_note.draft.sql
+```
+
+Never put `--redo-drafts` in a deploy: it is for a database you write in
+development, as [A migration still being written](../sql/migrations.md#a-migration-still-being-written)
+says.
+
 ## search
 
 ```sh

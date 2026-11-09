@@ -138,6 +138,7 @@ These contracts are what does not.
 - **SQL-09** An update or a delete with an empty condition MUST be refused.
 - **SQL-10** Every SDK's query builder MUST write the same statement from the same steps.
 - **SQL-11** A database's name MUST NOT leave `sql/` nor meet another's on a file system that folds case.
+- **SQL-12** A migration named `….draft.sql` MUST be applied only after every one that shipped and with a copy of the database from before the first draft kept; a draft edited since it was applied MUST refuse the open, naming the command that takes the database back, and the store MUST NOT take it back by itself; `--redo-drafts` MUST take the database back to that copy and apply the drafts again; a draft renamed without `.draft`, its text the same, MUST become a migration that shipped, and its copy MUST go.
 
 ### Blobs
 

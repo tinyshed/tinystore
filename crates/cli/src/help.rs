@@ -426,10 +426,16 @@ pub(crate) const MIGRATE: Command = Command {
     name: "migrate",
     takes: "<dir> <db> <migrations>",
     does: "apply a database's migration files",
-    flags: &[],
-    examples: &["tinystore migrate ./data app ./migrations"],
-    more: "It applies the files the database has not applied, in one transaction, and refuses one that applied an \
-           edited, renamed or missing file. No program may hold the directory meanwhile.",
+    flags: &[flag(
+        "--redo-drafts",
+        "",
+        "take the database back to its copy from before its drafts, losing what was written since, and apply them again",
+    )],
+    examples: &["tinystore migrate ./data app ./migrations", "tinystore migrate ./data app ./migrations --redo-drafts"],
+    more: "It applies the files the database has not applied, those that shipped in one transaction and the drafts, \
+           named NNNN_name.draft.sql, in another once the database is copied, and refuses one that applied an \
+           edited, renamed or missing file. A draft edited since it was applied is applied again with --redo-drafts. \
+           No program may hold the directory meanwhile.",
 };
 
 pub(crate) const SCHEMA: Command = Command {

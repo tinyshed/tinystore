@@ -153,15 +153,51 @@ fn apply(asked: Asked) -> Done {
     }
     let store = held(&dir)?;
     let before = applied(&store, database)?;
-    let opened = store.database(database).migrations(Path::new(migrations)).open();
+    let redo = asked.has("--redo-drafts");
+    let builder = store.database(database).migrations(Path::new(migrations));
+    let opened = if redo { builder.redo_drafts() } else { builder }.open();
     let after = opened.map_err(asked::Refused::from).and_then(|_| applied(&store, database));
     let closed = store.close();
     let after = after?;
     closed?;
-    let new: Vec<&String> = after.iter().filter(|name| !before.contains(name)).collect();
-    match new.len() {
-        0 => outln!("● {database}  up to date: {} migrations applied", after.len()),
-        _ => outln!("● {database}  applied {}", new.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", ")),
+    let changed = Changed::of(&before, &after, redo);
+    if changed.taken.is_empty() && changed.shipped.is_empty() && changed.applied.is_empty() {
+        return outln!("● {database}  up to date: {} migrations applied", after.len());
+    }
+    let said = [("took back", &changed.taken), ("shipped", &changed.shipped), ("applied", &changed.applied)];
+    let said: Vec<String> = said
+        .iter()
+        .filter(|(_, names)| !names.is_empty())
+        .map(|(verb, names)| format!("{verb} {}", names.join(", ")))
+        .collect();
+    outln!("● {database}  {}", said.join(", "))
+}
+
+/// What a migrate did to a database's migrations, by their names before
+/// and after it: the drafts it took back, those that shipped under their
+/// names without `.draft`, and those it applied, a draft taken back too.
+struct Changed<'a> {
+    taken: Vec<&'a str>,
+    shipped: Vec<&'a str>,
+    applied: Vec<&'a str>,
+}
+
+impl<'a> Changed<'a> {
+    fn of(before: &'a [String], after: &'a [String], redo: bool) -> Changed<'a> {
+        let was = |name: &str| before.iter().any(|before| before == name);
+        let taken: Vec<&str> =
+            before.iter().map(String::as_str).filter(|name| redo && name.ends_with(".draft.sql")).collect();
+        let draft_of = |name: &str| name.strip_suffix(".sql").map(|stem| format!("{stem}.draft.sql"));
+        let shipped = after
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !was(name) && draft_of(name).is_some_and(|draft| was(&draft)));
+        let shipped: Vec<&str> = shipped.collect();
+        let applied = after
+            .iter()
+            .map(String::as_str)
+            .filter(|name| taken.contains(name) || !was(name) && !shipped.contains(name));
+        Changed { applied: applied.collect(), shipped, taken }
     }
 }
 

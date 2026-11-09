@@ -282,6 +282,13 @@ has not, all in one transaction, and refuses a file that applied an
 edited, renamed or missing one, or more than the program has. Without
 them the file opens as it is.
 
+The newest may be drafts, named `0007_messages.draft.sql`: they apply
+in a transaction of their own once the file is copied to
+`sql/<name>.before-drafts`, and one edited since it was applied
+refuses the file, naming `tinystore migrate --redo-drafts`, which
+takes it back to the copy and applies them again. A draft renamed
+without `.draft`, its text the same, has shipped, and the copy goes.
+
 ### DatabaseBuilder.durability
 
 ```rust

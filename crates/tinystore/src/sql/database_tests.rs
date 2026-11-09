@@ -137,6 +137,58 @@ fn a_statement_sqlite_cannot_run_as_written_is_invalid() {
 }
 
 // contract: SQL-03
+// contract: SQL-12
+#[test]
+fn a_draft_changed_since_it_was_applied_is_applied_again_from_the_copy_kept_before_it() {
+    let f = fixture();
+    let open = |migrations: Migrations| f.store.database("app").migrations(migrations).open();
+    let notes = |db: &Database| -> Vec<String> { db.all("select title from notes order by title").unwrap() };
+    let copy = f.dir.path().join("sql").join("app.before-drafts");
+    let db = open(Migrations::from([("0001_notes.sql", NOTES)])).unwrap();
+    db.exec("insert into notes (id, author_id, title) values ('1', 1, 'before')").unwrap();
+
+    let drafted = [("0001_notes.sql", NOTES), ("0002_tags.draft.sql", "create table tags (name text)")];
+    let db = open(Migrations::from(drafted)).unwrap();
+    assert!(copy.is_file(), "the database before its drafts is kept");
+    db.exec("insert into notes (id, author_id, title) values ('2', 1, 'during')").unwrap();
+    db.exec("insert into tags (name) values ('red')").unwrap();
+
+    let edited = [("0001_notes.sql", NOTES), ("0002_tags.draft.sql", "create table tags (name text, color text)")];
+    let refused = open(Migrations::from(edited)).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid);
+    let said = refused.to_string();
+    assert!(said.contains("the draft 0002_tags.draft.sql changed after it was applied"), "{said}");
+    assert!(said.contains("<migrations> --redo-drafts"), "the command that takes it back: {said}");
+
+    let redone = f.store.database("app").migrations(Migrations::from(edited)).redo_drafts().open().unwrap();
+    assert_eq!(notes(&redone), ["before"], "what was written since the drafts is gone");
+    let tags: Vec<(String, Option<String>)> = redone.all("select name, color from tags").unwrap();
+    assert!(tags.is_empty(), "the draft applied again, as it reads now");
+    assert!(copy.is_file(), "a copy kept again, before the drafts applied again");
+
+    let shipped = [("0001_notes.sql", NOTES), ("0002_tags.sql", "create table tags (name text, color text)")];
+    let db = open(Migrations::from(shipped)).unwrap();
+    let applied: Vec<String> = db.all("select name from _tinystore_migrations order by version").unwrap();
+    assert_eq!(applied, ["0001_notes.sql", "0002_tags.sql"], "a draft ships under its name without .draft");
+    assert!(!copy.exists(), "and the copy goes, as no draft is left to take back");
+
+    let edited = [("0001_notes.sql", NOTES), ("0002_tags.sql", "create table tags (name text)")];
+    let said = open(Migrations::from(edited)).unwrap_err().to_string();
+    assert!(said.contains("so write the change as the next migration"), "a shipped one never changes: {said}");
+    let after = [("0001_notes.sql", NOTES), ("0002_tags.sql", TAGS), ("0003_x.draft.sql", ""), ("0004_y.sql", "")];
+    let said = open(Migrations::from(after)).unwrap_err().to_string();
+    assert!(said.contains("0004_y.sql follows the draft 0003_x.draft.sql"), "{said}");
+
+    let kept = [("0001_notes.sql", NOTES), ("0002_tags.sql", "create table tags (name text, color text)")];
+    open(Migrations::from([kept[0], kept[1], ("0003_x.draft.sql", "create table x (y text)")])).unwrap();
+    let said = open(Migrations::from(kept)).unwrap_err().to_string();
+    assert!(said.contains("the draft 0003_x.draft.sql changed") && said.contains("--redo-drafts"), "{said}");
+    let back = f.store.database("app").migrations(Migrations::from(kept)).redo_drafts().open().unwrap();
+    let tables: i64 = back.scalar("select count(*) from sqlite_schema where name = 'x'").unwrap();
+    assert_eq!(tables, 0, "a draft the program dropped is taken back and applied no more");
+    assert!(!copy.exists(), "and with no draft left, no copy");
+}
+
 #[test]
 fn a_migration_changed_renamed_missing_or_out_of_order_refuses_to_open() {
     let f = fixture();
