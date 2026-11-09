@@ -119,7 +119,7 @@
       "takes": "[dir] list <bucket> [branch]"
     },
     {
-      "does": "a queue's jobs that have ids, with their state",
+      "does": "a queue's jobs, with their state",
       "examples": [
         "tinystore jobs ./data list emails --state failed",
         "tinystore jobs ./data list emails welcome-"
@@ -136,9 +136,9 @@
           "value": "<count>"
         },
         {
-          "means": "the page after this id, as the end of the last one says",
+          "means": "the page after this one, as the end of the last one says",
           "name": "--after",
-          "value": "<id>"
+          "value": "<next>"
         },
         {
           "means": "a queue the program opened from this database, kept in sql/<db>.db",

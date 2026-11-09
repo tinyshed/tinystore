@@ -129,6 +129,11 @@ failed, err := emails.List(ctx, jobs.Failed)
 A prefix is text: `chat:4` matches chat 42 too, so end a prefix with a
 separator.
 
+With no prefix a page lists every job the queue holds: those with ids in the
+order of their ids, then those without in the order they run, then those
+without that failed, the last failed first. A state narrows any of them, and
+`failed` with no prefix lists every failed job, the last failed first.
+
 <div data-for="rust">
 
 In Rust, a job whose value no longer reads as the queue's type, kept failed

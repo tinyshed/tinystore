@@ -331,6 +331,25 @@ func TestAPageReadsTheIDsUnderAPrefix(t *testing.T) {
 	})
 }
 
+func TestAPageWithNoPrefixListsTheJobsWithoutIDsAfterThoseWith(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		notifications := ways.Must(jobs.OpenQueue[int](store, "notifications"))
+		ways.Must(notifications.Add(ctx, 1))
+		ways.Must(notifications.Add(ctx, 2, jobs.ID("two")))
+		var seen []string
+		for job, err := range notifications.All(ctx, jobs.Waiting) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen = append(seen, fmt.Sprintf("%s=%d", job.ID, job.Value))
+		}
+		if strings.Join(seen, ",") != "two=2,=1" {
+			t.Fatalf("waiting %v", seen)
+		}
+	})
+}
+
 func TestAGroupRateStartsEachGroupsCountASpanAndHoldsBackNoOther(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

@@ -289,7 +289,8 @@ async def list(
 ) -> JobPage[T]: ...
 ```
 
-A page of the queue's jobs whose ids start with a prefix, or of its failed ones, the last first.
+A page of the queue's jobs: with no prefix every job, those with ids by id,
+then those without as they run, then those without that failed.
 
 ### Queue.all
 

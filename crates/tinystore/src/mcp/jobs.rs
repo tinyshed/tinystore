@@ -19,8 +19,9 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
         "state": text("scheduled, waiting, running, done or failed"),
         "limit": count("200 at most"),
     }));
-    let description = "A queue's jobs that have ids, in the order of their ids, with their state, attempts and last \
-                       error; or, with state failed and no prefix, its failed jobs, the last failed first.";
+    let description = "A queue's jobs with their state, attempts and last error: those with ids in the order of their \
+                       ids, then, with no prefix, those without as they run, then those without that failed; or, with \
+                       state failed and no prefix, its failed jobs, the last failed first.";
     vec![Tool::reads("jobs_list", description, schema(takes, &["queue"]), move |given, _| {
         Ok(page(&open, &Arguments { tool: "jobs_list", given })?)
     })]
@@ -48,8 +49,8 @@ pub struct Listing<'a> {
     pub state: Option<&'a str>,
 }
 
-/// A page of the queue's jobs that have ids, `limit` of them at most, after
-/// the id `after`.
+/// A page of the queue's jobs, `limit` of them at most, after the page that
+/// ended at `after`.
 pub fn listed(store: &Store, listing: &Listing, limit: usize, after: Option<&str>) -> Result<Page<Value>, String> {
     let opened = match listing.database {
         #[cfg(feature = "sql")]

@@ -282,6 +282,17 @@ for (const way of ways) {
 			expect(all).toEqual(['chat:42:1', 'chat:4:1', 'chat:4:2', 'chat:4:3'])
 		})
 
+		test('a page with no prefix lists the jobs without ids after those with', async () => {
+			const notifications = store.queue<{ n: number }>('notifications')
+			await notifications.add({ n: 1 })
+			await notifications.add({ n: 2 }, { id: 'two' })
+			const every: number[] = []
+			for await (const job of notifications.all()) every.push(job.value.n)
+			const waiting: (string | undefined)[] = []
+			for await (const job of notifications.all({ state: 'waiting' })) waiting.push(job.id)
+			expect({ every, waiting }).toEqual({ every: [2, 1], waiting: ['two', undefined] })
+		})
+
 		test("a group rate starts each group's count a span, and a group past it holds back no other", async () => {
 			const messages = store.queue<{ bot: string; n: number }>('messages', { groupRate: '2/m' })
 			for (const [bot, n] of [

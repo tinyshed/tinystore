@@ -2825,8 +2825,9 @@ def _read_jobs_list(r: Reader) -> dict[str, Any]:
 
 
 # A page of a queue's jobs: those whose ids start with a prefix, in the byte
-# order of their ids, or with no prefix and the failed state, the last failed
-# first.
+# order of their ids; with no prefix every job, those with ids first, then
+# those without as they run, then those without that failed, the last failed
+# first; with no prefix and the failed state the failed alone, the last first.
 JobsList = Message(
     "jobs.List",
     {

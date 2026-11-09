@@ -145,11 +145,11 @@ pub(crate) const JOBS_ADD: Command = Command {
 pub(crate) const JOBS_LIST: Command = Command {
     name: "jobs list",
     takes: "[dir] list <queue> [prefix]",
-    does: "a queue's jobs that have ids, with their state",
+    does: "a queue's jobs, with their state",
     flags: &[
         flag("--state", "<state>", "scheduled, waiting, running, done or failed alone"),
         flag("--limit", "<count>", "the jobs a page holds, 100 when not given, 1000 at most"),
-        flag("--after", "<id>", "the page after this id, as the end of the last one says"),
+        flag("--after", "<next>", "the page after this one, as the end of the last one says"),
         flag("--database", "<db>", "a queue the program opened from this database, kept in sql/<db>.db"),
         JSON,
     ],

@@ -53,14 +53,16 @@ fn a_job_is_added_listed_and_cancelled_from_a_shell() {
     assert_eq!(wrong.status.code(), Some(2), "a job is JSON: {}", said(&wrong));
     let listed = tinystore(&[&"jobs", &data, &"list", &"emails", &"--json"]);
     let jobs: Vec<Value> = String::from_utf8_lossy(&listed.stdout).lines().map(|line| line.parse().unwrap()).collect();
-    assert_eq!(jobs.len(), 1, "a job without an id is listed by none: {}", said(&listed));
+    assert_eq!(jobs.len(), 2, "a job without an id after those with: {}", said(&listed));
     assert_eq!((jobs[0]["id"].as_str(), jobs[0]["state"].as_str()), (Some("welcome-42"), Some("scheduled")));
     assert_eq!(jobs[0]["value"]["to"], "ada@example.com");
+    assert_eq!((jobs[1]["id"].as_str(), jobs[1]["value"]["to"].as_str()), (None, Some("bob@example.com")));
     let cancelled = tinystore(&[&"jobs", &data, &"cancel", &"emails", &"welcome-42"]);
     assert!(said(&cancelled).contains("cancelled welcome-42 in queue emails"), "{}", said(&cancelled));
     let store = stopped(&data);
     let queue = store.queue::<Value>("emails").open().unwrap();
     assert!(queue.get("welcome-42").unwrap().is_none());
-    let waiting = queue.list(&tinystore::jobs::Filter::default().state(State::Scheduled)).unwrap();
-    assert!(waiting.jobs.is_empty(), "a page lists the jobs that have ids");
+    let scheduled = queue.list(&tinystore::jobs::Filter::default().state(State::Scheduled)).unwrap();
+    assert_eq!(scheduled.jobs.len(), 1, "the job without an id, which no cancel reaches");
+    assert_eq!(scheduled.jobs[0].id, None);
 }

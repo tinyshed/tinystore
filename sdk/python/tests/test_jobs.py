@@ -262,6 +262,14 @@ async def test_a_page_reads_the_ids_under_a_prefix(store: tinystore.Store) -> No
     assert [job.id async for job in chats.all(prefix="chat:")] == ["chat:42:1", "chat:4:1", "chat:4:2", "chat:4:3"]
 
 
+async def test_a_page_with_no_prefix_lists_the_jobs_without_ids_after_those_with(store: tinystore.Store) -> None:
+    notifications = store.queue("notifications", int)
+    await notifications.add(1)
+    await notifications.add(2, id="two")
+    assert [job.value async for job in notifications.all()] == [2, 1]
+    assert [job.id async for job in notifications.all(state="waiting")] == ["two", None]
+
+
 async def test_a_value_that_no_longer_reads_as_its_type_fails_its_job_not_its_queue(store: tinystore.Store) -> None:
     loose = store.queue("checked")
     await loose.add({"user_id": "not a number"}, id="bad")

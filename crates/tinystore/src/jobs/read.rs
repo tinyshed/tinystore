@@ -67,10 +67,12 @@ pub struct LastRun {
     pub ended_at: SystemTime,
 }
 
-/// Which jobs a page lists: those whose ids start with a prefix, in the byte
-/// order of their ids, or with no prefix and `Failed` the failed jobs, the
-/// last failed first. A prefix is text: `chat:4` meets chat 42 too, so end it
-/// with a separator.
+/// Which jobs a page lists. With a prefix, those whose ids start with it, in
+/// the byte order of their ids; a prefix is text: `chat:4` meets chat 42 too,
+/// so end it with a separator. With none, every job the queue holds: those
+/// with ids in that order, then those without in the order they run, then
+/// those without that failed, the last failed first. With no prefix and
+/// `Failed`, the failed jobs alone, the last failed first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Filter {
     prefix: String,
@@ -143,13 +145,20 @@ enum Table {
 /// The columns every read takes, in the order `found` reads them. A value's
 /// size is read without its bytes: SQLite takes a blob's length from the row's
 /// header and leaves its overflow pages alone.
-macro_rules! keyed_columns {
+macro_rules! job_columns {
     () => {
         "j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill,
             coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0),
-            j.ran, j.took, j.grp
-        from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
-        left join _tinystore_jobs_leases l on l.id = j.id and l.until > ?9"
+            j.ran, j.took, j.grp"
+    };
+}
+macro_rules! keyed_columns {
+    () => {
+        concat!(
+            job_columns!(),
+            " from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
+            left join _tinystore_jobs_leases l on l.id = j.id and l.until > ?9"
+        )
     };
 }
 macro_rules! failed_columns {
@@ -184,10 +193,24 @@ const PAGE_BY_KEY: &str = concat!(
     " where f.queue = ?1 and f.key > ?2 and f.key >= ?3 and (?4 is null or f.key < ?4) and ?5 in (0, 2)
     ) order by 1 limit cast(?6 as integer)"
 );
+/// A page of the jobs without ids in the order the queue runs them, after the
+/// job whose next and number are ?7 and ?8. The queue's rows are read in that
+/// order, those with ids passed over, so the first page after the last id
+/// may read through every row the queue holds to find none.
+const PAGE_UNNAMED: &str = concat!(
+    "select ",
+    job_columns!(),
+    " from _tinystore_jobs j left join _tinystore_jobs_leases l on l.id = j.id and l.until > ?9
+    where j.queue = ?1 and j.key is null and (j.next, j.id) > (?7, ?8)
+    order by j.next, j.id limit cast(?6 as integer)"
+);
+/// A page of the failed jobs, the last failed first, before the one that
+/// failed at ?7 with the number ?8; ?5 is 1 for those without ids alone.
 const PAGE_FAILED: &str = concat!(
     "select ",
     failed_columns!(),
-    " where f.queue = ?1 and (f.failed, f.id) < (?7, ?8) order by f.failed desc, f.id desc limit cast(?6 as integer)"
+    " where f.queue = ?1 and (?5 = 0 or f.key is null) and (f.failed, f.id) < (?7, ?8)
+    order by f.failed desc, f.id desc limit cast(?6 as integer)"
 );
 
 /// Reads the job under `key` from one snapshot: in the queue's rows, failed,
@@ -240,7 +263,7 @@ pub(crate) fn page<V: DeserializeOwned>(
         }
         read += 1;
         bytes += found.size;
-        last = Some(cursor_of(filter, found));
+        last = Some(found);
         // whether a held job runs is memory's to say, so a page of one state
         // leaves out the rows it read that turn out another, and may hold fewer
         let job = job_of::<V>(c, queue, found, now).map_err(|error| match &found.key {
@@ -252,45 +275,111 @@ pub(crate) fn page<V: DeserializeOwned>(
         }
     }
     if read < found.len() {
-        page.next = last;
+        page.next = last.map(|found| cursor_of(filter, found).to_string());
     }
     Ok(page)
 }
 
-/// The rows a page reads, up to `limit`.
+/// The rows a page reads, up to `limit`: the walk its cursor names from where
+/// it stopped, and each walk after it from its start, until `limit` are read.
 fn rows(c: &Connection, queue: &QueueState, filter: &Filter, limit: usize, now: i64) -> Result<Vec<Found>> {
-    let limit = limit as i64;
-    if filter.prefix.is_empty() && filter.state == Some(State::Failed) {
-        let (before, id) = failed_cursor(filter.after.as_deref())?;
-        let no = Option::<i64>::None;
-        return all(c, PAGE_FAILED, params![queue.id, no, no, no, no, limit, before, id]);
-    }
-    let tables = match filter.state {
-        None => 0,
-        Some(State::Failed) => 2,
-        Some(_) => 1,
+    let given = filter.after.as_deref().map(Cursor::parse).transpose()?;
+    let no = Option::<i64>::None;
+    let by_failure = filter.prefix.is_empty() && filter.state == Some(State::Failed);
+    let mut walk = match given {
+        None if by_failure => Cursor::Failed(i64::MAX, i64::MAX),
+        None => Cursor::Id(String::new()),
+        Some(cursor) => cursor,
     };
-    let after = filter.after.as_deref().unwrap_or("");
-    let end = prefix_end(&filter.prefix);
-    let end = end.as_deref().map(TextBytes);
-    all(c, PAGE_BY_KEY, params![queue.id, after, filter.prefix, end, tables, limit, None::<i64>, None::<i64>, now])
+    let mut found = Vec::new();
+    loop {
+        let left = (limit - found.len()) as i64;
+        let read = match &walk {
+            Cursor::Failed(before, id) if by_failure => {
+                all(c, PAGE_FAILED, params![queue.id, no, no, no, 0, left, before, id])?
+            }
+            Cursor::Id(after) if !by_failure => {
+                let tables = match filter.state {
+                    None => 0,
+                    Some(State::Failed) => 2,
+                    Some(_) => 1,
+                };
+                let end = prefix_end(&filter.prefix);
+                let end = end.as_deref().map(TextBytes);
+                all(c, PAGE_BY_KEY, params![queue.id, after, filter.prefix, end, tables, left, no, no, now])?
+            }
+            Cursor::Queued(next, id) if filter.prefix.is_empty() && !by_failure => {
+                all(c, PAGE_UNNAMED, params![queue.id, no, no, no, no, left, next, id, now])?
+            }
+            Cursor::Failed(before, id) if filter.prefix.is_empty() && filter.state.is_none() => {
+                all(c, PAGE_FAILED, params![queue.id, no, no, no, 1, left, before, id])?
+            }
+            _ => {
+                let given = filter.after.as_deref().unwrap_or_default();
+                return Err(Error::invalid(format!("a cursor of {given:?}, which no page of this filter gave")));
+            }
+        };
+        found.extend(read);
+        if found.len() == limit {
+            break;
+        }
+        walk = match walk {
+            Cursor::Id(_) if filter.prefix.is_empty() => Cursor::Queued(i64::MIN, i64::MIN),
+            Cursor::Queued(..) if filter.state.is_none() => Cursor::Failed(i64::MAX, i64::MAX),
+            _ => break,
+        };
+    }
+    Ok(found)
 }
 
-/// Where the next page starts after a job: its id, or for failed jobs listed
-/// by time, when it failed and its job's number.
-fn cursor_of(filter: &Filter, found: &Found) -> String {
-    if filter.prefix.is_empty() && filter.state == Some(State::Failed) {
-        return format!("{}.{}", found.time, found.id);
-    }
-    found.key.clone().unwrap_or_default()
+/// Where a page ended, which its `next` carries: after an id, after a job
+/// without one in the order the queue runs them, its next and number, or
+/// after a failed job, the last failed first, when it failed and its number.
+#[derive(Debug, PartialEq, Eq)]
+enum Cursor {
+    Id(String),
+    Queued(i64, i64),
+    Failed(i64, i64),
 }
 
-fn failed_cursor(after: Option<&str>) -> Result<(i64, i64)> {
-    let Some(after) = after else {
-        return Ok((i64::MAX, i64::MAX));
-    };
-    let parsed = after.split_once('.').and_then(|(failed, id)| Some((failed.parse().ok()?, id.parse().ok()?)));
-    parsed.ok_or_else(|| Error::invalid(format!("a cursor of {after:?}")))
+impl Cursor {
+    fn parse(text: &str) -> Result<Cursor> {
+        if let Some(id) = text.strip_prefix("id:") {
+            return Ok(Cursor::Id(id.to_owned()));
+        }
+        let place = |kind: &str| {
+            let (time, number) = text.strip_prefix(kind)?.split_once('.')?;
+            Some((time.parse().ok()?, number.parse().ok()?))
+        };
+        if let Some((next, number)) = place("queued:") {
+            return Ok(Cursor::Queued(next, number));
+        }
+        if let Some((failed, number)) = place("failed:") {
+            return Ok(Cursor::Failed(failed, number));
+        }
+        Err(Error::invalid(format!("a cursor of {text:?}, which no page gave")))
+    }
+}
+
+impl std::fmt::Display for Cursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Cursor::Id(id) => write!(f, "id:{id}"),
+            Cursor::Queued(next, number) => write!(f, "queued:{next}.{number}"),
+            Cursor::Failed(failed, number) => write!(f, "failed:{failed}.{number}"),
+        }
+    }
+}
+
+/// Where the next page starts after a job: its id, or for one without, where
+/// it lies in its walk; for failed jobs listed by time, when it failed.
+fn cursor_of(filter: &Filter, found: &Found) -> Cursor {
+    let by_failure = filter.prefix.is_empty() && filter.state == Some(State::Failed);
+    match (&found.key, found.table) {
+        (Some(key), _) if !by_failure => Cursor::Id(key.clone()),
+        (_, Table::Failed) => Cursor::Failed(found.time, found.id),
+        (_, _) => Cursor::Queued(found.time, found.id),
+    }
 }
 
 fn one(c: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Option<Found>> {

@@ -230,7 +230,7 @@ func (c cron) schedule(o *queueOptions) { o.cron = &c }
 
 type prefix string
 
-// Prefix lists the jobs whose ids start with it.
+// Prefix lists the jobs whose ids start with it, in their byte order.
 func Prefix(p string) prefix { return prefix(p) }
 
 func (p prefix) list(o *listOptions) { s := string(p); o.prefix = &s }

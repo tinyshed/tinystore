@@ -555,10 +555,12 @@ Runs what is due; see `Queue::run_due`.
 pub struct Filter { /* private fields */ }
 ```
 
-Which jobs a page lists: those whose ids start with a prefix, in the byte
-order of their ids, or with no prefix and `Failed` the failed jobs, the
-last failed first. A prefix is text: `chat:4` meets chat 42 too, so end it
-with a separator.
+Which jobs a page lists. With a prefix, those whose ids start with it, in
+the byte order of their ids; a prefix is text: `chat:4` meets chat 42 too,
+so end it with a separator. With none, every job the queue holds: those
+with ids in that order, then those without in the order they run, then
+those without that failed, the last failed first. With no prefix and
+`Failed`, the failed jobs alone, the last failed first.
 
 ### Filter.prefix
 

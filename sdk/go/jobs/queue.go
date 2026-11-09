@@ -371,8 +371,8 @@ func text(s *string) string {
 	return *s
 }
 
-// List is a page of the queue's jobs whose ids start with a prefix, or of
-// its failed ones, the last first.
+// List is a page of the queue's jobs: with no prefix every job, those with
+// ids by id, then those without as they run, then those without that failed.
 func (q *Queue[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error) {
 	var o listOptions
 	for _, opt := range opts {

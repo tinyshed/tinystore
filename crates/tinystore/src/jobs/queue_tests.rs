@@ -270,6 +270,41 @@ fn list_reads_the_ids_under_a_prefix_a_page_at_a_time() {
     assert_eq!(all.len(), 4, "a prefix is text: chat:4 meets chat 420 too");
 }
 
+// contract: JOB-13
+#[test]
+fn a_page_with_no_prefix_lists_the_jobs_without_ids_after_those_with() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").attempts(1).open().unwrap();
+    pushes.add(&note("bounced")).unwrap();
+    pushes.id("gone").add(&note("gone")).unwrap();
+    pushes.run_due(|_: Note, _run| -> Result<(), &str> { Err("no device") }).unwrap();
+    f.clock.advance(SECOND);
+    pushes.add(&note("first")).unwrap();
+    pushes.id("b").add(&note("b")).unwrap();
+    pushes.add(&note("second")).unwrap();
+    pushes.id("a").delay(HOUR).add(&note("a")).unwrap();
+    pushes.delay(HOUR).add(&note("later")).unwrap();
+
+    let texts = |filter: Filter| -> Vec<String> { pushes.all(filter).map(|job| job.unwrap().value.text).collect() };
+    let every = ["a", "b", "gone", "first", "second", "later", "bounced"];
+    assert_eq!(texts(Filter::default()), every, "ids first, then the rest as they run, then the failed");
+    assert_eq!(texts(Filter::default().limit(1)), every, "a page at a time across the walks");
+    assert_eq!(texts(Filter::default().state(State::Waiting)), ["b", "first", "second"]);
+    assert_eq!(texts(Filter::default().state(State::Scheduled)), ["a", "later"]);
+    assert_eq!(texts(Filter::default().state(State::Failed)), ["gone", "bounced"], "the last failed first");
+    assert_eq!(texts(Filter::prefix("g")), ["gone"], "a job without an id starts with no prefix");
+
+    let first = pushes.list(&Filter::default().limit(4)).unwrap();
+    assert_eq!(first.jobs.last().unwrap().id, None);
+    let rest = pushes.list(&Filter::default().after(first.next.clone().unwrap())).unwrap();
+    let rest: Vec<_> = rest.jobs.iter().map(|job| job.value.text.as_str()).collect();
+    assert_eq!(rest, ["second", "later", "bounced"]);
+    let error = pushes.list(&Filter::prefix("chat:").after(first.next.unwrap())).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "a prefix walks ids alone: {error}");
+    let error = pushes.list(&Filter::default().after("chat:42")).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "an id is no cursor: {error}");
+}
+
 #[test]
 fn the_failed_jobs_list_the_last_failed_first() {
     let f = fixture();

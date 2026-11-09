@@ -123,6 +123,7 @@ These contracts are what does not.
 - **JOB-10** `maxWaiting` MUST hold under concurrent adds.
 - **JOB-11** A stopping worker MUST wait for its handlers and give back, uncounted, the jobs it had not started.
 - **JOB-12** A value that no longer decodes MUST fail its job, not its queue.
+- **JOB-13** A page with no prefix MUST list every job its queue holds, those without ids too, and walking its pages MUST meet each job that stayed where it was once.
 
 ### SQL
 

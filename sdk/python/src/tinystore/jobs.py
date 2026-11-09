@@ -540,7 +540,8 @@ class Queue[T]:
         after: str | None = None,
         limit: int | None = None,
     ) -> JobPage[T]:
-        """A page of the queue's jobs whose ids start with a prefix, or of its failed ones, the last first."""
+        """A page of the queue's jobs: with no prefix every job, those with ids by id,
+        then those without as they run, then those without that failed."""
         body = await self._source.call(
             "jobs.list",
             lambda h: JobsList.encode(handle=h, prefix=prefix, state=state, after=after, limit=limit),

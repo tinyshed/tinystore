@@ -125,7 +125,7 @@ MaxWaiting is how many jobs a queue holds waiting before an add is a Limit error
 func Prefix(p string) prefix
 ```
 
-Prefix lists the jobs whose ids start with it.
+Prefix lists the jobs whose ids start with it, in their byte order.
 
 ## Rate
 
@@ -316,7 +316,7 @@ In is the queue inside a transaction: the store's, whose commit makes its writes
 func (q *Queue[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error)
 ```
 
-List is a page of the queue's jobs whose ids start with a prefix, or of its failed ones, the last first.
+List is a page of the queue's jobs: with no prefix every job, those with ids by id, then those without as they run, then those without that failed.
 
 ### Queue.Name
 

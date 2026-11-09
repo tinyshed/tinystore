@@ -33,7 +33,7 @@ tinystore kv ./data set flags beta on --ttl 1h
 | Look    | `status [dir]`                        | what the store holds, who serves it, how its node stands          |
 |         | `logs [dir]`                          | the application's logs; new ones as they arrive with `-f`         |
 |         | `kv [dir] get <bucket> <key>`         | one value; `list <bucket> [branch]` for a bucket's keys           |
-|         | `jobs [dir] list <queue>`             | a queue's jobs that have ids, with their state                    |
+|         | `jobs [dir] list <queue>`             | a queue's jobs, with their state                                  |
 |         | `files [dir] list <set>`              | a set's files; `get <set> <path> <file>` writes one to a path     |
 |         | `sql [dir] <db> "<query>"`            | a query's rows; reads only unless `--write`                       |
 |         | `search list [dir]`                   | the store's search indexes; `drop <dir> <name>` drops one         |

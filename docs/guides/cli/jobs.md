@@ -57,8 +57,9 @@ welcome-42  failed     26 Oct 14:32:07  attempt 10  smtp: connection refused
 welcome-43  scheduled  26 Oct 14:40:00  attempt 0
 ```
 
-- It lists the jobs that have ids, in the order of their ids. A second word
-  narrows them to the ids that start with it.
+- It lists the jobs that have ids, in the order of their ids, then those
+  without, `-` in the id's column, in the order they run, then those without
+  that failed. A second word narrows them to the ids that start with it.
 - `--state` lists one state alone: `scheduled`, `waiting`, `running`, `done`
   or `failed`.
 - A page holds 100 jobs unless `--limit` says, 1000 at most, and `--after`
