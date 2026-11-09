@@ -225,6 +225,32 @@ func TestAHitSaysWhereItMatchedInBytesThatSliceItsOwnStrings(t *testing.T) {
 	})
 }
 
+func TestAHitKeepsEachHalfOfItsScoreAndAFloorKeepsAFarVectorOutOfTheSum(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		opinions := ways.Must(search.OpenIndex[product](store, "opinions", search.FieldNames("title"), search.Vectors{Dimensions: 3}))
+		ways.Must(0, opinions.Set(ctx, "dota", product{Title: "dota is dead"}, search.Vector([]float32{1, 0, 0})))
+		ways.Must(0, opinions.Set(ctx, "rain", product{Title: "loves the rain"}, search.Vector([]float32{0, 1, 0})))
+		ways.Must(0, opinions.Set(ctx, "patch", product{Title: "the new dota patch"}, search.Vector([]float32{0, 0, 1})))
+		far := search.Vector([]float32{-1, -1, -1})
+		summed := ways.Must(opinions.Search(ctx, "dota", far))
+		for _, hit := range summed.Hits {
+			if hit.ID != "rain" {
+				continue
+			}
+			if hit.Score != 0.5 || hit.TextScore != nil || hit.Similarity == nil || math.Abs(*hit.Similarity+1/math.Sqrt(3)) > 1e-6 {
+				t.Fatalf("rain %+v", hit)
+			}
+		}
+		floored := ways.Must(opinions.Search(ctx, "dota", far, search.MinSimilarity(0.58)))
+		if !reflect.DeepEqual(ids(floored), []string{"dota", "patch"}) || floored.Hits[1].TextScore == nil {
+			t.Fatalf("floored %+v", floored)
+		}
+		_, err := opinions.Search(ctx, "dota", far, search.MinSimilarity(0.58), search.Hybrid{Rerank: true})
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestAVectorFindsTheNearestByItsCosineAndWithWordsBothAreSummedOrReranked(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

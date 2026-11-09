@@ -8719,6 +8719,10 @@ def _write_search_query(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(11)
         w.str(x)
         n += 1
+    if (x := v.get("min_similarity")) is not None:
+        w.uint(12)
+        w.float(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8749,6 +8753,8 @@ def _read_search_query(r: Reader) -> dict[str, Any]:
                 read["prefix_every"] = r.bool()
             case 11:
                 read["matches"] = r.str()
+            case 12:
+                read["min_similarity"] = r.float()
             case _:
                 r.skip()
     r.leave()
@@ -8776,6 +8782,8 @@ SearchQuery = Message(
         "prefix_every": (10, bool_),
         # utf8, utf16 or chars: each hit says where it matched, counted in that unit
         "matches": (11, str_),
+        # the least cosine a document's vector has for the vector to find it
+        "min_similarity": (12, float_),
     },
     _write_search_query,
     _read_search_query,
@@ -10272,6 +10280,14 @@ def _write_search_hit(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             SearchMatch.write(w, item0)
         n += 1
+    if (x := v.get("text_score")) is not None:
+        w.uint(6)
+        w.float(x)
+        n += 1
+    if (x := v.get("similarity")) is not None:
+        w.uint(7)
+        w.float(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -10294,6 +10310,10 @@ def _read_search_hit(r: Reader) -> dict[str, Any]:
                 items0 = [SearchMatch.read(r) for _ in range(r.array())]
                 r.leave()
                 read["matches"] = items0
+            case 6:
+                read["text_score"] = r.float()
+            case 7:
+                read["similarity"] = r.float()
             case _:
                 r.skip()
     r.leave()
@@ -10301,8 +10321,8 @@ def _read_search_hit(r: Reader) -> dict[str, Any]:
 
 
 # A hit: a document and its value, or a table's row, a value a column of
-# the answer's columns, as sql.Rows holds one, and where the search's words
-# matched it when the query asked.
+# the answer's columns, as sql.Rows holds one, where the search's words
+# matched it when the query asked, and what each half of the search gave it.
 SearchHit = Message(
     "search.Hit",
     {
@@ -10312,6 +10332,10 @@ SearchHit = Message(
         "score": (3, float_),
         "row": (4, list_(sql_value)),
         "matches": (5, list_(SearchMatch)),
+        # its words' score, where they found it among their best
+        "text_score": (6, float_),
+        # its vector's cosine with the search's, where both have one
+        "similarity": (7, float_),
     },
     _write_search_hit,
     _read_search_hit,

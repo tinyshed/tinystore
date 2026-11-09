@@ -10278,6 +10278,8 @@ pub(crate) struct SearchQuery {
     pub(crate) prefix_every: bool,
     /// Utf8, utf16 or chars: each hit says where it matched, counted in that unit.
     pub(crate) matches: Option<String>,
+    /// The least cosine a document's vector has for the vector to find it.
+    pub(crate) min_similarity: Option<f64>,
 }
 
 #[cfg(feature = "search")]
@@ -10300,6 +10302,7 @@ impl Message for SearchQuery {
                 9 => message.prefix = codec::bool(r, "prefix")?,
                 10 => message.prefix_every = codec::bool(r, "prefixEvery")?,
                 11 => message.matches = Some(codec::str(r, "matches")?),
+                12 => message.min_similarity = Some(codec::float(r, "minSimilarity")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10352,6 +10355,10 @@ impl Message for SearchQuery {
             map.field(out, 11);
             codec::write_str(out, matches);
         }
+        if let Some(min_similarity) = &self.min_similarity {
+            map.field(out, 12);
+            codec::write_float(out, min_similarity);
+        }
         map.close(out);
     }
 
@@ -10368,6 +10375,7 @@ impl Message for SearchQuery {
             + 2
             + 2
             + self.matches.as_ref().map_or(0, |matches| 1 + 5 + matches.len())
+            + self.min_similarity.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -10382,12 +10390,13 @@ impl Message for SearchQuery {
             && !self.prefix
             && !self.prefix_every
             && self.matches.is_none()
+            && self.min_similarity.is_none()
     }
 }
 
 /// A hit: a document and its value, or a table's row, a value a column of
-/// the answer's columns, as sql.Rows holds one, and where the search's words
-/// matched it when the query asked.
+/// the answer's columns, as sql.Rows holds one, where the search's words
+/// matched it when the query asked, and what each half of the search gave it.
 #[cfg(feature = "search")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SearchHit {
@@ -10397,6 +10406,10 @@ pub(crate) struct SearchHit {
     pub(crate) score: f64,
     pub(crate) row: Option<Vec<Cell>>,
     pub(crate) matches: Option<Vec<SearchMatch>>,
+    /// Its words' score, where they found it among their best.
+    pub(crate) text_score: Option<f64>,
+    /// Its vector's cosine with the search's, where both have one.
+    pub(crate) similarity: Option<f64>,
 }
 
 #[cfg(feature = "search")]
@@ -10413,6 +10426,8 @@ impl Message for SearchHit {
                 3 => message.score = codec::float(r, "score")?,
                 4 => message.row = Some(codec::list(r, "row", codec::cell)?),
                 5 => message.matches = Some(codec::list(r, "matches", codec::message::<SearchMatch>)?),
+                6 => message.text_score = Some(codec::float(r, "textScore")?),
+                7 => message.similarity = Some(codec::float(r, "similarity")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10441,6 +10456,14 @@ impl Message for SearchHit {
             map.field(out, 5);
             codec::write_list(out, matches, codec::write_message);
         }
+        if let Some(text_score) = &self.text_score {
+            map.field(out, 6);
+            codec::write_float(out, text_score);
+        }
+        if let Some(similarity) = &self.similarity {
+            map.field(out, 7);
+            codec::write_float(out, similarity);
+        }
         map.close(out);
     }
 
@@ -10451,6 +10474,8 @@ impl Message for SearchHit {
             + 10
             + self.row.as_ref().map_or(0, |row| 1 + codec::list_size(row, codec::cell_size))
             + self.matches.as_ref().map_or(0, |matches| 1 + codec::list_size(matches, codec::message_size))
+            + self.text_score.map_or(0, |_| 10)
+            + self.similarity.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -10459,6 +10484,8 @@ impl Message for SearchHit {
             && self.score.to_bits() == 0
             && self.row.is_none()
             && self.matches.is_none()
+            && self.text_score.is_none()
+            && self.similarity.is_none()
     }
 }
 

@@ -112,6 +112,10 @@ class Hit[T]:
     score: float
     matches: list[Match] | None = None
     """where the search's words matched it, when the search asked with matches"""
+    text_score: float | None = None
+    """the score its words gave it, as a search by its words alone scores it, where they found it among their best"""
+    similarity: float | None = None
+    """the cosine of its vector with the search's, from -1 to 1, where both have one"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +197,7 @@ class _Searchable[T]:
         vector: Vector | None = None,
         where: Where | None = None,
         hybrid: Hybrid | None = None,
+        min_similarity: float | None = None,
         prefix: bool | Literal["every"] = False,
         matches: bool = False,
         limit: int | None = None,
@@ -212,7 +217,10 @@ class _Searchable[T]:
         With matches, each hit says where the search's words matched it, as a
         search box shows them in bold: ranges of code points of each field's
         text, a word found as written, by its stem or once corrected whole,
-        and a word a prefix began by the letters typed.
+        and a word a prefix began by the letters typed. With min_similarity,
+        the least cosine a document's vector has with the search's for the
+        vector to find it: a search by its vector alone leaves out the hits
+        under it, and one by words too adds nothing for them to the sum.
         """
         if prefix not in (True, False, "every"):
             raise InvalidError(f"a prefix of {prefix!r}: True, False or 'every'")
@@ -221,6 +229,7 @@ class _Searchable[T]:
             vector_bytes=None if vector is None else _vector_bytes(vector),
             where=None if where is None else where_json(where),
             hybrid=hybrid,
+            min_similarity=min_similarity,
             prefix=prefix,
             matches=matches,
             limit=limit,
@@ -238,6 +247,8 @@ class _Searchable[T]:
                     self._read({**hit, "columns": found.get("columns")}),
                     hit.get("score", 0.0),
                     _matches_of(hit.get("matches")),
+                    hit.get("text_score"),
+                    hit.get("similarity"),
                 )
                 for hit in found.get("hits", [])
             ],
@@ -427,6 +438,7 @@ def _query(
     vector_bytes: bytes | None,
     where: str | None,
     hybrid: Hybrid | None,
+    min_similarity: float | None,
     prefix: bool | Literal["every"],
     matches: bool,
     limit: int | None,
@@ -441,6 +453,7 @@ def _query(
             vector=vector_bytes,
             vector_weight=None if hybrid is None else hybrid.vector_weight,
             rerank=None if hybrid is None else hybrid.rerank,
+            min_similarity=min_similarity,
             prefix=prefix is True,
             # none unless asked, so that a server before it reads the search
             prefix_every=True if prefix == "every" else None,

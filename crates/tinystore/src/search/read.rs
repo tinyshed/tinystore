@@ -88,6 +88,9 @@ pub(crate) struct Query {
     pub(crate) vector: Option<Question>,
     pub(crate) vector_weight: Option<f64>,
     pub(crate) rerank: bool,
+    /// The least cosine a document's vector has for the search's vector to
+    /// find it.
+    pub(crate) min_similarity: Option<f64>,
     /// Which words the search asks read as the start of others too, as
     /// [`prefixes`] reads them.
     pub(crate) prefix: Prefix,
@@ -123,17 +126,59 @@ pub(crate) struct Asked<'a> {
     pub(crate) query: Query,
 }
 
-/// What a search found: each hit's id, value as JSON and score, and the
-/// search's text as it was read, when a word was read as another.
+/// What a search found, and the search's text as it was read, when a word
+/// was read as another.
 #[derive(Debug)]
 pub(crate) struct Answer {
-    pub(crate) hits: Vec<(String, Vec<u8>, f64)>,
+    pub(crate) hits: Vec<Ranked>,
     pub(crate) corrected: Option<String>,
     /// The index's words changed since its dictionary was built.
     pub(crate) behind: bool,
     /// What the hits' matches are read against after the read, when the
     /// search asks where they matched and found them by its words.
     pub(crate) sought: Option<Sought>,
+}
+
+/// A document a search answers: its id, value as JSON and score, the score
+/// its words gave it where they found it, and its vector's cosine with the
+/// search's where both have one.
+#[derive(Debug)]
+pub(crate) struct Ranked {
+    pub(crate) id: String,
+    pub(crate) value: Vec<u8>,
+    pub(crate) score: f64,
+    pub(crate) text_score: Option<f64>,
+    pub(crate) similarity: Option<f64>,
+}
+
+/// What each half of a search gave the documents it found.
+#[derive(Default)]
+struct Halves {
+    words: HashMap<u32, f64>,
+    cosines: HashMap<u32, f64>,
+}
+
+impl Halves {
+    /// Keeps what the words found, and hands it on.
+    fn words(&mut self, found: Vec<(f64, u32)>) -> Vec<(f64, u32)> {
+        self.words.extend(found.iter().map(|(score, doc)| (*doc, *score)));
+        found
+    }
+
+    /// Keeps what the vector found, and hands it on.
+    fn vectors(&mut self, found: Vec<(f64, u32)>) -> Vec<(f64, u32)> {
+        self.cosines.extend(found.iter().map(|(cosine, doc)| (*doc, *cosine)));
+        found
+    }
+}
+
+/// What the vector found, without the documents under the search's floor:
+/// they add nothing to a sum rather than the least of its half's scale.
+fn floored(found: Vec<(f64, u32)>, asked: &Asked<'_>) -> Vec<(f64, u32)> {
+    match asked.query.min_similarity {
+        Some(floor) => found.into_iter().filter(|(cosine, _)| *cosine >= floor).collect(),
+        None => found,
+    }
 }
 
 /// How a search makes its hits of its words and its vector.
@@ -157,21 +202,32 @@ pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<An
     let both = k.max(HALF);
     let passing = passing(connection, &asked, moment)?;
     let held = Held { moment, documents, passing: passing.as_deref() };
+    let mut halves = Halves::default();
     let ranked = match mode {
-        Mode::Words => by_words(connection, &asked, held, k)?,
-        Mode::Vector => by_vector(connection, &asked, held, k)?,
+        Mode::Words => halves.words(by_words(connection, &asked, held, k)?),
+        Mode::Vector => halves.vectors(floored(by_vector(connection, &asked, held, k)?, &asked)),
         Mode::Sum(weight) => {
-            let words = by_words(connection, &asked, held, both)?;
-            hybrid::fuse(&words, &by_vector(connection, &asked, held, both)?, weight)
+            let words = halves.words(by_words(connection, &asked, held, both)?);
+            let vectors = halves.vectors(floored(by_vector(connection, &asked, held, both)?, &asked));
+            hybrid::fuse(&words, &vectors, weight)
         }
         Mode::Rerank => {
-            let words = by_words(connection, &asked, held, both)?;
+            let words = halves.words(by_words(connection, &asked, held, both)?);
             let docs: Vec<u32> = words.iter().map(|(_, doc)| *doc).collect();
-            hybrid::rerank(&words, &vectors::cosines(connection, asked.index, question(&asked)?, &docs)?)
+            halves.cosines = vectors::cosines(connection, asked.index, question(&asked)?, &docs)?;
+            hybrid::rerank(&words, &halves.cosines)
         }
     };
-    let page = ranked.into_iter().skip(asked.query.offset).take(asked.query.limit);
-    let hits = page.map(|(score, doc)| hit(connection, asked.index, doc, score)).collect::<Result<_>>()?;
+    let page: Vec<(f64, u32)> = ranked.into_iter().skip(asked.query.offset).take(asked.query.limit).collect();
+    // a hit the words alone found, or a search whose weight left its vector
+    // out, has its cosine read for the page alone
+    if let (Mode::Sum(_) | Mode::Words, Some(question)) = (mode, &asked.query.vector) {
+        let unread: Vec<u32> =
+            page.iter().map(|(_, doc)| *doc).filter(|doc| !halves.cosines.contains_key(doc)).collect();
+        halves.cosines.extend(vectors::cosines(connection, asked.index, question, &unread)?);
+    }
+    let hits = page.into_iter().map(|(score, doc)| hit(connection, asked.index, doc, score, &halves));
+    let hits = hits.collect::<Result<_>>()?;
     let sought = match &asked.query.matches {
         Some(ask) if !matches!(mode, Mode::Vector) => Some(sought(connection, &asked, ask)?),
         _ => None,
@@ -224,6 +280,11 @@ fn mode(asked: &Asked<'_>) -> Result<Mode> {
     let hybrid = asked.settings.hybrid;
     let weight = match query.vector_weight {
         Some(weight) => weight,
+        None if query.min_similarity.is_some() && (query.rerank || hybrid.rerank) => {
+            return Err(Error::invalid(
+                "a similarity floor keeps what a vector finds, and a rerank finds nothing by it",
+            ));
+        }
         None if query.rerank || hybrid.rerank => return Ok(Mode::Rerank),
         None => hybrid.vector_weight,
     };
@@ -884,12 +945,13 @@ fn push_held(list: &mut List, mut postings: Vec<Posting>, gone: &HashSet<u32>) {
     }
 }
 
-fn hit(connection: &Connection, index: i64, doc: u32, score: f64) -> Result<(String, Vec<u8>, f64)> {
+fn hit(connection: &Connection, index: i64, doc: u32, score: f64, halves: &Halves) -> Result<Ranked> {
     let failed = |error| sql_error(format!("read document {doc}"), error);
     let mut select = connection.prepare_cached(READ_HIT).map_err(failed)?;
     let found = select.query_row((index, doc), |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(failed)?;
     let (id, value) = found.ok_or_else(|| Error::corrupt(format!("document {doc} a search found is not kept")))?;
-    Ok((id, value, score))
+    let (text_score, similarity) = (halves.words.get(&doc).copied(), halves.cosines.get(&doc).copied());
+    Ok(Ranked { id, value, score, text_score, similarity })
 }
 
 /// Where a search's blocks come from: a run's at its place through a blob

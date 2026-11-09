@@ -83,6 +83,27 @@ fn an_index_sets_reads_searches_and_deletes_documents_over_the_wire() {
     assert_eq!(status.state, "ready");
 }
 
+// contract: SRCH-15
+#[test]
+fn a_hit_says_each_half_of_its_score_and_a_floor_keeps_a_far_vector_out_of_the_sum() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client, "notes");
+    set(&mut client, handle, ("dota", r#"{"title":"dota is dead"}"#), &[1.0, 0.0, 0.0]);
+    set(&mut client, handle, ("rain", r#"{"title":"loves the rain"}"#), &[0.0, 1.0, 0.0]);
+    let far = SearchQuery { vector: Some(bytes(&[-1.0, -1.0, -1.0])), ..query(handle, "dota") };
+    let summed: SearchFound = client.call(method::SEARCH_SEARCH, &far).unwrap();
+    let thousandths = |cosine: f64| (cosine * 1000.0).round() as i64;
+    let halves: Vec<_> =
+        summed.hits.iter().map(|hit| (hit.text_score.is_some(), hit.similarity.map(thousandths))).collect();
+    assert_eq!(ids(&summed), ["dota", "rain"]);
+    assert_eq!(halves, [(true, Some(-577)), (false, Some(-577))], "rain shares no word, and its vector is far");
+    let floored = SearchQuery { min_similarity: Some(0.58), ..far };
+    assert_eq!(ids(&client.call(method::SEARCH_SEARCH, &floored).unwrap()), ["dota"]);
+    let refused = SearchQuery { rerank: true, ..floored };
+    assert_eq!(client.call::<SearchFound>(method::SEARCH_SEARCH, &refused).unwrap_err().code, "invalid");
+}
+
 // contract: SRCH-14
 #[test]
 fn a_hit_s_matches_count_in_the_unit_its_client_slices_strings_in() {

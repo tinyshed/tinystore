@@ -167,7 +167,7 @@ search, `status` and `ready`: see [A table's index](table-index.md#async-rust).
 | [Show what matched](matches.md)         | `matches`: where each hit matched, to bold it       |
 | [Filters](filters.md)                   | `where`, lists, ranges, `search.or`                 |
 | [Vectors](vectors.md)                   | dimensions, exact search, `recall` and clusters     |
-| [Words and vectors together](hybrid.md) | `vectorWeight`, `rerank`                            |
+| [Words and vectors together](hybrid.md) | `vectorWeight`, `minSimilarity`, `rerank`           |
 | [A table's index](table-index.md)       | `db.searchIndex`, triggers, `ready`                 |
 | [Rebuilds](rebuilds.md)                 | changing fields and filters while the index answers |
 

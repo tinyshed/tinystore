@@ -77,14 +77,16 @@ Or is conditions any of which passes.
 
 ```go
 type Hit[T any] struct {
-	ID      string
-	Value   T
-	Score   float64
-	Matches []Match
+	ID         string
+	Value      T
+	Score      float64
+	Matches    []Match
+	TextScore  *float64
+	Similarity *float64
 }
 ```
 
-Hit is a document a search found, and the score that ordered it among this search's hits; Matches says where the search's words matched it, when the search asked with Matches.
+Hit is a document a search found, and the score that ordered it among this search's hits; Matches says where the search's words matched it, when the search asked with Matches. TextScore is the score its words gave it, as a search by its words alone scores it, nil where they did not find it among their best; Similarity the cosine of its vector with the search's, from -1 to 1, nil where either has none.
 
 ## Hybrid
 
@@ -314,6 +316,14 @@ func Matches() QueryOption
 ```
 
 Matches has each hit say where the search's words matched it, in Hit.Matches, as a search box shows them in bold: a word found as written, by its stem or once corrected whole, and a word a prefix began by the letters typed.
+
+### MinSimilarity
+
+```go
+func MinSimilarity(cosine float64) QueryOption
+```
+
+MinSimilarity is the least cosine, from -1 to 1, a document's vector has with the search's for the Vector to find it: a search by its vector alone leaves out the hits under it, and one by words too adds nothing for them to the sum. Invalid beside a Rerank.
 
 ### Offset
 

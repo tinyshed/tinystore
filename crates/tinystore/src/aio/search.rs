@@ -380,6 +380,11 @@ impl<'i, T: DeserializeOwned + Send + 'static> SearchCall<'i, T> {
         self.changed(crate::search::SearchCall::rerank)
     }
 
+    /// As [`crate::search::SearchCall::min_similarity`].
+    pub fn min_similarity(self, cosine: f64) -> Self {
+        self.changed(|call| call.min_similarity(cosine))
+    }
+
     /// As [`crate::search::SearchCall::prefix`].
     pub fn prefix(self) -> Self {
         self.changed(crate::search::SearchCall::prefix)

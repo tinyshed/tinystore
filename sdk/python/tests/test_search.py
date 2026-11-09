@@ -155,6 +155,25 @@ async def test_a_hit_says_where_it_matched_in_code_points_that_slice_its_own_str
     assert (await catalog.search("елка")).hits[0].matches is None
 
 
+async def test_a_hit_keeps_each_half_of_its_score_and_a_floor_keeps_a_far_vector_out_of_the_sum(
+    store: tinystore.Store,
+) -> None:
+    opinions = store.index("opinions", Product, fields=["title"], vectors=Vectors(dimensions=3))
+    await opinions.set("dota", Product("dota is dead"), vector=[1, 0, 0])
+    await opinions.set("rain", Product("loves the rain"), vector=[0, 1, 0])
+    await opinions.set("patch", Product("the new dota patch"), vector=[0, 0, 1])
+    far = [-1, -1, -1]
+    summed = await opinions.search("dota", vector=far)
+    rain = next(hit for hit in summed.hits if hit.id == "rain")
+    assert (rain.score, rain.text_score) == (0.5, None)
+    assert rain.similarity == pytest.approx(-(3**-0.5))
+    floored = await opinions.search("dota", vector=far, min_similarity=0.58)
+    assert ids(floored) == ["dota", "patch"]
+    assert all(hit.text_score is not None and hit.similarity is not None for hit in floored.hits)
+    with pytest.raises(tinystore.InvalidError, match="rerank"):
+        await opinions.search("dota", vector=far, min_similarity=0.58, hybrid=Hybrid(rerank=True))
+
+
 async def test_a_vector_finds_the_nearest_by_its_cosine_and_with_words_both_are_summed_or_reranked(
     store: tinystore.Store,
 ) -> None:

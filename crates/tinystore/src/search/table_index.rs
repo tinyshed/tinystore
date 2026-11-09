@@ -12,7 +12,7 @@ use serde::de::DeserializeOwned;
 use super::engine::{FILE, InFiles, Search};
 use super::index::{Found, Hit, Index, Rebuild, SearchCall};
 use super::open::{OpenIndex, Status};
-use super::read::{Answer, Query};
+use super::read::{Answer, Query, Ranked};
 use super::settings::{Settings, Table, Wanted};
 use super::table;
 use crate::engine::{Host, SharedFile};
@@ -364,7 +364,7 @@ pub(crate) fn found<T, R>(
 ) -> Result<Found<R>> {
     let read = |connection: &Connection, settings: &Settings, answer: &Answer| -> Result<(Vec<Option<R>>, Columns)> {
         let select = table::hit_select(&table_of(settings)?);
-        let keys = answer.hits.iter().map(|(_, value, _)| table::hit_key(value)).collect::<Result<Vec<_>>>()?;
+        let keys = answer.hits.iter().map(|hit| table::hit_key(&hit.value)).collect::<Result<Vec<_>>>()?;
         let rows = read_rows(connection, &index.search.memory, (&select, &keys))?;
         let columns = match answer.sought {
             Some(_) => keys.iter().map(|key| table::columns_read(connection, settings, key)).collect::<Result<_>>()?,
@@ -381,9 +381,11 @@ pub(crate) fn found<T, R>(
     };
     columns.resize(rows.len(), None);
     let Answer { hits, corrected, sought, .. } = answer;
-    let hits = hits.into_iter().zip(rows).zip(columns).filter_map(|(((id, _, score), row), columns)| {
-        let matches = sought.as_ref().zip(columns).map(|(sought, columns)| sought.matches(&columns));
-        row.map(|value| Hit { id, value, score, matches: matches.unwrap_or_default() })
+    let hits = hits.into_iter().zip(rows).zip(columns).filter_map(|((ranked, row), columns)| {
+        let matches =
+            sought.as_ref().zip(columns).map(|(sought, columns)| sought.matches(&columns)).unwrap_or_default();
+        let Ranked { id, score, text_score, similarity, .. } = ranked;
+        row.map(|value| Hit { id, value, score, matches, text_score, similarity })
     });
     Ok(Found { hits: hits.collect(), corrected })
 }

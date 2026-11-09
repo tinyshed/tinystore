@@ -11622,6 +11622,8 @@ type SearchQuery struct {
 	PrefixEvery bool `wire:"10,prefixEvery"`
 	// utf8, utf16 or chars: each hit says where it matched, counted in that unit
 	Matches *string `wire:"11,matches"`
+	// the least cosine a document's vector has for the vector to find it
+	MinSimilarity *float64 `wire:"12,minSimilarity"`
 }
 
 func (m SearchQuery) Write(w *Writer) {
@@ -11682,6 +11684,11 @@ func (m SearchQuery) Write(w *Writer) {
 		w.Str(*m.Matches)
 		n++
 	}
+	if m.MinSimilarity != nil {
+		w.Uint(12)
+		w.Float(*m.MinSimilarity)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11717,6 +11724,9 @@ func (m *SearchQuery) Read(r *Reader) {
 		case 11:
 			v := r.Str()
 			m.Matches = &v
+		case 12:
+			v := r.Float()
+			m.MinSimilarity = &v
 		default:
 			r.Skip()
 		}
@@ -11736,14 +11746,15 @@ func (m SearchQuery) IsZero() bool {
 		m.Limit == nil &&
 		!m.Prefix &&
 		!m.PrefixEvery &&
-		m.Matches == nil
+		m.Matches == nil &&
+		m.MinSimilarity == nil
 }
 
 // SearchHit is the schema's search.Hit.
 //
 // A hit: a document and its value, or a table's row, a value a column of
-// the answer's columns, as sql.Rows holds one, and where the search's words
-// matched it when the query asked.
+// the answer's columns, as sql.Rows holds one, where the search's words
+// matched it when the query asked, and what each half of the search gave it.
 type SearchHit struct {
 	Id string `wire:"1,id"`
 	// null for a table's row
@@ -11751,6 +11762,10 @@ type SearchHit struct {
 	Score   float64        `wire:"3,score"`
 	Row     *[]Cell        `wire:"4,row"`
 	Matches *[]SearchMatch `wire:"5,matches"`
+	// its words' score, where they found it among their best
+	TextScore *float64 `wire:"6,textScore"`
+	// its vector's cosine with the search's, where both have one
+	Similarity *float64 `wire:"7,similarity"`
 }
 
 func (m SearchHit) Write(w *Writer) {
@@ -11787,6 +11802,16 @@ func (m SearchHit) Write(w *Writer) {
 		}
 		n++
 	}
+	if m.TextScore != nil {
+		w.Uint(6)
+		w.Float(*m.TextScore)
+		n++
+	}
+	if m.Similarity != nil {
+		w.Uint(7)
+		w.Float(*m.Similarity)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11818,6 +11843,12 @@ func (m *SearchHit) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Matches = &v
+		case 6:
+			v := r.Float()
+			m.TextScore = &v
+		case 7:
+			v := r.Float()
+			m.Similarity = &v
 		default:
 			r.Skip()
 		}
@@ -11831,7 +11862,9 @@ func (m SearchHit) IsZero() bool {
 		m.Value == "" &&
 		math.Float64bits(m.Score) == 0 &&
 		m.Row == nil &&
-		m.Matches == nil
+		m.Matches == nil &&
+		m.TextScore == nil &&
+		m.Similarity == nil
 }
 
 // SearchMatch is the schema's search.Match.

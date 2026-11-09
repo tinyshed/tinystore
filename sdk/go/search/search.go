@@ -341,12 +341,17 @@ func (x *Index[T]) Get(ctx context.Context, id any) (T, bool, error) {
 
 // Hit is a document a search found, and the score that ordered it among
 // this search's hits; Matches says where the search's words matched it,
-// when the search asked with Matches.
+// when the search asked with Matches. TextScore is the score its words gave
+// it, as a search by its words alone scores it, nil where they did not find
+// it among their best; Similarity the cosine of its vector with the
+// search's, from -1 to 1, nil where either has none.
 type Hit[T any] struct {
-	ID      string
-	Value   T
-	Score   float64
-	Matches []Match
+	ID         string
+	Value      T
+	Score      float64
+	Matches    []Match
+	TextScore  *float64
+	Similarity *float64
 }
 
 // Match is where a search's word matched a hit: bytes Start to End of a
@@ -399,6 +404,16 @@ func Matches() QueryOption { return matches{} }
 
 // Go slices a string by its bytes.
 func (matches) search(q *wire.SearchQuery) { unit := "utf8"; q.Matches = &unit }
+
+type minSimilarity float64
+
+// MinSimilarity is the least cosine, from -1 to 1, a document's vector has
+// with the search's for the Vector to find it: a search by its vector alone
+// leaves out the hits under it, and one by words too adds nothing for them
+// to the sum. Invalid beside a Rerank.
+func MinSimilarity(cosine float64) QueryOption { return minSimilarity(cosine) }
+
+func (c minSimilarity) search(q *wire.SearchQuery) { cosine := float64(c); q.MinSimilarity = &cosine }
 
 type limit int
 
@@ -455,7 +470,13 @@ func (x *Index[T]) result(found wire.SearchFound) (Result[T], error) {
 		columns = *found.Columns
 	}
 	for i, hit := range found.Hits {
-		out.Hits[i] = Hit[T]{ID: hit.Id, Score: hit.Score, Matches: matchesOf(hit.Matches)}
+		out.Hits[i] = Hit[T]{
+			ID:         hit.Id,
+			Score:      hit.Score,
+			Matches:    matchesOf(hit.Matches),
+			TextScore:  hit.TextScore,
+			Similarity: hit.Similarity,
+		}
 		var err error
 		switch {
 		case hit.Row != nil:

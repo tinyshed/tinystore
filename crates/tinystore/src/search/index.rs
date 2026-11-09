@@ -15,7 +15,7 @@ use super::filter::{self, Condition};
 use super::forward::Passed;
 use super::matches::{Ask, Match, Unit};
 use super::open::{Data, OpenIndex, Status};
-use super::read::{Answer, Prefix, Query};
+use super::read::{Answer, Prefix, Query, Ranked};
 use super::settings::{Settings, Wanted, check_hybrid};
 #[cfg(feature = "sql")]
 use super::table_index::ReadRows;
@@ -271,6 +271,7 @@ impl<T: DeserializeOwned> Index<T> {
             vector: None,
             vector_weight: None,
             rerank: false,
+            min_similarity: None,
             prefix: Prefix::Whole,
             matches: None,
             filter: Vec::new(),
@@ -290,10 +291,10 @@ impl<T: DeserializeOwned> Index<T> {
     /// it matched when the search asked, read from it after the search.
     pub(super) fn found(&self, query: Query) -> Result<Found<T>> {
         let Answer { hits, corrected, sought, .. } = self.search.search(&self.open, query)?;
-        let hits = hits.into_iter().map(|(id, value, score)| {
+        let hits = hits.into_iter().map(|Ranked { id, value, score, text_score, similarity }| {
             let matches = sought.as_ref().map(|sought| sought.matches_in(&value)).unwrap_or_default();
             let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
-            Ok(Hit { id, value, score, matches })
+            Ok(Hit { id, value, score, matches, text_score, similarity })
         });
         Ok(Found { hits: hits.collect::<Result<_>>()?, corrected })
     }
@@ -492,6 +493,7 @@ pub struct SearchCall<'i, T> {
     vector: Option<&'i [f32]>,
     vector_weight: Option<f64>,
     rerank: bool,
+    min_similarity: Option<f64>,
     prefix: Prefix,
     /// What a hit's matches count, when the search asks where it matched.
     matches: Option<Unit>,
@@ -515,7 +517,10 @@ pub struct Found<T> {
 }
 
 /// A document a search found, and the score that ordered it: a score orders
-/// one search's hits and means nothing beside another's.
+/// one search's hits and means nothing beside another's. Of a search by
+/// words and a vector, each half's own score says how near it was, as the
+/// sum cannot: a document the vector found least near still has its half's
+/// whole weight in the sum when that half found nothing nearer.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Hit<T> {
@@ -525,6 +530,13 @@ pub struct Hit<T> {
     /// Where the search's words matched it, when the search asked with
     /// [`matches`](SearchCall::matches); empty otherwise.
     pub matches: Vec<Match>,
+    /// The score its words gave it, as a search by its words alone scores
+    /// it; none where they did not find it among their best hundred, or
+    /// `offset + limit` if more, or the search had no words.
+    pub text_score: Option<f64>,
+    /// The cosine of its vector with the search's, from −1 to 1; none where
+    /// the document or the search has no vector.
+    pub similarity: Option<f64>,
 }
 
 impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
@@ -553,6 +565,17 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     /// without a vector comes after those with one, scored −1.
     pub fn rerank(mut self) -> Self {
         self.rerank = true;
+        self
+    }
+
+    /// The least cosine, from −1 to 1, that a document's vector has with the
+    /// search's for the vector to find it: of a search by its vector alone,
+    /// the hits under it are left out; of one by words too, a document under
+    /// it adds nothing to the sum and comes by its words or not at all,
+    /// where without the floor the least near of the vector's best would
+    /// still be scaled into the sum. `invalid` beside a rerank.
+    pub fn min_similarity(mut self, cosine: f64) -> Self {
+        self.min_similarity = Some(cosine);
         self
     }
 
@@ -668,6 +691,7 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
             vector: self.question()?,
             vector_weight: self.vector_weight,
             rerank: self.rerank,
+            min_similarity: self.min_similarity,
             prefix: self.prefix,
             filter: if self.filter.is_empty() { None } else { Some(filter::asked(&self.filter)?) },
             offset: self.offset,
@@ -675,16 +699,23 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
         })
     }
 
-    /// The search's vector, refusing a weight or a rerank without one and a
-    /// rerank without words to order.
+    /// The search's vector, refusing a weight, a rerank or a floor without
+    /// one and a rerank without words to order.
     fn question(&self) -> Result<Option<Question>> {
         let Some(vector) = self.vector else {
-            if self.vector_weight.is_some() || self.rerank {
-                return Err(Error::invalid("a vector weight or a rerank for a search without a vector"));
+            if self.vector_weight.is_some() || self.rerank || self.min_similarity.is_some() {
+                return Err(Error::invalid(
+                    "a vector weight, a rerank or a similarity floor for a search without a vector",
+                ));
             }
             return Ok(None);
         };
         check_hybrid(self.vector_weight, self.rerank)?;
+        if let Some(floor) = self.min_similarity
+            && !(-1.0..=1.0).contains(&floor)
+        {
+            return Err(Error::invalid(format!("a similarity floor of {floor}: a cosine is from -1 to 1")));
+        }
         if self.rerank && self.text.trim().is_empty() {
             return Err(Error::invalid("a rerank orders a search's words' hits, and a search without words has none"));
         }

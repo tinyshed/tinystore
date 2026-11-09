@@ -231,6 +231,8 @@ fn searched(handles: &Handles, asked: SearchQuery) -> Answered {
         score: hit.score,
         row: None,
         matches: asked_matches.then(|| matches(hit.matches)),
+        text_score: hit.text_score,
+        similarity: hit.similarity,
     });
     Ok(SearchFound { hits: hits.collect(), corrected: found.corrected, columns: None }.encode())
 }
@@ -276,6 +278,9 @@ fn query<'i>(
     if asked.rerank {
         call = call.rerank();
     }
+    if let Some(cosine) = asked.min_similarity {
+        call = call.min_similarity(cosine);
+    }
     if asked.prefix_every {
         call = call.prefix_every();
     } else if asked.prefix {
@@ -304,6 +309,8 @@ fn rows_found(call: SearchCall<'_, Value>, asked_matches: bool) -> Answered {
         score: hit.score,
         row: Some(hit.value.1.into_iter().map(super::sql::cell_of).collect()),
         matches: asked_matches.then(|| matches(hit.matches)),
+        text_score: hit.text_score,
+        similarity: hit.similarity,
     });
     Ok(SearchFound { hits: hits.collect(), corrected: found.corrected, columns: Some(columns) }.encode())
 }

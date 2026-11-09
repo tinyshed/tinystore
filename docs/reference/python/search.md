@@ -50,6 +50,8 @@ class Hit[T]:
     value: T
     score: float
     matches: list[Match] | None = None  # where the search's words matched it, when the search asked with matches
+    text_score: float | None = None  # the score its words gave it, as a search by its words alone scores it, where they found it among their best
+    similarity: float | None = None  # the cosine of its vector with the search's, from -1 to 1, where both have one
 ```
 
 A document a search found, and the score that ordered it among this search's hits.

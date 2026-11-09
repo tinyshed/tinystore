@@ -203,11 +203,16 @@ pub struct Hit<T> {
     pub value: T,
     pub score: f64,
     pub matches: Vec<Match>,
+    pub text_score: Option<f64>,
+    pub similarity: Option<f64>,
 }
 ```
 
 A document a search found, and the score that ordered it: a score orders
-one search's hits and means nothing beside another's.
+one search's hits and means nothing beside another's. Of a search by
+words and a vector, each half's own score says how near it was, as the
+sum cannot: a document the vector found least near still has its half's
+whole weight in the sum when that half found nothing nearer.
 
 ## Index
 
@@ -505,6 +510,19 @@ pub fn rerank(self) -> Self
 Orders the hundred best of the search's words by their vectors'
 cosines with its vector, finding nothing the words do not; a hit
 without a vector comes after those with one, scored −1.
+
+### SearchCall.min_similarity
+
+```rust
+pub fn min_similarity(self, cosine: f64) -> Self
+```
+
+The least cosine, from −1 to 1, that a document's vector has with the
+search's for the vector to find it: of a search by its vector alone,
+the hits under it are left out; of one by words too, a document under
+it adds nothing to the sum and comes by its words or not at all,
+where without the floor the least near of the vector's best would
+still be scaled into the sum. `invalid` beside a rerank.
 
 ### SearchCall.prefix
 
@@ -1143,6 +1161,14 @@ pub fn rerank(self) -> Self
 ```
 
 As `crate::search::SearchCall::rerank`.
+
+### aio::search::SearchCall.min_similarity
+
+```rust
+pub fn min_similarity(self, cosine: f64) -> Self
+```
+
+As `crate::search::SearchCall::min_similarity`.
 
 ### aio::search::SearchCall.prefix
 

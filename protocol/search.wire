@@ -83,17 +83,20 @@ message search.Query {
   9 prefix: bool            # the last word read as the start of a word too, as a search box types
   10 prefixEvery: bool      # every word read so, a document holding a word for each first; in place of prefix
   11 matches: str?          # utf8, utf16 or chars: each hit says where it matched, counted in that unit
+  12 minSimilarity: float?  # the least cosine a document's vector has for the vector to find it
 }
 
 # A hit: a document and its value, or a table's row, a value a column of
-# the answer's columns, as sql.Rows holds one, and where the search's words
-# matched it when the query asked.
+# the answer's columns, as sql.Rows holds one, where the search's words
+# matched it when the query asked, and what each half of the search gave it.
 message search.Hit {
   1 id: str
   2 value: json             # null for a table's row
   3 score: float
   4 row: [cell]?
   5 matches: [search.Match]?
+  6 textScore: float?       # its words' score, where they found it among their best
+  7 similarity: float?      # its vector's cosine with the search's, where both have one
 }
 
 # Where a search's word matched a hit: a range of a field's text, or of a

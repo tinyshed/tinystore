@@ -10553,6 +10553,8 @@ export const SearchQuery = message(
 		prefixEvery: [10, bool],
 		/** utf8, utf16 or chars: each hit says where it matched, counted in that unit */
 		matches: [11, str],
+		/** the least cosine a document's vector has for the vector to find it */
+		minSimilarity: [12, float],
 	},
 	{
 		write(w, v) {
@@ -10613,6 +10615,11 @@ export const SearchQuery = message(
 				w.str(v.matches)
 				n++
 			}
+			if (v.minSimilarity !== undefined) {
+				w.field(12)
+				w.float(v.minSimilarity)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -10627,6 +10634,7 @@ export const SearchQuery = message(
 			let $prefix: boolean | undefined
 			let $prefixEvery: boolean | undefined
 			let $matches: string | undefined
+			let $minSimilarity: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -10662,6 +10670,9 @@ export const SearchQuery = message(
 					case 11:
 						$matches = r.str()
 						break
+					case 12:
+						$minSimilarity = r.float()
+						break
 					default:
 						r.skip()
 				}
@@ -10679,6 +10690,7 @@ export const SearchQuery = message(
 				prefix: $prefix,
 				prefixEvery: $prefixEvery,
 				matches: $matches,
+				minSimilarity: $minSimilarity,
 			}
 		},
 	},
@@ -12499,8 +12511,8 @@ export const SearchSetMany = message(
 
 /**
  * A hit: a document and its value, or a table's row, a value a column of
- * the answer's columns, as sql.Rows holds one, and where the search's words
- * matched it when the query asked.
+ * the answer's columns, as sql.Rows holds one, where the search's words
+ * matched it when the query asked, and what each half of the search gave it.
  */
 export const SearchHit = message(
 	'search.Hit',
@@ -12511,6 +12523,10 @@ export const SearchHit = message(
 		score: [3, float],
 		row: [4, list(sqlValue)],
 		matches: [5, list(SearchMatch)],
+		/** its words' score, where they found it among their best */
+		textScore: [6, float],
+		/** its vector's cosine with the search's, where both have one */
+		similarity: [7, float],
 	},
 	{
 		write(w, v) {
@@ -12547,6 +12563,16 @@ export const SearchHit = message(
 				}
 				n++
 			}
+			if (v.textScore !== undefined) {
+				w.field(6)
+				w.float(v.textScore)
+				n++
+			}
+			if (v.similarity !== undefined) {
+				w.field(7)
+				w.float(v.similarity)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -12555,6 +12581,8 @@ export const SearchHit = message(
 			let $score: number | undefined
 			let $row: (SqlValue | boolean)[] | undefined
 			let $matches: Read<typeof SearchMatch.fields>[] | undefined
+			let $textScore: number | undefined
+			let $similarity: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -12584,12 +12612,26 @@ export const SearchHit = message(
 						$matches = items0
 						break
 					}
+					case 6:
+						$textScore = r.float()
+						break
+					case 7:
+						$similarity = r.float()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { id: $id, value: $value, score: $score, row: $row, matches: $matches }
+			return {
+				id: $id,
+				value: $value,
+				score: $score,
+				row: $row,
+				matches: $matches,
+				textScore: $textScore,
+				similarity: $similarity,
+			}
 		},
 	},
 )

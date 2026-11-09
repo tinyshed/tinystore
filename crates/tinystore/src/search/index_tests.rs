@@ -1394,7 +1394,11 @@ fn a_search_by_a_vector_answers_the_nearest_by_their_cosine() {
     assert_eq!(ids(&reranked), ["c", "a", "d"], "the words' hits by their vectors, none without last");
     assert_eq!(reranked.hits[2].score, -1.0);
     let words = checked(|| shoes.search("red").vector(&[0.0, 1.0, 0.0]).vector_weight(0.0).run()).unwrap();
-    assert_eq!(words, search(&shoes, "red"), "a weight of 0 is the search by the words alone");
+    let scores = |found: &Found<Article>| found.hits.iter().map(|hit| (hit.id.clone(), hit.score)).collect::<Vec<_>>();
+    assert_eq!(scores(&words), scores(&search(&shoes, "red")), "a weight of 0 is the search by the words alone");
+    let similarities: BTreeMap<_, _> = words.hits.iter().map(|hit| (hit.id.as_str(), hit.similarity)).collect();
+    let expected = BTreeMap::from([("a", Some(0.0)), ("c", Some(0.5 / 4.25f64.sqrt())), ("d", None)]);
+    assert_eq!(similarities, expected, "its hits' cosines read all the same");
     let vector = checked(|| shoes.search("red").vector(&[1.0, 0.0, 0.0]).vector_weight(1.0).run()).unwrap();
     assert_eq!(vector, nearest, "and of 1, by the vector alone");
     let (first, second, third) = (article("a", ""), article("b", ""), article("c", ""));
@@ -1403,6 +1407,51 @@ fn a_search_by_a_vector_answers_the_nearest_by_their_cosine() {
     shoes.set_many([("g", &third, Some(&va[..])), ("h", &third, None)]).unwrap();
     let listed = checked(|| shoes.search_vector(&[3.0, 2.0, 1.0]).limit(20).run()).unwrap();
     assert_eq!(ids(&listed), ["f", "c", "a", "e", "g", "b"], "of equal cosines, e set first; h has no vector");
+}
+
+// contract: SRCH-15
+#[test]
+fn a_hit_keeps_each_half_of_its_score_and_a_floor_keeps_a_far_vector_out_of_the_sum() {
+    let fixture = fixture();
+    let notes = fixture.store.index::<Article>("notes").field("title", 1.0).vectors(3).open().unwrap();
+    notes.id("dota").vector(&[1.0, 0.0, 0.0]).set(&article("dota is dead", "")).unwrap();
+    notes.id("rain").vector(&[0.0, 1.0, 0.0]).set(&article("loves the rain", "")).unwrap();
+    notes.id("patch").vector(&[0.0, 0.0, 1.0]).set(&article("the new dota patch", "")).unwrap();
+    // −1/√3, in thousandths
+    let (far, cosine) = ([-1.0, -1.0, -1.0], -577);
+    let halves = |found: &Found<Article>| -> Vec<(String, f64, bool, Option<i64>)> {
+        let thousandths = |cosine: f64| (cosine * 1000.0).round() as i64;
+        let half =
+            |hit: &Hit<Article>| (hit.id.clone(), hit.score, hit.text_score.is_some(), hit.similarity.map(thousandths));
+        found.hits.iter().map(half).collect()
+    };
+    let words = search(&notes, "dota");
+    assert_eq!(words.hits[0].text_score, Some(words.hits[0].score), "a search by words alone scores by them");
+    assert_eq!(words.hits[0].similarity, None);
+
+    let summed = checked(|| notes.search("dota").vector(&far).run()).unwrap();
+    let near_nothing = [
+        ("dota".to_owned(), 1.0, true, Some(cosine)),
+        ("rain".to_owned(), 0.5, false, Some(cosine)),
+        ("patch".to_owned(), 0.5, true, Some(cosine)),
+    ];
+    assert_eq!(halves(&summed), near_nothing, "the vector's least near still weighs in the sum");
+    let floored = checked(|| notes.search("dota").vector(&far).min_similarity(0.58).run()).unwrap();
+    let kept = [("dota".to_owned(), 0.5, true, Some(cosine)), ("patch".to_owned(), 0.0, true, Some(cosine))];
+    assert_eq!(halves(&floored), kept, "under the floor the vector finds nothing, and rain no word finds");
+    let nearest = checked(|| notes.search_vector(&[1.0, 0.0, 0.0]).min_similarity(0.5).run()).unwrap();
+    assert_eq!(halves(&nearest), [("dota".to_owned(), 1.0, false, Some(1000))], "a vector alone leaves the rest out");
+
+    let reranked = checked(|| notes.search("dota").vector(&far).rerank().run()).unwrap();
+    assert!(reranked.hits.iter().all(|hit| hit.text_score.is_some() && hit.similarity == Some(hit.score)));
+    let refused = [
+        notes.search("dota").vector(&far).rerank().min_similarity(0.5).run().unwrap_err(),
+        notes.search("dota").min_similarity(0.5).run().unwrap_err(),
+        notes.search_vector(&far).min_similarity(1.5).run().unwrap_err(),
+    ];
+    for error in refused {
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+    }
 }
 
 #[test]

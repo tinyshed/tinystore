@@ -158,6 +158,33 @@ for (const way of ways) {
 			expect((await catalog.search('елка')).hits[0]?.matches).toBeUndefined()
 		})
 
+		test('a hit keeps each half of its score, and a floor keeps a far vector out of the sum', async () => {
+			const opinions = store.index<Product>('opinions', {
+				fields: ['title'],
+				vectors: { dimensions: 3 },
+			})
+			await opinions.set('dota', { title: 'dota is dead' }, { vector: [1, 0, 0] })
+			await opinions.set('rain', { title: 'loves the rain' }, { vector: [0, 1, 0] })
+			await opinions.set('patch', { title: 'the new dota patch' }, { vector: [0, 0, 1] })
+			const far = [-1, -1, -1]
+			const summed = await opinions.search({ text: 'dota', vector: far })
+			const rain = summed.hits.find(hit => hit.id === 'rain')
+			expect([rain?.score, rain?.textScore]).toEqual([0.5, undefined])
+			expect(rain?.similarity).toBeCloseTo(-1 / Math.sqrt(3), 6)
+			const floored = await opinions.search({ text: 'dota', vector: far, minSimilarity: 0.58 })
+			expect(ids(floored)).toEqual(['dota', 'patch'])
+			expect(
+				floored.hits.every(hit => hit.textScore !== undefined && hit.similarity !== undefined),
+			).toBe(true)
+			const refused = opinions.search({
+				text: 'dota',
+				vector: far,
+				minSimilarity: 0.58,
+				hybrid: { rerank: true },
+			})
+			expect(await caught(refused)).toBeInstanceOf(InvalidError)
+		})
+
 		test('a vector finds the nearest by its cosine, and with words both are summed or reranked', async () => {
 			const shoes = store.index<Product>('shoes', {
 				fields: ['title'],

@@ -95,6 +95,13 @@ export interface Query {
 	/** this search's way of combining its words and its vector, in place of the index's */
 	hybrid?: { vectorWeight?: number | undefined; rerank?: boolean | undefined } | undefined
 	/**
+	 * the least cosine, from -1 to 1, a document's vector has with the
+	 * search's for the vector to find it: a search by its vector alone leaves
+	 * out the hits under it, and one by words too adds nothing for them to
+	 * the sum; invalid beside a rerank
+	 */
+	minSimilarity?: number | undefined
+	/**
 	 * the last word read as the start of a word too, as a search box types:
 	 * `crypt` finds `cryptography` as well, at half its field's weight; a
 	 * word a space follows is whole, and so is one of a single letter. With
@@ -137,6 +144,10 @@ export interface Hit<T> {
 	score: number
 	/** where the search's words matched it, when the search asked with `matches` */
 	matches?: Match[]
+	/** the score its words gave it, as a search by its words alone scores it, where they found it among their best */
+	textScore?: number
+	/** the cosine of its vector with the search's, from -1 to 1, where both have one */
+	similarity?: number
 }
 
 /** What a search found, the best first, and the text it read in fact when a word was misspelt. */
@@ -230,6 +241,7 @@ abstract class Searchable<T> {
 				vector,
 				vectorWeight: asked.hybrid?.vectorWeight,
 				rerank: asked.hybrid?.rerank,
+				minSimilarity: asked.minSimilarity,
 				prefix: asked.prefix === true || undefined,
 				// none unless asked, so that a server before it reads the search
 				prefixEvery: asked.prefix === 'every' || undefined,
@@ -250,6 +262,12 @@ abstract class Searchable<T> {
 			const read: Hit<T> = { id: hit.id ?? '', value, score: hit.score ?? 0 }
 			if (hit.matches !== undefined) {
 				read.matches = hit.matches.map(matchOf)
+			}
+			if (hit.textScore !== undefined) {
+				read.textScore = hit.textScore
+			}
+			if (hit.similarity !== undefined) {
+				read.similarity = hit.similarity
 			}
 			return read
 		})

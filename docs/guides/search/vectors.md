@@ -33,7 +33,9 @@ docs.id("d-1").vector(&embed("Bread at home …")).set(&bread)?;
 let found = docs.search_vector(&embed("sourdough")).run()?;
 ```
 
-A hit's `score` is the cosine of the two vectors, from −1 to 1.
+A hit's `score` is the cosine of the two vectors, from −1 to 1, and so is
+its `similarity`. `minSimilarity` leaves out the hits under a cosine, as
+[A similarity floor](hybrid.md#a-similarity-floor) shows.
 
 ## Setting a document's vector
 
