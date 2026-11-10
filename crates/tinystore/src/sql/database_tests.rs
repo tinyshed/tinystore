@@ -402,6 +402,21 @@ fn a_key_already_held_is_a_conflict_and_another_constraint_is_invalid() {
     assert!(taken.to_string().starts_with(r#"sql app: statement "insert into notes"#), "{taken}");
 }
 
+// contract: ERR-03
+#[test]
+fn a_text_of_two_statements_is_invalid_and_runs_neither() {
+    let f = fixture();
+    let db = f.app();
+    let two = "insert into notes (id, author_id, title) values ('n1', 1, 'a');
+        insert into notes (id, author_id, title) values ('n2', 1, 'b')";
+    let write = db.exec(two).unwrap_err();
+    assert_eq!(write.kind(), ErrorKind::Invalid, "{write}");
+    assert!(write.to_string().contains("a call runs one: a batch runs several"), "{write}");
+    let read = db.all::<(i64,)>("select 1; select 2").unwrap_err();
+    assert_eq!(read.kind(), ErrorKind::Invalid, "{read}");
+    assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 0, "neither insert ran");
+}
+
 // contract: ERR-03, SQL-08
 #[test]
 fn a_broken_constraint_says_which_as_sqlite_names_it() {

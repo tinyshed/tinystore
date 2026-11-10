@@ -262,7 +262,9 @@ pub(crate) fn given_sql_error(what: impl Into<String>, error: rusqlite::Error) -
     error_of(what, error, ErrorKind::Invalid)
 }
 
-/// `plain` is what SQLite's plain `SQLITE_ERROR` means to the caller.
+/// `plain` is what SQLite's plain `SQLITE_ERROR` means to the caller, and
+/// what rusqlite's own refusals of a statement mean: the fault of whoever
+/// wrote the statement, the program or the engine.
 fn error_of(what: impl Into<String>, error: rusqlite::Error, plain: ErrorKind) -> Error {
     let kind = match &error {
         rusqlite::Error::SqliteFailure(failure, _) | rusqlite::Error::SqlInputError { error: failure, .. } => {
@@ -273,10 +275,22 @@ fn error_of(what: impl Into<String>, error: rusqlite::Error, plain: ErrorKind) -
         rusqlite::Error::FromSqlConversionFailure(..)
         | rusqlite::Error::InvalidColumnType(..)
         | rusqlite::Error::IntegralValueOutOfRange(..) => ErrorKind::Corrupt,
+        // Two statements in one text; or a text value that is not UTF-8,
+        // which SQLite keeps as a statement cast it and rusqlite will not read.
+        rusqlite::Error::MultipleStatement | rusqlite::Error::Utf8Error(..) => plain,
+        // A store's directory that is not UTF-8, which rusqlite cannot name to
+        // SQLite on Windows.
+        rusqlite::Error::InvalidPath(_) => ErrorKind::Invalid,
         _ => ErrorKind::Internal,
     };
+    let what = what.into();
+    let what = if matches!(error, rusqlite::Error::MultipleStatement) { format!("{what}: {SEVERAL}") } else { what };
     super::name_constraint(Error::new(kind, what), &error).with_source(error)
 }
+
+/// What a text of two statements or more is told: SQLite would run only its
+/// first, and rusqlite refuses it rather than drop the rest.
+const SEVERAL: &str = "several statements, and a call runs one: a batch runs several";
 
 /// A unique or a primary key already held is `conflict`; any other
 /// constraint, a check, a not null or a foreign key, is `invalid`.
@@ -325,5 +339,33 @@ mod tests {
         assert_eq!(broken("INSERT INTO t VALUES (2, NULL, 1, NULL)").kind(), ErrorKind::Invalid, "not null");
         assert_eq!(broken("INSERT INTO t VALUES (2, 'b', 0, NULL)").kind(), ErrorKind::Invalid, "check");
         assert_eq!(broken("INSERT INTO t VALUES (2, 'b', 1, 9)").kind(), ErrorKind::Invalid, "foreign key");
+    }
+
+    // contract: ERR-03
+    #[test]
+    fn what_rusqlite_refuses_of_a_statement_is_the_fault_of_whoever_wrote_it() {
+        super::super::give_mutexes();
+        let connection = Connection::open_in_memory().unwrap();
+        let several = || connection.prepare("SELECT 1; SELECT 2").map(drop).unwrap_err();
+        let given = given_sql_error("its text", several());
+        assert_eq!(given.kind(), ErrorKind::Invalid, "{given}");
+        assert!(given.to_string().contains("a batch runs several"), "{given}");
+        assert_eq!(sql_error("its text", several()).kind(), ErrorKind::Internal, "an engine's own text");
+
+        let not_utf8 = connection
+            .query_row("SELECT CAST(x'ff' AS TEXT)", [], |row| row.get::<_, rusqlite::types::Value>(0))
+            .unwrap_err();
+        assert_eq!(given_sql_error("read table docs", not_utf8).kind(), ErrorKind::Invalid);
+    }
+
+    // contract: ERR-03
+    #[cfg(windows)]
+    #[test]
+    fn a_directory_sqlite_cannot_be_told_is_invalid() {
+        use std::os::windows::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        let unpaired = std::ffi::OsString::from_wide(&[u16::from(b'a'), 0xd800]);
+        let error = open(&dir.path().join(unpaired).join("kv.db"), &Config::default(), Role::Writer).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
     }
 }
