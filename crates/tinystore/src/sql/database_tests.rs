@@ -566,6 +566,50 @@ fn a_name_that_could_leave_sql_or_meet_another_is_refused() {
     }
 }
 
+// contract: SQL-11
+#[test]
+fn a_new_database_takes_no_name_windows_reads_as_a_device() {
+    let f = fixture();
+    let devices = ["con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9"];
+    for name in devices {
+        let error = f.store.database(name).open().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{name}: {error}");
+        assert!(error.to_string().contains("as a device"), "{name}: {error}");
+    }
+    for name in ["com10", "console", "nul_x", "lpt", "auxiliary"] {
+        f.store.database(name).open().unwrap();
+    }
+    // the folder's listing, since Windows answers for sql/nul.db by its name alone
+    let listed: Vec<String> = std::fs::read_dir(f.dir.path().join("sql"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    for name in devices {
+        assert!(!listed.iter().any(|file| file.starts_with(&format!("{name}."))), "{name}: made {listed:?}");
+    }
+}
+
+// Not on Windows, which before Windows 11 would write the device NUL: a store
+// there holds no such file.
+// contract: SQL-11, STORE-11
+#[test]
+#[cfg(not(windows))]
+fn a_database_a_store_holds_under_a_devices_name_still_opens() {
+    let mut f = fixture();
+    f.app().exec("insert into notes (id, author_id, title) values ('n1', 1, 'kept')").unwrap();
+    f.store.close().unwrap();
+    let sql = f.dir.path().join("sql");
+    for entry in std::fs::read_dir(&sql).unwrap() {
+        let name = entry.unwrap().file_name().into_string().unwrap();
+        if let Some(rest) = name.strip_prefix("app.") {
+            std::fs::rename(sql.join(&name), sql.join(format!("nul.{rest}"))).unwrap();
+        }
+    }
+    f.store = open_store(&f.dir, &f.clock);
+    let db = f.store.database("nul").open().unwrap();
+    assert_eq!(db.scalar::<String>("select title from notes").unwrap(), "kept");
+}
+
 // contract: STORE-03
 #[test]
 fn a_database_closes_with_its_store() {

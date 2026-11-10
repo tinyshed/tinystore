@@ -92,6 +92,7 @@ impl DatabaseBuilder {
             command: redo_command(self.store.dir(), name, migrations),
         };
         let opened = check_name(name)
+            .and_then(|()| refuse_a_device(self.store.dir(), name))
             .and_then(|()| self.migrations.map(|migrations| Ok((drafts(&migrations), migrations.load()?))).transpose())
             .and_then(|migrating| Databases::of(&self.store)?.open(&self.store, name, migrating, durability));
         opened.map(|base| Database { base }).map_err(|error| error.within(describe))
@@ -418,6 +419,35 @@ impl fmt::Debug for Database {
 /// cannot climb out of `sql/` or meet another on a file system that folds case.
 fn check_name(name: &str) -> Result<()> {
     crate::text::check_name("a database's", name)
+}
+
+/// Refuses a new database whose name Windows reads as a device, on every
+/// platform, so that a store's directory moves to Windows whole: there, before
+/// Windows 11, `sql/nul.db` is the device NUL and not a file. A database the
+/// store already holds under such a name opens, as the release that made it
+/// opened it.
+fn refuse_a_device(dir: &Path, name: &str) -> Result<()> {
+    if !is_device(name) || holds_file(dir, name) {
+        return Ok(());
+    }
+    Err(Error::invalid(format!(
+        "a database's name {name:?}: Windows reads it as a device, not a file: name it otherwise"
+    )))
+}
+
+/// `con`, `prn`, `aux`, `nul`, `com0` to `com9` and `lpt0` to `lpt9`, the
+/// names Windows keeps for devices whatever extension follows them.
+fn is_device(name: &str) -> bool {
+    let port = |prefix: &str| name.strip_prefix(prefix).is_some_and(|n| matches!(n.as_bytes(), [b'0'..=b'9']));
+    ["con", "prn", "aux", "nul"].contains(&name) || port("com") || port("lpt")
+}
+
+/// Whether `sql/` holds the file `<name>.db`, by the folder's listing: Windows
+/// answers for a device by its name alone, and a listing never shows one.
+fn holds_file(dir: &Path, name: &str) -> bool {
+    let file = format!("{name}.db");
+    let listed = std::fs::read_dir(dir.join(DATABASES));
+    listed.is_ok_and(|entries| entries.flatten().any(|entry| entry.file_name().to_str() == Some(file.as_str())))
 }
 
 /// The command that takes a database back to before its drafts and applies

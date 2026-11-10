@@ -238,10 +238,11 @@ before the program starts: no program may hold the directory meanwhile. See
 
 ## Limits and defaults
 
-| What                    | Limit                                                |
-|-------------------------|------------------------------------------------------|
-| a database's name       | `[a-z0-9][a-z0-9_-]{0,63}`, its file `sql/<name>.db` |
-| the engine's own tables | names that start with `_tinystore_`, beside yours    |
+| What                    | Limit                                                                                          |
+|-------------------------|------------------------------------------------------------------------------------------------|
+| a database's name       | `[a-z0-9][a-z0-9_-]{0,63}`, its file `sql/<name>.db`                                           |
+| a new database's name   | none Windows reads as a device: `con`, `prn`, `aux`, `nul`, `com0` to `com9`, `lpt0` to `lpt9` |
+| the engine's own tables | names that start with `_tinystore_`, beside yours                                              |
 
 ## See also
 
