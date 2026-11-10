@@ -15,7 +15,8 @@ fn bits(series: &Series) -> Bits {
 }
 
 /// Every page of `query` read `limit` samples at a time by `next`, each
-/// checked to hold at most `limit` and to go on past the page before it.
+/// checked to hold at most `limit`, to go on past the page before it, and to
+/// hold a sample unless it is the last.
 fn pages(query: &Query, limit: usize) -> Vec<SeriesPage> {
     let paged = query.clone().limit(limit);
     let mut pages = vec![paged.read().unwrap()];
@@ -26,9 +27,10 @@ fn pages(query: &Query, limit: usize) -> Vec<SeriesPage> {
         place = (went_on.series, went_on.at);
         pages.push(paged.clone().after(&next).read().unwrap());
     }
-    for page in &pages {
-        assert!(page.series.iter().map(|series| series.samples().len()).sum::<usize>() <= limit);
-    }
+    let held: Vec<usize> =
+        pages.iter().map(|page| page.series.iter().map(|series| series.samples().len()).sum()).collect();
+    assert!(held.iter().all(|&samples| samples <= limit), "{held:?}");
+    assert!(held[..held.len() - 1].iter().all(|&samples| samples > 0), "no page but the last is empty: {held:?}");
     pages
 }
 
@@ -143,6 +145,44 @@ fn a_page_goes_on_past_the_series_a_query_finds() {
     assert_eq!(query.read().unwrap_err().fact("limit"), Some("series"));
     let read = pages(&query, 100_000);
     assert_eq!(read.iter().map(|page| page.series.len()).collect::<Vec<_>>(), [1000, 1]);
+}
+
+// contract: MET-22
+#[test]
+fn a_read_goes_on_past_the_series_without_a_sample_in_its_range() {
+    let f = fixture();
+    dead_first(&f);
+    let query = f.metrics().query().name("cpu").since(HOUR);
+    assert_eq!(query.read().unwrap_err().fact("limit"), Some("series"));
+    let read = pages(&query, 10);
+    let pods: Vec<&str> =
+        read.iter().flat_map(|page| &page.series).map(|series| series.labels()["pod"].as_str()).collect();
+    assert_eq!((read.len(), pods), (1, vec!["p1000"]), "a thousand series of nothing make no page");
+}
+
+// contract: MET-22
+#[test]
+fn a_window_between_two_samples_of_a_block_or_a_head_costs_a_page_nothing() {
+    let f = fixture();
+    // a sample every ten seconds for two hours, packed into half hours, but none from 61:40 to 64:50
+    let first = f.now() - 2 * HOUR;
+    let at = |index: u32| first + 10 * SECOND * index;
+    let mut a = Series::gauge("cpu").label("host", "a");
+    a.extend((0..720).filter(|index| !(370..390).contains(index)).map(|index| (at(index), f64::from(index))));
+    f.metrics().ingest(&[a]).unwrap();
+    maintain(&f.store).unwrap();
+    let host = |host: &str| Series::gauge("cpu").label("host", host);
+    f.metrics().ingest(&[host("b").sample(first + 50 * MINUTE, 1.0).sample(first + 70 * MINUTE, 2.0)]).unwrap();
+    f.metrics().ingest(&[host("c").sample(first + 63 * MINUTE, 3.0)]).unwrap();
+    // a's block and b's head reach across the window with none of their samples inside it
+    let query = f.metrics().query().name("cpu").from(first + 62 * MINUTE).to(first + 64 * MINUTE);
+    let (asked, paging) = query.clone().limit(1).paged(None).unwrap();
+    let mut budget = Budget::default();
+    let (taken, stopped) = f.engine().take_page(&asked, &paging.unwrap(), &mut budget).unwrap();
+    assert_eq!((taken.len(), budget.decoded, stopped), (3, 1, None), "c's sample alone is decoded");
+    let whole: Vec<Bits> = query.read().unwrap().series.iter().map(bits).collect();
+    assert_eq!(whole.iter().map(|(series, _)| series.as_str()).collect::<Vec<_>>(), ["cpu{host=\"c\"}"]);
+    assert_eq!(joined(&pages(&query, 1)), whole);
 }
 
 /// The `_bucket` series of a latency histogram of `functions` functions,

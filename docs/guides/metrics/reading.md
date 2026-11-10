@@ -238,7 +238,9 @@ for part in page.all() {
   long series is split across pages. Its last part on a page has
   `more: true`, and the next page starts with the rest of it.
 - A page can hold fewer samples than `limit` and still have `next`, when it
-  reached another bound first. Only the last page has no `next`.
+  reached another bound first, but never none: it skips the series with no
+  samples in the range, however many come first. Only the last page has no
+  `next`, and only the last can be empty.
 - Walking a page reads the pages after it one at a time, so only one page is
   in memory. In async Rust, `page.all()` is a `Stream`.
 - `next` keeps the range of the first page, so `since: '30d'` means the same

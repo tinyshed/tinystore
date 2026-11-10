@@ -5,7 +5,7 @@
 use super::budget::Budget;
 use super::codec::Point;
 use super::engine::Engine;
-use super::page::{Paging, Place};
+use super::page::{Paging, Place, Start};
 use super::query::Asked;
 use super::series::{Sample, Series};
 use super::snapshot::{Taken, Want, decode_block};
@@ -20,8 +20,27 @@ pub(super) use crate::memory::PATIENCE;
 
 impl Engine {
     /// The series of a read, whole; or those of a page, and the place the
-    /// page after it begins, none on the last.
+    /// page after it begins, none on the last. A page that holds no sample
+    /// goes on from its `next`, from a snapshot of its own each time, as a
+    /// walk of `next` would, so that only the last page may come back empty.
     pub(super) fn read(&self, asked: &Asked, paging: Option<&Paging>) -> Result<(Vec<Series>, Option<Place>)> {
+        let Some(paging) = paging else { return self.read_once(asked, None) };
+        let mut paging = paging.clone();
+        loop {
+            let began = paging.series_from();
+            match self.read_once(asked, Some(&paging))? {
+                // a next where the page began would read the same page for ever
+                (series, Some(next)) if series.is_empty() && next != began => {
+                    crate::cancel::check(|| "a read".to_owned())?;
+                    paging.from = Start::Series(next);
+                }
+                page => return Ok(page),
+            }
+        }
+    }
+
+    /// The series of a read, whole, or those of a page, from one snapshot.
+    fn read_once(&self, asked: &Asked, paging: Option<&Paging>) -> Result<(Vec<Series>, Option<Place>)> {
         let mut budget = Budget::default();
         let (taken, stopped) = match paging {
             None => (self.take(asked, Want::Samples, &mut budget)?, None),

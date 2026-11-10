@@ -2,7 +2,8 @@
 //! an aggregate's groups, each part of a series copied only once the page
 //! reaches it, and where the page stopped.
 //!
-//! A read stops before the part that would pass its `limit` or a bound. An
+//! A read stops before the part that would pass its `limit` or a bound, and
+//! passes over a part whose samples its window falls between. An
 //! aggregate's page holds whole groups, chosen from every series the query
 //! finds, as many series as a query finds at most, so that pages go past
 //! that bound a group at a time. A group shares what the page has left among
@@ -26,13 +27,15 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::chosen::{Choice, Chosen};
 use super::sampled::Sampled;
-use super::{GROUPS, GROUPS_AND_BEFORE, HEAD, Part, Reading, State, Taken, TakenHead, Want, from_the_chunk_before};
+use super::{
+    GROUPS, GROUPS_AND_BEFORE, HEAD, Part, Reading, State, Taken, TakenHead, Want, Window, from_the_chunk_before,
+};
 use crate::metrics::aggregate::{Op, Shape};
 use crate::metrics::budget::Budget;
-use crate::metrics::clock;
+use crate::metrics::clock::{self, Times};
 use crate::metrics::directory::{Group, Row};
 use crate::metrics::engine::Engine;
-use crate::metrics::head;
+use crate::metrics::head::{self, Chunk};
 use crate::metrics::labels;
 use crate::metrics::matching::{self, Found};
 use crate::metrics::page::{GroupPlace, Paging, Place, Start};
@@ -424,6 +427,10 @@ impl Reading<'_, '_> {
                 }
                 continue;
             }
+            // a read takes no block that holds none of its window's samples
+            if shape.is_none() && falls_between(&block.times, window)? {
+                continue;
+            }
             let whole = shape.is_some_and(|(shape, op)| shape.holds(op, &block, window));
             let bytes = if !whole && block.external() { block.body_len } else { 0 };
             let decoded = if whole { 0 } else { block.times.count };
@@ -482,6 +489,10 @@ impl Reading<'_, '_> {
             if chunk.head.start >= room.end(window.to) {
                 break;
             }
+            if matches!(want, Want::Samples) && self.chunk_falls_between(chunk, window)? {
+                // the one chunk the window touches: the head holds none of a read's samples
+                return Ok(None);
+            }
             if !self.admits(room, 0, chunk.head.count) {
                 stopped = Some(chunk.head.start.max(window.from));
                 break;
@@ -505,6 +516,17 @@ impl Reading<'_, '_> {
         Ok(stopped)
     }
 
+    /// Whether a read's window falls between two samples of a head's chunk
+    /// that reaches across it, as [`falls_between`] asks of a block.
+    fn chunk_falls_between(&mut self, chunk: &Chunk<'_>, window: Window) -> Result<bool> {
+        if chunk.head.start >= window.from || chunk.head.end < window.to {
+            return Ok(false);
+        }
+        let mut times = Vec::with_capacity(chunk.head.count);
+        chunk.times(self.zstd, &mut times)?;
+        Ok(!times.iter().any(|point| (window.from..window.to).contains(&point.at)))
+    }
+
     /// A head's bytes, read apart from its state's row for a page, which
     /// copies them only once it reaches them.
     fn head_bytes(&self, id: i64, length: usize) -> Result<Vec<u8>> {
@@ -516,6 +538,19 @@ impl Reading<'_, '_> {
             .map_err(|error| sql_error("read a series' head", error))?;
         body.filter(|body| body.len() == length).ok_or_else(|| Error::corrupt("a head its state says it has"))
     }
+}
+
+/// Whether a read's window falls between two samples of a block it touches
+/// that reaches across it, from before it to its end or past, so that the
+/// block holds none of the window's samples. One that starts or ends inside
+/// the window holds a sample there, its first or its last.
+fn falls_between(times: &Times, window: Window) -> Result<bool> {
+    if times.start >= window.from || times.end < window.to {
+        return Ok(false);
+    }
+    let mut inside = false;
+    times.walk(|_, at| inside |= (window.from..window.to).contains(&at))?;
+    Ok(!inside)
 }
 
 /// Keeps the newest block before a series' window first among its parts,
