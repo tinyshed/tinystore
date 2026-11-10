@@ -243,7 +243,7 @@ async def update(
 ) -> bool: ...
 ```
 
-Changes the id's job when it has not started, and says whether it did.
+Changes the id's job when it is not running, its old value's steps dropped, and says whether it did.
 
 ### Queue.cancel
 
@@ -412,7 +412,7 @@ async def update(
 ) -> None: ...
 ```
 
-Changes the id's job when it has not started, with the commit.
+Changes the id's job when it is not running, its old value's steps dropped, with the commit.
 
 ### StoreTxQueue.cancel
 

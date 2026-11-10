@@ -348,7 +348,7 @@ Set makes the id's job this value at this time, whatever it was: one waiting is 
 func (q *Queue[T]) Update(ctx context.Context, id string, value T, opts ...SetOption) (bool, error)
 ```
 
-Update changes the id's job when it has not started, and says whether it did.
+Update changes the id's job when it is not running, the steps kept for the old value dropped with it, and says whether it did.
 
 ### Queue.Watch
 

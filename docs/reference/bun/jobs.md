@@ -320,9 +320,10 @@ after this run, with this value.
 update(id: string, value: T, options?: JobOptions): Promise<boolean>
 ```
 
-Changes the id's job when it has not started: its value, and its time,
-group or repeat when the options give them. It says whether it did: a
-job that runs, ran or never was answers false.
+Changes the id's job when it is not running: its value, the steps kept
+for the old one dropped with it, and its time, group or repeat when the
+options give them. It says whether it did: a job that runs, is done or
+failed, or never was answers false.
 
 ### Queue.cancel
 
@@ -491,7 +492,7 @@ Makes the id's job this value at this time, whatever it was, with the commit.
 update(id: string, value: T, options?: JobOptions): Promise<void>
 ```
 
-Changes the id's job when it has not started, with the commit.
+Changes the id's job when it is not running, its old value's steps dropped, with the commit.
 
 ### StoreTxQueue.cancel
 

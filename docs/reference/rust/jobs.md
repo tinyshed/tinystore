@@ -152,9 +152,10 @@ once more after this run, with this value.
 pub fn update(self, value: &V) -> Result<bool>
 ```
 
-Changes the id's job when it has not started: its value, and its time,
-group or repeat when the call names them. Says whether it did: a job
-that runs, ran or never was answers `false`.
+Changes the id's job when it is not running: its value, the steps kept
+for the old one dropped with it, and its time, group or repeat when the
+call names them. Says whether it did: a job that runs, is done or failed,
+or never was answers `false`.
 
 ## Maintenance
 
@@ -295,8 +296,9 @@ Makes the job under `id` this value, due now, whatever it was; see
 pub fn update(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
 ```
 
-Gives the job under `id` this value when it has not started, and says
-whether it did; see `JobCall::update`.
+Gives the job under `id` this value when it is not running, the steps
+kept for the old one dropped with it, and says whether it did; see
+`JobCall::update`.
 
 ### Queue.cancel
 
@@ -1132,8 +1134,9 @@ Makes the id's job this value at this time, whatever it was; see
 pub fn update(self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static
 ```
 
-Changes the id's job when it has not started, and says whether it did;
-see `jobs::JobCall::update`.
+Changes the id's job when it is not running, the steps kept for the old
+value dropped with it, and says whether it did; see
+`jobs::JobCall::update`.
 
 ### aio::jobs::JobCall.adding
 
@@ -1196,8 +1199,9 @@ pub fn update(
 ) -> impl Future<Output = Result<bool>> + Send + 'static
 ```
 
-Gives the job under `id` this value when it has not started, and says
-whether it did; see `JobCall::update`.
+Gives the job under `id` this value when it is not running, the steps
+kept for the old one dropped with it, and says whether it did; see
+`JobCall::update`.
 
 ### aio::jobs::Queue.cancel
 
