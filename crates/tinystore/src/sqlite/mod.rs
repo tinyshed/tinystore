@@ -109,18 +109,48 @@ impl<'a> Tx<'a> {
         self.committed.push(hook);
     }
 
+    /// Runs `hook` as [`after_commit`](Tx::after_commit) does, told the
+    /// commit is in the file, and also once a commit whose outcome is
+    /// unknown, told that: what the call placed beside the file may be named
+    /// by a row that committed after all. A rollback runs nothing.
+    #[cfg(all(feature = "blobs", feature = "sql"))]
+    pub(crate) fn after_commit_or_unknown(&self, hook: Hook) {
+        self.committed.push_told(hook);
+    }
+
     pub(crate) fn committed(&self) -> &Committed {
         self.committed
     }
 }
 
+/// How a commit ended, as the hooks its calls asked for are told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ended {
+    /// It is in the file.
+    Committed,
+    /// It failed with its outcome unknown: it may be in the file or not.
+    Unknown,
+}
+
+/// What a call asked to run once its transaction commits, told how it ended.
+pub(crate) type Hook = Box<dyn FnOnce(Ended)>;
+
 /// What a transaction's calls asked to run once it commits, in their order.
 #[derive(Default)]
-pub(crate) struct Committed(RefCell<Vec<Box<dyn FnOnce()>>>);
+pub(crate) struct Committed(RefCell<Vec<Hook>>);
 
 impl Committed {
     #[cfg(any(feature = "channels", feature = "records", all(feature = "blobs", feature = "sql")))]
     pub(crate) fn push(&self, hook: Box<dyn FnOnce()>) {
+        self.push_told(Box::new(move |ended| {
+            if ended == Ended::Committed {
+                hook();
+            }
+        }));
+    }
+
+    #[cfg(any(feature = "channels", feature = "records", all(feature = "blobs", feature = "sql")))]
+    fn push_told(&self, hook: Hook) {
         self.0.borrow_mut().push(hook);
     }
 
@@ -149,11 +179,33 @@ impl Committed {
         *self.0.borrow_mut() = hooks;
     }
 
+    /// Runs the hooks as the commit's `outcome` says: once it is in the file,
+    /// and once its outcome is unknown, told so, which a hook asked for with
+    /// `after_commit` ignores as it would a rollback; a commit known to have
+    /// failed rolled back, and runs none.
+    pub(crate) fn ended(&self, outcome: &crate::Result<()>) {
+        if capture::in_the_file(outcome) {
+            return self.run();
+        }
+        if outcome.as_ref().is_err_and(|error| error.kind() == crate::ErrorKind::OutcomeUnknown) {
+            self.tell(Ended::Unknown);
+        }
+    }
+
     /// Runs the hooks, once the commit is in the file.
     pub(crate) fn run(&self) {
+        self.tell(Ended::Committed);
+    }
+
+    /// Tells the hooks the commit failed with its outcome unknown.
+    pub(crate) fn unknown(&self) {
+        self.tell(Ended::Unknown);
+    }
+
+    fn tell(&self, ended: Ended) {
         let hooks = std::mem::take(&mut *self.0.borrow_mut());
         for hook in hooks {
-            hook();
+            hook(ended);
         }
     }
 }

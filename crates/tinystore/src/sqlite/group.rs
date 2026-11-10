@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use super::capture::{Capture, Logged, in_the_file, logged};
+use super::capture::{Capture, Logged, logged};
 use super::checkpoint::Checkpoints;
 use super::connection::{self, execute, sql_error};
 use super::deferred;
@@ -563,6 +563,7 @@ impl Group {
             // The commit failed and left the transaction open: nothing of it stays.
             let _ = execute(connection, ROLLBACK);
         }
+        committed.unknown();
         let failure = sql_error("a grouped commit", error);
         let unknown = || Error::new(ErrorKind::OutcomeUnknown, "a grouped commit").with_source(failure.duplicate());
         answers.into_iter().map(|answer| answer.and_then(|()| Err(unknown()))).collect()
@@ -615,7 +616,8 @@ impl Group {
 
     /// Hands a commit that is in the file to the capture, where the file has
     /// one, or tells the file's checkpoints where it left the WAL, then runs
-    /// what its writes asked to run once it is there.
+    /// what its writes asked to run once it is there, or once the capture
+    /// leaves its outcome unknown.
     fn handed(&self, connection: &Connection, capture: Option<&Capture>, committed: &Committed) -> Result<()> {
         let handed = match capture {
             Some(capture) => capture.committed(connection),
@@ -624,9 +626,7 @@ impl Group {
                 Ok(())
             }
         };
-        if in_the_file(&handed) {
-            committed.run();
-        }
+        committed.ended(&handed);
         handed
     }
 }

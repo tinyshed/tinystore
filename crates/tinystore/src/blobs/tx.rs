@@ -8,7 +8,9 @@
 //! writer is still held, so that no later write takes the id while the
 //! object lies there; one it could not remove keeps its id in doubt, which a
 //! later write skips, and one a crash left lies past what the file reserved,
-//! and the next open removes it.
+//! and the next open removes it. A commit whose outcome is unknown keeps the
+//! object, its id in doubt, since its row may have committed: maintenance
+//! removes it once the file says no row names it.
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -20,6 +22,7 @@ use super::engine::Blobs;
 use super::files::{FileCall, Files, Options};
 use super::info::FileInfo;
 use super::upload::{INLINE, past_its_bound};
+use crate::sqlite::Ended;
 use crate::transaction::sealed::Sealed;
 use crate::{Error, Result, Transaction, TxHandle};
 
@@ -110,7 +113,7 @@ pub(super) fn write_in(
             Place::Inline(bytes.to_vec())
         } else {
             let placed = Placed::write(&files.blobs, id, bytes)?;
-            sql.after_commit(Box::new(move || placed.keep()));
+            sql.after_commit_or_unknown(Box::new(move |ended| placed.keep(ended)));
             Place::File
         };
         let content = Content { id, size, sha256, place };
@@ -176,8 +179,14 @@ impl Placed {
         Ok(placed)
     }
 
-    fn keep(mut self) {
+    /// Keeps the bytes once their commit ended in the file, and once its
+    /// outcome is unknown, their id held in doubt: a row that committed after
+    /// all names them, and maintenance removes them where none does.
+    fn keep(mut self, ended: Ended) {
         self.kept = true;
+        if ended == Ended::Unknown {
+            self.blobs.ids.doubt(self.id);
+        }
     }
 }
 

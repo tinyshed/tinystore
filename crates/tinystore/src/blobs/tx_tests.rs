@@ -132,6 +132,87 @@ fn bytes_a_rollback_could_not_remove_go_without_those_of_the_next_file() {
     assert_eq!(f.objects().len(), 1);
 }
 
+/// A log of a database's commits on a full disk: it keeps none of them, so
+/// that each is in the file and answers `outcome_unknown`.
+#[cfg(feature = "replication")]
+struct LogsNothing;
+
+#[cfg(feature = "replication")]
+impl crate::sqlite::Observe for LogsNothing {
+    fn last(&self) -> Option<crate::sqlite::Position> {
+        None
+    }
+
+    fn begin(&self, _: crate::sqlite::Position, _: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn committed(&self, _: &crate::sqlite::Commit<'_>) -> Result<()> {
+        Err(Error::io("append", std::io::Error::other("the disk is full")))
+    }
+
+    fn gap(&self, _: crate::sqlite::Position) -> Result<()> {
+        Ok(())
+    }
+
+    fn sync(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// contract: DUR-06
+#[cfg(feature = "replication")]
+#[test]
+fn bytes_whose_commit_is_in_the_file_with_its_outcome_unknown_stay_with_the_row_that_names_them() {
+    let mut f = fixture();
+    let db = f.app();
+    let packages = db.files("packages").open().unwrap();
+    packages.blobs.file.become_home(Arc::new(LogsNothing)).unwrap();
+    let unknown = db.tx(|tx| -> Result<()> {
+        tx.exec(sql!("insert into plugins (file) values (?)", "stripe-1.0.0.js"))?;
+        tx.with(&packages).put("stripe-1.0.0.js", bytes(PACKAGE)).map(drop)
+    });
+    assert_eq!(unknown.unwrap_err().kind(), ErrorKind::OutcomeUnknown);
+    assert!(installed(&db, "stripe-1.0.0.js"), "the commit is in the file");
+    let read = || packages.get("stripe-1.0.0.js").unwrap().expect("its row committed").read_all();
+    assert_eq!(read().unwrap(), bytes(PACKAGE), "the row names bytes that are there");
+    // maintenance asks the file about the bytes in doubt, which a row names
+    packages.blobs.ids.doubtful().into_iter().for_each(|id| packages.blobs.resolve(id));
+    assert_eq!(read().unwrap(), bytes(PACKAGE));
+
+    f.reopen();
+    let packages = f.app().files("packages").open().unwrap();
+    let mut file = packages.get("stripe-1.0.0.js").unwrap().expect("its row committed");
+    assert_eq!(file.read_all().unwrap(), bytes(PACKAGE), "and after the next open");
+    assert_eq!(f.objects().len(), 1);
+}
+
+// contract: DUR-06
+#[test]
+fn bytes_whose_commit_failed_with_its_outcome_unknown_stay_until_maintenance_finds_no_row_names_them() {
+    let f = fixture();
+    let db = f.app();
+    let packages = db.files("packages").open().unwrap();
+    let unknown = db.tx(|tx| -> Result<()> {
+        let files = tx.with(&packages);
+        files.put("stripe-1.0.0.js", bytes(PACKAGE))?;
+        // SQLite rolls the commit back and fails it, as it may one the disk
+        // failed; the hook takes the place of the writer's own for good
+        let refused = std::sync::atomic::AtomicBool::new(false);
+        files.tx.call(|raw| {
+            let refuse_once = move || !refused.swap(true, std::sync::atomic::Ordering::SeqCst);
+            raw.commit_hook(Some(refuse_once)).map_err(|error| crate::sqlite::sql_error("a commit hook", error))
+        })
+    });
+    assert_eq!(unknown.unwrap_err().kind(), ErrorKind::OutcomeUnknown);
+    assert!(packages.get("stripe-1.0.0.js").unwrap().is_none(), "no row names them");
+    assert_eq!(f.objects().len(), 1, "the bytes stay, since a row might have named them");
+    packages.blobs.maintain().unwrap();
+    assert!(f.objects().is_empty(), "maintenance found that no row names them");
+    packages.put("stripe-1.0.0.js", bytes(PACKAGE)).unwrap();
+    assert_eq!(packages.get("stripe-1.0.0.js").unwrap().unwrap().read_all().unwrap(), bytes(PACKAGE));
+}
+
 #[test]
 fn a_delete_a_copy_and_a_create_commit_with_the_rows_too() {
     let f = fixture();

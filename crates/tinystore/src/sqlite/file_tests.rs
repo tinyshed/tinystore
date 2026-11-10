@@ -783,6 +783,61 @@ fn what_a_write_asks_to_run_after_its_commit_runs_in_commit_order_and_never_afte
     assert_eq!(*said.lock().unwrap(), ["begun"], "a transaction dropped before its commit runs nothing");
 }
 
+/// Asks in `tx` to be told how its commit ended, whatever it was, and to run
+/// once it committed; where `refused`, SQLite rolls the commit back and fails
+/// it, as it may one the disk failed. The hook that refuses takes the place
+/// of the writer's own for good.
+#[cfg(all(feature = "blobs", feature = "sql"))]
+fn told_how_it_ended(tx: &Tx<'_>, told: &Arc<Mutex<Vec<String>>>, refused: bool) -> Result<()> {
+    let (ended, committed) = (Arc::clone(told), Arc::clone(told));
+    tx.after_commit_or_unknown(Box::new(move |how| ended.lock().unwrap().push(format!("{how:?}"))));
+    tx.after_commit(Box::new(move || committed.lock().unwrap().push("committed".to_owned())));
+    if !refused {
+        return Ok(());
+    }
+    let once = std::sync::atomic::AtomicBool::new(false);
+    let refuse_once = move || !once.swap(true, std::sync::atomic::Ordering::SeqCst);
+    tx.commit_hook(Some(refuse_once)).map_err(|error| sql_error("a commit hook", error))
+}
+
+// contract: DUR-05
+#[cfg(all(feature = "blobs", feature = "sql"))]
+#[test]
+fn a_commit_whose_outcome_is_unknown_tells_only_the_hooks_that_asked_to_be_told() {
+    let (_dir, file) = open(Config::default());
+    let told = Arc::new(Mutex::new(Vec::new()));
+    let taken = || std::mem::take(&mut *told.lock().unwrap());
+    let grouped = {
+        let told = Arc::clone(&told);
+        file.write(0, move |tx| told_how_it_ended(tx, &told, true))
+    };
+    assert_eq!(grouped.unwrap_err().kind(), ErrorKind::OutcomeUnknown);
+    assert_eq!(taken(), ["Unknown"], "a grouped write's");
+    let alone = file.transaction(|tx| told_how_it_ended(tx, &told, true));
+    assert_eq!(alone.unwrap_err().kind(), ErrorKind::OutcomeUnknown);
+    assert_eq!(taken(), ["Unknown"], "a transaction's");
+    {
+        let mark = file.mark().unwrap();
+        let begun = file.begin(&mark).unwrap();
+        told_how_it_ended(&begun.tx(), &told, true).unwrap();
+        assert_eq!(begun.commit().unwrap_err().kind(), ErrorKind::OutcomeUnknown);
+    }
+    assert_eq!(taken(), ["Unknown"], "a transaction begun on the file's");
+
+    let rolled_back = file.transaction(|tx| -> Result<()> {
+        told_how_it_ended(tx, &told, false)?;
+        Err(Error::invalid("the transaction fails"))
+    });
+    assert!(rolled_back.is_err());
+    assert!(taken().is_empty(), "a rollback tells none");
+    let kept = {
+        let told = Arc::clone(&told);
+        file.write(0, move |tx| told_how_it_ended(tx, &told, false))
+    };
+    kept.unwrap();
+    assert_eq!(taken(), ["Committed", "committed"], "in the order they were asked");
+}
+
 #[cfg(feature = "replication")]
 #[test]
 fn a_copy_s_readers_paused_hold_its_file_open_nowhere_and_their_reads_wait_for_what_replaces_it() {

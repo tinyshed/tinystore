@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rusqlite::Connection;
 
-use super::capture::{Capture, Logged, Observe, in_the_file, logged, own_work};
+use super::capture::{Capture, Logged, Observe, logged, own_work};
 use super::checkpoint::Checkpoints;
 use super::connection::{self, Role, execute, sql_error};
 use super::deferred;
@@ -340,9 +340,7 @@ impl File {
         tx.settle(Left::All)?;
         open.finished = true;
         let handed = self.commit(connection, waited);
-        if in_the_file(&handed) {
-            committed.run();
-        }
+        committed.ended(&handed);
         handed.map(|()| value).map_err(E::from)
     }
 
@@ -917,9 +915,7 @@ impl Begun<'_> {
         self.tx().settle(Left::All)?;
         self.committed = true;
         let handed = self.file.commit(&self.connection, self.waited);
-        if in_the_file(&handed) {
-            self.hooks.run();
-        }
+        self.hooks.ended(&handed);
         let file = self.file;
         drop(self);
         file.checkpoints.run_due();
