@@ -1026,6 +1026,118 @@
         }
       ],
       "refused": "ends inside a /* comment"
+    },
+    {
+      "name": "a parenthesis inside a string or a quoted name opens no group, so two groups an or joins are put in one",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "sql": [
+              "(title = '(') or (title = ')')"
+            ]
+          }
+        },
+        {
+          "where": {
+            "sql": [
+              "(\"x(\" = 1) or (`y(` = 2)"
+            ]
+          }
+        },
+        {
+          "where": {
+            "equal": {
+              "done": false
+            }
+          }
+        }
+      ],
+      "text": "select * from \"notes\" where ((title = '(') or (title = ')')) and ((\"x(\" = 1) or (`y(` = 2)) and \"done\" = ?",
+      "values": [
+        0
+      ]
+    },
+    {
+      "name": "a parenthesis inside a comment opens no group, so two groups an or joins are put in one",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "sql": [
+              "(views > 1 /* ( */) or (views < 0)"
+            ]
+          }
+        },
+        {
+          "where": {
+            "sql": [
+              "(views > 1 -- (\n) or (views < 0)"
+            ]
+          }
+        },
+        {
+          "where": {
+            "equal": {
+              "done": false
+            }
+          }
+        }
+      ],
+      "text": "select * from \"notes\" where ((views > 1 /* ( */) or (views < 0)) and ((views > 1 -- (\n) or (views < 0)) and \"done\" = ?",
+      "values": [
+        0
+      ]
+    },
+    {
+      "name": "an alternative of two groups whose string holds a parenthesis is put in one",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "or": [
+              {
+                "sql": [
+                  "(title = '(') or (title = ')')"
+                ]
+              },
+              {
+                "equal": {
+                  "done": true
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "text": "select * from \"notes\" where (((title = '(') or (title = ')')) or \"done\" = ?)",
+      "values": [
+        1
+      ]
+    },
+    {
+      "name": "one group whose strings hold parentheses, a doubled quote among them, stays as it is",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "sql": [
+              "(title = 'it''s (' or title = ')')"
+            ]
+          }
+        },
+        {
+          "where": {
+            "equal": {
+              "done": false
+            }
+          }
+        }
+      ],
+      "text": "select * from \"notes\" where (title = 'it''s (' or title = ')') and \"done\" = ?",
+      "values": [
+        0
+      ]
     }
   ]
 }

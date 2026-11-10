@@ -133,15 +133,32 @@ export function grouped(text: string): boolean {
 	if (!text.startsWith('(') || !text.endsWith(')')) {
 		return /^[01]$/.test(text)
 	}
+	// A parenthesis inside quotes or a comment counts for nothing: ('(') or ('x') is two groups, not one.
 	let depth = 0
 	for (let at = 0; at < text.length; at++) {
-		if (text[at] === '(') depth++
-		if (text[at] === ')') depth--
+		const c = text[at]!
+		if (c === "'" || c === '"' || c === '`') {
+			at = closing(text, at, c)
+			continue
+		}
+		if (c === '-' && text[at + 1] === '-') {
+			at = text.indexOf('\n', at)
+			if (at < 0) break
+			continue
+		}
+		if (c === '/' && text[at + 1] === '*') {
+			at = text.indexOf('*/', at + 2)
+			if (at < 0) break
+			at++
+			continue
+		}
+		if (c === '(') depth++
+		if (c === ')') depth--
 		if (depth === 0 && at < text.length - 1) {
 			return false
 		}
 	}
-	return true
+	return depth === 0
 }
 
 /** Pieces joined with and or or, each in parentheses unless it may stand as it is. */
@@ -470,7 +487,7 @@ export function placeholders(text: string): {
 	return { positional, named, numbered }
 }
 
-/** The index past a quoted run that starts at `at`, a doubled quote inside it kept. */
+/** The index of the quote that ends a quoted run starting at `at`, a doubled quote inside it kept. */
 function closing(text: string, at: number, quote: string): number {
 	for (let next = at + 1; next < text.length; next++) {
 		if (text[next] === quote) {

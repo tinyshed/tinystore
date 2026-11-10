@@ -303,19 +303,38 @@ func grouped(text string) bool {
 	if !strings.HasPrefix(text, "(") || !strings.HasSuffix(text, ")") {
 		return text == "0" || text == "1"
 	}
+	// A parenthesis inside quotes or a comment counts for nothing: ('(') or
+	// ('x') is two groups, not one.
 	depth := 0
-	for at, c := range text {
-		switch c {
-		case '(':
+	for at := 0; at < len(text); at++ {
+		switch c := text[at]; {
+		case c == '\'' || c == '"' || c == '`':
+			at = closing(text, at, c)
+			continue
+		case strings.HasPrefix(text[at:], "--"):
+			end := strings.IndexByte(text[at:], '\n')
+			if end < 0 {
+				return depth == 0
+			}
+			at += end
+			continue
+		case strings.HasPrefix(text[at:], "/*"):
+			end := strings.Index(text[at+2:], "*/")
+			if end < 0 {
+				return depth == 0
+			}
+			at += end + 3
+			continue
+		case c == '(':
 			depth++
-		case ')':
+		case c == ')':
 			depth--
 		}
 		if depth == 0 && at < len(text)-1 {
 			return false
 		}
 	}
-	return true
+	return depth == 0
 }
 
 var word = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]*`)

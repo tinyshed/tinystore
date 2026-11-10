@@ -108,15 +108,34 @@ def grouped(text: str) -> bool:
     """Whether text is one group in parentheses, or a bare 0 or 1, which may stand beside others as it is."""
     if not text.startswith("(") or not text.endswith(")"):
         return text in ("0", "1")
+    # A parenthesis inside quotes or a comment counts for nothing: ('(') or ('x') is two groups, not one.
     depth = 0
-    for at, c in enumerate(text):
+    at = 0
+    while at < len(text):
+        c = text[at]
+        if c in "'\"`":
+            at = _closing(text, at, c) + 1
+            continue
+        if text.startswith("--", at):
+            at = text.find("\n", at)
+            if at < 0:
+                break
+            at += 1
+            continue
+        if text.startswith("/*", at):
+            at = text.find("*/", at + 2)
+            if at < 0:
+                break
+            at += 2
+            continue
         if c == "(":
             depth += 1
         elif c == ")":
             depth -= 1
         if depth == 0 and at < len(text) - 1:
             return False
-    return True
+        at += 1
+    return depth == 0
 
 
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
@@ -216,7 +235,7 @@ def joined_with(pieces: Sequence[Sql], joiner: str) -> Sql:
 
 
 def _closing(text: str, at: int, quote: str) -> int:
-    """The index past a quoted run that starts at at, a doubled quote inside it kept."""
+    """The index of the quote that ends a quoted run starting at at, a doubled quote inside it kept."""
     following = at + 1
     while following < len(text):
         if text[following] == quote:
