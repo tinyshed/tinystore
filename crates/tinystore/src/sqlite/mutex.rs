@@ -9,8 +9,8 @@
 //! a read takes, and park only then.
 //!
 //! The lock itself is safe code. What hands it to SQLite is not: the second
-//! half of this file is the one place beside [`super::memory`] where the
-//! adapter writes `unsafe`.
+//! half of this file is one of the places, beside [`super::memory`] and
+//! [`super::deferred`], where the adapter writes `unsafe`.
 
 #![allow(unsafe_code)]
 

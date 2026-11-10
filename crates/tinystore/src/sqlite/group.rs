@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use super::capture::{Capture, Logged, in_the_file, logged};
 use super::checkpoint::Checkpoints;
 use super::connection::{self, execute, sql_error};
+use super::deferred;
 use super::given::own;
 use super::{Committed, Config, GroupLimits, Left, Settlers, Tx};
 use crate::probe::FileProbe;
@@ -653,9 +654,9 @@ fn still_open(connection: &Connection) -> Result<()> {
 }
 
 /// Runs one write in a savepoint, then settles what it left, keeping the
-/// savepoint when both succeed and rolling it back when either fails or
-/// panics, its hooks with it. A write that ended the transaction leaves its
-/// batch to answer for it.
+/// savepoint when both succeed and no foreign key it deferred stands broken,
+/// and rolling it back when either fails or panics, its hooks with it. A
+/// write that ended the transaction leaves its batch to answer for it.
 fn run(
     connection: &Connection,
     work: Option<Work>,
@@ -668,7 +669,19 @@ fn run(
     execute(connection, SAVEPOINT).map_err(|error| sql_error("a grouped write: its savepoint", error))?;
     let mark = committed.mark();
     let tx = Tx::new(connection, committed, settlers);
-    let settled = || work(&tx).and_then(|()| still_open(connection)).and_then(|()| tx.settle(Left::Here));
+    // SQLite counts the deferred keys broken in the whole transaction, not in
+    // this savepoint, yet a broken one is this write's: the count stands at
+    // none as the transaction begins and as each write begins, since a write
+    // that left one broken rolled its savepoint back, which puts the count
+    // back where it stood. Nor can a write mend a key a write before it
+    // broke, as that write failed alone: each write is a commit of its own to
+    // its caller.
+    let settled = || {
+        work(&tx)
+            .and_then(|()| still_open(connection))
+            .and_then(|()| tx.settle(Left::Here))
+            .and_then(|()| deferred::kept(connection, "a grouped write"))
+    };
     let outcome =
         catch_unwind(AssertUnwindSafe(settled)).unwrap_or_else(|_| Err(Error::internal("a grouped write panicked")));
     if connection.is_autocommit() {

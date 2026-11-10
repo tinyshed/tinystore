@@ -11,6 +11,7 @@ use rusqlite::Connection;
 use super::capture::{Capture, Logged, Observe, in_the_file, logged, own_work};
 use super::checkpoint::Checkpoints;
 use super::connection::{self, Role, execute, sql_error};
+use super::deferred;
 use super::given::own;
 use super::group::{BEGIN, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
@@ -348,7 +349,15 @@ impl File {
     /// Commits the transaction on `connection`; a commit that fails may or may
     /// not be in the file. One that waited `waited` for the writer is told to
     /// the probe.
+    ///
+    /// A foreign key the transaction deferred and left broken would fail the
+    /// commit: it is asked for first, and the transaction rolls back whole,
+    /// `invalid`, its outcome known.
     fn commit(&self, connection: &Connection, waited: Option<Duration>) -> Result<()> {
+        if let Err(broken) = deferred::kept(connection, "a transaction") {
+            let _ = execute(connection, ROLLBACK);
+            return Err(broken.within(self.describe()));
+        }
         let capture = logged(&self.capture);
         if let Some(Err(refused)) = capture.as_deref().map(Capture::refuse_a_commit) {
             let _ = execute(connection, ROLLBACK);

@@ -2,7 +2,7 @@
 //! grouped commits, a pool of `query_only` readers, checked migrations.
 //!
 //! Nothing here knows an engine's vocabulary. `unsafe` is allowed in this
-//! module alone, and only in [`memory`] and [`mutex`].
+//! module alone, and only in [`memory`], [`mutex`] and [`deferred`].
 
 // Every engine stands on the adapter, and a build of a few of them leaves the
 // rest of it unused: there the lint is quiet, while a build of every engine
@@ -30,6 +30,7 @@ mod checkpoint;
 mod config;
 mod connection;
 mod constraint;
+mod deferred;
 #[cfg(test)]
 pub(crate) mod division;
 mod drafts;

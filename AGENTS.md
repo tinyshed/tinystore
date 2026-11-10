@@ -192,7 +192,9 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   Config stands at the root, since `config::load` opens no store, and only its
   `store.rs` names kv, whose file keeps the live settings' changes and whose
   engine keeps the configs open in the process.
-- **`unsafe` lives in eight places**: `sqlite::memory`, `sqlite::mutex`,
+- **`unsafe` lives in nine places**: `sqlite::memory`, `sqlite::mutex`,
+  `sqlite::deferred`, which asks SQLite whether a foreign key a transaction
+  defers to its commit stands broken,
   `space`, which asks the system for the disk's free space,
   `console::terminal`, which asks a Windows console to read colours,
   `crates/ffi`, the command line's `owner_only`, which gives what a Windows server
@@ -201,7 +203,7 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   it starts on Windows, since std's `inherit_handles` is not stable, and the
   test `metrics_memory`, whose allocator counts the heap an
   ingest holds against what it reserves. The workspace denies
-  `unsafe_code` everywhere else, each of the eight allows it at its module's
+  `unsafe_code` everywhere else, each of the nine allows it at its module's
   top, and clippy's `undocumented_unsafe_blocks` makes every block carry a
   `SAFETY:` comment saying what it relies on.
 - **A dependency is a decision**, and every program linking TinyStore pays for

@@ -233,6 +233,73 @@ fn a_transaction_a_statement_rolled_back_commits_nothing_of_what_runs_after() {
     insert(&file, "next").unwrap();
 }
 
+/// A file whose children name their parent by a foreign key SQLite checks
+/// only at the commit, parent 1 there.
+fn open_with_a_deferred_key() -> (tempfile::TempDir, Arc<File>) {
+    let (dir, file) = open(Config::default());
+    file.transaction(|tx| {
+        tx.execute_batch(
+            "create table parent (id integer primary key);
+             create table child (parent integer not null references parent (id) deferrable initially deferred);
+             insert into parent values (1)",
+        )
+        .map_err(|error| sql_error("create parent and child", error))
+    })
+    .unwrap();
+    (dir, file)
+}
+
+fn insert_child(file: &File, parent: i64) -> Result<()> {
+    file.write(8, move |tx| {
+        tx.execute("insert into child values (?1)", [parent]).map(drop).map_err(|error| sql_error("insert", error))
+    })
+}
+
+fn children(file: &File) -> Vec<i64> {
+    let read = |connection: &rusqlite::Connection| -> rusqlite::Result<Vec<i64>> {
+        connection.prepare("select parent from child order by rowid")?.query_map([], |row| row.get(0))?.collect()
+    };
+    file.read(|connection| read(connection).map_err(|error| sql_error("children", error))).unwrap()
+}
+
+// contract: DUR-03, DUR-05, SQL-08
+#[test]
+fn a_write_that_breaks_a_deferred_foreign_key_fails_alone_and_the_writes_beside_it_commit() {
+    let (_dir, file) = open_with_a_deferred_key();
+    let before = file.commits();
+    let answers = queue_in_order_behind_the_writer(
+        &file,
+        vec![
+            Box::new(|file| insert_child(file, 1)),
+            Box::new(|file| insert_child(file, 999)),
+            Box::new(|file| insert_child(file, 1)),
+        ],
+    );
+    assert_eq!(file.commits() - before, 1, "the three shared a commit");
+    let broken = answers[1].as_ref().unwrap_err();
+    assert_eq!(broken.kind(), ErrorKind::Invalid, "its outcome is known, and its own: {broken}");
+    assert_eq!(broken.fact("constraint"), Some("foreignKey"));
+    // the third finds none broken: the second's rollback took its broken key with it
+    assert!(answers[0].is_ok() && answers[2].is_ok(), "{answers:?}");
+    assert_eq!(children(&file), [1, 1]);
+}
+
+// contract: DUR-02, DUR-05, SQL-08
+#[test]
+fn a_transaction_that_leaves_a_deferred_foreign_key_broken_fails_invalid_and_leaves_nothing() {
+    let (_dir, file) = open_with_a_deferred_key();
+    let broke = file.transaction(|tx| -> Result<()> {
+        tx.execute("insert into child values (1)", []).map_err(|error| sql_error("insert", error))?;
+        tx.execute("insert into child values (999)", []).map(drop).map_err(|error| sql_error("insert", error))
+    });
+    let error = broke.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "its outcome is known: {error}");
+    assert_eq!(error.fact("constraint"), Some("foreignKey"));
+    assert!(children(&file).is_empty(), "nothing of the transaction is in the file");
+    insert_child(&file, 1).unwrap();
+    assert_eq!(children(&file), [1], "the writer goes on");
+}
+
 /// Runs `scenario` on a thread of its own, and fails the test when it has
 /// not ended within a minute, as two writers waiting for each other never do.
 fn within_a_minute<T: Send + 'static>(scenario: impl FnOnce() -> T + Send + 'static) -> T {
