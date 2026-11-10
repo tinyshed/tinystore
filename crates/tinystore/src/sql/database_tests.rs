@@ -417,6 +417,34 @@ fn a_text_of_two_statements_is_invalid_and_runs_neither() {
     assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 0, "neither insert ran");
 }
 
+// contract: SQL-02
+#[test]
+fn a_statement_holding_a_nul_is_invalid_wherever_it_is_given_and_runs_nothing() {
+    let f = fixture();
+    let db = f.app();
+    let refused = |error: crate::Error, given: &str| {
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{given}: {error}");
+        assert!(error.to_string().contains("NUL"), "{given}: {error}");
+    };
+    // SQLite reads a statement's text up to a NUL, and would run none of the rest
+    let insert = "insert into notes (id, author_id, title) values ('n1', 1, 'a')\0 and what is not sql";
+    refused(db.exec(insert).unwrap_err(), "a write");
+    refused(db.scalar::<i64>("select 1\0 and what is not sql").unwrap_err(), "a read");
+    let first = "insert into notes (id, author_id, title) values ('n2', 1, 'b')";
+    refused(db.batch([first, insert]).unwrap_err(), "a batch");
+    refused(db.tx(|tx| tx.exec(insert)).unwrap_err(), "a transaction");
+    assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 0, "nothing ran");
+
+    let step = "create table early (x);\0 create table late (x)";
+    let migrated = f.store.database("steps").migrations([("0001_tables.sql", step)]).open().unwrap_err();
+    assert!(migrated.to_string().contains("0001_tables.sql"), "{migrated}");
+    refused(migrated, "a migration");
+
+    // a NUL in a value is the value's
+    db.exec(sql!("insert into notes (id, author_id, title) values (?, ?, ?)", "n3", 1, "a\0b")).unwrap();
+    assert_eq!(db.scalar::<String>(sql!("select title from notes where id = ?", "n3")).unwrap(), "a\0b");
+}
+
 // contract: ERR-03, SQL-08
 #[test]
 fn a_broken_constraint_says_which_as_sqlite_names_it() {

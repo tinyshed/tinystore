@@ -129,7 +129,7 @@ These contracts are what does not.
 ### SQL
 
 - **SQL-01** A read MUST run on a connection that cannot write; a write with `returning` MUST run on the writer and answer once its commit is durable.
-- **SQL-02** A statement MUST NOT change its connection: attaching a file, beginning or ending a transaction, or setting a pragma MUST be `invalid`, for every caller and in a migration too.
+- **SQL-02** A statement MUST NOT change its connection: attaching a file, beginning or ending a transaction, or setting a pragma MUST be `invalid`, for every caller and in a migration too, and so MUST a statement whose text holds a NUL character, rather than run only what comes before it.
 - **SQL-03** Migrations MUST apply in the order of their numbers; an applied migration that changed, was renamed, went missing or was put before another MUST stop the database from opening.
 - **SQL-04** A migration that leaves a row without its parent MUST be refused.
 - **SQL-05** A value MUST come back as it went in; a value SQLite would change MUST be refused; a placeholder without its value MUST be refused, not read as `NULL`.

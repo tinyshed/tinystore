@@ -18,6 +18,10 @@
 //! lie, which the build has for a node's copies: a page written there under
 //! SQLite's own b-trees leaves them broken for every reader and every copy.
 //!
+//! Nor may its text hold a NUL: SQLite reads a statement's text only up to
+//! one, and would run what comes before it and none of what follows, saying
+//! nothing. A NUL in a value bound to it is the value's.
+//!
 //! The authorizer sees a statement once, when it is compiled, and a compiled
 //! statement is kept by its text. The adapter's own `commit`, once kept, would
 //! then run for a given statement of the same text, unseen. So the adapter
@@ -66,6 +70,8 @@ const TEMPORARY: &str = "a statement makes no temporary table, view, trigger or 
 const PAGES: &str = "a statement writes no page of its file through sqlite_dbpage: a page written there under \
     SQLite's own b-trees would leave them broken";
 const UNNAMED: &str = "a statement does what SQLite gives no name to, as an attach of a file that is not a literal";
+const NUL: &str = "a statement holds no NUL character: SQLite reads its text only up to one, and would run none of \
+    what follows";
 
 /// The virtual table of a file's pages as they lie.
 const RAW_PAGES: &str = "sqlite_dbpage";
@@ -84,11 +90,15 @@ pub(super) fn guard(connection: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Runs `work`, which compiles and runs `text`, a statement the store was
-/// given: `Invalid`, saying what it may not do, when the authorizer refused it.
+/// given: `Invalid`, saying what it may not do, when the authorizer refused it
+/// or its text holds a NUL.
 pub(crate) fn given<T>(text: &str, work: impl FnOnce() -> Result<T>) -> Result<T> {
     // rusqlite keeps a statement by its text trimmed
     if text.trim_start().starts_with(OWN) {
         return Err(Error::invalid(AS_OWN));
+    }
+    if text.contains('\0') {
+        return Err(Error::invalid(NUL));
     }
     let _running = Running::enter();
     let done = work();
