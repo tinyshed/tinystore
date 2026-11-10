@@ -6,6 +6,7 @@
 //! savepoint holds the writer.
 
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use rusqlite::{Statement, params_from_iter};
@@ -169,8 +170,10 @@ pub(crate) fn step(
         };
         // A kept statement compiled before its table changed is compiled
         // again at its first step, so its columns are named after it.
-        let (columns, _) = named.get_or_insert_with(|| named_columns(row.as_ref()));
-        let width = columns.len();
+        if named.is_none() {
+            named = Some(named_columns(row.as_ref())?);
+        }
+        let width = named.as_ref().map_or(0, |(columns, _)| columns.len());
         for index in 0..width {
             let value = Value::of(row.get_ref(index).map_err(|error| failure("its rows", error))?);
             size += value.size();
@@ -184,16 +187,28 @@ pub(crate) fn step(
     }
     held.settle();
     drop(rows);
-    let (columns, declared) = named.unwrap_or_else(|| named_columns(statement));
+    let (columns, declared) = match named {
+        Some(named) => named,
+        None => named_columns(statement)?,
+    };
     Ok(Stepped { columns, declared, rows: count })
 }
 
 /// A stepped statement's columns, and what each one's declared type holds.
-fn named_columns(statement: &Statement<'_>) -> (Vec<String>, Vec<Holds>) {
-    let named = statement.columns();
-    let columns = named.iter().map(|column| column.name().to_owned()).collect();
-    (columns, named.iter().map(|column| Holds::declared(column.decl_type())).collect())
+///
+/// A declared type that is not UTF-8, which only a file another program wrote
+/// can hold, is `invalid`: rusqlite panics on one rather than fail, and has no
+/// other way to read it, so its panic is caught here.
+fn named_columns(statement: &Statement<'_>) -> Result<(Vec<String>, Vec<Holds>)> {
+    let named = catch_unwind(AssertUnwindSafe(|| {
+        let named = statement.columns();
+        let columns = named.iter().map(|column| column.name().to_owned()).collect();
+        (columns, named.iter().map(|column| Holds::declared(column.decl_type())).collect())
+    }));
+    named.map_err(|_| Error::invalid(NOT_UTF8))
 }
+
+const NOT_UTF8: &str = "a column's declared type or name is not UTF-8, as a file another program wrote may hold";
 
 /// Where a statement's values go as its rows are read, for a caller that
 /// keeps them in a form of its own: the wire, as the bytes of its message.

@@ -875,6 +875,43 @@ fn a_kept_statement_names_the_columns_a_table_has_after_a_change_of_it() {
     assert!(none.is_empty());
 }
 
+/// Writes `to` over the one `from` that `path` holds, as long, as another
+/// program may have left the file: a schema whose text is not UTF-8.
+fn write_over(path: &std::path::Path, from: &[u8], to: &[u8]) {
+    assert_eq!(from.len(), to.len());
+    let mut bytes = std::fs::read(path).unwrap();
+    let found: Vec<usize> = (0..bytes.len()).filter(|&at| bytes[at..].starts_with(from)).collect();
+    assert_eq!(found.len(), 1, "{:?} once in the file", String::from_utf8_lossy(from));
+    bytes[found[0]..found[0] + from.len()].copy_from_slice(to);
+    std::fs::write(path, bytes).unwrap();
+}
+
+// contract: ERR-03
+#[test]
+fn a_column_whose_declared_type_is_not_utf8_fails_a_read_invalid_rather_than_panic() {
+    let mut f = fixture();
+    let made = f.store.database("made").open().unwrap();
+    made.exec("create table typed (id integer, rr tyty)").unwrap();
+    made.exec("create table named (id integer, qq integer)").unwrap();
+    made.exec("insert into typed values (1, 2)").unwrap();
+    f.store.close().unwrap();
+    let file = f.dir.path().join("sql").join("made.db");
+    write_over(&file, b"rr tyty", b"rr ty\xff\xfe");
+    write_over(&file, b"qq integer", b"\xff\xfe integer");
+    f.store = open_store(&f.dir, &f.clock);
+    let made = f.store.database("made").open().unwrap();
+
+    // named after the first row, and with no row at the end
+    for read in ["select * from typed", "select * from typed where id = 0"] {
+        let typed = made.all::<serde_json::Value>(read).unwrap_err();
+        assert_eq!(typed.kind(), ErrorKind::Invalid, "{read}: {typed}");
+        assert!(typed.to_string().contains("not UTF-8"), "{read}: {typed}");
+    }
+    assert_eq!(made.scalar::<i64>("select id from typed").unwrap(), 1, "the column beside it reads");
+    // a name that is not UTF-8 meets the guard of every statement first, which refuses it
+    assert!(made.all::<serde_json::Value>("select * from named").is_err());
+}
+
 /// Counts to a billion, minutes of work: a read only its cancel ends.
 const COUNT_FOR_MINUTES: &str =
     "with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000) select count(*) from c";
