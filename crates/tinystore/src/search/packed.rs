@@ -167,15 +167,23 @@ impl Directory {
         self.runs.partition_point(|run| run.first_block as usize <= index) - 1
     }
 
-    /// Where block `index`'s bytes lie in its run, the run's length `run_len`.
-    pub(crate) fn bytes_of(&self, index: usize, run_len: usize) -> std::ops::Range<usize> {
+    /// Where block `index`'s bytes lie in its run, the run's length
+    /// `run_len`: from its place to the next block's or the run's end. A
+    /// directory decodes without its runs, so a place past one is refused
+    /// here, where every reader of a block's bytes asks for them.
+    pub(crate) fn bytes_of(&self, index: usize, run_len: usize) -> Result<std::ops::Range<usize>> {
         let start = usize::from(self.blocks[index].at);
-        let next_in_run = self.runs.get(self.run_of(index) + 1).is_none_or(|run| run.first_block as usize > index + 1);
+        let run = self.run_of(index);
+        let next_in_run = self.runs.get(run + 1).is_none_or(|next| next.first_block as usize > index + 1);
         let end = match self.blocks.get(index + 1) {
             Some(next) if next_in_run => usize::from(next.at),
             _ => run_len,
         };
-        start..end.max(start)
+        if start >= end || end > run_len {
+            let broken = Error::corrupt("a piece's directory: a block placed past the next or past its run's end");
+            return Err(broken.within(format!("run {}", self.runs[run].id)));
+        }
+        Ok(start..end)
     }
 }
 
@@ -360,9 +368,9 @@ mod tests {
         let read = Directory::decode(&directory.encode()).unwrap();
         assert_eq!(read, directory);
         assert_eq!((read.run_of(0), read.run_of(1), read.run_of(2)), (0, 0, 1));
-        assert_eq!(read.bytes_of(0, 200), 0..120);
-        assert_eq!(read.bytes_of(1, 200), 120..200);
-        assert_eq!(read.bytes_of(2, 31), 0..31);
+        assert_eq!(read.bytes_of(0, 200).unwrap(), 0..120);
+        assert_eq!(read.bytes_of(1, 200).unwrap(), 120..200);
+        assert_eq!(read.bytes_of(2, 31).unwrap(), 0..31);
         assert_eq!(Directory::decode(&Directory::default().encode()).unwrap(), Directory::default());
         let mut later = directory.encode();
         later[0] = VERSION + 1;
@@ -401,6 +409,26 @@ mod tests {
             broken(Directory::decode(&short).unwrap_err()),
             "a piece's directory: its entries are not its count's: corrupt"
         );
+    }
+
+    // contract: ERR-04
+    #[test]
+    fn a_block_placed_past_its_run_or_the_next_says_so_and_names_its_run() {
+        let placed = |first, last, at| Placed { first, last, bound: 1.0, average: 3, at };
+        let directory = Directory {
+            runs: vec![Run { id: 7, first_block: 0 }, Run { id: 9, first_block: 2 }],
+            blocks: vec![placed(1, 90, 0), placed(95, 300, 500), placed(301, 302, 40)],
+        };
+        let misplaced = "run 7: a piece's directory: a block placed past the next or past its run's end: corrupt";
+        let lying = |index, run_len| directory.bytes_of(index, run_len).map_err(|error| error.to_string());
+        assert_eq!(lying(0, 200), Err(misplaced.to_owned()), "the next block's place past the run");
+        assert_eq!(lying(1, 200), Err(misplaced.to_owned()), "its own place past the run");
+        assert_eq!(lying(0, 600), Ok(0..500));
+        assert_eq!(lying(2, 40), Err(misplaced.replace("run 7", "run 9")), "its place at the run's end");
+        assert_eq!(lying(2, 41), Ok(40..41));
+        let backwards =
+            Directory { blocks: vec![placed(1, 90, 30), placed(95, 300, 10), placed(301, 302, 0)], ..directory };
+        assert_eq!(backwards.bytes_of(0, 200).unwrap_err().to_string(), misplaced, "the next block placed before it");
     }
 
     #[test]

@@ -898,6 +898,60 @@ fn errors_name_the_index_the_id_and_what_failed() {
     assert_eq!(failure(articles.search("bread").offset(995).limit(10).run().unwrap_err()).0, ErrorKind::Limit);
 }
 
+// contract: ERR-04
+#[test]
+fn a_block_its_directory_places_past_its_run_fails_corrupt_in_a_merge_a_purge_and_a_search() {
+    let corrupt = |error: crate::Error| {
+        let said = error.to_string();
+        assert_eq!(error.kind(), ErrorKind::Corrupt, "{said}");
+        assert!(said.contains("key ") && said.contains(": run "), "the key and the run named: {said}");
+    };
+    let searched = fixture();
+    let articles = misplaced(&searched);
+    let filtered = articles.search("flour").filter(crate::search::eq("category", "bread"));
+    corrupt(filtered.run().unwrap_err());
+    corrupt(articles.search("flour").run().unwrap_err());
+    let purged = fixture();
+    let articles = misplaced(&purged);
+    assert!(articles.delete(0).unwrap());
+    corrupt(maintain(&purged.store).unwrap_err());
+    let merged = fixture();
+    let articles = misplaced(&merged);
+    articles.set("late", &article("loaf", "flour")).unwrap();
+    corrupt(maintain(&merged.store).unwrap_err());
+}
+
+/// The index `articles` of forty documents of the category bread in one
+/// folded segment, every block of its pieces in runs then placed past its
+/// run's end, as a bit flipped in search.db would place it.
+fn misplaced(fixture: &Fixture) -> Index<Article> {
+    let builder = fixture.store.index("articles").field("title", 2.0).field("body", 1.0).filters(["category"]);
+    let articles: Index<Article> = builder.open().unwrap();
+    for n in 0..40 {
+        let value = Article { category: Some("bread".to_owned()), ..article(&format!("loaf {n}"), "flour") };
+        articles.set(n, &value).unwrap();
+    }
+    maintain(&fixture.store).unwrap();
+    let connection = rusqlite::Connection::open(fixture.dir.path().join("search.db")).unwrap();
+    let pieces: Vec<(i64, i64, Vec<u8>)> = connection
+        .prepare("select segment, key, directory from _tinystore_search_pieces where directory is not null")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(!pieces.is_empty(), "the words and the category of forty documents are pieces in runs");
+    for (segment, key, bytes) in pieces {
+        let mut directory = crate::search::packed::Directory::decode(&bytes).unwrap();
+        directory.blocks.iter_mut().for_each(|block| block.at = u16::MAX);
+        let write = "update _tinystore_search_pieces set directory = ?3 where segment = ?1 and key = ?2";
+        connection.execute(write, (segment, key, directory.encode())).unwrap();
+    }
+    // as a file damaged beside the store: what the store keeps of its pieces is behind
+    connection.execute("update _tinystore_search_indexes set lists_version = lists_version + 1", []).unwrap();
+    articles
+}
+
 const WORDS: &[&str] = &[
     "bread",
     "sourdough",

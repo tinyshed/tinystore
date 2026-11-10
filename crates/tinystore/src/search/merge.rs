@@ -377,7 +377,7 @@ pub(super) fn each_posting(
     for (place, run) in directory.runs.iter().enumerate() {
         let bytes = read_run(connection, run.id)?;
         for at in directory.blocks_of(place) {
-            let lying = directory.bytes_of(at, bytes.len());
+            let lying = directory.bytes_of(at, bytes.len())?;
             packed::unpack(&bytes[lying], directory.blocks[at].first, &mut block)?;
             for posting in &block {
                 each(Posting { len: lengths.of(connection, part, posting.doc)?, ..*posting })?;
@@ -397,7 +397,7 @@ pub(super) fn documents(connection: &Connection, piece: &Piece) -> Result<Vec<u3
     for (place, run) in directory.runs.iter().enumerate() {
         let bytes = read_run(connection, run.id)?;
         for at in directory.blocks_of(place) {
-            packed::unpack(&bytes[directory.bytes_of(at, bytes.len())], directory.blocks[at].first, &mut block)?;
+            packed::unpack(&bytes[directory.bytes_of(at, bytes.len())?], directory.blocks[at].first, &mut block)?;
             docs.extend(block.iter().map(|posting| posting.doc));
         }
     }

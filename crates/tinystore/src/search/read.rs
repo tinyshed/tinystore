@@ -1066,7 +1066,7 @@ impl<'a> Source<'a> {
             None => connection.blob_open(MAIN_DB, RUNS, BLOCKS, run, true).map_err(failed)?,
         };
         let handle = &keyed.handle.insert((run, handle)).1;
-        let lying = directory.bytes_of(index, handle.len());
+        let lying = directory.bytes_of(index, handle.len())?;
         self.bytes.resize(lying.len(), 0);
         handle.read_at_exact(&mut self.bytes, lying.start).map_err(failed)?;
         packed::unpack(&self.bytes, directory.blocks[index].first, out)?;

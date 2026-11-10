@@ -211,7 +211,7 @@ fn take_out_of_run(
     let (mut held, mut taken) = (Vec::new(), 0);
     for at in directory.blocks_of(place) {
         let block = directory.blocks[at];
-        let lying = directory.bytes_of(at, bytes.len());
+        let lying = directory.bytes_of(at, bytes.len())?;
         let start = written.len() as u16;
         if touched.binary_search(&at).is_err() {
             written.extend_from_slice(&bytes[lying]);
