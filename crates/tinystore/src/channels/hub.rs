@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::deliver::Deliverer;
 use super::log::{Log, Released, Wake};
-use crate::engine::{Engine, Host};
+use crate::engine::{Engine, Handling, Host};
 use crate::limits::SUBSCRIPTIONS;
 use crate::memory::Reservation;
 use crate::{Error, Memory, Result, Store};
@@ -42,6 +42,8 @@ pub(crate) struct Hub {
     logs: Mutex<Logs>,
     next_reader: AtomicU64,
     closed: AtomicBool,
+    /// The store's mark on a delivery thread while it runs a handler.
+    pub(super) handling: Handling,
     pub(super) deliverer: Deliverer,
 }
 
@@ -62,6 +64,7 @@ impl Hub {
                 logs: Mutex::default(),
                 next_reader: AtomicU64::new(0),
                 closed: AtomicBool::new(false),
+                handling: store.handling(),
                 deliverer: Deliverer::default(),
             }))
         })

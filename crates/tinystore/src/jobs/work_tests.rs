@@ -297,6 +297,84 @@ fn a_worker_stopped_by_its_own_handler_stops_at_once_and_writes_that_handlers_an
     assert!(took_rx.try_recv().is_err(), "a stopped worker takes nothing more");
 }
 
+/// Checks what a handler's close of its own store answered: `invalid`, at once.
+fn refused_at_once(closed: (Result<()>, Duration)) {
+    let (closed, took) = closed;
+    let refused = closed.expect_err("a close from inside a handler the close waits for");
+    assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+    assert!(refused.to_string().contains("from inside a handler"), "{refused}");
+    assert!(took < SECOND, "it waited for no handler: {took:?}");
+}
+
+// contract: DUR-07
+#[test]
+fn a_close_from_a_workers_handler_is_invalid_at_once_and_the_store_and_the_worker_go_on() {
+    let f = fixture();
+    let pushes = f.store.queue::<Push>("pushes").timeout(5 * SECOND).open().unwrap();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let inside = f.store.clone();
+    let _worker = pushes
+        .work(move |push: Push, _run| -> Result<()> {
+            if push.user == 1 {
+                closed_tx.send(crate::testing::timed_close(&inside)).unwrap();
+            }
+            Ok(())
+        })
+        .unwrap();
+    pushes.id("shutdown").add(&Push { user: 1 }).unwrap();
+    refused_at_once(closed_rx.recv_timeout(Duration::from_secs(60)).expect("its close returned"));
+    eventually(|| pushes.get("shutdown").unwrap().is_none()); // its handler's answer written
+    pushes.id("next").add(&Push { user: 2 }).unwrap();
+    eventually(|| pushes.get("next").unwrap().is_none());
+    f.store.close().unwrap();
+}
+
+// contract: DUR-07
+#[test]
+fn a_close_from_a_schedules_handler_is_invalid_at_once_and_its_run_is_written() {
+    let f = fixture();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let inside = f.store.clone();
+    let report = f
+        .store
+        .schedule("report")
+        .every(HOUR)
+        .timeout(5 * SECOND)
+        .work(move |_run: &Run| -> Result<()> {
+            closed_tx.send(crate::testing::timed_close(&inside)).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let first = report.get().unwrap().unwrap().at;
+    f.advance(HOUR);
+    refused_at_once(closed_rx.recv_timeout(Duration::from_secs(60)).expect("its close returned"));
+    eventually(|| report.get().unwrap().is_some_and(|job| job.at > first));
+    let next = report.get().unwrap().unwrap();
+    assert_eq!((next.state, next.attempt, &next.error), (State::Scheduled, 0, &None), "the run went as usual");
+    assert!(next.last_run.is_some(), "its run was written");
+    f.store.close().unwrap();
+}
+
+// contract: DUR-07
+#[test]
+fn a_handler_closes_another_store_as_any_caller_does() {
+    let f = fixture();
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = crate::Store::open(other_dir.path(), crate::Options { background: false, ..Default::default() });
+    let other = other.unwrap();
+    let pushes = f.store.queue::<Push>("pushes").open().unwrap();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let _worker = pushes
+        .work(move |_: Push, _run| -> Result<()> {
+            closed_tx.send(other.close().map_err(|error| error.kind())).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    pushes.id("p").add(&Push { user: 1 }).unwrap();
+    assert_eq!(closed_rx.recv_timeout(Duration::from_secs(60)).unwrap(), Ok(()), "that store waits for no handler");
+    f.store.close().unwrap();
+}
+
 #[test]
 fn a_worker_runs_a_job_its_moved_clock_made_due_at_once() {
     let f = fixture();

@@ -226,6 +226,43 @@ async fn the_stores_close_stops_a_worker_once_its_handler_finished() {
     again.close().unwrap();
 }
 
+// contract: DUR-07
+#[tokio::test]
+async fn a_close_from_an_awaited_handler_is_invalid_at_once_awaited_or_blocking_and_the_worker_goes_on() {
+    let f = fixture();
+    let pushes = f.store.queue::<Draft>("pushes").timeout(5 * SECOND).open().unwrap();
+    pushes.id("shutdown").add(&draft(1)).await.unwrap();
+    let (closed_tx, mut closed_rx) = tokio::sync::mpsc::unbounded_channel();
+    let inside = f.store.clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let handler = move |draft: Draft, _run: Run| {
+        let (inside, closed_tx) = (inside.clone(), closed_tx.clone());
+        async move {
+            if draft.chat == 1 {
+                let began = std::time::Instant::now();
+                let awaited = inside.close().await;
+                let blocking = inside.blocking().close();
+                closed_tx.send((awaited, blocking, began.elapsed())).unwrap();
+            }
+            Ok::<(), String>(())
+        }
+    };
+    let worker = tokio::spawn(pushes.work(handler).until(stopped));
+    let (awaited, blocking, took) = closed_rx.recv().await.expect("the handler's closes returned");
+    for refused in [awaited.unwrap_err(), blocking.unwrap_err()] {
+        assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+        assert!(refused.to_string().contains("from inside a handler"), "{refused}");
+    }
+    assert!(took < SECOND, "it waited for no handler: {took:?}");
+    let held = pushes.queue.clone();
+    eventually("its handler's answer was written", || held.get("shutdown").unwrap().is_none()).await;
+    pushes.id("next").add(&draft(2)).await.unwrap();
+    eventually("the worker went on", || held.get("next").unwrap().is_none()).await;
+    stop.send(()).unwrap();
+    worker.await.unwrap().unwrap();
+    f.store.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_worker_first_polled_after_its_store_closed_fails_closed() {
     let f = fixture();

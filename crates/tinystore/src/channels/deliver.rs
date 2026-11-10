@@ -22,6 +22,7 @@ use std::thread::{self, JoinHandle, ThreadId};
 
 use super::hub::{Hub, LogKey};
 use super::log::{Log, Released};
+use crate::engine::Handling;
 use crate::sync::lock;
 use crate::{Error, Result};
 
@@ -69,6 +70,9 @@ pub(crate) struct Subscriber {
     place: OnceLock<(Arc<Log>, u64)>,
     hub: Weak<Hub>,
     pool: Weak<Pool>,
+    /// The store's close waits for a call that runs, so the call's thread is
+    /// marked while it runs: a close from the handler would wait for itself.
+    handling: Handling,
     run: Mutex<Run>,
     turn: Mutex<Turn>,
     /// Set as `stop` begins, before it waits out the running batch, so that
@@ -95,6 +99,7 @@ impl Deliverer {
             place: OnceLock::new(),
             hub: Arc::downgrade(hub),
             pool: Arc::downgrade(&self.pool),
+            handling: hub.handling,
             run: Mutex::new(run),
             turn: Mutex::new(Turn::Idle),
             stopping: AtomicBool::new(false),
@@ -137,8 +142,9 @@ impl Deliverer {
         Ok(())
     }
 
-    /// Stops the threads once their running calls end; a call that closes
-    /// the store from a handler ends its own thread on return.
+    /// Stops the threads once their running calls end; a handler that drops
+    /// the store's last handle closes it on its own thread, which ends on
+    /// return.
     pub(crate) fn close(&self) {
         {
             let mut ready = lock(&self.pool.ready);
@@ -235,7 +241,7 @@ impl Subscriber {
             let mut run = lock(&self.run);
             // A handler's panic is its own: the typed handler reports it, and
             // the next message follows.
-            let _ = catch_unwind(AssertUnwindSafe(|| run(delivery)));
+            let _ = catch_unwind(AssertUnwindSafe(|| self.handling.run(|| run(delivery))));
         }
         self.finish_turn(log, *reader);
     }

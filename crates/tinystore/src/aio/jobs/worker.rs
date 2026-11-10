@@ -306,15 +306,18 @@ impl Driver {
         if !run.begin() {
             return self.answers.answer(lease, None);
         }
-        if let Some((lease, ran)) = self.running.begin(lease, || begin(run), &self.shared) {
+        let handling = self.queue.queue.jobs.handling();
+        if let Some((lease, ran)) = handling.run(|| self.running.begin(lease, || begin(run), &self.shared)) {
             self.answer(lease, ran);
         }
     }
 
     /// Polls one handler with its own waker, and answers its job once it ends,
-    /// a panic among its ends.
+    /// a panic among its ends. The store's close waits for the loop, and the
+    /// loop for this handler, so the thread is marked while it polls it.
     fn poll_handler(&mut self, slot: u64) {
-        if let Some((lease, ran)) = self.running.poll(slot) {
+        let handling = self.queue.queue.jobs.handling();
+        if let Some((lease, ran)) = handling.run(|| self.running.poll(slot)) {
             self.answer(lease, ran);
         }
     }

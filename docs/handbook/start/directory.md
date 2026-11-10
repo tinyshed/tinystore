@@ -218,6 +218,13 @@ closed fails with a `closed` error
 (`ClosedError` in TypeScript and Python, `tinystore.ErrClosed` in Go,
 `ErrorKind::Closed` in Rust).
 
+In Rust, `close` called from inside one of those handlers, a worker's, a
+schedule's or a subscription's, fails `invalid` at once, blocking or awaited:
+it would wait for the handler that calls it (contract DUR-07). Close the store
+after the handler returns. To stop taking work from inside a handler, call a
+blocking worker's or a subscription's `stop()` there instead: it returns at
+once.
+
 In TypeScript, `await using store = await open(…)` closes the store at the
 end of the block, and `async with` does the same in Python.
 

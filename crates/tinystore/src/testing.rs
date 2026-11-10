@@ -14,3 +14,12 @@ pub(crate) fn holds_within(within: Duration, what: &str, mut holds: impl FnMut()
         std::thread::sleep(Duration::from_millis(2));
     }
 }
+
+/// Closes `store`, and says what the close answered and how long it took: a
+/// close from inside a handler it waits for answers at once.
+#[cfg(any(feature = "channels", feature = "jobs"))]
+pub(crate) fn timed_close(store: &crate::Store) -> (crate::Result<()>, Duration) {
+    let began = Instant::now();
+    let closed = store.close();
+    (closed, began.elapsed())
+}

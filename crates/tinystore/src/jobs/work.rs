@@ -662,6 +662,8 @@ where
     let handler = Arc::new(handler);
     let alive = Arc::new((Mutex::new(0usize), Condvar::new()));
     let mut handlers = Vec::with_capacity(local);
+    // the store's close waits for these threads, so a close from one of them would wait for itself
+    let handling = jobs.handling();
     for at in 0..local {
         *alive.0.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         let (jobs, queue_of, fed, inbox, handler, count) = (
@@ -674,7 +676,7 @@ where
         );
         let name = format!("tinystore-jobs-{}-{at}", queue.name);
         let spawned = thread::Builder::new().name(name).spawn(move || {
-            serve(&jobs, &queue_of, &fed, &inbox, &*handler);
+            handling.run(|| serve(&jobs, &queue_of, &fed, &inbox, &*handler));
             let (alive, ended) = &*count;
             *alive.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
             ended.notify_all();

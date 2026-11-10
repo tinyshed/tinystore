@@ -207,6 +207,30 @@ fn stop_from_inside_its_handler_answers_at_once_and_from_outside_waits_for_the_r
     assert!(stopper.join().unwrap() >= released, "stop waited for the running call");
 }
 
+// contract: DUR-07
+#[test]
+fn a_close_from_a_subscriptions_handler_is_invalid_at_once_and_its_messages_go_on() {
+    let (_dir, store) = opened();
+    let chat = store.channel::<u32>("chat").open().unwrap();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let inside = store.clone();
+    let _sub = chat
+        .subscribe(move |message: Message<u32>| {
+            closed_tx.send((message.value, crate::testing::timed_close(&inside))).unwrap();
+        })
+        .unwrap();
+    chat.publish(&1).unwrap();
+    let (value, (closed, took)) = closed_rx.recv_timeout(PATIENCE).expect("its close returned");
+    let refused = closed.expect_err("a close from inside a handler the close waits for");
+    assert_eq!((value, refused.kind()), (1, ErrorKind::Invalid), "{refused}");
+    assert!(refused.to_string().contains("from inside a handler"), "{refused}");
+    assert!(took < Duration::from_secs(1), "it waited for no handler: {took:?}");
+    chat.publish(&2).unwrap();
+    let (value, _) = closed_rx.recv_timeout(PATIENCE).expect("the next message");
+    assert_eq!(value, 2, "the store and the subscription go on");
+    store.close().unwrap();
+}
+
 // contract: CHAN-04
 #[test]
 fn a_handler_that_panics_or_a_message_of_another_type_is_told_and_the_next_follows() {

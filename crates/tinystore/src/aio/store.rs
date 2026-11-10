@@ -76,14 +76,14 @@ impl Store {
     /// starts, so that the executor's thread waits for nothing: the close
     /// waits for background work, for the handlers running and for each
     /// engine's last writes. A store whose last handle is dropped closes on
-    /// the dropping thread instead, which may be the executor's.
+    /// the dropping thread instead, which may be the executor's. Awaited
+    /// inside a transaction or a handler it waits for, it is `Invalid` at its
+    /// first poll, as the blocking close is.
     pub fn close(&self) -> impl Future<Output = Result<()>> + Send + 'static {
         let store = self.store.clone();
         async move {
-            if crate::sqlite::in_a_transaction() {
-                let why = "a close from inside a transaction would wait for the writer the transaction holds";
-                return Err(Error::invalid(format!("{store:?}: {why}: close after it")));
-            }
+            // a handler that awaits the close polls it on the thread its worker marked
+            store.refuse_where_a_close_would_wait_for_itself()?;
             let (answer, closed) = pending(format!("{store:?}: its close"));
             // A thread of the pool would wait for the pool it runs on to stop.
             std::thread::Builder::new()

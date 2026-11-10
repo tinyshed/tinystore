@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime};
 
 #[cfg(feature = "kv")]
 use crate::encryption::{self, EncryptionKey, Keyring, SealedIn};
-use crate::engine::{Claim, Engine, Host, Wake};
+use crate::engine::{Claim, Engine, Handling, Host, Wake};
 use crate::probe::Probe;
 use crate::schedule::Scheduler;
 #[cfg(any(feature = "kv", feature = "jobs"))]
@@ -240,6 +240,8 @@ struct Inner {
     node: Option<Arc<crate::replication::State>>,
     /// Opened beside the process that holds the directory: it reads only.
     beside: bool,
+    /// What marks the threads that run the handlers its close waits for.
+    handling: Handling,
     closed: AtomicBool,
 }
 
@@ -314,6 +316,7 @@ impl Store {
                 .map(|node| crate::replication::State::new(&dir, node, options.keep_free).map(Arc::new))
                 .transpose()?,
             beside,
+            handling: Handling::new(),
             closed: AtomicBool::new(false),
             dir,
         };
@@ -656,14 +659,36 @@ impl Store {
     /// of the directory. The first engine that fails to close is the error;
     /// the others still close. A second call does nothing, and neither does
     /// the last clone's drop after. From inside a transaction it is
-    /// `Invalid`: it would wait for the writer the transaction holds.
+    /// `Invalid`: it would wait for the writer the transaction holds. So it is
+    /// from inside one of the handlers it waits for, a worker's, a schedule's
+    /// or a subscription's, blocking or awaited: it would wait for the handler
+    /// that calls it. Such a handler returns first, or stops its worker or its
+    /// subscription, whose stop returns at once there.
     pub fn close(&self) -> Result<()> {
-        if crate::sqlite::in_a_transaction() {
-            let why =
-                "a close from inside a transaction would wait for the writer the transaction holds: close after it";
-            return Err(Error::invalid(why).within(self.describe()));
-        }
+        self.refuse_where_a_close_would_wait_for_itself()?;
         self.inner.close()
+    }
+
+    /// Refuses a close from inside a transaction, which holds a writer the
+    /// close waits for, or from inside a handler of this store's, which the
+    /// close waits for too.
+    pub(crate) fn refuse_where_a_close_would_wait_for_itself(&self) -> Result<()> {
+        let why = if crate::sqlite::in_a_transaction() {
+            "a close from inside a transaction would wait for the writer the transaction holds: close after it"
+        } else if self.inner.handling.on_this_thread() {
+            "a close from inside a handler would wait for the handler that calls it: close after it returns, \
+             or stop its worker or subscription, whose stop returns at once there"
+        } else {
+            return Ok(());
+        };
+        Err(Error::invalid(why).within(self.describe()))
+    }
+
+    /// What marks the threads that run the handlers this store's close waits
+    /// for, as they run them.
+    #[cfg(any(feature = "jobs", feature = "channels"))]
+    pub(crate) fn handling(&self) -> Handling {
+        self.inner.handling
     }
 
     #[cfg_attr(

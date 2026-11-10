@@ -50,6 +50,58 @@ pub trait Engine: Send + Sync + 'static {
     }
 }
 
+/// What marks a thread while it runs a program's handler that one store's
+/// close waits for: a queue's worker's, a schedule's, a channel
+/// subscription's. That store's close, called there, would wait for the
+/// handler that calls it, so it refuses instead, as it does inside a
+/// transaction. A close of another store waits for no such handler: each
+/// store has a mark of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Handling(u64);
+
+thread_local! {
+    /// The marks of the handlers this thread runs, the innermost last.
+    static HANDLING: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Handling {
+    /// A mark no other store has: a number, never an address, which another
+    /// store could take once this one is gone.
+    pub(crate) fn new() -> Handling {
+        static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Handling(LAST.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1)
+    }
+
+    /// Runs `handler` with this thread marked, a panic's unwinding included.
+    #[cfg(any(feature = "jobs", feature = "channels"))]
+    pub(crate) fn run<T>(self, handler: impl FnOnce() -> T) -> T {
+        HANDLING.with(|marks| marks.borrow_mut().push(self.0));
+        let _unmarked = Unmark(self.0);
+        handler()
+    }
+
+    /// Whether this thread runs a handler under this mark now.
+    pub(crate) fn on_this_thread(self) -> bool {
+        HANDLING.with(|marks| marks.borrow().contains(&self.0))
+    }
+}
+
+/// Takes a handler's mark off its thread as the handler ends.
+#[cfg(any(feature = "jobs", feature = "channels"))]
+struct Unmark(u64);
+
+#[cfg(any(feature = "jobs", feature = "channels"))]
+impl Drop for Unmark {
+    fn drop(&mut self) {
+        HANDLING.with(|marks| {
+            let mut marks = marks.borrow_mut();
+            if let Some(at) = marks.iter().rposition(|&mark| mark == self.0) {
+                marks.remove(at);
+            }
+        });
+    }
+}
+
 /// A file of a snapshot: its path inside the store, `/` between its parts,
 /// as `kv.db`, `sql/app.db` or `blobs/objects/1a3/1a3f07`, and the engine
 /// whose it is.

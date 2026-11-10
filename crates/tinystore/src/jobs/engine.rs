@@ -8,7 +8,7 @@ use super::policy::Policy;
 use super::rows;
 use super::state::{Kind, QueueState};
 use super::work::Running;
-use crate::engine::{Claim, Copying, Engine, Home, Host, to_copy};
+use crate::engine::{Claim, Copying, Engine, Handling, Home, Host, to_copy};
 use crate::sqlite::{Config, File, Migration};
 use crate::sync::lock;
 use crate::{Clock, Error, Result, Store, unix_millis};
@@ -38,6 +38,8 @@ pub(crate) struct Jobs {
     queues: Mutex<HashMap<String, Arc<QueueState>>>,
     /// Kept here, so that a worker its program let go of still stops at close.
     workers: Mutex<Vec<Arc<Running>>>,
+    /// The store's mark on the threads that run its workers' handlers.
+    handling: Handling,
     closed: AtomicBool,
     /// One maintenance at a time.
     maintaining: Mutex<()>,
@@ -88,6 +90,7 @@ impl Jobs {
             store: store.downgrade(),
             queues: Mutex::new(HashMap::new()),
             workers: Mutex::new(Vec::new()),
+            handling: store.handling(),
             closed: AtomicBool::new(false),
             maintaining: Mutex::new(()),
             leases_ended,
@@ -153,6 +156,12 @@ impl Jobs {
 
     pub(crate) fn closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
+    }
+
+    /// What marks a thread while it runs a handler of a worker the store's
+    /// close stops and waits for.
+    pub(crate) fn handling(&self) -> Handling {
+        self.handling
     }
 
     /// The queue `name` as this process knows it, registered on its first open.
