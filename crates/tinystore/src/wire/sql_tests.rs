@@ -312,6 +312,35 @@ fn a_transactions_call_gives_its_credit_back_once_it_is_answered() {
     assert_eq!(client.pipe.streams(), 0);
 }
 
+// contract: WIRE-02, DUR-02
+#[test]
+fn a_transactions_data_that_is_not_a_call_is_invalid_naming_its_field_and_runs_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client);
+    let stream = begin(&mut client, handle);
+    call(&mut client, stream, "insert into notes (id, title) values ('n1', 'a')", Vec::new(), "exec");
+    // a map of one field, 3, `want`, whose value is a number rather than text
+    client.write(Frame::new(Kind::Data, stream, vec![0x81, 3, 7]));
+    let refused = client.next_on(stream);
+    assert_eq!((refused.kind, refused.flags), (Kind::Data, 0), "an answer, the transaction open");
+    let failure = SqlTxAnswer::decode(&refused.body).unwrap().failure.unwrap();
+    assert_eq!((failure.code.as_str(), failure.message.as_str()), ("invalid", "want is not a str"));
+    let seen = call(&mut client, stream, "select count(*) from notes", Vec::new(), "scalar");
+    assert_eq!(seen.rows.unwrap().rows, [vec![Cell::Int(1)]], "the write before it stands");
+
+    // a last one whose field 4, `commit`, is a number says neither commit nor roll back
+    client.write(Frame::new(Kind::Data, stream, vec![0x81, 4, 7]).ending());
+    let last = client.next_on(stream);
+    assert_eq!((last.kind, last.flags), (Kind::Data, frame::END | frame::ERROR));
+    let failure = answered::<Empty>(&last).unwrap_err();
+    assert_eq!(failure.code, "invalid", "{failure:?}");
+    assert_eq!(failure.message, "commit is not a bool, and the transaction rolled back");
+    let rows = query(&mut client, handle, "select count(*) from notes", "scalar").rows;
+    assert_eq!(rows, [vec![Cell::Int(0)]], "rolled back");
+    assert_eq!(client.pipe.streams(), 0);
+}
+
 /// Opens a transaction on `handle` that inserts the note `id` and commits,
 /// every call sent before any answer comes, as a client with many in flight
 /// sends them.

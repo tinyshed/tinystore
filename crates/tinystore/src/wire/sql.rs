@@ -580,6 +580,8 @@ impl Running {
 enum Ended {
     RolledBack,
     Failed(Error),
+    /// Its last DATA is not a call, and says neither commit nor roll back.
+    Unread(Failure),
 }
 
 impl From<Error> for Ended {
@@ -589,29 +591,25 @@ impl From<Error> for Ended {
 }
 
 /// What a transaction's thread takes from the client: a call and the bytes
-/// of its DATA, or END.
+/// of its DATA, or END, which commits or rolls back; each, instead, may be
+/// why its DATA is not a call.
 pub(crate) enum TxItem {
-    Call(SqlTxCall, usize),
-    End { commit: bool },
+    Call(Result<SqlTxCall, Failure>, usize),
+    End(Result<bool, Failure>),
 }
 
 impl Txing {
     /// A DATA of the client's: a call, or, with END, the last, which commits
-    /// or rolls back. A call that is not one fails the transaction.
+    /// or rolls back. One that is not a call is answered with why, naming
+    /// its field, the transaction as it was; a last one rolls it back.
     ///
     /// Its credit goes back once the call is answered, not as it is queued:
     /// the calls that wait while the transaction waits for the writer are
     /// then within the stream's credit, past which a client is cut off.
     pub(crate) fn item(&self, body: &[u8], ended: bool) {
-        let call = match SqlTxCall::decode(body) {
-            Ok(call) => call,
-            Err(failure) => {
-                tracing::debug!(target: "tinystore", code = %failure.code, "a transaction's call that is not one");
-                return self.leave();
-            }
-        };
+        let call = SqlTxCall::decode(body);
         // Only END ends the transaction, whatever a call's `want` holds.
-        let item = if ended { TxItem::End { commit: call.commit } } else { TxItem::Call(call, body.len()) };
+        let item = if ended { TxItem::End(call.map(|call| call.commit)) } else { TxItem::Call(call, body.len()) };
         let calls = lock(&self.calls);
         if let Some(calls) = calls.as_ref() {
             let _ = calls.send(item);
@@ -644,6 +642,9 @@ impl Txing {
         let last = match ended {
             Ok(()) | Err(Ended::RolledBack) => Ok(Empty {}.encode()),
             Err(Ended::Failed(error)) => Err(Failure::from(error)),
+            Err(Ended::Unread(failure)) => {
+                Err(Failure { message: format!("{}, and the transaction rolled back", failure.message), ..failure })
+            }
         };
         (link.finish)(last);
     }
@@ -662,7 +663,8 @@ impl Txing {
             let left = deadline.saturating_duration_since(Instant::now());
             let (call, read) = match received.recv_timeout(left) {
                 Ok(TxItem::Call(call, read)) => (call, read),
-                Ok(TxItem::End { commit }) => return if commit { Ok(()) } else { Err(Ended::RolledBack) },
+                Ok(TxItem::End(Ok(commit))) => return if commit { Ok(()) } else { Err(Ended::RolledBack) },
+                Ok(TxItem::End(Err(failure))) => return Err(Ended::Unread(failure)),
                 Err(RecvTimeoutError::Timeout) => return Err(Ended::Failed(past_bound())),
                 Err(RecvTimeoutError::Disconnected) => return Err(Ended::Failed(left_its_transaction())),
             };
@@ -707,9 +709,12 @@ fn left_its_transaction() -> Error {
 pub(crate) type Nested<'a> = &'a dyn Fn(&Transaction<'_>, u16, &[u8], usize) -> Answered;
 
 /// A call's answer: its rows, what it changed, a method's answer, or why it
-/// failed, which left the transaction as it was before the call.
-fn answer(tx: &Tx<'_>, call: SqlTxCall, max_body: usize, nested: Nested<'_>) -> SqlTxAnswer {
+/// failed, which left the transaction as it was before the call. A DATA that
+/// is not a call ran nothing, and its failure names the field that did not
+/// read.
+fn answer(tx: &Tx<'_>, call: Result<SqlTxCall, Failure>, max_body: usize, nested: Nested<'_>) -> SqlTxAnswer {
     let ran = || -> Result<SqlTxAnswer, Failure> {
+        let call = call?;
         if call.want == "call" {
             let method = call.method.and_then(|method| u16::try_from(method).ok());
             let method = method.ok_or_else(|| Failure::invalid("a call inside a transaction names its method"))?;
