@@ -44,6 +44,17 @@ tinystore restore backups/chat-2026-10-19.zip ./restored
   opens there, which removes it. The zip it was writing stays too, beside
   the zip's name with `.part` at its end.
 
+## Through the protocol
+
+A backup that TypeScript, Python or Go asks for, of the core in its own
+process or of a server, comes back as the zip in pieces, each sent once the
+SDK has room for it. A
+client that reads slowly but steadily, as one writing to a slow disk, gets
+the whole zip however long it takes. A client that takes nothing for a
+minute gets no zip: the backup fails with `cancelled`, saying its reader
+took nothing for 60s, and the server removes the backup's snapshot and goes
+on with its other work.
+
 ## In these guides
 
 | Page                                    | Covers                                        |

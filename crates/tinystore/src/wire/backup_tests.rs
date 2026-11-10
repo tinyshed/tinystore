@@ -1,8 +1,11 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::path::Path;
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
+use super::PATIENCE;
 use crate::pipe::fixture::{Client, answered};
 use crate::pipe::{Admit, Capability, Connect, Pipe};
+use crate::testing::holds_within;
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{BackupPiece, BackupWrite, BackupWritten, Empty, Hello, method};
@@ -36,6 +39,73 @@ fn admin(store: &Store) -> Client {
 
 fn credit(client: &mut Client, stream: u32, bytes: usize) {
     client.write(Frame::new(Kind::Credit, stream, u32::try_from(bytes).unwrap().to_le_bytes().to_vec()));
+}
+
+/// The snapshots of backups a store's directory holds.
+fn snapshots(dir: &Path) -> usize {
+    let entries = std::fs::read_dir(dir).unwrap().flatten();
+    entries.filter(|entry| entry.file_name().to_string_lossy().starts_with(".snapshot-")).count()
+}
+
+// contract: STORE-09
+#[test]
+fn a_backup_whose_client_takes_nothing_for_a_while_ends_cancelled_and_lets_its_snapshot_and_worker_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = filled(dir.path());
+    let mut client = admin(&store);
+    let stream = client.start(method::BACKUP_WRITE, &BackupWrite::default());
+    assert_eq!(client.next_on(stream).kind, Kind::Response);
+    // the first piece takes the credit, and the client grants no more
+    let waited = Instant::now();
+    let ended = loop {
+        let frame = client.next_on(stream);
+        if frame.flags & frame::END != 0 {
+            break frame;
+        }
+    };
+    assert!(waited.elapsed() >= PATIENCE, "ended after {:?}", waited.elapsed());
+    let failure = answered::<Empty>(&ended).unwrap_err();
+    assert_eq!(failure.code, "cancelled", "{}", failure.message);
+    assert!(failure.message.contains("took nothing for 1s"), "{}", failure.message);
+    holds_within(Duration::from_secs(10), "the snapshot removed", || snapshots(dir.path()) == 0);
+    // a worker still waiting would hold the store's close, which waits for every worker
+    let (closed, closes) = mpsc::channel();
+    let closing = store.clone();
+    std::thread::spawn(move || closed.send(closing.close().map_err(|error| error.to_string())).unwrap());
+    closes.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    drop(client);
+}
+
+#[test]
+fn a_backup_whose_client_takes_slowly_but_steadily_is_sent_whole() {
+    let dirs = tempfile::tempdir().unwrap();
+    let store = filled(&dirs.path().join("data"));
+    let mut client = admin(&store);
+    let stream = client.start(method::BACKUP_WRITE, &BackupWrite::default());
+    assert_eq!(client.next_on(stream).kind, Kind::Response);
+    let began = Instant::now();
+    let mut zip = Vec::new();
+    let backed = loop {
+        let piece = client.next_on(stream);
+        if piece.flags & frame::END != 0 {
+            break answered::<BackupWritten>(&piece).unwrap();
+        }
+        zip.extend(BackupPiece::decode(&piece.body).unwrap().bytes);
+        // each grant well within the wait a backup allows, until the backup
+        // as a whole has taken longer than it
+        if began.elapsed() < PATIENCE * 2 {
+            std::thread::sleep(PATIENCE * 2 / 5);
+        }
+        credit(&mut client, stream, piece.body.len());
+    };
+    assert!(began.elapsed() > PATIENCE * 2, "a backup of {:?}", began.elapsed());
+    drop(client);
+    drop(store);
+
+    let (archive, restored) = (dirs.path().join("backup.zip"), dirs.path().join("restored"));
+    std::fs::write(&archive, &zip).unwrap();
+    let held = crate::backup::restore(&archive, &restored).unwrap();
+    assert_eq!((held.files as u64, held.bytes), (backed.files, backed.bytes));
 }
 
 #[test]
