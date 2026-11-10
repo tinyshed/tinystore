@@ -76,6 +76,15 @@ fn nearest_name(name: &str) -> Option<String> {
     is_name(&nearest).then_some(nearest)
 }
 
+/// `con`, `prn`, `aux`, `nul`, `com0` to `com9` and `lpt0` to `lpt9`, the
+/// names Windows keeps for devices whatever extension follows them: a new
+/// database takes none, and a restore on Windows writes none.
+#[cfg(any(feature = "sql", feature = "backup"))]
+pub(crate) fn is_device(name: &str) -> bool {
+    let port = |prefix: &str| name.strip_prefix(prefix).is_some_and(|n| matches!(n.as_bytes(), [b'0'..=b'9']));
+    ["con", "prn", "aux", "nul"].contains(&name) || port("com") || port("lpt")
+}
+
 /// FNV-1a 64 of `bytes`: a hash every build and every language computes the
 /// same, for a phase kept in text, a jitter that must come out the same and a
 /// filter's bits.

@@ -16,6 +16,7 @@ use crate::engine::DATABASES;
 #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
 use crate::engine::SharedFile;
 use crate::sqlite::Drafts;
+use crate::text::is_device;
 use crate::{Durability, Error, Result, Store, Transaction};
 
 impl Store {
@@ -445,13 +446,6 @@ fn refuse_a_device(dir: &Path, name: &str) -> Result<()> {
     Err(Error::invalid(format!(
         "a database's name {name:?}: Windows reads it as a device, not a file: name it otherwise"
     )))
-}
-
-/// `con`, `prn`, `aux`, `nul`, `com0` to `com9` and `lpt0` to `lpt9`, the
-/// names Windows keeps for devices whatever extension follows them.
-fn is_device(name: &str) -> bool {
-    let port = |prefix: &str| name.strip_prefix(prefix).is_some_and(|n| matches!(n.as_bytes(), [b'0'..=b'9']));
-    ["con", "prn", "aux", "nul"].contains(&name) || port("com") || port("lpt")
 }
 
 /// Whether `sql/` holds the file `<name>.db`, by the folder's listing: Windows

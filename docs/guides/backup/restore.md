@@ -44,6 +44,7 @@ store, err := tinystore.Open(ctx, "./data")
 | the directory is empty or absent           | `invalid`: a restore never mixes two stores |
 | no store holds the directory               | `in use`                                    |
 | the manifest reads, of format `1`          | `corrupt`, naming both formats              |
+| on Windows, no file is named as a device   | `invalid`, naming the database or the file  |
 | each file's CRC-32, size and SHA-256 match | `corrupt`, naming the file                  |
 
 - The restore holds the directory's `LOCK` meanwhile, so no store opens there
@@ -57,6 +58,12 @@ store, err := tinystore.Open(ctx, "./data")
   open, in a program or in the command line: the error, `invalid`, says to
   remove the directory and restore again. A restore into it is refused the
   same way.
+- On Windows, a backup that holds a file named as Windows names a device,
+  `con`, `prn`, `aux`, `nul`, `com0` to `com9` or `lpt0` to `lpt9`, whatever
+  its extension, is refused before anything is written: before Windows 11,
+  `sql/nul.db` is the device NUL, not a file. Such a backup comes from Linux
+  or macOS, of a database an older release let a program name so, and
+  restores there as it is.
 - A restore of a backup without the encryption key says so: its encrypted
   buckets need the key put back first. See [The encryption
   key](encryption-key.md).

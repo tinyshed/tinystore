@@ -3,7 +3,7 @@
 //! asked for, and nothing left by a backup or a restore that fails.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, UNIX_EPOCH};
@@ -586,6 +586,95 @@ fn a_manifest_an_older_release_wrote_reads_as_it_did_and_the_one_written_now_ali
     let written = read.to_json();
     assert!(!written.contains(' '), "written without the spaces: {written}");
     assert_eq!(Manifest::read(written.as_bytes(), 2).unwrap(), read);
+}
+
+/// The backup at `path` written again with every file of the database `from`
+/// as the database `to`'s, as a store that held `to` would have backed it up.
+fn renamed_database(path: &Path, from: &str, to: &str) {
+    let (old, new) = (format!("sql/{from}."), format!("sql/{to}."));
+    let mut archive = io::BufReader::new(fs::File::open(path).unwrap());
+    let (mut files, mut manifest) = (Vec::new(), String::new());
+    for entry in zip::entries(&mut archive).unwrap() {
+        let mut bytes = Vec::new();
+        zip::open(&mut archive, &entry).unwrap().read_to_end(&mut bytes).unwrap();
+        if entry.name == MANIFEST {
+            manifest = String::from_utf8(bytes).unwrap().replace(&format!("\"{old}"), &format!("\"{new}"));
+            continue;
+        }
+        let name = entry.name.strip_prefix(&old).map_or_else(|| entry.name.clone(), |rest| format!("{new}{rest}"));
+        files.push((name, bytes));
+    }
+    zipped(path, &files, &manifest);
+}
+
+// On Windows, before Windows 11, sql/nul.db is the device NUL and not a file,
+// so a backup made elsewhere of a store that holds such a database restores
+// there not.
+// contract: BAK-02, SQL-11
+#[test]
+fn a_database_windows_reads_as_a_device_restores_on_windows_not_and_writes_nothing_there() {
+    let f = fixture();
+    let store = f.open(&f.data);
+    let app = store.database("app").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
+    app.exec(sql!("insert into notes (text) values (?)", "a note")).unwrap();
+    app.files("photos").open().unwrap().put("cat.jpg", photo()).unwrap();
+    store.backup().write(&f.zip).unwrap();
+    drop(app);
+    store.close().unwrap();
+    renamed_database(&f.zip, "app", "nul");
+
+    let restored = restore(&f.zip, &f.restored);
+    if cfg!(windows) {
+        let error = restored.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+        assert!(error.to_string().contains(r#"a database's name "nul""#), "{error}");
+        assert!(!f.restored.exists(), "a restore refused makes no directory");
+        fs::create_dir_all(&f.restored).unwrap();
+        assert_eq!(restore(&f.zip, &f.restored).unwrap_err().kind(), ErrorKind::Invalid);
+        assert!(fs::read_dir(&f.restored).unwrap().next().is_none(), "an empty directory stays empty");
+    } else {
+        restored.unwrap();
+        let store = f.open(&f.restored);
+        let nul = store.database("nul").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
+        assert_eq!(nul.scalar::<String>(sql!("select text from notes")).unwrap(), "a note");
+        let mut cat = nul.files("photos").open().unwrap().get("cat.jpg").unwrap().expect("the file kept");
+        assert_eq!(cat.read_all().unwrap(), photo());
+    }
+}
+
+// contract: BAK-02
+#[test]
+fn a_file_beside_a_database_or_of_the_programs_named_as_a_device_restores_on_windows_not() {
+    let f = fixture();
+    let restores = |name: &str| {
+        let (file, bytes) = (name.to_owned(), b"bytes".to_vec());
+        zipped(&f.zip, &[(file, bytes.clone())], &manifest_of(std::iter::once(listing(name, &bytes, 0))));
+        let _ = fs::remove_dir_all(&f.restored);
+        restore(&f.zip, &f.restored)
+    };
+    for name in ["sql/nul.db-wal", "sql/com1.blobs/objects/1a3/1a3f07", "sql/lpt9.db", "sql/aux.db"] {
+        match restores(name) {
+            Err(error) if cfg!(windows) => {
+                assert_eq!(error.kind(), ErrorKind::Invalid, "{name}: {error}");
+                let database = name["sql/".len()..].split(['.', '/']).next().unwrap();
+                assert!(error.to_string().contains(&format!("a database's name {database:?}")), "{error}");
+                assert!(!f.restored.exists(), "{name}: made the directory");
+            }
+            restored => assert!(restored.is_ok() && !cfg!(windows), "{name}: {restored:?}"),
+        }
+    }
+    // a file of the program's too, whatever the case of its name
+    match restores("keys/Con.pem") {
+        Err(error) if cfg!(windows) => {
+            let said = r#"keys/Con.pem: "con": Windows reads it as a device, not a file"#;
+            assert!(error.kind() == ErrorKind::Invalid && error.to_string().contains(said), "{error}");
+        }
+        restored => assert!(restored.is_ok() && !cfg!(windows), "{restored:?}"),
+    }
+    for name in ["sql/com10.db", "sql/console.db", "sql/nul_x.db", "sql/app.db", "keys/console.pem"] {
+        restores(name).unwrap();
+        assert_eq!(fs::read(f.restored.join(name)).unwrap(), b"bytes", "{name}");
+    }
 }
 
 #[test]

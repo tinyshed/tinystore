@@ -14,7 +14,7 @@ use super::manifest::{Listed, MANIFEST, Manifest};
 use super::{Backup, is_inside, zip};
 use crate::durable::sync_directory;
 use crate::store::{HALF_RESTORED, RESTORING};
-use crate::text::hex;
+use crate::text::{hex, is_device};
 use crate::{Error, ErrorKind, Result};
 
 /// Restores the backup at `archive` into `dir`, which is empty or absent,
@@ -26,6 +26,7 @@ pub fn restore(archive: impl AsRef<Path>, dir: impl AsRef<Path>) -> Result<Backu
     let within = |error: Error| error.within(format!("restore {} into {}", archive.display(), dir.display()));
     let mut zip = io::BufReader::new(fs::File::open(archive).map_err(|error| within(Error::io("open", error)))?);
     let (entries, manifest) = read(&mut zip).map_err(|why| within(Error::new(ErrorKind::Corrupt, why)))?;
+    refuse_devices(&manifest).map_err(within)?;
     claim_empty(dir).map_err(within)?;
     let lock = crate::store::take_lock(dir).map_err(within)?;
     let restored = begun(dir)
@@ -64,6 +65,32 @@ fn read(zip: &mut (impl Read + io::Seek)) -> std::result::Result<(HashMap<String
         }
     }
     Ok((entries, manifest))
+}
+
+/// Refuses, on Windows, a backup that holds a file a part of whose path
+/// Windows reads as a device, before anything is written: there, before
+/// Windows 11, `sql/nul.db` is the device NUL and not a file. A store on
+/// another system may hold such a database, made by a release before a new
+/// one was refused the name, and its backup restores there as it was.
+fn refuse_devices(manifest: &Manifest) -> Result<()> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+    for file in &manifest.files {
+        // Windows reads a part as a device whatever its case and extension
+        let mut stems =
+            file.name.split('/').map(|part| part.split('.').next().unwrap_or_default().to_ascii_lowercase());
+        let Some(device) = stems.find(|stem| is_device(stem)) else { continue };
+        let database = file.name.strip_prefix("sql/").and_then(|rest| rest.split(['/', '.']).next());
+        let whose = match database {
+            Some(name) if name.eq_ignore_ascii_case(&device) => format!("a database's name {name:?}, of {}", file.name),
+            _ => format!("{}: {device:?}", file.name),
+        };
+        return Err(Error::invalid(format!(
+            "{whose}: Windows reads it as a device, not a file: restore the backup on another system"
+        )));
+    }
+    Ok(())
 }
 
 /// Makes `dir` when it is absent; one that holds anything is refused, and
