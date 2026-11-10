@@ -93,7 +93,7 @@ impl Client {
 
     /// The credit the server gives back next on `stream`, for the DATA the
     /// client sent on it; the frames of other kinds kept for later.
-    #[cfg(any(feature = "blobs", feature = "metrics"))]
+    #[cfg(any(feature = "blobs", feature = "metrics", feature = "sql"))]
     pub(crate) fn credit_on(&mut self, stream: u32) -> u64 {
         loop {
             let frame = self.read();

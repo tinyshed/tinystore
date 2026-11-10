@@ -190,10 +190,7 @@ impl Shared {
         }
         #[cfg(feature = "sql")]
         if let Some(tx) = self.sql.tx(frame.stream) {
-            // a call is read once it is queued: its credit goes back at once
-            if let Ok(read) = u32::try_from(frame.body.len()) {
-                self.send(&[Frame::new(Kind::Credit, frame.stream, read.to_le_bytes().to_vec())]);
-            }
+            // its credit goes back once the transaction answered the call
             return tx.item(&frame.body, frame.flags & frame::END != 0);
         }
         #[cfg(feature = "jobs")]

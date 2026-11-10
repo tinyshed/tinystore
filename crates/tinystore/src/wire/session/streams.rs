@@ -334,7 +334,7 @@ impl Shared {
     /// What an sql stream that sends DATA needs of the session.
     #[cfg(feature = "sql")]
     fn sql_link(self: &Arc<Self>, input: &Input, stream: u32) -> sql::Link {
-        let (sending, finishing) = (Arc::downgrade(self), Arc::downgrade(self));
+        let (sending, finishing, granting) = (Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self));
         sql::Link {
             send: Arc::new(move |body| {
                 if let Some(shared) = sending.upgrade() {
@@ -344,6 +344,11 @@ impl Shared {
             finish: Arc::new(move |last| {
                 if let Some(shared) = finishing.upgrade() {
                     shared.end_stream(stream, last);
+                }
+            }),
+            grant: Arc::new(move |bytes: u32| {
+                if let Some(shared) = granting.upgrade() {
+                    shared.send(&[Frame::new(Kind::Credit, stream, bytes.to_le_bytes().to_vec())]);
                 }
             }),
             credit: input.stream_credit,

@@ -281,6 +281,37 @@ fn a_transaction_whose_client_stalls_or_cancels_is_rolled_back_by_the_server() {
     assert_eq!(client.pipe.streams(), 0);
 }
 
+// contract: WIRE-03
+#[test]
+fn a_transactions_call_gives_its_credit_back_once_it_is_answered() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client);
+    // one transaction holds the writer, so that the next waits its turn, its call queued
+    let holding = begin(&mut client, handle);
+    call(&mut client, holding, "insert into notes (id, title) values ('held', 'a')", Vec::new(), "exec");
+    let waiting = client.open_stream(method::SQL_TX, &SqlTxOpen { handle });
+    let insert = SqlTxCall {
+        text: "insert into notes (id, title) values ('waited', 'b')".to_owned(),
+        want: "exec".to_owned(),
+        ..SqlTxCall::default()
+    };
+    let sent = insert.encode();
+    client.write(Frame::new(Kind::Data, waiting, sent.clone()));
+    // Ending the one that holds the writer reads past every frame sent so far:
+    // a grant for the queued call, had it gone back at once, among them.
+    let last = end(&mut client, holding, true);
+    assert_eq!((last.kind, last.flags), (Kind::Data, frame::END), "{:?}", answered::<Empty>(&last));
+    let opened = client.next_on(waiting);
+    assert_eq!((opened.kind, opened.flags), (Kind::Response, 0), "the waiting transaction opened");
+    assert_eq!(client.credit_on(waiting), sent.len() as u64, "the call's credit, once the call ran");
+    let answer = SqlTxAnswer::decode(&client.next_on(waiting).body).unwrap();
+    assert_eq!(answer.done.map(|done| done.changes), Some(1), "{:?}", answer.failure);
+    assert_eq!(end(&mut client, waiting, true).flags, frame::END, "committed");
+    assert_eq!(query(&mut client, handle, "select count(*) from notes", "scalar").rows, [vec![Cell::Int(2)]]);
+    assert_eq!(client.pipe.streams(), 0);
+}
+
 /// Opens a transaction on `handle` that inserts the note `id` and commits,
 /// every call sent before any answer comes, as a client with many in flight
 /// sends them.

@@ -40,11 +40,15 @@ pub(crate) fn route(called: u16) -> Route {
     }
 }
 
-/// What a stream that sends DATA needs of its session: a DATA, and the last.
+/// What a stream that sends DATA needs of its session: a DATA, the last, and
+/// a grant of credit for the DATA its client sent.
 #[derive(Clone)]
 pub(crate) struct Link {
     pub(crate) send: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
     pub(crate) finish: Arc<dyn Fn(Answered) + Send + Sync>,
+    /// Gives the client back the credit of DATA bytes the stream let go of:
+    /// a transaction's call, once it is answered.
+    pub(crate) grant: Arc<dyn Fn(u32) + Send + Sync>,
     /// The DATA bytes the client takes before it grants more.
     pub(crate) credit: u64,
     pub(crate) max_body: usize,
@@ -584,15 +588,20 @@ impl From<Error> for Ended {
     }
 }
 
-/// What a transaction's thread takes from the client: a call, or END.
+/// What a transaction's thread takes from the client: a call and the bytes
+/// of its DATA, or END.
 pub(crate) enum TxItem {
-    Call(SqlTxCall),
+    Call(SqlTxCall, usize),
     End { commit: bool },
 }
 
 impl Txing {
     /// A DATA of the client's: a call, or, with END, the last, which commits
     /// or rolls back. A call that is not one fails the transaction.
+    ///
+    /// Its credit goes back once the call is answered, not as it is queued:
+    /// the calls that wait while the transaction waits for the writer are
+    /// then within the stream's credit, past which a client is cut off.
     pub(crate) fn item(&self, body: &[u8], ended: bool) {
         let call = match SqlTxCall::decode(body) {
             Ok(call) => call,
@@ -602,7 +611,7 @@ impl Txing {
             }
         };
         // Only END ends the transaction, whatever a call's `want` holds.
-        let item = if ended { TxItem::End { commit: call.commit } } else { TxItem::Call(call) };
+        let item = if ended { TxItem::End { commit: call.commit } } else { TxItem::Call(call, body.len()) };
         let calls = lock(&self.calls);
         if let Some(calls) = calls.as_ref() {
             let _ = calls.send(item);
@@ -651,13 +660,17 @@ impl Txing {
         let deadline = Instant::now() + TX_BOUND;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
-            let call = match received.recv_timeout(left) {
-                Ok(TxItem::Call(call)) => call,
+            let (call, read) = match received.recv_timeout(left) {
+                Ok(TxItem::Call(call, read)) => (call, read),
                 Ok(TxItem::End { commit }) => return if commit { Ok(()) } else { Err(Ended::RolledBack) },
                 Err(RecvTimeoutError::Timeout) => return Err(Ended::Failed(past_bound())),
                 Err(RecvTimeoutError::Disconnected) => return Err(Ended::Failed(left_its_transaction())),
             };
             let answer = answer(tx, call, link.max_body, nested);
+            // before the answer: by the time a client reads it, its call's credit is counted back
+            if let Ok(read) = u32::try_from(read) {
+                (link.grant)(read);
+            }
             self.send(link, answer.encode(), deadline)?;
         }
     }
