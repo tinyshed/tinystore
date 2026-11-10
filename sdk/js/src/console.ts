@@ -81,9 +81,12 @@ const cyan = '\x1b[36m'
 /**
  * A line as a person reads it: the time of day, the level padded to five, the
  * stream, the message, the context's fields and the attributes', and the
- * trace's first eight digits. A value of several lines, a stack or a
- * traceback, follows the line, indented. A key or a string shows without its
- * quotes when it is one word with no '=', quote or backslash.
+ * trace's first eight digits. A message's further lines, and then a value of
+ * several lines, a stack or a traceback, follow the line, indented, so that
+ * none of them starts where a line does. A key or a string shows without its
+ * quotes when it is one word with no '=', quote or backslash. What a program
+ * logged shows no control character but a tab: the message, the event's name,
+ * a value below the line and a source each show it as its escape.
  */
 export function prettyLine(line: ConsoleLine, look: Look): string {
 	const paint = (hue: string, text: string) => (look.color ? hue + text + reset : text)
@@ -96,7 +99,7 @@ export function prettyLine(line: ConsoleLine, look: Look): string {
 		out += `${separator}${paint(cyan, line.stream)}`
 		separator = '  '
 	}
-	const message = prettyMessage(line)
+	const [message, further] = prettyMessage(line)
 	if (message !== '') {
 		out += `${separator}${message}`
 		separator = '  '
@@ -119,16 +122,46 @@ export function prettyLine(line: ConsoleLine, look: Look): string {
 	if (line.traceId !== undefined) {
 		field('trace', line.traceId.slice(0, 8))
 	}
+	for (const part of further) {
+		out += `\n    ${escaped(part)}`
+	}
 	for (const [key, text] of below) {
-		text
-			.replace(/[\r\n]+$/, '')
-			.split('\n')
-			.forEach((part, i) => {
-				const shown = part.replace(/\r$/, '')
-				out += `\n    ${paint(dim, i === 0 ? `${key}: ${shown}` : shown)}`
-			})
+		linesOf(text).forEach((part, i) => {
+			out += `\n    ${paint(dim, escaped(i === 0 ? `${key}: ${part}` : part))}`
+		})
 	}
 	return `${out}\n`
+}
+
+/**
+ * The lines of a text of several, without the line ends after the last, and
+ * each without the carriage return before its newline: "line one\r\nline
+ * two\r\n" is line one, line two.
+ */
+function linesOf(text: string): string[] {
+	const lines = text.replace(/[\r\n]+$/, '').split('\n')
+	return lines.map(part => part.replace(/\r$/, ''))
+}
+
+/**
+ * Text a program logged as a pretty line shows it: each control character but
+ * a tab, and DEL, as its JSON escape, so that none reaches the terminal as an
+ * escape sequence, a carriage return or a line of its own. The colours the
+ * console paints with are its own, never in this text.
+ *
+ *   "\x1b[2J" → \u001b[2J    "a\rb" → a\rb    "\x7f" → \u007f
+ */
+function escaped(text: string): string {
+	let out = ''
+	for (const c of text) {
+		const code = c.codePointAt(0) as number
+		if ((code < 0x20 && c !== '\t') || code === 0x7f) {
+			out += code === 0x7f ? '\\u007f' : JSON.stringify(c).slice(1, -1)
+		} else {
+			out += c
+		}
+	}
+	return out
 }
 
 /** A level as slog spells it: INFO, WARN+2, DEBUG-4. */
@@ -157,12 +190,19 @@ function prettyLevel(level: number | undefined): [string, string] {
 	return [levelLabel(level), hue]
 }
 
-function prettyMessage(line: ConsoleLine): string {
-	const body = line.msg ?? ''
+/**
+ * A log line's message, or an event's name and the message it may carry, as
+ * the line shows them; and the further lines of a message of several, which
+ * go below the line as a value's do.
+ */
+function prettyMessage(line: ConsoleLine): [string, string[]] {
+	const [first, ...further] = linesOf(line.msg ?? '')
+	const body = escaped(first ?? '')
 	if (line.event === undefined) {
-		return body
+		return [body, further]
 	}
-	return body === '' ? line.event : `${line.event}  ${body}`
+	const event = escaped(line.event)
+	return [body === '' ? event : `${event}  ${body}`, further]
 }
 
 /** How a field's JSON shows, and whether it is text of several lines, which goes under the line. */
@@ -247,7 +287,7 @@ function shortSource(json: string): string | undefined {
 	}
 	const parts = source.file.split(/[\\/]+/).filter(part => part !== '')
 	const line = typeof source.line === 'number' ? source.line : 0
-	return `${parts.slice(-2).join('/')}:${line}`
+	return escaped(`${parts.slice(-2).join('/')}:${line}`)
 }
 
 /** The names `redact` takes to hide the usual secrets, as Go's console.Secrets and Python's SECRETS. */

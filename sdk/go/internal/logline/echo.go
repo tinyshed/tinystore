@@ -162,7 +162,10 @@ const (
 //
 // A key, and a string, shows without its quotes when it is one word with no
 // '=', quote or backslash; a source shows as its file and line; any other
-// value shows as its JSON.
+// value shows as its JSON. A body's further lines follow the line before such
+// a value, so that none starts where a line does, and what a program logged
+// shows no control character but a tab: the body, the event's name, a value
+// below the line and a source each show it as its escape.
 func AppendPretty(dst []byte, l *Line, look Look) []byte {
 	paint := painter(look.Color)
 	switch {
@@ -184,7 +187,8 @@ func AppendPretty(dst []byte, l *Line, look Look) []byte {
 		dst = paint.text(dst, cyan, l.Stream)
 		separator = "  "
 	}
-	if message := prettyMessage(l); message != "" {
+	message, further := prettyMessage(l)
+	if message != "" {
 		dst = append(dst, separator...)
 		dst = append(dst, message...)
 		separator = "  "
@@ -213,6 +217,10 @@ func AppendPretty(dst []byte, l *Line, look Look) []byte {
 	if l.TraceID != ([16]byte{}) {
 		field("trace", hex.EncodeToString(l.TraceID[:4]))
 	}
+	for _, part := range further {
+		dst = append(dst, "\n    "...)
+		dst = append(dst, escaped(part)...)
+	}
 	for _, f := range below {
 		dst = appendBelow(dst, paint, f.Key, f.Value)
 	}
@@ -222,32 +230,72 @@ func AppendPretty(dst []byte, l *Line, look Look) []byte {
 // appendBelow writes a value of several lines under its line, the first after
 // its key, each indented by four spaces
 func appendBelow(dst []byte, paint painter, key, text string) []byte {
-	lines := strings.Split(strings.TrimRight(text, "\r\n"), "\n")
-	for i, line := range lines {
-		line = strings.TrimSuffix(line, "\r")
+	for i, line := range linesOf(text) {
 		if i == 0 {
 			line = key + ": " + line
 		}
 		dst = append(dst, "\n    "...)
-		dst = paint.text(dst, dim, line)
+		dst = paint.text(dst, dim, escaped(line))
 	}
 	return dst
 }
 
 // prettyMessage is a log line's message, or an event's name and the body it
-// may carry
-func prettyMessage(l *Line) string {
+// may carry, as the line shows them; and the further lines of a body of
+// several, which go below the line as a value's do
+func prettyMessage(l *Line) (message string, further []string) {
 	body := ""
 	if l.Body != nil {
 		body = *l.Body
 	}
+	lines := linesOf(body)
+	first := escaped(lines[0])
 	switch {
 	case l.Name == LogName:
-		return body
-	case body == "":
-		return l.Name
+		return first, lines[1:]
+	case first == "":
+		return escaped(l.Name), lines[1:]
 	}
-	return l.Name + "  " + body
+	return escaped(l.Name) + "  " + first, lines[1:]
+}
+
+// linesOf is the lines of a text of several, without the line ends after the
+// last, and each without the carriage return before its newline:
+//
+//	"line one\r\nline two\r\n"  →  line one, line two
+func linesOf(text string) []string {
+	lines := strings.Split(strings.TrimRight(text, "\r\n"), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSuffix(line, "\r")
+	}
+	return lines
+}
+
+// escaped is text a program logged as a pretty line shows it: each control
+// character but a tab, and DEL, as its JSON escape, so that none reaches the
+// terminal as an escape sequence, a carriage return or a line of its own. The
+// colours the console paints with are its own, never in this text.
+//
+//	"\x1b[2J"  →  \u001b[2J    "a\rb"  →  a\rb    "\x7f"  →  \u007f
+func escaped(text string) string {
+	if !strings.ContainsFunc(text, isEscaped) {
+		return text
+	}
+	out := make([]byte, 0, len(text)+8)
+	// a control character and DEL are one byte each, never part of another character's
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; isEscaped(rune(c)) {
+			out = appendEscape(out, rune(c))
+		} else {
+			out = append(out, c)
+		}
+	}
+	return string(out)
+}
+
+// isEscaped is whether a pretty line shows a character a program logged as its escape
+func isEscaped(r rune) bool {
+	return (r < 0x20 && r != '\t') || r == 0x7f
 }
 
 // prettyLevel spells a level as slog does, INFO, WARN+2, with its colour; a
@@ -310,7 +358,7 @@ func shortSource(spelled string) (string, bool) {
 	if len(parts) > 2 {
 		parts = parts[len(parts)-2:]
 	}
-	return strings.Join(parts, "/") + ":" + strconv.Itoa(source.Line), true
+	return escaped(strings.Join(parts, "/") + ":" + strconv.Itoa(source.Line)), true
 }
 
 // bare is a string a person reads without its quotes: not empty, and no

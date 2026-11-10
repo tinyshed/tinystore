@@ -68,6 +68,7 @@ describe('console lines', () => {
 		expect([...secrets]).toEqual(vectors.secrets)
 	})
 
+	// contract: LOG-03
 	for (const v of vectors.lines) {
 		test(v.name, () => {
 			const names = [...(v.redact ?? []), ...(v.redact_secrets === true ? secrets : [])]

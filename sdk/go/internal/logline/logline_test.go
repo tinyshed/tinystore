@@ -46,6 +46,7 @@ type consoleVector struct {
 	Pretty           string               `json:"pretty"`
 }
 
+// contract: LOG-03
 func TestConsoleLinesAreTheVectors(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "..", "testdata", "console", "console.json")
 	vectors := readConsoleVectors(t, path)

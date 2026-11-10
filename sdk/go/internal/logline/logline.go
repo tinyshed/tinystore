@@ -75,31 +75,39 @@ func AppendFloat(out []byte, value float64) []byte {
 // characters and the line and paragraph separators are escaped, and an invalid
 // byte becomes the replacement character.
 func AppendString(out []byte, value string) []byte {
-	const hex = "0123456789abcdef"
 	out = append(out, '"')
 	for i := 0; i < len(value); {
 		r, size := utf8.DecodeRuneInString(value[i:])
 		switch {
 		case r == '"' || r == '\\':
 			out = append(out, '\\', byte(r))
-		case r == '\n':
-			out = append(out, '\\', 'n')
-		case r == '\r':
-			out = append(out, '\\', 'r')
-		case r == '\t':
-			out = append(out, '\\', 't')
-		case r == '\b':
-			out = append(out, '\\', 'b')
-		case r == '\f':
-			out = append(out, '\\', 'f')
 		case r == utf8.RuneError && size == 1:
 			out = utf8.AppendRune(out, utf8.RuneError)
 		case r < 0x20 || r == 0x2028 || r == 0x2029:
-			out = append(out, '\\', 'u', hex[r>>12&0xf], hex[r>>8&0xf], hex[r>>4&0xf], hex[r&0xf])
+			out = appendEscape(out, r)
 		default:
 			out = append(out, value[i:i+size]...)
 		}
 		i += size
 	}
 	return append(out, '"')
+}
+
+// appendEscape writes a character's JSON escape, the short one where JSON has
+// one: \n, \t, \u001b
+func appendEscape(out []byte, r rune) []byte {
+	const hex = "0123456789abcdef"
+	switch r {
+	case '\n':
+		return append(out, '\\', 'n')
+	case '\r':
+		return append(out, '\\', 'r')
+	case '\t':
+		return append(out, '\\', 't')
+	case '\b':
+		return append(out, '\\', 'b')
+	case '\f':
+		return append(out, '\\', 'f')
+	}
+	return append(out, '\\', 'u', hex[r>>12&0xf], hex[r>>8&0xf], hex[r>>4&0xf], hex[r&0xf])
 }

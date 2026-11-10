@@ -110,8 +110,9 @@ pub(crate) fn json(line: &Line) -> String {
 
 /// A line as a person reads it: the time of day, the level padded to five,
 /// the stream, the message, the context's fields and the call's, and the
-/// trace's first eight digits. A value of several lines, a stack or a
-/// traceback, follows the line, indented:
+/// trace's first eight digits. A message's further lines, and then a value of
+/// several lines, a stack or a traceback, follow the line, indented, so that
+/// none of them starts where a line does:
 ///
 /// ```text
 /// 11:02:11.123 ERROR api  charge failed  userId=42
@@ -121,7 +122,9 @@ pub(crate) fn json(line: &Line) -> String {
 ///
 /// A key, and a string, shows without its quotes when it is one word with no
 /// `=`, quote or backslash; a source shows as its file and line; any other
-/// value shows as its JSON.
+/// value shows as its JSON. What a program logged shows no control character
+/// but a tab: the message, the event's name, a value below the line and a
+/// source each show it as its escape.
 pub(crate) fn pretty(line: &Line, look: &Look) -> String {
     let paint = Painter(look.color);
     let mut out = String::new();
@@ -143,7 +146,7 @@ pub(crate) fn pretty(line: &Line, look: &Look) -> String {
         paint.text(&mut out, CYAN, &line.stream);
         separator = "  ".to_owned();
     }
-    let message = message_of(line);
+    let (message, further) = message_of(line);
     if !message.is_empty() {
         out.push_str(&separator);
         out.push_str(&message);
@@ -166,6 +169,10 @@ pub(crate) fn pretty(line: &Line, look: &Look) -> String {
     if let Some(trace) = line.trace {
         field(&mut out, "trace", &crate::text::hex(&trace[..4]));
     }
+    for part in further {
+        out.push_str("\n    ");
+        out.push_str(&escaped(part));
+    }
     for (key, text) in below {
         push_below(&mut out, paint, key, &text);
     }
@@ -187,26 +194,55 @@ fn label_of(level: Option<i32>) -> (String, &'static str) {
 /// A value of more than one line, below its line: each line of it indented,
 /// the first after its key.
 fn push_below(out: &mut String, paint: Painter, key: &str, text: &str) {
-    let trimmed = text.trim_end_matches(['\r', '\n']);
-    for (place, part) in trimmed.split('\n').enumerate() {
-        let part = part.strip_suffix('\r').unwrap_or(part);
+    for (place, part) in lines_of(text).enumerate() {
         out.push_str("\n    ");
-        if place == 0 {
-            paint.text(out, DIM, &format!("{key}: {part}"));
-        } else {
-            paint.text(out, DIM, part);
-        }
+        let part = if place == 0 { escaped(&format!("{key}: {part}")) } else { escaped(part) };
+        paint.text(out, DIM, &part);
     }
 }
 
-/// A log line's message, or an event's name and the message it may carry.
-fn message_of(line: &Line) -> String {
-    let message = line.message.as_deref().unwrap_or_default();
-    match (line.name == LOG, message.is_empty()) {
-        (true, _) => message.to_owned(),
-        (false, true) => line.name.clone(),
-        (false, false) => format!("{}  {message}", line.name),
+/// A log line's message, or an event's name and the message it may carry,
+/// as the line shows them; and the further lines of a message of several,
+/// which go below the line as a value's do.
+fn message_of(line: &Line) -> (String, Vec<&str>) {
+    let mut lines = lines_of(line.message.as_deref().unwrap_or_default());
+    let first = escaped(lines.next().unwrap_or_default());
+    let message = match (line.name == LOG, first.is_empty()) {
+        (true, _) => first,
+        (false, true) => escaped(&line.name),
+        (false, false) => format!("{}  {first}", escaped(&line.name)),
+    };
+    (message, lines.collect())
+}
+
+/// The lines of a text of several, without the line ends after the last,
+/// and each without the carriage return before its newline.
+///
+/// ```text
+/// "line one\r\nline two\r\n"  →  line one, line two
+/// ```
+fn lines_of(text: &str) -> impl Iterator<Item = &str> {
+    text.trim_end_matches(['\r', '\n']).split('\n').map(|part| part.strip_suffix('\r').unwrap_or(part))
+}
+
+/// Text a program logged as a pretty line shows it: each control character
+/// but a tab, and DEL, as its JSON escape, so that none reaches the terminal
+/// as an escape sequence, a carriage return or a line of its own. The
+/// colours the console paints with are its own, never in this text.
+///
+/// ```text
+/// "\x1b[2J"  →  \u001b[2J    "a\rb"  →  a\rb    "\x7f"  →  \u007f
+/// ```
+fn escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if (c < ' ' && c != '\t') || c == '\x7f' {
+            push_escape(&mut out, c);
+        } else {
+            out.push(c);
+        }
     }
+    out
 }
 
 /// How a field shows, and whether it is text of several lines, which goes
@@ -244,7 +280,7 @@ fn short_source(spelled: &str) -> Option<String> {
         return None;
     }
     let parts: Vec<&str> = file.split(['/', '\\']).filter(|part| !part.is_empty()).collect();
-    Some(format!("{}:{line}", parts[parts.len().saturating_sub(2)..].join("/")))
+    Some(escaped(&format!("{}:{line}", parts[parts.len().saturating_sub(2)..].join("/"))))
 }
 
 /// Text a person reads without its quotes: not empty, and no character a
@@ -305,18 +341,26 @@ pub(crate) fn quote(out: &mut String, text: &str) {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if c < ' ' || c == '\u{2028}' || c == '\u{2029}' => {
-                let _ = write!(out, "\\u{:04x}", u32::from(c));
-            }
+            c if c < ' ' || c == '\u{2028}' || c == '\u{2029}' => push_escape(out, c),
             c => out.push(c),
         }
     }
     out.push('"');
+}
+
+/// Appends a character's JSON escape, the short one where JSON has one:
+/// `\n`, `\t`, `\u001b`.
+fn push_escape(out: &mut String, c: char) {
+    match c {
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '\u{8}' => out.push_str("\\b"),
+        '\u{c}' => out.push_str("\\f"),
+        c => {
+            let _ = write!(out, "\\u{:04x}", u32::from(c));
+        }
+    }
 }
 
 pub(crate) fn quoted(text: &str) -> String {
@@ -372,3 +416,7 @@ impl Painter {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "line_tests.rs"]
+mod tests;

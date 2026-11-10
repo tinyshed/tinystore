@@ -19,6 +19,7 @@ FILE = json.loads((Path(__file__).parents[3] / "testdata" / "console" / "console
 VECTORS: list[dict[str, Any]] = FILE["lines"]
 
 
+# contract: LOG-03
 @pytest.mark.parametrize("vector", VECTORS, ids=[v["name"] for v in VECTORS])
 def test_a_console_line_is_the_vectors(vector: dict[str, Any]) -> None:
     names = [*vector.get("redact", []), *(tinystore.secrets if vector.get("redact_secrets") else ())]

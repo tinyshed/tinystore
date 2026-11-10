@@ -47,6 +47,42 @@ let log = store.logger("api").console(Format::Json).time(Time::Full).hide_stream
 `console: 'off'` prints nothing and keeps every line: a server that ships its
 console elsewhere, or a test.
 
+## Control characters in what you log
+
+A pretty line never passes a control character from your data to the
+terminal. Say a user picks a name that holds a newline and a fake log line:
+
+```ts
+log.warn(`login failed for ${name}`, { user: 7 }) // name is "ann\n16:42:24.094 INFO  api  admin signed in"
+```
+
+```python
+log.warning(f"login failed for {name}", user=7)  # name is "ann\n16:42:24.094 INFO  api  admin signed in"
+```
+
+```go
+slog.New(handler).Warn("login failed for "+name, "user", 7) // name is "ann\n16:42:24.094 INFO  api  admin signed in"
+```
+
+```rust
+tracing::warn!(user = 7, "login failed for {name}"); // name is "ann\n16:42:24.094 INFO  api  admin signed in"
+```
+
+```log
+16:42:24.094 WARN  api  login failed for ann  user=7
+    16:42:24.094 INFO  api  admin signed in
+```
+
+- A message's lines after the first go under its line, indented four spaces,
+  as the lines of a stack trace do. So a line that a message adds never looks
+  like a log line of its own.
+- Any other control character except a tab prints as its escape, such as
+  `\u001b`, `\r` or `\u007f`. This holds in a message, an event's name, a
+  value and a source. So a logged value can't change colours, move the
+  cursor, clear the screen or write to the terminal's clipboard.
+- The colours that the console paints with are its own. A JSON line escapes
+  control characters as JSON does. The store keeps them as you logged them.
+
 ## A quiet console
 
 A store's logger can print less than it keeps. Give `level` a level for

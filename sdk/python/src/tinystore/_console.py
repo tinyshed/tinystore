@@ -91,9 +91,12 @@ def pretty_line(
 ) -> str:
     """A line as a person reads it: time of day, level, stream, message, fields, and the trace's first eight digits.
 
-    A value of several lines, a stack or a traceback, follows the line,
-    indented. A key or a string shows without its quotes when it is one word
-    with no '=', quote or backslash.
+    A message's further lines, and then a value of several lines, a stack or a
+    traceback, follow the line, indented, so that none of them starts where a
+    line does. A key or a string shows without its quotes when it is one word
+    with no '=', quote or backslash. What a program logged shows no control
+    character but a tab: the message, the event's name, a value below the line
+    and a source each show it as its escape.
     """
 
     def paint(hue: str, text: str) -> str:
@@ -104,7 +107,7 @@ def pretty_line(
     out += paint(hue, label)
     # the level is padded to five; the columns after it are two spaces apart
     columns = [] if hide_stream else [paint(_CYAN, line.stream)]
-    message = _pretty_message(line)
+    message, further = _pretty_message(line)
     if message:
         columns.append(message)
     shown: list[str] = []
@@ -121,11 +124,32 @@ def pretty_line(
         columns.append(" ".join(shown))
     if columns:
         out += " " * max(0, 5 - len(label)) + " " + "  ".join(columns)
+    for part in further:
+        out += "\n    " + _escaped(part)
     for key, text in below:
-        for i, part in enumerate(text.rstrip("\r\n").split("\n")):
-            part = part.removesuffix("\r")
-            out += "\n    " + paint(_DIM, f"{key}: {part}" if i == 0 else part)
+        for i, part in enumerate(_lines_of(text)):
+            out += "\n    " + paint(_DIM, _escaped(f"{key}: {part}" if i == 0 else part))
     return out + "\n"
+
+
+def _lines_of(text: str) -> list[str]:
+    """The lines of a text of several, without the line ends after the last, and each without the carriage return
+    before its newline: "line one\\r\\nline two\\r\\n" is line one, line two."""
+    return [part.removesuffix("\r") for part in text.rstrip("\r\n").split("\n")]
+
+
+_ESCAPED = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
+"""What a pretty line shows as its escape when a program logged it: each control character but a tab, and DEL."""
+
+
+def _escaped(text: str) -> str:
+    """Text a program logged as a pretty line shows it: each control character but a tab, and DEL, as its JSON escape.
+
+    So none reaches the terminal as an escape sequence, a carriage return or a
+    line of its own. The colours the console paints with are its own, never in
+    this text: "\\x1b[2J" is \\u001b[2J, "a\\rb" a\\rb and "\\x7f" \\u007f.
+    """
+    return _ESCAPED.sub(lambda found: "\\u007f" if found[0] == "\x7f" else _string(found[0])[1:-1], text)
 
 
 def _stamp(at: int, utc: bool, *, full: bool) -> str:
@@ -155,11 +179,15 @@ def _pretty_level(level: int | None) -> tuple[str, str]:
     return level_label(level), hue
 
 
-def _pretty_message(line: Line) -> str:
-    body = line.msg or ""
+def _pretty_message(line: Line) -> tuple[str, list[str]]:
+    """A log line's message, or an event's name and the message it may carry, as the line shows them; and the further
+    lines of a message of several, which go below the line as a value's do."""
+    first, *further = _lines_of(line.msg or "")
+    body = _escaped(first)
     if line.event is None:
-        return body
-    return f"{line.event}  {body}" if body else line.event
+        return body, further
+    event = _escaped(line.event)
+    return (f"{event}  {body}" if body else event), further
 
 
 SOURCE_KEY = "source"
@@ -175,7 +203,7 @@ def _short_source(value: str) -> str | None:
     if not isinstance(file, str) or not file:
         return None
     parts = [part for part in re.split(r"[\\/]+", file) if part]
-    return "/".join(parts[-2:]) + f":{line if isinstance(line, int) else 0}"
+    return _escaped("/".join(parts[-2:]) + f":{line if isinstance(line, int) else 0}")
 
 
 def _pretty_value(key: str, value: str) -> tuple[str, bool]:
