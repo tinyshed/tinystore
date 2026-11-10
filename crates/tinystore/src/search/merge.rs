@@ -432,8 +432,22 @@ impl Writer {
         Writer { segment, average, next_run, count: 0, held, directory, run, runs, best }
     }
 
-    /// Takes the next posting, after every one before.
+    /// Takes the next posting, after every one before. A block packs the
+    /// gaps between its documents and each frequency less one, so a piece
+    /// read out of its order or with no occurrence is refused here rather
+    /// than written again as other documents.
     pub(super) fn push(&mut self, posting: Posting) -> Result<()> {
+        let before =
+            self.held.last().map(|held| held.doc).or_else(|| self.directory.blocks.last().map(|block| block.last));
+        if posting.doc < self.segment.first || before.is_some_and(|before| posting.doc <= before) {
+            return Err(Error::corrupt(format!(
+                "document {}: a key's postings out of their segment's order",
+                posting.doc
+            )));
+        }
+        if posting.tf == 0 {
+            return Err(Error::corrupt(format!("document {}: a posting of no occurrences", posting.doc)));
+        }
         self.count += 1;
         self.held.push(posting);
         if self.held.len() == BLOCK { self.block() } else { Ok(()) }
@@ -672,5 +686,39 @@ impl Lengths {
             .and_then(|mut select| select.query_row((self.index, part, chunk), |row| row.get(0)).optional())
             .map_err(failed)?;
         Ok(lengths_of(&bytes.unwrap_or_default()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // contract: ERR-04
+    #[test]
+    fn a_writer_refuses_postings_out_of_their_order_rather_than_pack_them_as_others() {
+        let segment =
+            Segment { id: 1, level: 1, first: 10, past: 300, docs: 290, folded: false, merge: None, through: None };
+        let written = |postings: &[Posting]| {
+            let mut writer = Writer::new(segment, 5, segment.runs().start);
+            let pushed = postings.iter().try_for_each(|posting| writer.push(*posting));
+            pushed.and_then(|()| writer.finish()).map(drop).map_err(|error| error.to_string())
+        };
+        let ascending: Vec<Posting> = (10..160).map(|doc| Posting { doc, tf: 1, len: 5 }).collect();
+        assert_eq!(written(&ascending), Ok(()));
+        let out_of_order = |doc: u32| -> std::result::Result<(), String> {
+            Err(format!("document {doc}: a key's postings out of their segment's order: corrupt"))
+        };
+        let mut back = ascending[..30].to_vec();
+        back[20].doc = 15;
+        assert_eq!(written(&back), out_of_order(15), "a document before the one ahead of it");
+        back[20].doc = 29;
+        assert_eq!(written(&back), out_of_order(29), "a document twice");
+        let mut across = ascending[..128].to_vec();
+        across.push(Posting { doc: 100, tf: 1, len: 5 });
+        assert_eq!(written(&across), out_of_order(100), "a document before the last block packed");
+        assert_eq!(written(&[Posting { doc: 4, tf: 1, len: 5 }]), out_of_order(4), "a document before its segment's");
+        let mut none = ascending[..20].to_vec();
+        none[5].tf = 0;
+        assert_eq!(written(&none), Err("document 15: a posting of no occurrences: corrupt".to_owned()));
     }
 }

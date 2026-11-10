@@ -179,11 +179,10 @@ impl Clusters {
         order
     }
 
-    /// The cluster nearest `direction`, by its place among them.
-    fn nearest_one(&self, direction: &[f32]) -> usize {
-        (0..self.len())
-            .max_by(|a, b| dot(self.centroid(*a), direction).total_cmp(&dot(self.centroid(*b), direction)))
-            .unwrap_or(0)
+    /// The cluster nearest `direction`, by its place among them; none when
+    /// there is none.
+    fn nearest_one(&self, direction: &[f32]) -> Option<usize> {
+        (0..self.len()).max_by(|a, b| dot(self.centroid(*a), direction).total_cmp(&dot(self.centroid(*b), direction)))
     }
 }
 
@@ -344,7 +343,10 @@ pub(crate) fn assigned(connection: &Connection, index: i64, clusters: &Clusters,
     };
     let mut members = Vec::with_capacity(vectors.len());
     for (doc, direction) in &vectors {
-        let at = clusters.nearest_one(direction);
+        // Training writes a centroid at least, so a build or a head with none is damage.
+        let Some(at) = clusters.nearest_one(direction) else {
+            return Err(Error::corrupt("an index's clusters: no centroid kept while they build or serve"));
+        };
         members.push((*doc, clusters.ids[at], code(direction, clusters.centroid(at))));
     }
     if state.phase == Phase::Building {

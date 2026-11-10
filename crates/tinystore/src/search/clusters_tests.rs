@@ -225,6 +225,25 @@ fn an_index_reopened_mid_build_goes_on_and_serves() {
     assert_eq!(state.phase, Phase::Serving);
 }
 
+// contract: ERR-04
+#[test]
+fn a_build_whose_centroids_are_gone_fails_corrupt_rather_than_assign_to_none() {
+    let fixture = fixture();
+    let mut random = Random::new(8);
+    let centers = centers(&mut random, 4);
+    let held = filled(&fixture.store, &mut random, &centers, 50);
+    let (id, state) = (held.index.open.id(), held.state());
+    // building, as a file damaged since training would say, with no centroid to assign to
+    held.index.search.file_write(|tx| begin(tx, id, state, &[]).map(drop)).unwrap();
+    let error = maintain(&fixture.store).unwrap_err();
+    assert_eq!(error.kind(), crate::ErrorKind::Corrupt, "{error}");
+    assert_eq!(
+        error.to_string(),
+        "index items: an index's clusters: no centroid kept while they build or serve: corrupt"
+    );
+    assert_eq!(held.state().phase, Phase::Building, "nothing assigned");
+}
+
 /// How long a build and a search from clusters take: 100,000 vectors of 256
 /// dimensions about 500 centers, recall 0.95, against the exact best found by
 /// scoring every vector in memory. Run by hand:

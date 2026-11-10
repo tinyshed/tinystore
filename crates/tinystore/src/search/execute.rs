@@ -27,7 +27,7 @@ use std::ops::Range;
 use super::packed::Placed;
 use super::postings::{BLOCK, Posting};
 use super::score::{Part, bound, points};
-use crate::Result;
+use crate::{Error, Result};
 
 /// Documents a window holds. Tests read windows of 512, so that an index of
 /// a few thousand documents crosses many and their bounds skip lists.
@@ -681,16 +681,20 @@ impl Run<'_> {
     }
 
     /// Adds every posting list `at` has in the window into its slot, a
-    /// decoded block's at a time.
+    /// decoded block's at a time. A block whose postings come before the
+    /// window's start, which only damage to a list's order leaves, has no slot.
     fn add(&mut self, at: usize, documents: &Range<u32>) -> Result<()> {
         let Run { lists, source, points: sums, marked, words, .. } = self;
         let list = &mut lists[at];
         let mut doc = list.seek(documents.start, *source)?;
         while doc < documents.end {
             list.lengthen(*source)?;
-            let (scale, average) = (list.scale, list.average);
+            let (scale, average, key) = (list.scale, list.average, list.key);
             for posting in list.take_before(documents.end) {
-                let slot = (posting.doc - documents.start) as usize;
+                let Some(slot) = posting.doc.checked_sub(documents.start) else {
+                    return Err(Error::corrupt(format!("key {key}'s documents are out of their order")));
+                };
+                let slot = slot as usize;
                 marked[slot / 64] |= 1 << (slot % 64);
                 words[slot / 4096] |= 1 << (slot / 64 % 64);
                 sums[slot] = sums[slot].saturating_add(points(scale, posting.tf, posting.len, average));

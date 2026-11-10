@@ -137,3 +137,18 @@ fn of_equal_scores_the_lower_document_comes_first() {
     let found = best(&mut lists, &mut memory, 3, None).unwrap();
     assert_eq!(found.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(), [1, 2, 3]);
 }
+
+// contract: ERR-04
+#[test]
+fn a_list_whose_next_block_goes_back_before_the_window_fails_corrupt() {
+    let mut memory = Memory::default();
+    let block_of = |docs: Range<u32>| docs.map(|doc| Posting { doc, tf: 1, len: 10 }).collect::<Vec<_>>();
+    // the pieces of two segments, the later one's documents damaged to come first
+    let mut lists = vec![List::new(1, Part(0), 1.0, 10.0, Vec::new())];
+    for docs in [5000..5003, 1000..1003] {
+        let held = lists[0].in_hand(block_of(docs));
+        lists[0].push(held);
+    }
+    let error = best(&mut lists, &mut memory, 3, None).unwrap_err();
+    assert_eq!(error.to_string(), "key 1's documents are out of their order: corrupt");
+}
