@@ -1,5 +1,5 @@
 {
-  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}. A row, and an update's columns, are [name, value] pairs, in their order. An include step is [name, {table, steps}], the query whose rows the row holds under the name.",
+  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}. A row, and an update's columns, are [name, value] pairs, in their order. An include step is [name, {table, steps}], the query whose rows the row holds under the name. A list is the statement of a page's first read, {limit}. A query with refused in place of its text and values is refused invalid, by its steps or by the call it ends in, and its error holds those words.",
   "queries": [
     {
       "name": "equal values in the order of their names, a group of alternatives, an order and a limit",
@@ -629,6 +629,115 @@
         5,
         7
       ]
+    },
+    {
+      "name": "a page reads by its order, its limit the list's",
+      "table": "orders",
+      "steps": [
+        {
+          "where": {
+            "equal": {
+              "user_id": 7
+            }
+          }
+        },
+        {
+          "orderBy": [
+            "id",
+            "desc"
+          ]
+        }
+      ],
+      "list": {
+        "limit": 20
+      },
+      "text": "select * from \"orders\" where \"user_id\" = ? order by \"id\" desc limit cast(? as integer)",
+      "values": [
+        7,
+        20
+      ]
+    },
+    {
+      "name": "a page refuses a limit of the query's own, which it would drop",
+      "table": "orders",
+      "steps": [
+        {
+          "orderBy": [
+            "id",
+            "asc"
+          ]
+        },
+        {
+          "limit": 100
+        }
+      ],
+      "list": {
+        "limit": 20
+      },
+      "refused": "after a limit or an offset"
+    },
+    {
+      "name": "a page refuses an offset of the query's own, which it would drop",
+      "table": "orders",
+      "steps": [
+        {
+          "orderBy": [
+            "id",
+            "asc"
+          ]
+        },
+        {
+          "offset": 50
+        }
+      ],
+      "list": {
+        "limit": 20
+      },
+      "refused": "after a limit or an offset"
+    },
+    {
+      "name": "a delete refuses a limit, which SQLite's delete would not keep",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "equal": {
+              "author_id": 5
+            }
+          }
+        },
+        {
+          "limit": 10
+        }
+      ],
+      "delete": true,
+      "refused": "a delete with a limit, offset, order, group, select or include"
+    },
+    {
+      "name": "an update refuses an order, which SQLite's update would not keep",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "equal": {
+              "author_id": 5
+            }
+          }
+        },
+        {
+          "orderBy": [
+            "id",
+            "desc"
+          ]
+        }
+      ],
+      "update": [
+        [
+          "done",
+          true
+        ]
+      ],
+      "refused": "an update with a limit, offset, order, group, select or include"
     }
   ]
 }

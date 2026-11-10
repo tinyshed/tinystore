@@ -532,13 +532,16 @@ impl Parts {
                 "a page is read by the query's order, of columns by their names: order_by first",
             ));
         }
-        let mut whole = self.clone();
-        whole.limit = None;
-        whole.offset = None;
-        let digest = digest_of(&render(&whole)?);
+        // A page reads `limit` rows after its cursor: the query's own limit or
+        // offset would be dropped, and `limit(100)` page through every row.
+        if self.limit.is_some() || self.offset.is_some() {
+            return Err(Error::invalid(
+                "list after a limit or an offset: list pages the rows itself and takes its own limit",
+            ));
+        }
+        let digest = digest_of(&render(self)?);
         let mut parts = self.clone();
         parts.limit = Some(limit);
-        parts.offset = None;
         if let Some(after) = after {
             let values = cursor_of(after, &digest)?;
             // A cursor is anyone's to send: one short of the order's values is no page's.

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -107,8 +108,8 @@ def written(pairs: list[list[Any]]) -> dict[str, Any]:
     return {name: made(value) for name, value in pairs}
 
 
-@pytest.mark.parametrize("vector", VECTORS, ids=[v["name"] for v in VECTORS])
-async def test_a_query_vector(vector: dict[str, Any]) -> None:
+async def sent(vector: dict[str, Any]) -> tuple[str, list[Any]]:
+    """What a vector's steps and the call it ends in send."""
     recorder = Recorder()
     table: Table[Any] = Table(recorder, vector["table"])
     query: Query[Any] = table
@@ -131,10 +132,20 @@ async def test_a_query_vector(vector: dict[str, Any]) -> None:
         )
     elif vector.get("count"):
         await query.count()
+    elif "list" in vector:
+        await query.list(limit=vector["list"]["limit"])
     if recorder.last is not None:
-        text, values = recorder.last.text, list(recorder.last.values)
-    else:
-        text, values = query.to_sql()
+        return recorder.last.text, list(recorder.last.values)
+    return query.to_sql()
+
+
+@pytest.mark.parametrize("vector", VECTORS, ids=[v["name"] for v in VECTORS])
+async def test_a_query_vector(vector: dict[str, Any]) -> None:
+    if "refused" in vector:
+        with pytest.raises(tinystore.InvalidError, match=re.escape(vector["refused"])):
+            await sent(vector)
+        return
+    text, values = await sent(vector)
     assert text == vector["text"]
     assert [kept(value) for value in values] == vector["values"]
 

@@ -430,12 +430,17 @@ func (q *Query[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error
 	if len(order) == 0 {
 		return Page[T]{}, core.Errorf(core.Invalid, "a page is read by the query's order, of columns by their names: OrderBy first")
 	}
+	// A page reads its limit's rows after its cursor: the query's own Limit or
+	// Offset would be dropped, and Limit(100) page through every row.
+	if q.parts.limit != nil || q.parts.offset != nil {
+		return Page[T]{}, core.Errorf(core.Invalid, "List after a limit or an offset: List pages the rows itself and takes its own limit")
+	}
 	if o.limit < 0 {
 		return Page[T]{}, core.Errorf(core.Invalid, "a page limit of %d: a whole number", o.limit)
 	}
-	digest := digestOf(render(q.parts.with(func(p *parts) { p.limit, p.offset = nil, nil })))
+	digest := digestOf(render(q.parts))
 	limit := o.limit
-	paged := q.parts.with(func(p *parts) { p.limit, p.offset = &limit, nil })
+	paged := q.parts.with(func(p *parts) { p.limit = &limit })
 	if o.after != "" {
 		after, err := cursorOf(o.after, digest)
 		if err != nil {
@@ -536,6 +541,14 @@ func (q *Query[T]) refuseEveryRow(what string) error {
 	}
 	if len(q.parts.joins) > 0 {
 		return core.Errorf(core.Invalid, "%s of a join: write it in SQL", what)
+	}
+	// SQLite's update and delete take none of these: Limit(10).Delete(ctx)
+	// would delete every row the conditions match.
+	p := q.parts
+	shaped := p.limit != nil || p.offset != nil || len(p.order) > 0 || len(p.groups) > 0 ||
+		len(p.having) > 0 || p.selected != nil || len(p.includes) > 0
+	if shaped {
+		return core.Errorf(core.Invalid, "%s with a limit, offset, order, group, select or include: narrow it by conditions, or write it in SQL", what)
 	}
 	return nil
 }

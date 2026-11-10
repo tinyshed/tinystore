@@ -132,6 +132,42 @@ fn kept(value: &Value) -> Json {
     }
 }
 
+/// Runs the call a vector ends in, which leaves its statement with `last`.
+fn ran(
+    vector: &Json,
+    table: &Table<'_, Ordered>,
+    query: &Rows<'_>,
+    last: &Arc<Mutex<Option<Sql>>>,
+) -> crate::Result<()> {
+    if let Some(sets) = vector.get("update") {
+        let sets = sets.as_array().unwrap().iter().map(|pair| {
+            let value = &pair[1];
+            let piece = if value.get("sql").is_some() { condition(value) } else { sql::value(value) };
+            (pair[0].as_str().unwrap().to_owned(), piece)
+        });
+        query.update(sets.collect::<Vec<_>>()).map(drop)
+    } else if vector.get("delete").is_some() {
+        query.delete().map(drop)
+    } else if let Some(rows) = vector.get("insert") {
+        let rows: Vec<Ordered> = rows.as_array().unwrap().iter().map(ordered).collect();
+        table.insert_all(&rows).map(drop)
+    } else if let Some(upsert) = vector.get("upsert") {
+        let options = &upsert[1];
+        let update = options["update"].as_array().unwrap().iter().map(|name| name.as_str().unwrap().to_owned());
+        let mut asked = Upsert::on([options["conflict"].as_str().unwrap()]).update(update);
+        if let Some(only_if) = options.get("where") {
+            asked = asked.only_if(condition(only_if));
+        }
+        table.upsert(&ordered(&upsert[0]), asked).map(drop)
+    } else if vector.get("count").is_some() {
+        query.count().map(drop)
+    } else if let Some(page) = vector.get("list") {
+        query.list(page["limit"].as_u64().unwrap(), None).map(drop)
+    } else {
+        query.to_sql().map(|statement| *last.lock().unwrap() = Some(statement))
+    }
+}
+
 // contract: SQL-10
 #[test]
 fn every_query_of_the_vectors_is_the_statement_every_sdk_writes() {
@@ -143,36 +179,14 @@ fn every_query_of_the_vectors_is_the_statement_every_sdk_writes() {
         let table = Table::<Ordered>::recorded(vector["table"].as_str().unwrap(), Arc::clone(&last));
         let steps = vector.get("steps").and_then(Json::as_array).cloned().unwrap_or_default();
         let query = steps.iter().fold((*table).clone(), apply);
-        let statement = if let Some(sets) = vector.get("update") {
-            let sets = sets.as_array().unwrap().iter().map(|pair| {
-                let value = &pair[1];
-                let piece = if value.get("sql").is_some() { condition(value) } else { sql::value(value) };
-                (pair[0].as_str().unwrap().to_owned(), piece)
-            });
-            query.update(sets.collect::<Vec<_>>()).unwrap();
-            last.lock().unwrap().take().unwrap()
-        } else if vector.get("delete").is_some() {
-            query.delete().unwrap();
-            last.lock().unwrap().take().unwrap()
-        } else if let Some(rows) = vector.get("insert") {
-            let rows: Vec<Ordered> = rows.as_array().unwrap().iter().map(ordered).collect();
-            table.insert_all(&rows).unwrap();
-            last.lock().unwrap().take().unwrap()
-        } else if let Some(upsert) = vector.get("upsert") {
-            let options = &upsert[1];
-            let update = options["update"].as_array().unwrap().iter().map(|name| name.as_str().unwrap().to_owned());
-            let mut asked = Upsert::on([options["conflict"].as_str().unwrap()]).update(update);
-            if let Some(only_if) = options.get("where") {
-                asked = asked.only_if(condition(only_if));
-            }
-            table.upsert(&ordered(&upsert[0]), asked).unwrap();
-            last.lock().unwrap().take().unwrap()
-        } else if vector.get("count").is_some() {
-            query.count().unwrap();
-            last.lock().unwrap().take().unwrap()
-        } else {
-            query.to_sql().unwrap()
-        };
+        let statement = ran(vector, &table, &query, &last).map(|()| last.lock().unwrap().take().unwrap());
+        if let Some(why) = vector.get("refused").and_then(Json::as_str) {
+            let error = statement.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Invalid, "{name}: {error}");
+            assert!(error.to_string().contains(why), "{name}: {error}");
+            continue;
+        }
+        let statement = statement.unwrap();
         assert_eq!(statement.text(), vector["text"].as_str().unwrap(), "{name}");
         let values: Vec<Json> = statement.values().iter().map(kept).collect();
         assert_eq!(Json::from(values), vector["values"], "{name}");
@@ -304,6 +318,24 @@ fn a_page_reads_after_the_last_row_of_the_one_before_and_only_its_own_query() {
     read["v"].as_array_mut().unwrap().truncate(1);
     let forged: String = serde_json::to_vec(&read).unwrap().iter().map(|byte| format!("{byte:02x}")).collect();
     assert_eq!(query.list(2, Some(&forged)).unwrap_err().kind(), ErrorKind::Invalid);
+}
+
+// contract: SQL-09
+#[test]
+fn a_page_refuses_a_limit_or_an_offset_its_list_would_drop() {
+    let f = fixture();
+    let db = f.store.database("app").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
+    let notes = db.table::<Note>("notes");
+    for n in 0..3 {
+        notes.insert(&note(&format!("p{n}"), 8, "x")).unwrap();
+    }
+    let by_id = notes.order_by("id", Direction::Asc);
+    for query in [by_id.limit(1), by_id.offset(1), by_id.limit(1).offset(1)] {
+        let error = query.list(2, None).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+        assert!(error.to_string().contains("takes its own limit"), "{error}");
+    }
+    assert_eq!(by_id.list(2, None).unwrap().rows.len(), 2, "without them a page reads its own limit");
 }
 
 #[test]

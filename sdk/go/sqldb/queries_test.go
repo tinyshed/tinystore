@@ -3,6 +3,7 @@ package sqldb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"tinyshed.org/tinystore/internal/core"
 )
 
 // Every query of testdata/sql/queries.json, built with this SDK's builder
@@ -43,8 +46,12 @@ type vector struct {
 	Insert [][][]any         `json:"insert"`
 	Upsert []json.RawMessage `json:"upsert"`
 	Count  bool              `json:"count"`
-	Text   string            `json:"text"`
-	Values []any             `json:"values"`
+	List   *struct {
+		Limit int `json:"limit"`
+	} `json:"list"`
+	Text    string `json:"text"`
+	Values  []any  `json:"values"`
+	Refused string `json:"refused"`
 }
 
 func conditionOf(t *testing.T, given map[string]any) Condition {
@@ -187,6 +194,8 @@ func TestEveryQueryVectorIsWrittenAlike(t *testing.T) {
 	ctx := context.Background()
 	for _, v := range file.Queries {
 		t.Run(v.Name, func(t *testing.T) {
+			// each vector's own, so that the refusal of the one before stays there
+			var err error
 			r := &recorder{}
 			table := OpenTable[Row](r, v.Table)
 			q := table.Query
@@ -231,18 +240,23 @@ func TestEveryQueryVectorIsWrittenAlike(t *testing.T) {
 				_, err = anyTable.Upsert(ctx, orderedRow(pairs), opts...)
 			case v.Count:
 				_, err = q.Count(ctx)
+			case v.List != nil:
+				_, err = q.List(ctx, Limit(v.List.Limit))
+			}
+			gotText, gotValues := "", []any(nil)
+			if err == nil && r.last != nil {
+				gotText, gotValues = r.last.text, r.last.values
+			} else if err == nil {
+				gotText, gotValues, err = q.SQL()
+			}
+			if v.Refused != "" {
+				if !errors.Is(err, core.ErrInvalid) || !strings.Contains(err.Error(), v.Refused) {
+					t.Fatalf("refused %v, want invalid: %s", err, v.Refused)
+				}
+				return
 			}
 			if err != nil {
 				t.Fatal(err)
-			}
-			gotText, gotValues := "", []any(nil)
-			if r.last != nil {
-				gotText, gotValues = r.last.text, r.last.values
-			} else {
-				gotText, gotValues, err = q.SQL()
-				if err != nil {
-					t.Fatal(err)
-				}
 			}
 			if gotText != v.Text {
 				t.Fatalf("text\n got %s\nwant %s", gotText, v.Text)

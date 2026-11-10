@@ -285,9 +285,16 @@ export class Query<T = Row> implements Embeddable {
 				'a page is read by the query order, of columns by their names: orderBy(…) first',
 			)
 		}
+		// A page reads its limit's rows after its cursor: the query's own limit or
+		// offset would be dropped, and limit(100) page through every row.
+		if (this.#parts.limit !== undefined || this.#parts.offset !== undefined) {
+			throw new InvalidError(
+				'list after a limit or an offset: list pages the rows itself and takes its own limit',
+			)
+		}
 		const limit = whole(options.limit ?? 100, 'a page limit')
-		const digest = digestOf(render({ ...this.#parts, limit: undefined, offset: undefined }))
-		let parts: Parts = { ...this.#parts, limit, offset: undefined }
+		const digest = digestOf(render(this.#parts))
+		let parts: Parts = { ...this.#parts, limit }
 		if (options.after !== undefined) {
 			const after = cursorOf(options.after, digest)
 			parts = {
@@ -413,6 +420,22 @@ export class Query<T = Row> implements Embeddable {
 		}
 		if (this.#parts.joins.length > 0) {
 			throw new InvalidError(`${what} of a join: write it in SQL`)
+		}
+		// SQLite's update and delete take none of these: limit(10).delete()
+		// would delete every row the conditions match.
+		const parts = this.#parts
+		const shaped =
+			parts.limit !== undefined ||
+			parts.offset !== undefined ||
+			parts.order.length > 0 ||
+			parts.groups.length > 0 ||
+			parts.having.length > 0 ||
+			parts.select !== undefined ||
+			parts.includes.length > 0
+		if (shaped) {
+			throw new InvalidError(
+				`${what} with a limit, offset, order, group, select or include: narrow it by conditions, or write it in SQL`,
+			)
 		}
 	}
 }

@@ -21,8 +21,10 @@ interface Case {
 	insert?: [string, unknown][][]
 	upsert?: [[string, unknown][], { conflict: string; update: string[]; where?: unknown }]
 	count?: true
-	text: string
-	values: unknown[]
+	list?: { limit: number }
+	text?: string
+	values?: unknown[]
+	refused?: string
 }
 
 const vectors: { queries: Case[] } = JSON.parse(
@@ -114,38 +116,51 @@ function written(values: Record<string, unknown>): Record<string, unknown> {
 	)
 }
 
+/** What a vector's steps and the call it ends in send. */
+async function sent(vector: Case): Promise<{ text: string; values: readonly SqlArg[] }> {
+	const recorder = new Recorder()
+	const table = new Table<Record<string, unknown>>(recorder, vector.table)
+	const query = (vector.steps ?? []).reduce(apply, table as Query<Record<string, unknown>>)
+	if (vector.update !== undefined) {
+		await query.update(written(Object.fromEntries(vector.update)))
+	} else if (vector.delete) {
+		await query.delete()
+	} else if (vector.insert !== undefined) {
+		await table.insert(vector.insert.map(row => Object.fromEntries(row)))
+	} else if (vector.upsert !== undefined) {
+		const [pairs, options] = vector.upsert
+		const row = Object.fromEntries(pairs)
+		await table.upsert(row, {
+			...options,
+			where: options.where === undefined ? undefined : conditionOf(options.where),
+		})
+	} else if (vector.count) {
+		await query.count()
+	} else if (vector.list !== undefined) {
+		await query.list({ limit: vector.list.limit })
+	} else {
+		return query.toSQL()
+	}
+	return recorder.last!
+}
+
 describe('the query vectors', () => {
 	for (const vector of vectors.queries) {
 		test(vector.name, async () => {
-			const recorder = new Recorder()
-			const table = new Table<Record<string, unknown>>(recorder, vector.table)
-			const query = (vector.steps ?? []).reduce(apply, table as Query<Record<string, unknown>>)
-			let statement: { text: string; values: readonly SqlArg[] }
-			if (vector.update !== undefined) {
-				await query.update(written(Object.fromEntries(vector.update)))
-				statement = recorder.last!
-			} else if (vector.delete) {
-				await query.delete()
-				statement = recorder.last!
-			} else if (vector.insert !== undefined) {
-				await table.insert(vector.insert.map(row => Object.fromEntries(row)))
-				statement = recorder.last!
-			} else if (vector.upsert !== undefined) {
-				const [pairs, options] = vector.upsert
-				const row = Object.fromEntries(pairs)
-				await table.upsert(row, {
-					...options,
-					where: options.where === undefined ? undefined : conditionOf(options.where),
-				})
-				statement = recorder.last!
-			} else if (vector.count) {
-				await query.count()
-				statement = recorder.last!
-			} else {
-				statement = query.toSQL()
+			if (vector.refused !== undefined) {
+				let error: unknown
+				try {
+					await sent(vector)
+				} catch (thrown) {
+					error = thrown
+				}
+				expect(error).toBeInstanceOf(InvalidError)
+				expect((error as InvalidError).message).toContain(vector.refused)
+				return
 			}
-			expect(statement.text).toBe(vector.text)
-			expect(statement.values.map(kept)).toEqual(vector.values)
+			const statement = await sent(vector)
+			expect(statement.text).toBe(vector.text!)
+			expect(statement.values.map(kept)).toEqual(vector.values!)
 		})
 	}
 })

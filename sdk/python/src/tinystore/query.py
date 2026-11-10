@@ -234,9 +234,13 @@ class Query[T]:
         order = self._parts.order
         if not order or any(each.column is None for each in order):
             raise InvalidError("a page is read by the query order, of columns by their names: order_by(...) first")
+        # A page reads its limit's rows after its cursor: the query's own limit or
+        # offset would be dropped, and limit(100) page through every row.
+        if self._parts.limit is not None or self._parts.offset is not None:
+            raise InvalidError("list after a limit or an offset: list pages the rows itself and takes its own limit")
         limit = _whole(limit, "a page limit")
-        digest = _digest(_render(replace(self._parts, limit=None, offset=None)))
-        parts = replace(self._parts, limit=limit, offset=None)
+        digest = _digest(_render(self._parts))
+        parts = replace(self._parts, limit=limit)
         if after is not None:
             keyset = _keyset(order, _cursor_of(after, digest))
             parts = replace(parts, conditions=(*parts.conditions, _Kept(keyset, True)))
@@ -317,6 +321,23 @@ class Query[T]:
             raise InvalidError(f"{what} without a condition: every row is said in SQL, delete from ...")
         if self._parts.joins:
             raise InvalidError(f"{what} of a join: write it in SQL")
+        # SQLite's update and delete take none of these: limit(10).delete()
+        # would delete every row the conditions match.
+        parts = self._parts
+        shaped = (
+            parts.limit is not None
+            or parts.offset is not None
+            or parts.order
+            or parts.groups
+            or parts.having
+            or parts.select is not None
+            or parts.includes
+        )
+        if shaped:
+            raise InvalidError(
+                f"{what} with a limit, offset, order, group, select or include: "
+                "narrow it by conditions, or write it in SQL"
+            )
 
 
 class Table[T](Query[T]):

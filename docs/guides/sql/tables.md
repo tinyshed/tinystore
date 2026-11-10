@@ -233,6 +233,10 @@ column: sort by `created_at`, then `id`. A column that holds nulls pages in
 SQLite's order, so its nulls come first in ascending order and last in
 descending order.
 
+`list` takes the page's limit itself. A query with a `limit` or an `offset`
+of its own is refused there, `invalid`, rather than read every row a page at
+a time (contract SQL-09).
+
 ## Columns, groups and joins
 
 ```ts
@@ -316,7 +320,9 @@ orders.filter(sql!("created_at < ?", cutoff)).delete()?;
 
 Both return how many rows changed. An update or a delete without a condition
 is refused (contract SQL-09): `delete from orders` is written as SQL, on
-purpose.
+purpose. So is one after a `limit`, an `offset`, an order, a group, a
+`select` or an `include`: SQLite's `update` and `delete` keep none of them,
+so `limit(10).delete()` would delete every row the conditions match.
 
 ## Builder or SQL?
 
