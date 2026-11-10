@@ -131,6 +131,33 @@ fn a_private_child_answers_hello_and_leaves_when_its_stdin_ends() {
     assert_eq!(wait(&mut child), 0, "the end of stdin asks it to leave");
 }
 
+/// A private child whose answer cannot be written, its parent's stdin open
+/// and silent: it exits then, rather than at the parent's next bytes, and
+/// its parent learns the connection is lost.
+#[test]
+fn a_private_child_whose_answer_cannot_be_written_exits_though_its_stdin_stays_open() {
+    const PING: u8 = 8;
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(BINARY)
+        .args(["serve", "--dir"])
+        .arg(dir.path())
+        .arg("--stdio")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(&hello(None)).unwrap();
+    let (kind, ..) = read_frame(child.stdout.as_mut().unwrap());
+    assert_eq!(kind, WELCOME);
+    // the parent stops reading: the PING's PONG has nowhere to go
+    drop(child.stdout.take());
+    stdin.write_all(&frame(PING, 0, 0, 0, &[7; 8])).unwrap();
+    assert_eq!(wait(&mut child), 0, "the child left once its writer failed");
+    drop(stdin);
+}
+
 #[test]
 fn a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_meanwhile() {
     let (dir, logs) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());

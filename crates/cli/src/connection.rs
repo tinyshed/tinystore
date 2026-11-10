@@ -71,6 +71,10 @@ struct Output<W> {
     /// The writer task left, its client gone: a reader that waits for it to
     /// take what the pipe owes would wait for ever, so it reads no more.
     gone: AtomicBool,
+    /// The writer task left: a reader waiting for the client's next bytes
+    /// stops at once, since nothing they ask could be answered, and a client
+    /// that says nothing more would hold the connection open for good.
+    left: Notify,
     handing: AtomicU8,
 }
 
@@ -86,8 +90,8 @@ struct Writing<W> {
 impl<W: AsyncWrite + Unpin> Output<W> {
     fn new(writer: W) -> Self {
         let writing = Mutex::new(Writing { writer, left: Vec::new(), unflushed: false });
-        let (drained, gone) = (Notify::new(), AtomicBool::new(false));
-        Output { writing, ready: Notify::new(), drained, gone, handing: AtomicU8::new(IDLE) }
+        let (drained, gone, left) = (Notify::new(), AtomicBool::new(false), Notify::new());
+        Output { writing, ready: Notify::new(), drained, gone, left, handing: AtomicU8::new(IDLE) }
     }
 
     /// The pipe's wake, from whichever thread made the frames: one that
@@ -139,8 +143,9 @@ impl<W: AsyncWrite + Unpin> Output<W> {
     }
 }
 
-/// Hands the client's bytes to the pipe until it leaves or breaks a rule; a
-/// server closing tells it `GOAWAY` and reads on while its streams finish.
+/// Hands the client's bytes to the pipe until it leaves, breaks a rule or
+/// can be written to no more; a server closing tells it `GOAWAY` and reads
+/// on while its streams finish.
 /// While the pipe is full it reads nothing, until the writer task took what
 /// the pipe owed: a client that sends and never reads holds the server's
 /// memory at the pipe's bound, its sends waiting in its own socket.
@@ -166,6 +171,7 @@ where
                 Ok(read) => output.hand(pipe, &buffer[..read]),
             },
             () = output.drained.notified(), if full => {}
+            () = output.left.notified() => {}
             changed = closing.changed(), if !going_away => {
                 going_away = true;
                 if changed.is_ok() {
@@ -233,17 +239,21 @@ async fn write_frames<W: AsyncWrite + Unpin>(pipe: Arc<Pipe>, output: Arc<Output
     let _ = writing.writer.shutdown().await;
     output.gone.store(true, Ordering::Release);
     output.drained.notify_one();
+    output.left.notify_one();
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+    use std::pin::Pin;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use tinystore::pipe::Connect;
     use tinystore::{Options, Store};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
     use tokio::sync::watch;
 
     /// A frame as docs/wire.md spells it, on stream 0: its header, then its body.
@@ -371,6 +381,52 @@ mod tests {
         store.close().unwrap();
     }
 
+    /// A connection whose writer failed, its client silent with its side
+    /// open: the connection ends at once, rather than at the client's next
+    /// bytes, so that a private child exits and its parent learns it is gone.
+    #[test]
+    fn a_connection_whose_writer_failed_ends_at_once_though_its_client_says_nothing_more() {
+        const PING: u8 = 8;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        runtime().block_on(async {
+            let broken = Arc::new(AtomicBool::new(false));
+            let breaking = Arc::clone(&broken);
+            let (from_server, mut to_server, serving) =
+                welcomed_through(&store, move |to_client| Breaking { to_client, broken: breaking }).await;
+            broken.store(true, Ordering::SeqCst);
+            to_server.write_all(&frame(PING, &[7; 8])).await.unwrap();
+            let ended = tokio::time::timeout(Duration::from_secs(5), serving).await;
+            assert!(ended.is_ok(), "the connection outlived its writer, waiting for its client's next bytes");
+            drop((to_server, from_server));
+        });
+        store.close().unwrap();
+    }
+
+    /// The server's side of a connection, which hands the client what it is
+    /// given until `broken`, then fails as a pipe whose reader is gone does.
+    struct Breaking {
+        to_client: Writes,
+        broken: Arc<AtomicBool>,
+    }
+
+    impl AsyncWrite for Breaking {
+        fn poll_write(mut self: Pin<&mut Self>, context: &mut Context<'_>, bytes: &[u8]) -> Poll<io::Result<usize>> {
+            if self.broken.load(Ordering::SeqCst) {
+                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+            }
+            Pin::new(&mut self.to_client).poll_write(context, bytes)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.to_client).poll_flush(context)
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.to_client).poll_shutdown(context)
+        }
+    }
+
     /// A REQUEST of `method` on `stream`, the client's only frame there.
     fn request(stream: u32, method: u16, body: &[u8]) -> Vec<u8> {
         const REQUEST: u8 = 3;
@@ -404,10 +460,22 @@ mod tests {
 
     /// A client of `store` served over bytes in memory, its HELLO welcomed.
     async fn welcomed(store: &Store) -> (Reads, Writes, tokio::task::JoinHandle<()>) {
+        welcomed_through(store, |to_client| to_client).await
+    }
+
+    /// `welcomed`, the server writing through what `writer` makes of its side.
+    async fn welcomed_through<W>(
+        store: &Store,
+        writer: impl FnOnce(Writes) -> W,
+    ) -> (Reads, Writes, tokio::task::JoinHandle<()>)
+    where
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
         const HELLO: u8 = 1;
         const WELCOME: u8 = 2;
         let (client, server) = tokio::io::duplex(64 << 10);
         let (server_reads, server_writes) = tokio::io::split(server);
+        let server_writes = writer(server_writes);
         let serving = {
             let store = store.clone();
             tokio::spawn(async move {

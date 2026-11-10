@@ -100,18 +100,30 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             return code;
         }
     };
-    let served = tokio::runtime::Builder::new_multi_thread().enable_all().build().and_then(|runtime| {
-        runtime.block_on(async {
-            match serve.transport {
-                Transport::Stdio => stdio(&store, clock).await,
-                Transport::Local { sidecar } => {
-                    let listening = Listening { sidecar, idle: serve.idle, console, started, shown };
-                    listen(&store, listening, remote).await
-                }
+    let private = matches!(serve.transport, Transport::Stdio);
+    let served = on_a_runtime(private, async {
+        match serve.transport {
+            Transport::Stdio => stdio(&store, clock).await,
+            Transport::Local { sidecar } => {
+                let listening = Listening { sidecar, idle: serve.idle, console, started, shown };
+                listen(&store, listening, remote).await
             }
-        })
+        }
     });
     close(&store, served, &console)
+}
+
+/// Runs `serving` on a runtime of its own. A runtime dropped waits for its
+/// blocking pool, where a private child's read of stdin waits for the
+/// parent's next bytes and cannot be cancelled, so a private child's runtime
+/// ends without it: one whose writer failed leaves without those bytes.
+fn on_a_runtime(private: bool, serving: impl Future<Output = io::Result<()>>) -> io::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let served = runtime.block_on(serving);
+    if private {
+        runtime.shutdown_background();
+    }
+    served
 }
 
 /// Says why the server stops on stderr, where whoever started it reads. A
