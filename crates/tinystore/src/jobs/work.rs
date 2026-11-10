@@ -588,6 +588,16 @@ impl Running {
         self.stopped.load(Ordering::SeqCst)
     }
 
+    /// Whether the calling thread is one of the worker's handlers.
+    fn on_a_handler(&self) -> bool {
+        let current = thread::current().id();
+        self.handlers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|handle| handle.thread().id() == current)
+    }
+
     /// Takes no job more, waits for the handlers under way, each bounded by
     /// its timeout, and writes what they answered. A handler that never
     /// returns is let go after its timeout and a grace, its job given back
@@ -617,8 +627,15 @@ impl Running {
 
 impl Worker {
     /// Takes no job more and waits for the handlers under way, each bounded by
-    /// its queue's timeout; the store's close stops every worker so.
+    /// its queue's timeout; the store's close stops every worker so. Called
+    /// from one of its own handlers, it returns at once, and the worker ends
+    /// once its handlers have returned and their answers are written.
     pub fn stop(&self) {
+        // the loop waits for the handler that called: waiting for the loop would wait for itself
+        if self.running.on_a_handler() {
+            self.running.inbox.stop();
+            return;
+        }
         self.running.stop();
     }
 }

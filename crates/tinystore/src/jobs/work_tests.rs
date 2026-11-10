@@ -269,6 +269,34 @@ fn a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_start
     assert_eq!((second.state, second.attempt), (State::Waiting, 0), "given back, its attempt not counted");
 }
 
+// contract: JOB-11
+#[test]
+fn a_worker_stopped_by_its_own_handler_stops_at_once_and_writes_that_handlers_answer() {
+    let f = fixture();
+    let pushes = f.store.queue::<Push>("pushes").timeout(2 * SECOND).open().unwrap();
+    let worker = Arc::new(std::sync::OnceLock::<super::Worker>::new());
+    let (took_tx, took_rx) = mpsc::channel();
+    let kept = Arc::clone(&worker);
+    let started = pushes
+        .work(move |_: Push, _run| -> Result<()> {
+            let began = Instant::now();
+            if let Some(worker) = kept.get() {
+                worker.stop();
+            }
+            took_tx.send(began.elapsed()).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(worker.set(started).is_ok());
+    pushes.id("shutdown").add(&Push { user: 1 }).unwrap();
+    let took = took_rx.recv_timeout(Duration::from_secs(5)).expect("its stop returned");
+    assert!(took < Duration::from_secs(1), "it waited for no handler of its own: {took:?}");
+    eventually(|| pushes.get("shutdown").unwrap().is_none());
+    pushes.add(&Push { user: 2 }).unwrap();
+    thread::sleep(Duration::from_millis(50));
+    assert!(took_rx.try_recv().is_err(), "a stopped worker takes nothing more");
+}
+
 #[test]
 fn a_worker_runs_a_job_its_moved_clock_made_due_at_once() {
     let f = fixture();

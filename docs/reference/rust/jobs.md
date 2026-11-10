@@ -999,7 +999,9 @@ pub fn stop(&self)
 ```
 
 Takes no job more and waits for the handlers under way, each bounded by
-its queue's timeout; the store's close stops every worker so.
+its queue's timeout; the store's close stops every worker so. Called
+from one of its own handlers, it returns at once, and the worker ends
+once its handlers have returned and their answers are written.
 
 ## aio::jobs::All
 
