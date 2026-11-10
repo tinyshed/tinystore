@@ -58,6 +58,15 @@ fn a_key_no_setting_has_and_a_value_of_another_kind_are_each_named() {
     );
 }
 
+// contract: CFG-06
+#[test]
+fn a_toml_value_that_does_not_parse_is_named_by_its_line_and_column_and_never_quoted() {
+    let refused = read_text("app.toml", "[tokens.sms]\ntoken = s3cr3t\n").unwrap_err();
+    let said = &refused[0];
+    assert!(said.contains("app.toml: string values must be quoted") && said.contains(" at line 2, column "), "{said}");
+    assert!(!said.contains("s3cr3t"), "{said}");
+}
+
 #[test]
 fn an_empty_key_declares_nothing_and_an_unknown_extension_is_refused() {
     assert_eq!(read_text("app.yaml", "port:\nname: n\n"), Ok(vec![("name".to_owned(), json!("n"))]));

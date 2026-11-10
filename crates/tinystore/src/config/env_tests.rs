@@ -37,6 +37,29 @@ fn a_dotenv_file_reads_as_every_language_reads_it() {
     }
 }
 
+// contract: CFG-06
+#[test]
+fn a_dotenv_line_that_does_not_read_is_named_by_its_number_and_never_quoted() {
+    let run_over = "APP_TOKENS={\"sms\":\n  {\"token\":\"s3cr3t\"}}\n";
+    assert_eq!(dotenv(run_over), Err("line 2: not NAME=value".to_owned()));
+    let pasted = "postgres://user:s3cr3t@host/db?sslmode=require\n";
+    assert_eq!(dotenv(pasted), Err("line 1: what stands before its = is no variable's name".to_owned()));
+}
+
+// contract: CFG-06
+#[test]
+fn an_env_prints_the_names_of_its_variables_and_never_their_text() {
+    let variables = [("APP_TOKENS", r#"{"sms":{"token":"s3cr3t"}}"#), ("DATABASE_URL", "postgres://u:s3cr3t@host")];
+    let env = Env::prefix("APP").var("db.url", "DATABASE_URL").files([".env.local"]).from(variables);
+    let printed = format!("{env:?}");
+    for name in ["APP_TOKENS", "DATABASE_URL", ".env.local"] {
+        assert!(printed.contains(name), "{name}: {printed}");
+    }
+    assert!(!printed.contains("s3cr3t"), "{printed}");
+    let builder = crate::config::load("app", json!({ "tokens": {} })).env(env);
+    assert!(!format!("{builder:?}").contains("s3cr3t"), "{builder:?}");
+}
+
 fn declaration(value: Value) -> Declaration {
     Declaration::of_marked(&value).unwrap()
 }

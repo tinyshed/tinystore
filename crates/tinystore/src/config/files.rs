@@ -189,8 +189,18 @@ fn parse(path: &Path, text: &str) -> Result<Map<String, Value>, String> {
 }
 
 fn toml_tree(text: &str) -> Result<Value, String> {
-    let table: toml::Table = toml::from_str(text).map_err(|error| error.to_string())?;
+    let table: toml::Table = toml::from_str(text).map_err(|error| toml_problem(text, &error))?;
     Ok(Value::Object(table.into_iter().map(|(key, value)| (key, toml_value(value))).collect()))
+}
+
+/// toml's problem and where it stands, without the line toml's own error
+/// prints whole, which may be a secret's.
+fn toml_problem(text: &str, error: &toml::de::Error) -> String {
+    let problem = error.message().trim_end();
+    let Some(before) = error.span().and_then(|span| text.get(..span.start)) else { return problem.to_owned() };
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().unwrap_or_default().chars().count() + 1;
+    format!("{problem} at line {line}, column {column}")
 }
 
 fn toml_value(value: toml::Value) -> Value {

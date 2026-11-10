@@ -21,7 +21,7 @@ const MOST_DOTENV: usize = 1 << 20;
 
 /// The variables a config reads: the prefix's, those `var` names, from the
 /// process, or from what `from` gives in its place, as a test does.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Env {
     prefix: String,
     names: Vec<(String, String)>,
@@ -33,7 +33,7 @@ pub struct Env {
 }
 
 /// A `.env` file: one the core reads, or one a program's SDK read and sent.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Dotenv {
     Path(PathBuf),
     #[cfg_attr(
@@ -44,6 +44,28 @@ enum Dotenv {
         name: String,
         text: String,
     },
+}
+
+// The variables' names alone, and the files' names: what each holds may be a secret.
+impl std::fmt::Debug for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let from: Option<Vec<&String>> = self.from.as_ref().map(|from| from.iter().map(|(name, _)| name).collect());
+        f.debug_struct("Env")
+            .field("prefix", &self.prefix)
+            .field("names", &self.names)
+            .field("files", &self.files)
+            .field("from", &from)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Dotenv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Dotenv::Path(path) => std::fmt::Debug::fmt(path, f),
+            Dotenv::Sent { name, .. } => std::fmt::Debug::fmt(name, f),
+        }
+    }
 }
 
 impl Env {
@@ -463,11 +485,12 @@ fn assignment(text: &str) -> Result<(Option<Assigned>, &str), String> {
     if trimmed.is_empty() || trimmed.starts_with('#') {
         return Ok((None, rest));
     }
-    let equals = line.find('=').ok_or_else(|| format!("{line:?} is no NAME=value"))?;
+    // a line is never quoted: one with no `=` may be a value run over lines, a secret's
+    let equals = line.find('=').ok_or_else(|| "not NAME=value".to_owned())?;
     let name = line[..equals].trim();
     let name = name.strip_prefix("export ").map_or(name, str::trim);
     if !is_variable_name(name) {
-        return Err(format!("{name:?} is no variable's name"));
+        return Err("what stands before its = is no variable's name".to_owned());
     }
     let value_start =
         equals + 1 + (line[equals + 1..].len() - line[equals + 1..].trim_start_matches([' ', '\t']).len());
