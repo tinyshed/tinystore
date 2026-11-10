@@ -1,6 +1,6 @@
 use std::io::{self, Cursor, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 
 use serde_json::{Value, json};
 
@@ -226,6 +226,46 @@ impl Write for Gone {
 fn the_server_ends_quietly_once_its_host_has_gone() {
     let input = format!("{}\n{}\n", request(1, "ping", json!({})), request(2, "ping", json!({})));
     assert!(mcp::server("dashbin", "1.4.0").serve_on(Cursor::new(input), Gone).is_ok());
+}
+
+/// An output that takes nothing on three writes of every four, and at most
+/// 1000 bytes on the fourth, as a host's pipe under Node on Windows now and
+/// then takes nothing.
+struct Hesitant {
+    taken: Arc<Mutex<Vec<u8>>>,
+    writes: usize,
+}
+
+impl Write for Hesitant {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.writes += 1;
+        if !self.writes.is_multiple_of(4) {
+            return Ok(0);
+        }
+        let taken = bytes.len().min(1000);
+        self.taken.lock().unwrap().extend_from_slice(&bytes[..taken]);
+        Ok(taken)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_output_that_takes_nothing_for_a_moment_gets_every_answer_whole() {
+    let long = "x".repeat(5000);
+    let tool = Tool::reads("long", "A long answer.", json!({ "type": "object" }), move |_, _| Ok(json!(long)));
+    let server = mcp::server("dashbin", "1.4.0").tool(tool);
+    let taken = Arc::default();
+    let input = format!("{}\n{}\n", call(1, "long", json!({})), request(2, "ping", json!({})));
+    server.serve_on(Cursor::new(input), Hesitant { taken: Arc::clone(&taken), writes: 0 }).unwrap();
+    let output = String::from_utf8(taken.lock().unwrap().clone()).unwrap();
+    let mut read: Vec<Value> = output.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    read.sort_by_key(|answer| answer["id"].as_u64());
+    assert_eq!(read.len(), 2, "{output}");
+    assert_eq!(read[0]["result"]["content"][0]["text"], format!("\"{}\"", "x".repeat(5000)));
+    assert_eq!(read[1]["result"], json!({}));
 }
 
 #[test]

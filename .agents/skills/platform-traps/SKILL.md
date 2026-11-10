@@ -55,7 +55,7 @@ Each line cost a debugging session once. The fix named is the one in the code.
   empties it. Tried again it takes every byte, but std's `write_all`, and
   `tokio::fs::File` with it, ends there, an answer stopped part way.
   `stdout::write_whole` (`crates/tinystore/src/stdout.rs`) tries again, under
-  a private child's `FramesOut`.
+  a private child's `FramesOut` and MCP's `Lines::write`.
 - **Closing stdin ends a read waiting on it only sometimes**: a pipe's close
   cancels it, a console's close waits for it. A private child is ended by
   closing its stdin, and killed when it does not leave.

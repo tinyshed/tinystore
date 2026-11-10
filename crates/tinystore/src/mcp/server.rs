@@ -18,7 +18,7 @@ use serde_json::Value;
 use super::session::{Asked, Session, Setup};
 use super::tool::{Answer, Blocking, Card, Tool};
 use crate::sync::lock;
-use crate::{CancellationToken, Error, Result};
+use crate::{CancellationToken, Error, Result, stdout};
 
 /// An MCP server being built: its name, its tools and its allow list; it
 /// answers with [`serve`](Server::serve).
@@ -138,7 +138,7 @@ impl<W: Write> Lines<W> {
         }
         let line = format!("{answer}\n");
         let to = &mut output.to;
-        if let Err(error) = to.write_all(line.as_bytes()).and_then(|()| to.flush()) {
+        if let Err(error) = stdout::write_whole(to, line.as_bytes()).and_then(|()| to.flush()) {
             output.failed = Some(error);
         }
     }
