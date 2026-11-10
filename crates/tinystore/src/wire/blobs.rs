@@ -336,7 +336,7 @@ pub(crate) fn read(handles: &Handles, stream: u32, body: &[u8], link: &Link) -> 
     let asked = BlobsRead::decode(body)?;
     let files = handles.at(asked.handle, &asked.folder)?;
     let mut file = match (files.get(&asked.path)?, &asked.if_match) {
-        (Some(file), Some(etag)) if file.info().etag != *etag => return Err(changed(&files, &asked.path)),
+        (Some(file), Some(etag)) if !file.matches(etag) => return Err(changed(&files, &asked.path)),
         (None, Some(_)) => return Err(changed(&files, &asked.path)),
         (None, None) => return Err(files.fail(&asked.path, Error::not_found("no file is there")).into()),
         (Some(file), _) => file,

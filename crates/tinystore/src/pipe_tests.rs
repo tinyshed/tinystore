@@ -27,6 +27,31 @@ fn a_client_sets_and_gets_a_key_through_the_pipe() {
     assert_eq!(entry.version, Some(written.version), "the version the set gave");
 }
 
+// contract: ERR-03
+// contract: WIRE-01
+#[test]
+fn a_take_or_a_delete_given_a_ttl_or_a_time_is_invalid_as_in_the_core() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = client.bucket("sessions");
+    let token = KvCall { handle, key: "token".to_owned(), ..KvCall::default() };
+    client.call::<KvWritten>(method::KV_SET, &KvCall { value: Some(Row::Int(1)), ..token.clone() }).unwrap();
+    let timed = [KvCall { ttl: Some(60_000), ..token.clone() }, KvCall { expires_at: Some(1 << 41), ..token.clone() }];
+    for (called, verb) in [(method::KV_TAKE, "take"), (method::KV_DELETE, "delete")] {
+        for call in &timed {
+            let alone = client.call::<Empty>(called, call).unwrap_err();
+            let batch = KvTx { checks: Vec::new(), writes: vec![KvOp { method: called.into(), call: call.clone() }] };
+            let batched = client.call::<Empty>(method::KV_TX, &batch).unwrap_err();
+            for failed in [alone, batched] {
+                assert_eq!(failed.code, "invalid", "{verb}: {}", failed.message);
+                assert!(failed.message.contains(&format!("a ttl or a time on a {verb}")), "{}", failed.message);
+            }
+        }
+    }
+    let entry: KvEntry = client.call(method::KV_GET, &token).unwrap();
+    assert!(entry.found, "nothing took or deleted the key");
+}
+
 #[test]
 fn every_method_of_the_schema_is_answered() {
     let dir = tempfile::tempdir().unwrap();

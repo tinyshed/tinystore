@@ -127,6 +127,7 @@ pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body
 #[cfg(feature = "sql")]
 fn key_call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, call: &KvCall) -> Answered {
     let bucket = handles.bucket(call.handle, &call.under)?;
+    refuse_expiry(called, &bucket, call)?;
     let (key, scope) = (call.key.as_str(), &bucket.scope);
     match called {
         method::KV_GET | method::KV_HAS => {
@@ -174,6 +175,7 @@ fn write(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered
     let prepared = || -> Result<_, Failure> {
         let call = KvCall::decode(body)?;
         let bucket = handles.bucket(call.handle, &call.under)?;
+        refuse_expiry(called, &bucket, &call)?;
         let options = options(&call)?;
         Ok((call, bucket, options))
     };
@@ -200,6 +202,22 @@ fn write(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered
         }),
         other => done(Err(Failure::unimplemented(format!("method {other:#06x}")))),
     }
+}
+
+/// Refuses a take's or a delete's ttl or time with the core's own refusal:
+/// neither writes a value, so it would keep the expiry nowhere.
+fn refuse_expiry(called: u16, bucket: &Bucket<()>, call: &KvCall) -> Result<(), Failure> {
+    let verb = match called {
+        method::KV_TAKE => "take",
+        method::KV_DELETE => "delete",
+        _ => return Ok(()),
+    };
+    let asked = match (call.ttl, call.expires_at) {
+        (None, None) => return Ok(()),
+        (Some(ttl), _) => bucket.key(&call.key).ttl(Duration::from_millis(ttl)),
+        (None, Some(at)) => bucket.key(&call.key).expires_at(from_unix_millis(at)),
+    };
+    Ok(asked.refuse_expiry(verb)?)
 }
 
 /// How a client's run of a once key starts: the answer kept, which ends the
@@ -519,6 +537,7 @@ fn add_write(handles: &Handles, batch: &mut Batch, called: u64, call: &KvCall) -
         return Ok(batch.add(&counters, &call.key, call.n.unwrap_or(1))?);
     }
     let bucket = handles.bucket(call.handle, &call.under)?;
+    refuse_expiry(called, &bucket, call)?;
     let options = options(call)?;
     match called {
         method::KV_SET | method::KV_CREATE => {

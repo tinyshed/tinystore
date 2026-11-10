@@ -578,6 +578,28 @@ fn a_bucket_and_a_queue_opened_from_a_database_write_inside_its_transactions() {
     assert_eq!(client.pipe.streams(), 0);
 }
 
+// contract: ERR-03
+// contract: WIRE-01
+#[cfg(any(feature = "jobs", feature = "records"))]
+#[test]
+fn a_take_or_a_delete_given_a_ttl_inside_a_transaction_is_invalid_as_in_the_core() {
+    use crate::wire::protocol::{KvBucketOpen, KvCall};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let database = open(&mut client);
+    let bucket_open = KvBucketOpen { name: "sessions".to_owned(), database: Some(database), ..KvBucketOpen::default() };
+    let sessions = client.call::<Handle>(method::KV_BUCKET_OPEN, &bucket_open).unwrap().handle;
+    let timed = KvCall { handle: sessions, key: "t-1".to_owned(), ttl: Some(60_000), ..KvCall::default() };
+    let stream = begin(&mut client, database);
+    for (called, verb) in [(method::KV_TAKE, "take"), (method::KV_DELETE, "delete")] {
+        let refused = nested(&mut client, stream, called, &timed).failure.unwrap();
+        assert_eq!(refused.code, "invalid", "{verb}: {}", refused.message);
+        assert!(refused.message.contains(&format!("a ttl or a time on a {verb}")), "{}", refused.message);
+    }
+    assert_eq!(end(&mut client, stream, false).flags, frame::END);
+}
+
 // contract: JOB-02
 #[cfg(feature = "jobs")]
 #[test]

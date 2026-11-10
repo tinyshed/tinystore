@@ -155,6 +155,13 @@ impl StoredFile {
         &self.info
     }
 
+    /// Whether an ETag a read was given names these bytes, as a write's
+    /// condition compares it: quoted or not, in either case.
+    #[cfg(feature = "wire")]
+    pub(crate) fn matches(&self, etag: &str) -> bool {
+        super::info::matches(etag, &self.sha256)
+    }
+
     /// What its errors call it: `files avatars: "users/42/1.png"`.
     #[cfg(feature = "async")]
     pub(crate) fn label(&self) -> &str {

@@ -200,6 +200,25 @@ fn a_read_on_an_etag_the_path_no_longer_holds_is_a_conflict() {
     assert_eq!(ended.unwrap_err().code, "not_found");
 }
 
+// contract: WIRE-01
+#[test]
+fn a_read_compares_its_etag_as_a_write_does_without_its_quotes_and_in_either_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client, "docs");
+    let write = BlobsWrite { handle, path: "a".to_owned(), bytes: b"first".to_vec(), ..BlobsWrite::default() };
+    let written: BlobsWritten = client.call(method::BLOBS_PUT, &write).unwrap();
+    let bare = written.info.unwrap().etag.trim_matches('"').to_ascii_uppercase();
+    let on = BlobsRead { handle, path: "a".to_owned(), if_match: Some(bare.clone()), ..BlobsRead::default() };
+
+    let (first, ended) = read(&mut client, &on, 2 << 20);
+    assert_eq!((first, ended), (b"first".to_vec(), Ok(())), "the ETag, unquoted and in capitals, names the bytes");
+    let replace = BlobsWrite { if_match: Some(bare), bytes: b"second".to_vec(), ..write };
+    assert!(client.call::<BlobsWritten>(method::BLOBS_PUT, &replace).unwrap().info.is_some(), "as a write takes it");
+    let (_, ended) = read(&mut client, &on, 2 << 20);
+    assert_eq!(ended.unwrap_err().code, "conflict", "the bytes it named were replaced");
+}
+
 #[test]
 fn a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
     let dir = tempfile::tempdir().unwrap();
