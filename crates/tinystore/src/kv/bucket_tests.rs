@@ -28,6 +28,18 @@ fn a_value_comes_back_as_its_type() {
     assert_eq!(prices.get("zero").unwrap().unwrap().to_bits(), (-0.0f64).to_bits());
 }
 
+// contract: KV-01, ERR-03
+#[test]
+fn a_nested_option_that_holds_nothing_is_refused_when_it_is_written() {
+    let f = fixture();
+    let maybe = f.store.bucket::<Option<Option<i64>>>("maybe").open().unwrap();
+    let error = maybe.set("k", &Some(None)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+    assert_eq!(maybe.get("k").unwrap(), None, "nothing was written");
+    maybe.set("k", &Some(Some(7))).unwrap();
+    assert_eq!(maybe.get("k").unwrap(), Some(Some(Some(7))), "a Some that holds a value reads back as it was");
+}
+
 #[test]
 fn delete_removes_a_key_and_says_whether_it_was_there() {
     let f = fixture();

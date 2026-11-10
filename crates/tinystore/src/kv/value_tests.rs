@@ -45,6 +45,23 @@ fn a_primitive_is_kept_as_its_row() {
 
 // contract: KV-01
 #[test]
+fn a_some_that_holds_nothing_is_refused_rather_than_read_back_as_none() {
+    #[derive(Serialize)]
+    struct Marker;
+    #[derive(Serialize)]
+    struct Wrapped(());
+    let refused =
+        [encode(&Some(())), encode(&Some(None::<i64>)), encode(&Some(Some(Marker))), encode(&Some(Wrapped(())))];
+    for refused in refused {
+        let error = refused.unwrap_err();
+        assert!(error.to_string().contains("no row tells from None"), "{error}");
+    }
+    round_trip(Some(Some(5i64)), Raw::Int(5));
+    round_trip(Some(vec![1i64]), row(3, b"[1]"));
+}
+
+// contract: KV-01
+#[test]
 fn a_float_keeps_its_bits() {
     round_trip(-0.0f64, row(4, &[0x80, 0, 0, 0, 0, 0, 0, 0]));
     round_trip(f64::INFINITY, row(4, &f64::INFINITY.to_bits().to_be_bytes()));

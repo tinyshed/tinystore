@@ -57,6 +57,9 @@ let used = messages.allow(user_id)?;
   `corrupt`; every language reads the others' rows (contracts KV-01, KV-02).
   A Go `uint64` or `uint` is kept as Rust's `u64`, its whole range, and a Go
   `float32` as Rust's `f32`. Rows that Go 0.1.0 wrote for them still read.
+  In Rust, `None` and `()` are kept as no value at all, so a `Some` that
+  holds nothing, `Some(())` or `Some(None)`, could not be told from `None`:
+  its write fails `invalid`.
 - An expired or cleared key is absent to every call at once, with no cleanup
   job (contract KV-03).
 - A version changes on every write and a write with `ifVersion` fails

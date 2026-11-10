@@ -259,8 +259,15 @@ impl ser::Serializer for Probe {
         Ok(Raw::None)
     }
 
+    /// A `Some` is kept as what it holds, so one that holds nothing would read
+    /// back as `None`: `Some(())` and `Some(None)` are refused.
     fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Result<Raw, Probed> {
-        value.serialize(self)
+        match value.serialize(self)? {
+            Raw::None => Err(Probed::Failed(Mismatch(
+                "a Some of nothing, a nested Option or a unit inside one, which no row tells from None".to_owned(),
+            ))),
+            raw => Ok(raw),
+        }
     }
 
     fn serialize_unit(self) -> Result<Raw, Probed> {
