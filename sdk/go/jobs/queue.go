@@ -240,7 +240,8 @@ func (q *Queue[T]) Set(ctx context.Context, id string, value T, opts ...SetOptio
 	return err
 }
 
-// Update changes the id's job when it has not started, and says whether it did.
+// Update changes the id's job when it is not running, the steps kept for the
+// old value dropped with it, and says whether it did.
 func (q *Queue[T]) Update(ctx context.Context, id string, value T, opts ...SetOption) (bool, error) {
 	o := jobOptions{id: &id}
 	for _, opt := range opts {

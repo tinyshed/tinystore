@@ -114,7 +114,7 @@ These contracts are what does not.
 - **JOB-01** A job MUST NOT run before its time, and jobs due MUST start in the order of their time.
 - **JOB-02** A job added in a transaction or a batch MUST commit with its rows or not at all, and a worker MUST NOT see it before the commit.
 - **JOB-03** An id MUST name one job; `add` MUST add only to a free id, and `set` MUST make the id's job its value whatever it was.
-- **JOB-04** `update` MUST change only a job that has not started; `cancel` MUST tell a running job's handler to stop.
+- **JOB-04** `update` MUST change only a job that is not running, and drop the steps kept for its old value; `cancel` MUST tell a running job's handler to stop.
 - **JOB-05** A job whose lease ended MUST run again, and its stale lease MUST settle nothing.
 - **JOB-06** A step MUST run once in a run, across its attempts.
 - **JOB-07** A failure MUST be retried with growing waits and then fail for good; a snooze MUST count no attempt; a job that kills its process MUST fail after its attempts.

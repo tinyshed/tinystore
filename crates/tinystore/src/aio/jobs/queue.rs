@@ -147,8 +147,9 @@ where
         self.id(id).set(value)
     }
 
-    /// Gives the job under `id` this value when it has not started, and says
-    /// whether it did; see [`JobCall::update`].
+    /// Gives the job under `id` this value when it is not running, the steps
+    /// kept for the old one dropped with it, and says whether it did; see
+    /// [`JobCall::update`].
     pub fn update(&self, id: impl AsRef<str>, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
         self.id(id).update(value)
     }
@@ -390,8 +391,9 @@ where
         async move { written.await.map(drop) }
     }
 
-    /// Changes the id's job when it has not started, and says whether it did;
-    /// see [`jobs::JobCall::update`].
+    /// Changes the id's job when it is not running, the steps kept for the old
+    /// value dropped with it, and says whether it did; see
+    /// [`jobs::JobCall::update`].
     pub fn update(self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
         self.write(Change::Update, "an update", value)
     }

@@ -192,6 +192,30 @@ fn update_changes_only_a_job_that_has_not_started() {
     assert!(!later.update("m1", &note("after it was sent")).unwrap());
 }
 
+// contract: JOB-04, JOB-06
+#[test]
+fn an_update_of_a_job_waiting_for_its_retry_drops_the_steps_kept_for_its_old_value() {
+    let f = fixture();
+    let orders = f.store.queue::<Note>("orders").attempts(3).open().unwrap();
+    orders.id("order:7").add(&note("10")).unwrap();
+    let charged = Mutex::new(Vec::new());
+    // it borrows `charged` alone, so that it is `Copy` and runs both times by value
+    let charge = |order: Note, run: &super::Run| -> Result<()> {
+        let kept: String = run.step("charge", || -> Result<String> { Ok(order.text.clone()) })?;
+        charged.lock().unwrap().push(kept);
+        match order.text.as_str() {
+            "10" => Err(crate::Error::invalid("the receipt did not save")),
+            _ => Ok(()),
+        }
+    };
+    orders.run_due(charge).unwrap();
+    assert!(orders.id("order:7").update(&note("20")).unwrap(), "a job waiting for its retry is not running");
+    f.clock.advance(HOUR);
+    orders.run_due(charge).unwrap();
+    assert_eq!(*charged.lock().unwrap(), ["10", "20"], "the step ran again for the new value");
+    assert!(orders.get("order:7").unwrap().is_none(), "and the job is done");
+}
+
 // contract: JOB-04
 #[test]
 fn cancel_says_whether_there_was_a_job_and_tells_a_running_handler_to_stop() {
@@ -329,7 +353,8 @@ fn a_page_of_one_state_reads_on_past_the_others_until_it_holds_its_limit() {
     let first = notes.list(&scheduled).unwrap();
     assert_eq!(texts(&first), ["later 0", "later 1", "later 2"], "past 300 waiting jobs, a page holds its limit");
     let rest = notes.list(&scheduled.clone().after(first.next.expect("a full page has a next"))).unwrap();
-    assert_eq!((texts(&rest), rest.next), (vec!["later 3".to_owned()], None), "the last page has no next");
+    assert_eq!(texts(&rest), ["later 3"]);
+    assert_eq!(rest.next, None, "the last page has no next");
     let walked: Vec<String> = notes.all(scheduled.limit(1)).map(|job| job.unwrap().value.text).collect();
     assert_eq!(walked, ["later 0", "later 1", "later 2", "later 3"], "each met once");
 }

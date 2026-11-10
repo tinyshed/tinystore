@@ -59,6 +59,11 @@ while `dedupe` keeps it once the job is done.
 `add`, `update` and `cancel` answer rather than throw: a message being sent
 says it is too late to edit, and the program shows that.
 
+A job waiting for a retry is not running, so `update` changes it too. The
+answers its steps kept were for the old value, so they go with it, and the
+next attempt runs every step again with the new one (contract JOB-04). Its
+attempts go on counting.
+
 A `set` of a running job waits for the run under way to end, however it
 ends. Then the job starts anew with the set's value, at the set's time or at
 once, its attempts counted from one and the earlier run's steps gone. A

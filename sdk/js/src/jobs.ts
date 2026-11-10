@@ -639,9 +639,10 @@ export class Queue<T> {
 	}
 
 	/**
-	 * Changes the id's job when it has not started: its value, and its time,
-	 * group or repeat when the options give them. It says whether it did: a
-	 * job that runs, ran or never was answers false.
+	 * Changes the id's job when it is not running: its value, the steps kept
+	 * for the old one dropped with it, and its time, group or repeat when the
+	 * options give them. It says whether it did: a job that runs, is done or
+	 * failed, or never was answers false.
 	 */
 	async update(id: string, value: T, options: JobOptions = {}): Promise<boolean> {
 		const fields = { ...jobFields(options), id, value: this.#source.values.encode(value) }
@@ -874,7 +875,7 @@ export class StoreTxQueue<T> {
 		this.#write('jobs.set', { ...jobFields(options), id }, value)
 	}
 
-	/** Changes the id's job when it has not started, with the commit. */
+	/** Changes the id's job when it is not running, its old value's steps dropped, with the commit. */
 	async update(id: string, value: T, options: JobOptions = {}): Promise<void> {
 		this.#write('jobs.update', { ...jobFields(options), id }, value)
 	}

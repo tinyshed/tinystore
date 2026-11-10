@@ -119,9 +119,10 @@ where
         self.queue.set_asked(self.asked, value, self.tx)
     }
 
-    /// Changes the id's job when it has not started: its value, and its time,
-    /// group or repeat when the call names them. Says whether it did: a job
-    /// that runs, ran or never was answers `false`.
+    /// Changes the id's job when it is not running: its value, the steps kept
+    /// for the old one dropped with it, and its time, group or repeat when the
+    /// call names them. Says whether it did: a job that runs, is done or failed,
+    /// or never was answers `false`.
     pub fn update(self, value: &V) -> Result<bool> {
         self.queue.update_asked(self.asked, value, self.tx)
     }

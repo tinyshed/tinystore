@@ -100,9 +100,9 @@ fn again(call: &Prepared, there: &Row) -> Option<i64> {
     }
 }
 
-/// Changes a job that has not started: its value, and its time, group or
-/// repeat when the call names them. Answers when it is due, none when there is
-/// no such job or it runs.
+/// Changes a job that is not running, one waiting for a retry among them: its
+/// value, and its time, group or repeat when the call names them. Answers when
+/// it is due, none when there is no such job or it runs.
 pub(crate) fn update(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Option<i64>> {
     let key = call.key.as_deref().unwrap_or_default();
     let Some(there) = rows::job_by_key(c, queue.id, key)? else {

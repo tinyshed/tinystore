@@ -210,8 +210,9 @@ where
         self.set_asked(Asked::with_id(id.as_ref()), value, None)
     }
 
-    /// Gives the job under `id` this value when it has not started, and says
-    /// whether it did; see [`JobCall::update`].
+    /// Gives the job under `id` this value when it is not running, the steps
+    /// kept for the old one dropped with it, and says whether it did; see
+    /// [`JobCall::update`].
     pub fn update(&self, id: impl AsRef<str>, value: &V) -> Result<bool> {
         self.update_asked(Asked::with_id(id.as_ref()), value, None)
     }

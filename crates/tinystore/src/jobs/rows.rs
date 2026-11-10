@@ -255,11 +255,13 @@ pub(crate) fn renew(c: &Connection, queue: i64, key: &str, there: &Row, change: 
     follow(c, queue, key, there.next, change.next)
 }
 
-/// Gives a job that has not started what an update names; a repeat or a group
-/// left out stays as it was. No live lease holds it.
+/// Gives a job that is not running what an update names; a repeat or a group
+/// left out stays as it was. No live lease holds it. The steps an earlier
+/// attempt kept go with the value they were kept for, as a set's do.
 pub(crate) fn update(c: &Connection, queue: i64, key: &str, there: &Row, change: &Change<'_>) -> Result<()> {
     end_lease(c, there.id)?;
     rewrite(c, queue, there, change, (UPDATE_JOB, "an update's job"))?;
+    execute(c, DROP_STEPS, [there.id], "an update's job: the steps kept for its old value")?;
     follow(c, queue, key, there.next, change.next)
 }
 

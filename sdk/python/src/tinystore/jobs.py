@@ -486,7 +486,7 @@ class Queue[T]:
         cron: str | None = None,
         time_zone: str | None = None,
     ) -> bool:
-        """Changes the id's job when it has not started, and says whether it did."""
+        """Changes the id's job when it is not running, its old value's steps dropped, and says whether it did."""
         timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.update", fields)
@@ -696,7 +696,7 @@ class StoreTxQueue[T]:
         cron: str | None = None,
         time_zone: str | None = None,
     ) -> None:
-        """Changes the id's job when it has not started, with the commit."""
+        """Changes the id's job when it is not running, its old value's steps dropped, with the commit."""
         timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
         self._write("jobs.update", {**timing, "id": id}, value)
 
