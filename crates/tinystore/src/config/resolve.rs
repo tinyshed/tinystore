@@ -100,7 +100,7 @@ impl<T: DeserializeOwned> Making<'_, T> {
         let value = rules::check(setting, value)?;
         let mut next = tree.clone();
         set(&mut next, path, value);
-        let built = self.built(&next)?;
+        let built = self.built(&next).map_err(|why| said(setting, &why))?;
         if let Some(validate) = self.validate {
             validate(&built)?;
         }
@@ -120,6 +120,13 @@ impl<T: DeserializeOwned> Making<'_, T> {
     /// value a layer gave is put back to its default, then given again alone.
     fn culprits(&self, base: &Base, tree: &Value, why: &str) -> Vec<String> {
         let settings: BTreeMap<String, &Setting> = self.declaration.settings_of(&base.shape).into_iter().collect();
+        // A problem no one value is found to make, as of a required setting,
+        // which has no default to put back, may quote any setting's value.
+        let unplaced = if settings.values().any(|setting| setting.may_hold_secret()) {
+            without_value(why)
+        } else {
+            why.to_owned()
+        };
         let given: Vec<(&String, &Stacked, &Value)> = base
             .stacks
             .iter()
@@ -134,21 +141,58 @@ impl<T: DeserializeOwned> Making<'_, T> {
             set(&mut clean, path, (*default).clone());
         }
         if self.built(&clean).is_err() {
-            return vec![why.to_owned()];
+            return vec![unplaced];
         }
         let found: Vec<String> = given
             .iter()
             .filter_map(|(path, last, _)| {
                 let mut alone = clean.clone();
                 set(&mut alone, path, last.value.clone());
-                let secret = settings.get(path.as_str()).is_some_and(|setting| setting.secret);
-                let shown =
-                    |why: String| if secret { "a secret that does not read as its type".to_owned() } else { why };
-                self.built(&alone).err().map(|why| named(&last.from, path, &shown(why)))
+                let why = self.built(&alone).err()?;
+                let shown = settings.get(path.as_str()).map_or_else(|| why.clone(), |setting| said(setting, &why));
+                Some(named(&last.from, path, &shown))
             })
             .collect();
-        if found.is_empty() { vec![why.to_owned()] } else { found }
+        if found.is_empty() { vec![unplaced] } else { found }
     }
+}
+
+/// What serde says of a value a setting was given, as an error says it: of a
+/// secret, nothing; of a value that may hold one, the type's words alone.
+fn said(setting: &Setting, why: &str) -> String {
+    if setting.secret {
+        "a secret that does not read as its type".to_owned()
+    } else if setting.kind.hides_secret() {
+        without_value(why)
+    } else {
+        why.to_owned()
+    }
+}
+
+/// serde's complaint in the words of the type alone: the field it misses, or
+/// what it expected and which complaint it is. The value serde quotes is
+/// left out, and any other message, a type's own, which may quote anything,
+/// is not said.
+///
+/// ```text
+/// invalid type: integer `482913`, expected a string   invalid type, expected a string
+/// unknown variant `s3cr3t`, expected `sms` or `call`  unknown variant, expected `sms` or `call`
+/// missing field `token`                               missing field `token`
+/// relative URL without a base                         does not read as its type
+/// ```
+fn without_value(why: &str) -> String {
+    const COMPLAINTS: [&str; 5] =
+        ["invalid type", "invalid value", "invalid length", "unknown variant", "unknown field"];
+    let missing = why.strip_prefix("missing field `").and_then(|rest| rest.strip_suffix('`'));
+    if missing.is_some_and(|field| !field.contains('`')) {
+        return why.to_owned();
+    }
+    // the last `, expected ` is serde's own: a quoted string before it may hold one too
+    let typed = why.rsplit_once(", expected ").and_then(|(complaint, expected)| {
+        let complaint = COMPLAINTS.into_iter().find(|known| complaint.starts_with(*known))?;
+        Some(format!("{complaint}, expected {expected}"))
+    });
+    typed.unwrap_or_else(|| "does not read as its type".to_owned())
 }
 
 impl<T: Serialize + DeserializeOwned> Making<'_, T> {
@@ -252,5 +296,27 @@ fn view_kind(kind: &Kind, value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_value;
+
+    // contract: CFG-06
+    #[test]
+    fn serde_is_said_in_the_types_words_and_never_with_the_value_it_quotes() {
+        let said = [
+            ("invalid type: integer `482913`, expected a string", "invalid type, expected a string"),
+            (r#"invalid value: string "s3, expected cr3t", expected u16"#, "invalid value, expected u16"),
+            ("unknown variant `s3cr3t`, expected `sms` or `call`", "unknown variant, expected `sms` or `call`"),
+            ("missing field `token`", "missing field `token`"),
+            ("missing field `s3cr3t` or `token`", "does not read as its type"),
+            ("relative URL without a base", "does not read as its type"),
+            ("not a port, expected 1 to 65535: s3cr3t", "does not read as its type"),
+        ];
+        for (serde, shown) in said {
+            assert_eq!(without_value(serde), shown, "{serde}");
+        }
     }
 }

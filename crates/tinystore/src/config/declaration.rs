@@ -43,6 +43,20 @@ pub(crate) enum Node {
     Chosen(Chosen),
 }
 
+impl Node {
+    /// Whether a value a layer gives in place of this node may be a secret or
+    /// hold one: a setting's that may, and a group's, an entry's or a chosen
+    /// group's with such a setting anywhere inside.
+    pub(crate) fn may_hold_secret(&self) -> bool {
+        match self {
+            Node::Setting(setting) => setting.may_hold_secret(),
+            Node::Group(group) => group.values().any(Node::may_hold_secret),
+            Node::Entries(entries) => entries.item.values().any(Node::may_hold_secret),
+            Node::Chosen(chosen) => chosen.groups.values().flat_map(|group| group.values()).any(Node::may_hold_secret),
+        }
+    }
+}
+
 /// A group whose settings are those of one of `groups`, the one a text
 /// setting beside it names: an instance's `settings` are the group of the
 /// plugin its `plugin` names. That chooser takes no value but a group's name.
@@ -104,6 +118,14 @@ pub(crate) struct Setting {
     pub(crate) secret: bool,
 }
 
+impl Setting {
+    /// Whether the value a layer gives it may be a secret or hold one, which
+    /// an error about it then never quotes.
+    pub(crate) fn may_hold_secret(&self) -> bool {
+        self.secret || self.kind.hides_secret()
+    }
+}
+
 /// What a setting holds. A span is kept as milliseconds; a list is one
 /// setting, given whole; an object is a map of any keys, given whole.
 #[derive(Clone, Debug, PartialEq)]
@@ -119,11 +141,37 @@ pub(crate) enum Kind {
     Any,
 }
 
+impl Kind {
+    /// Whether a value of this kind may hold a secret the declaration cannot
+    /// see: a map, any value, and a list of them or of groups that may. A
+    /// Rust program declares one by a type whose default shows nothing of
+    /// it, as an empty `BTreeMap<String, Creds>` whose `Creds` holds a
+    /// `Secret`.
+    pub(crate) fn hides_secret(&self) -> bool {
+        match self {
+            Kind::Text | Kind::Integer | Kind::Number | Kind::Boolean | Kind::Duration => false,
+            Kind::Object | Kind::Any => true,
+            Kind::List(item) => item.hides_secret(),
+        }
+    }
+}
+
 /// The items of a list: values of one kind, or groups of settings.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Item {
     Value { kind: Kind, rules: Rules },
     Group(Group),
+}
+
+impl Item {
+    /// Whether an item may hold a secret the declaration cannot see, as
+    /// `Kind::hides_secret` says; a field of an item is never a secret itself.
+    pub(crate) fn hides_secret(&self) -> bool {
+        match self {
+            Item::Value { kind, .. } => kind.hides_secret(),
+            Item::Group(group) => group.values().any(Node::may_hold_secret),
+        }
+    }
 }
 
 /// What one value says of itself: a range of a number, a span or a list's
@@ -772,6 +820,23 @@ pub(crate) fn shown(value: &Value) -> String {
         Some((cut, _)) => format!("{}…", &text[..cut]),
         None => text,
     }
+}
+
+/// A value as an error says it: quoted, or, where it may be or hold a
+/// secret, only what it is, `text`, `a number` or `a map`.
+pub(crate) fn shown_unless_secret(value: &Value, secret: bool) -> String {
+    if !secret {
+        return shown(value);
+    }
+    let what = match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "text",
+        Value::Array(_) => "a list",
+        Value::Object(_) => "a map",
+    };
+    what.to_owned()
 }
 
 #[cfg(test)]

@@ -226,19 +226,20 @@ impl Read {
     }
 }
 
-/// What a map of entries' own variable is read as: a map given as JSON, whose
-/// text is never quoted, since it may hold an entry's secret.
+/// What a map of entries' own variable is read as: a map given as JSON. Its
+/// text, as any map's, is never quoted, since it may hold an entry's secret:
+/// a refusal says where its JSON stops reading.
 static WHOLE_MAP: Setting = Setting {
     kind: Kind::Object,
     rules: Rules { min: None, max: None, one_of: None },
     default: None,
     required: false,
     live: false,
-    secret: true,
+    secret: false,
 };
 
 /// A variable's text as its setting keeps it; the text of a secret is never
-/// quoted.
+/// quoted, nor, as `rules` words it, that of a map, a list or any value.
 fn parsed(setting: &Setting, text: &str) -> Result<Value, String> {
     if text.len() > MOST_BYTES {
         return Err(format!("{} bytes, past the {MOST_BYTES} a setting takes", text.len()));

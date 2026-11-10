@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 use yaml_rust2::{Yaml, YamlLoader};
 
-use super::declaration::{Choices, Chosen, Declaration, Entries, Group, Node, did_you_mean, entry_path, joined, shown};
+use super::declaration::{
+    Choices, Chosen, Declaration, Entries, Group, Node, did_you_mean, entry_path, joined, shown_unless_secret,
+};
 use super::rules;
 use crate::typos::meant;
 
@@ -181,7 +183,8 @@ fn parse(path: &Path, text: &str) -> Result<Map<String, Value>, String> {
     match tree {
         Value::Object(map) => Ok(map),
         Value::Null => Ok(Map::new()),
-        other => Err(format!("{} is not a map of settings", shown(&other))),
+        // the whole file may hold any of its settings' secrets
+        other => Err(format!("{} is not a map of settings", shown_unless_secret(&other, true))),
     }
 }
 
@@ -360,8 +363,9 @@ pub(super) fn walk(group: &Group, tree: &Map<String, Value>, path: &str, walked:
             (Some(Node::Chosen(chosen)), Value::Object(map)) => {
                 walk_chosen(chosen, map, &Stand { group, tree, path, at: &at }, walked);
             }
-            (Some(Node::Group(_) | Node::Entries(_) | Node::Chosen(_)), other) => {
-                walked.problems.push(format!("{at}: {} is not a group of settings", shown(other)));
+            (Some(node @ (Node::Group(_) | Node::Entries(_) | Node::Chosen(_))), other) => {
+                let what = shown_unless_secret(other, node.may_hold_secret());
+                walked.problems.push(format!("{at}: {what} is not a group of settings"));
             }
             (Some(Node::Setting(setting)), _) if setting.secret && walked.refuses_secrets => walked.secrets.push(at),
             (Some(Node::Setting(setting)), value) => match rules::check(setting, value) {
@@ -427,7 +431,10 @@ pub(super) fn walk_entries(entries: &Entries, map: &Map<String, Value>, path: &s
                 walked.entries.push((path.to_owned(), key.clone()));
                 walk(&entries.item, fields, &at, walked);
             }
-            other => walked.problems.push(format!("{at}: {} is not a group of settings", shown(other))),
+            other => {
+                let what = shown_unless_secret(other, entries.item.values().any(Node::may_hold_secret));
+                walked.problems.push(format!("{at}: {what} is not a group of settings"));
+            }
         }
     }
 }

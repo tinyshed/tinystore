@@ -1,10 +1,15 @@
 //! A value checked against its setting, whichever layer gave it: its kind,
 //! then the rules of one value. A variable's text is read as its setting's
 //! kind first.
+//!
+//! A refusal quotes what it refuses, but where what was declared may hide a
+//! secret, a map, a list or any value, it says only what the value is:
+//! `text is not a map`, `its text is not a list: trailing comma at line 1
+//! column 30`.
 
 use serde_json::{Map, Number, Value};
 
-use super::declaration::{Group, Item, Kind, Node, Rules, Setting, did_you_mean, joined, shown};
+use super::declaration::{Group, Item, Kind, Node, Rules, Setting, did_you_mean, joined, shown, shown_unless_secret};
 use crate::typos::meant;
 
 /// The units of a span, longest first, as the SDKs spell one: `1h30m`, `250ms`.
@@ -43,7 +48,7 @@ fn check_kind(kind: &Kind, value: &Value) -> Result<Value, String> {
             .map(|(at, value)| check_item(item, value).map_err(|why| format!("[{at}]{why}")))
             .collect::<Result<Vec<_>, _>>()
             .map(Value::Array),
-        _ => Err(format!("{} is not {}", shown(value), described(kind))),
+        _ => Err(format!("{} is not {}", shown_unless_secret(value, kind.hides_secret()), described(kind))),
     }
 }
 
@@ -75,7 +80,7 @@ fn check_item(item: &Item, value: &Value) -> Result<Value, String> {
         }
         Item::Group(group) => match value {
             Value::Object(map) => check_group(group, map, ""),
-            other => Err(format!(": {} is not a group of settings", shown(other))),
+            other => Err(format!(": {} is not a group of settings", shown_unless_secret(other, item.hides_secret()))),
         },
     }
 }
@@ -93,7 +98,10 @@ fn check_group(group: &Group, map: &Map<String, Value>, path: &str) -> Result<Va
         let given = map.get(key).filter(|value| !value.is_null());
         let value = match (node, given) {
             (Node::Group(inner), Some(Value::Object(fields))) => check_group(inner, fields, &at)?,
-            (Node::Group(_), Some(other)) => return Err(format!(".{at}: {} is not a group of settings", shown(other))),
+            (Node::Group(_), Some(other)) => {
+                let what = shown_unless_secret(other, node.may_hold_secret());
+                return Err(format!(".{at}: {what} is not a group of settings"));
+            }
             (Node::Group(inner), None) => check_group(inner, &Map::new(), &at)?,
             (Node::Setting(setting), Some(value)) => check(setting, value).map_err(|why| format!(".{at}: {why}"))?,
             (Node::Setting(setting), None) if setting.required => return Err(format!(".{at} is required")),
@@ -169,7 +177,7 @@ pub(crate) fn parse(setting: &Setting, text: &str) -> Result<Value, String> {
 
 fn parse_kind(kind: &Kind, text: &str) -> Result<Value, String> {
     let trimmed = text.trim();
-    let refused = || format!("{text:?} is not {}", described(kind));
+    let refused = || format!("{} is not {}", named_text(text, kind.hides_secret()), described(kind));
     match kind {
         Kind::Text => Ok(Value::String(text.to_owned())),
         Kind::Integer => match trimmed.parse::<i64>() {
@@ -186,9 +194,18 @@ fn parse_kind(kind: &Kind, text: &str) -> Result<Value, String> {
         Kind::Boolean => boolean(trimmed).map(Value::Bool).ok_or_else(refused),
         Kind::Duration => span(trimmed).map(Value::from),
         Kind::List(item) => list(item, trimmed),
-        Kind::Object => serde_json::from_str::<Map<String, Value>>(trimmed).map(Value::Object).map_err(|_| refused()),
+        // JSON that stops reading says where; JSON of another value, as serde quotes it, says nothing
+        Kind::Object => serde_json::from_str::<Map<String, Value>>(trimmed)
+            .map(Value::Object)
+            .map_err(|error| if error.is_data() { refused() } else { format!("{}: {error}", refused()) }),
         Kind::Any => Ok(serde_json::from_str(trimmed).unwrap_or_else(|_| Value::String(text.to_owned()))),
     }
+}
+
+/// A variable's text as a refusal names it: quoted, or `its text` where it
+/// may hide a secret.
+fn named_text(text: &str, hides_secret: bool) -> String {
+    if hides_secret { "its text".to_owned() } else { format!("{text:?}") }
 }
 
 /// `true` or `false` as Go's `strconv.ParseBool` reads them, as variables of
@@ -203,11 +220,13 @@ fn boolean(text: &str) -> Option<bool> {
 
 /// A list given as JSON, or as items between commas: `a.com, b.com`.
 fn list(item: &Item, text: &str) -> Result<Value, String> {
+    let given = named_text(text, item.hides_secret());
+    // JSON read as any value fails only where it stops reading, which quotes none of it
     if text.starts_with('[') {
-        return serde_json::from_str(text).map_err(|error| format!("{text:?} is not a list: {error}"));
+        return serde_json::from_str(text).map_err(|error| format!("{given} is not a list: {error}"));
     }
     let Item::Value { kind, .. } = item else {
-        return Err(format!("{text:?} is not a list: a list of groups is given as JSON"));
+        return Err(format!("{given} is not a list: a list of groups is given as JSON"));
     };
     if text.is_empty() {
         return Ok(Value::Array(Vec::new()));

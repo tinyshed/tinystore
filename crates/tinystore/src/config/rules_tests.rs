@@ -76,6 +76,30 @@ fn a_lists_items_are_checked_each_its_length_counted_and_a_group_item_filled() {
     );
 }
 
+// contract: CFG-06
+#[test]
+fn what_may_hide_a_secret_is_refused_by_what_it_is_and_never_quoted() {
+    let map = setting(Kind::Object, Rules::default());
+    let error = parse(&map, r#"{"token":"s3cr3t",}"#).unwrap_err();
+    assert!(error.starts_with("its text is not a map: trailing comma at line 1 column "), "{error}");
+    assert_eq!(parse(&map, r#""s3cr3t""#), Err("its text is not a map".to_owned()), "JSON of another value");
+    assert_eq!(check(&map, &json!("s3cr3t")), Err("text is not a map".to_owned()));
+    let anything = Item::Value { kind: Kind::Any, rules: Rules::default() };
+    let list = setting(Kind::List(Box::new(anything)), Rules::default());
+    let error = parse(&list, r#"[{"token":"s3cr3t"},]"#).unwrap_err();
+    assert!(error.starts_with("its text is not a list: trailing comma at line 1 column "), "{error}");
+    assert_eq!(check(&list, &json!({ "token": "s3cr3t" })), Err("a map is not a list".to_owned()));
+    let extra = Setting { default: Some(Value::Null), ..setting(Kind::Any, Rules::default()) };
+    let item = Item::Group(Group::from([("extra".to_owned(), Node::Setting(extra))]));
+    let groups = setting(Kind::List(Box::new(item)), Rules::default());
+    assert_eq!(check(&groups, &json!(["s3cr3t"])), Err("[0]: text is not a group of settings".to_owned()));
+    let text = Item::Value { kind: Kind::Text, rules: Rules::default() };
+    let texts = setting(Kind::List(Box::new(text)), Rules::default());
+    assert_eq!(check(&texts, &json!("a.com")), Err(r#""a.com" is not a list"#.to_owned()), "a list of text may say it");
+    let error = parse(&texts, "[a.com").unwrap_err();
+    assert!(error.starts_with(r#""[a.com" is not a list: expected value at line 1 column "#), "{error}");
+}
+
 #[test]
 fn a_variables_text_reads_as_its_settings_kind() {
     let list =

@@ -313,6 +313,101 @@ fn an_optional_secret_left_none_is_a_secret_whatever_layer_gives_it() {
     assert!(error.contains("password: a secret is text; one with no value is Option<Secret<String>>"), "{error}");
 }
 
+/// Settings whose secrets the declaration cannot see: an empty map, an empty
+/// list and a `None`, of a struct that holds a `Secret`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Sms {
+    tokens: BTreeMap<String, Creds>,
+    backups: Vec<Creds>,
+    fallback: Option<Creds>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Creds {
+    user: String,
+    token: Secret<String>,
+}
+
+// contract: CFG-06, CFG-03
+#[test]
+fn a_map_a_list_or_any_value_that_does_not_read_is_refused_without_what_a_layer_gave_it() {
+    let f = fixture();
+    let refused_saying = |yaml: &str, variables: &[(&str, &str)], said: &str| {
+        let yaml = file(&f, "sms.yaml", yaml);
+        let error = refused(load("sms", Sms::default()).file(yaml).env(env(variables)).open()).to_string();
+        assert!(error.contains(said), "{said}: {error}");
+        assert!(!error.contains("s3cr3t") && !error.contains("482913"), "{error}");
+    };
+    let tokens = [("APP_TOKENS", r#"{"sms":{"token":"s3cr3t"},}"#)];
+    refused_saying("", &tokens, "APP_TOKENS: its text is not a map: trailing comma at line 1 column ");
+    let backups = [("APP_BACKUPS", r#"[{"token":"s3cr3t"},]"#)];
+    refused_saying("", &backups, "APP_BACKUPS: its text is not a list: trailing comma at line 1 column ");
+    refused_saying("tokens: s3cr3t\n", &[], "sms.yaml: tokens: text is not a map");
+    let number = "tokens: { sms: { token: 482913 } }\n";
+    refused_saying(number, &[], "sms.yaml: tokens: invalid type, expected a string");
+    refused_saying("backups: [s3cr3t]\n", &[], "sms.yaml: backups: invalid type, expected struct Creds");
+    let fallback = [("APP_FALLBACK", r#"{"token":482913}"#)];
+    refused_saying("", &fallback, "APP_FALLBACK: invalid type, expected a string");
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Vault {
+    tokens: Required<BTreeMap<String, Creds>>,
+    mode: Secret<Mode>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+enum Mode {
+    #[default]
+    Sms,
+    Call,
+}
+
+// contract: CFG-06
+#[test]
+fn a_required_value_that_does_not_read_is_refused_without_what_a_layer_gave_it() {
+    let opened =
+        |variables: &[(&str, &str)]| refused(load("vault", Vault::default()).env(env(variables)).open()).to_string();
+    let error = opened(&[("APP_TOKENS", r#"{"sms":{"token":482913}}"#), ("APP_MODE", "Sms")]);
+    assert!(error.contains("invalid type, expected a string") && !error.contains("482913"), "{error}");
+    let error = opened(&[("APP_TOKENS", "{}"), ("APP_MODE", "s3cr3t")]);
+    assert!(error.contains("unknown variant, expected `Sms` or `Call`") && !error.contains("s3cr3t"), "{error}");
+}
+
+// contract: CFG-06, CFG-03
+#[test]
+fn what_a_file_gives_in_place_of_a_group_that_holds_a_secret_is_said_by_what_it_is() {
+    let f = fixture();
+    let opened = |name: &str, yaml: &str| {
+        let yaml = file(&f, name, yaml);
+        refused(f.store.config("app", Settings::default()).file(yaml).open()).to_string()
+    };
+    let error = opened("app.yaml", "db: postgres://user:s3cr3t@host\nlimits: 3\n");
+    assert!(error.contains("app.yaml: db: text is not a group of settings") && !error.contains("s3cr3t"), "{error}");
+    assert!(error.contains("app.yaml: limits: 3 is not a group of settings"), "a group with no secret: {error}");
+    let error = opened("list.yaml", "- db: postgres://user:s3cr3t@host\n");
+    assert!(error.contains("list.yaml: a list is not a map of settings") && !error.contains("s3cr3t"), "{error}");
+}
+
+// contract: CFG-06, CFG-05
+#[test]
+fn a_change_that_holds_a_secret_is_refused_before_another_handles_check_could_quote_it() {
+    #[derive(Clone, Serialize, Deserialize)]
+    struct Mirrors {
+        mirrors: Live<Vec<String>>,
+    }
+    let f = fixture();
+    let sites = f.store.config("sites", Sites::default()).open().unwrap();
+    let _texts = f.store.config("sites", Mirrors { mirrors: Live::new(vec!["x".to_owned()]) }).open().unwrap();
+    let kazan = Instance { host: "h".to_owned(), password: Secret::new("kept?".to_owned()) };
+    let error =
+        refused(sites.update(|value| drop(value.mirrors.insert("kazan".to_owned(), kazan.clone())))).to_string();
+    assert!(error.contains("mirrors holds a secret, which only a layer gives") && !error.contains("kept?"), "{error}");
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Dashbin {
@@ -438,6 +533,26 @@ fn each_entry_is_given_its_required_fields_and_a_variable_of_an_entry_no_layer_m
     let misspelt = file(&f, "misspelt.toml", "[instance.aimee]\nplugn = \"a\"\n");
     let error = refused(dashbin(&f, &misspelt, &[])).to_string();
     assert!(error.contains("instance.aimee.plugn: no such setting; did you mean instance.aimee.plugin?"), "{error}");
+}
+
+// contract: CFG-11, CFG-06
+#[test]
+fn an_entry_given_what_does_not_read_is_refused_without_its_secret() {
+    let f = fixture();
+    let toml = file(&f, "dashbin.toml", SITES);
+    let refused_saying = |toml: &std::path::Path, variables: &[(&str, &str)], said: &str| {
+        let error = refused(dashbin(&f, toml, variables)).to_string();
+        assert!(error.contains(said), "{said}: {error}");
+        assert!(!error.contains("s3cr3t") && !error.contains("482913"), "{error}");
+    };
+    let broken = [("APP_INSTANCE", r#"{"aimee":{"settings":{"password":"s3cr3t"}},}"#)];
+    refused_saying(&toml, &broken, "APP_INSTANCE: its text is not a map: trailing comma at line 1 column ");
+    let number = [("APP_INSTANCE", r#"{"aimee":{"settings":{"password":482913}}}"#)];
+    refused_saying(&toml, &number, "APP_INSTANCE: instance.aimee.settings.password: a secret is text");
+    let whole = [("APP_INSTANCE", r#"{"aimee":"s3cr3t"}"#)];
+    refused_saying(&toml, &whole, "APP_INSTANCE: instance.aimee: text is not a group of settings");
+    let in_file = file(&f, "whole.toml", "[instance]\naimee = \"s3cr3t\"\n");
+    refused_saying(&in_file, &[], "whole.toml: instance.aimee: text is not a group of settings");
 }
 
 // contract: CFG-11, CFG-02, CFG-06

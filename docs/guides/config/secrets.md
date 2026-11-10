@@ -91,6 +91,11 @@ let pool = connect(config.get().db.url.reveal())?;
 - A file that is committed beside the code can be
   [marked to refuse secrets](layers.md#keep-secrets-out-of-a-committed-file).
 - An error about a secret names its variable and never quotes its text.
+  Neither does an error about a map, a list or any value, which may hold a
+  secret: it names the variable or the file and the setting, and says what
+  was wrong without the value, as in
+  `APP_TOKENS: its text is not a map: trailing comma at line 1 column 27`
+  or `app.yaml: tokens: invalid type, expected a string`.
 - A secret is text. It cannot be `live`: a value an admin page could set and
   read back is not a secret.
 - A secret in each entry of a map is declared as a field of

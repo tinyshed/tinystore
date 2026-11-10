@@ -496,11 +496,13 @@ where
             if was == is {
                 continue;
             }
-            let value = self.checked(&path, setting, &is.cloned().unwrap_or(Value::Null))?;
-            // a map's or a list's value is kept whole, so a secret its type holds inside would be kept too
-            if at(&read, &path).is_some_and(holds_secret) {
+            // A map's or a list's value is kept whole, so a secret its type
+            // holds inside would be kept too. It is refused first, since the
+            // check of another handle's kind of the setting quotes the value.
+            if !setting.secret && at(&read, &path).is_some_and(holds_secret) {
                 return Err(Error::invalid(format!("{path} holds a secret, which only a layer gives")));
             }
+            let value = self.checked(&path, setting, &is.cloned().unwrap_or(Value::Null))?;
             leaves.push((path.clone(), value));
         }
         for (path, _) in self.declaration.entries() {
