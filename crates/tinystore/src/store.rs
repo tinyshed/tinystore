@@ -699,8 +699,20 @@ impl Host for Store {
     }
 
     fn attach(&self, engine: Arc<dyn Engine>) -> Result<()> {
-        self.refuse_when_closed("an engine opening")?;
-        lock(&self.inner.engines).push(engine);
+        // The check and the push hold the list's lock, which `close` takes
+        // only after it marks the store closed: an engine is in the list
+        // `close` takes, or refused here, never pushed onto a list taken.
+        let mut engines = lock(&self.inner.engines);
+        if let Err(closed) = self.refuse_when_closed("an engine opening") {
+            drop(engines);
+            // what it opened is closed here, since the store's close never sees it
+            engine.stop();
+            if let Err(error) = engine.close() {
+                tracing::warn!(target: "tinystore", %error, "an engine opened as its store closed did not close");
+            }
+            return Err(closed);
+        }
+        engines.push(engine);
         Ok(())
     }
 
@@ -941,6 +953,36 @@ mod tests {
         }
         store.close().unwrap();
         assert_eq!(*lock(&closed), ["records", "jobs", "kv"]);
+    }
+
+    // contract: STORE-03
+    #[test]
+    fn an_engine_attached_while_the_store_closes_is_refused_and_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let closed = Arc::new(Mutex::new(Vec::new()));
+        let late: Arc<dyn Engine> = Arc::new(Recorder { name: "late", closed: Arc::clone(&closed) });
+        // Held, so that the attach waits for the list while the store closes:
+        // one that read the store open before it waited would push onto the
+        // list `close` took, and nothing would close its engine.
+        let list = lock(&store.inner.engines);
+        let attaching = {
+            let store = store.clone();
+            std::thread::spawn(move || store.attach(late))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        let closing = {
+            let store = store.clone();
+            std::thread::spawn(move || store.close())
+        };
+        while !store.inner.closed.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        drop(list);
+        let attached = attaching.join().unwrap();
+        closing.join().unwrap().unwrap();
+        assert_eq!(attached.map_err(|error| error.kind()), Err(ErrorKind::Closed), "a late handle answers closed");
+        assert_eq!(*lock(&closed), ["late"], "the engine opened late is closed once");
     }
 
     // contract: STORE-03
