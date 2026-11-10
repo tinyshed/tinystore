@@ -269,7 +269,7 @@ fn decide(windows: &[Window], held: &Held, now: i64, n: u64) -> (Held, Allowance
     let refusing: Vec<i64> = windows
         .iter()
         .zip(&kept)
-        .filter(|(window, (used, _))| used + asked > window.limit)
+        .filter(|(window, (used, _))| used.checked_add(asked).is_none_or(|total| total > window.limit))
         .map(|(_, (_, resets))| *resets)
         .collect();
     let ok = refusing.is_empty();

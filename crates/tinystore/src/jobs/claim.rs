@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::call::in_years;
+use super::call::{LONGEST_SPAN, in_years};
 use super::policy::Policy;
 use super::repeat::Repeat;
 use super::rows::{self, PARKED_BY, execute};
@@ -792,8 +792,11 @@ fn move_job(c: &Connection, queue: &QueueState, (next, id, key): Place<'_>, to: 
 /// ```text
 /// 1 s to 1 h: 1 s, 2 s, 4 s … 34 m 8 s, 1 h, 1 h … each ± 10 %
 /// ```
+///
+/// A most past the longest span a job's time may move by is that span.
 pub(crate) fn backoff(policy: &Policy, attempt: i64, id: i64) -> i64 {
     let (initial, most) = (crate::clock::millis(policy.backoff.0), crate::clock::millis(policy.backoff.1));
+    let (initial, most) = (initial.min(LONGEST_SPAN), most.min(LONGEST_SPAN));
     let mut wait = initial;
     for _ in 1..attempt {
         if wait >= most {
@@ -871,6 +874,16 @@ mod tests {
             assert!((expected * 9 / 10..=expected * 11 / 10 + 1).contains(wait), "attempt {attempt}: {wait}");
         }
         assert_ne!(backoff(&policy, 3, 42), backoff(&policy, 3, 43), "two jobs, two waits");
+    }
+
+    // contract: JOB-07
+    #[test]
+    fn a_backoff_with_no_most_waits_no_longer_than_a_job_may_and_never_overflows() {
+        let policy = Policy { backoff: (Duration::from_secs(1), Duration::MAX), ..Policy::default() };
+        for id in 0..100 {
+            let wait = backoff(&policy, 100, id);
+            assert!((1..=LONGEST_SPAN + LONGEST_SPAN / 10 + 1).contains(&wait), "job {id}: {wait}");
+        }
     }
 
     #[test]

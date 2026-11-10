@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 
+use super::call::LONGEST_SPAN;
+use crate::clock::millis;
 use crate::{Error, Result};
 
 /// How many jobs run at once: in all, across every worker of the store, and
@@ -66,6 +68,8 @@ impl Default for Policy {
 impl Policy {
     pub(crate) fn check(&self) -> Result<()> {
         let (initial, max) = self.backoff;
+        let rates = [self.rate, self.group_rate].into_iter().flatten().map(|(_, per)| per);
+        let past_the_years = std::iter::once(self.timeout).chain(rates).find(|span| millis(*span) > LONGEST_SPAN);
         let refused = if self.attempts == 0 {
             Some("attempts of 0: the first run is one".to_owned())
         } else if initial.is_zero() || max < initial {
@@ -83,7 +87,8 @@ impl Policy {
         } else if self.max_waiting == 0 {
             Some("a max_waiting of 0, which would refuse every add".to_owned())
         } else {
-            None
+            past_the_years
+                .map(|span| format!("a timeout or a rate's span of {span:?}, longer than the years 1 to 9999"))
         };
         refused.map_or(Ok(()), |why| Err(Error::invalid(why)))
     }

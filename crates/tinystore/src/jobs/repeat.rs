@@ -12,6 +12,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
+use super::call::LONGEST_SPAN;
 use super::cron::Cron;
 use crate::clock::millis;
 use crate::{Error, Result};
@@ -72,6 +73,9 @@ impl Asked {
                 if every < 1000 {
                     return Err(Error::invalid(format!("every {every} ms: a repeat is a second at least")));
                 }
+                if every > LONGEST_SPAN {
+                    return Err(Error::invalid(format!("every {every} ms: longer than the years 1 to 9999")));
+                }
                 Ok(Repeat::Every { every, phase: phase_of(id, every) })
             }
             Asked::Cron { expr, zone } => {
@@ -126,10 +130,14 @@ impl Repeat {
     }
 
     /// The first time after `after`, unix milliseconds, that the repeat runs;
-    /// none for a cron that never runs again.
+    /// none for a cron that never runs again, or an interval whose next time
+    /// no number holds.
     pub(crate) fn next(&self, after: i64) -> Option<i64> {
         match self {
-            Repeat::Every { every, phase } => Some(((after - phase).div_euclid(*every) + 1) * every + phase),
+            Repeat::Every { every, phase } => {
+                let intervals = after.checked_sub(*phase)?.div_euclid(*every).checked_add(1)?;
+                intervals.checked_mul(*every)?.checked_add(*phase)
+            }
             Repeat::Cron { cron, zone, .. } => {
                 let after = Timestamp::from_millisecond(after).ok()?;
                 cron.next(zone, after).map(|next| next.as_millisecond())
@@ -201,6 +209,15 @@ mod tests {
         let error = Asked::Cron { expr: "0 0 31 2 *".into(), zone: "UTC".into() }.check().unwrap_err();
         assert!(error.to_string().contains("never runs"), "{error}");
         assert!(Asked::Every(Duration::from_millis(500)).check().is_err());
+    }
+
+    // contract: ERR-03
+    #[test]
+    fn an_interval_longer_than_the_years_is_refused_and_one_kept_runs_no_more() {
+        let error = Asked::Every(Duration::MAX).check().unwrap_err();
+        assert_eq!(error.kind(), crate::ErrorKind::Invalid, "{error}");
+        let kept = Repeat::Every { every: i64::MAX, phase: 1 };
+        assert_eq!(kept.next(1_800_000_000_000), None, "a next time no number holds is none, not an overflow");
     }
 
     #[test]

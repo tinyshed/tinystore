@@ -567,6 +567,26 @@ fn a_time_outside_the_years_a_job_keeps_is_refused() {
     assert_eq!(notes.at(year_10000).add(&note("x")).unwrap_err().kind(), ErrorKind::Invalid);
 }
 
+// contract: ERR-03, ERR-06
+#[test]
+fn a_span_longer_than_the_years_a_job_keeps_is_refused_where_it_is_given() {
+    let f = fixture();
+    let notes = f.store.queue::<Note>("notes").open().unwrap();
+    let error = notes.id("a").every(Duration::MAX).add(&note("x")).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+    assert!(notes.get("a").unwrap().is_none(), "the call added nothing");
+    let builders = [
+        f.store.queue::<Note>("rated").rate(1, Duration::MAX),
+        f.store.queue::<Note>("grouped").group_rate(1, Duration::MAX),
+        f.store.queue::<Note>("patient").timeout(Duration::MAX),
+    ];
+    for builder in builders {
+        let error = builder.open().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+    }
+    assert!(f.store.queue::<Note>("rated").rate(1, SECOND).open().is_ok(), "the refused open kept nothing");
+}
+
 #[test]
 fn a_progress_past_4_kib_is_refused() {
     let f = fixture();

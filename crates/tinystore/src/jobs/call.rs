@@ -26,6 +26,11 @@ pub(crate) fn in_years(at: i64) -> bool {
     (EARLIEST..=LATEST).contains(&at)
 }
 
+/// The longest span a queue's option or a repeat may give, in milliseconds:
+/// from the first time a job may have to the last. One longer moves a job
+/// past every time it may have.
+pub(crate) const LONGEST_SPAN: i64 = LATEST - EARLIEST;
+
 /// A call on one job with what it asks beside its value, run by its last
 /// step: `later.id(&key).at(nine_am).add(&draft)`.
 #[must_use = "a job's call runs at its last step: add, set or update"]

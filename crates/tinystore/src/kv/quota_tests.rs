@@ -40,6 +40,16 @@ fn a_use_counts_in_every_window_or_in_none() {
     assert!(ai.under("tenant-7").allow("user-1").unwrap().ok, "the same key in another branch");
 }
 
+// contract: KV-10
+#[test]
+fn a_window_of_the_largest_limit_refuses_a_use_past_it() {
+    let f = fixture();
+    let all = f.store.quota("all").window("ever", u64::MAX, 7 * DAY).open().unwrap();
+    expect(&all.allow_n("user-1", u64::MAX).unwrap(), true, 0, &[u64::MAX]);
+    expect(&all.allow("user-1").unwrap(), false, 0, &[u64::MAX]);
+    assert!(!all.peek("user-1").unwrap().ok, "one more would not pass");
+}
+
 #[test]
 fn a_window_starts_at_the_first_use_after_the_last_ended() {
     let f = fixture();

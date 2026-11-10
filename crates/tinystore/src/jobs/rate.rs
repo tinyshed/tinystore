@@ -48,7 +48,7 @@ impl RateLog {
         if left > 0 {
             return (left, None);
         }
-        (0, state.starts.front().map(|(at, _)| at + self.per))
+        (0, state.starts.front().map(|(at, _)| at.saturating_add(self.per)))
     }
 
     /// Counts up to `want` starts at `now`, and says how many it counted.
@@ -60,7 +60,9 @@ impl RateLog {
             return 0;
         }
         match state.starts.back_mut() {
-            Some((at, started)) if *at >= now - self.per / 1024 => (*at, *started) = (now, *started + taken),
+            Some((at, started)) if *at >= now.saturating_sub(self.per / 1024) => {
+                (*at, *started) = (now, *started + taken)
+            }
             _ => state.starts.push_back((now, taken)),
         }
         state.used += taken;
@@ -96,7 +98,7 @@ impl RateLog {
         let now = now.max(state.last);
         state.last = now;
         while let Some(&(at, started)) = state.starts.front() {
-            if at > now - self.per {
+            if at > now.saturating_sub(self.per) {
                 break;
             }
             state.used -= started;
@@ -212,6 +214,14 @@ mod tests {
         assert_eq!(rate.take(1000, 5), 2, "the two of 0 ms left the span");
         assert_eq!(rate.take(1399, 5), 0);
         assert_eq!(rate.take(1400, 5), 1);
+    }
+
+    // contract: JOB-09
+    #[test]
+    fn a_span_past_what_a_time_holds_saturates_the_next_start() {
+        let rate = RateLog::new(1, Duration::MAX);
+        assert_eq!(rate.take(1_800_000_000_000, 1), 1);
+        assert_eq!(rate.room(1_800_000_000_001), (0, Some(i64::MAX)), "no second start, and no overflow");
     }
 
     // contract: JOB-09
