@@ -51,6 +51,12 @@ store, err := tinystore.Open(ctx, "./data")
 - Each file is written beside its name, checked, synced, and only then
   named. A file that does not match fails the restore and leaves the
   directory empty (contract BAK-02).
+- Before its first file, the restore writes a `RESTORING` file into the
+  directory, and removes it once every file is synced. If the restore's
+  process dies in between, `RESTORING` stays and the directory does not
+  open, in a program or in the command line: the error, `invalid`, says to
+  remove the directory and restore again. A restore into it is refused the
+  same way.
 - A restore of a backup without the encryption key says so: its encrypted
   buckets need the key put back first. See [The encryption
   key](encryption-key.md).

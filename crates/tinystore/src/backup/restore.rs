@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use super::manifest::{Listed, MANIFEST, Manifest};
 use super::{Backup, is_inside, zip};
 use crate::durable::sync_directory;
+use crate::store::{HALF_RESTORED, RESTORING};
 use crate::text::hex;
 use crate::{Error, ErrorKind, Result};
 
@@ -27,11 +28,14 @@ pub fn restore(archive: impl AsRef<Path>, dir: impl AsRef<Path>) -> Result<Backu
     let (entries, manifest) = read(&mut zip).map_err(|why| within(Error::new(ErrorKind::Corrupt, why)))?;
     claim_empty(dir).map_err(within)?;
     let lock = crate::store::take_lock(dir).map_err(within)?;
-    let restored =
-        manifest.files.iter().try_for_each(|file| put(&mut zip, &entries, dir, file)).and_then(|()| synced(dir));
+    let restored = begun(dir)
+        .and_then(|()| manifest.files.iter().try_for_each(|file| put(&mut zip, &entries, dir, file)))
+        .and_then(|()| synced(dir))
+        .and_then(|()| finished(dir));
     if let Err(error) = restored {
-        // Emptied while the LOCK is held, so no store opens the half restored.
-        let emptied = empty(dir);
+        // Emptied while the LOCK is held, so no store opens the half restored;
+        // the marker goes last, so that a directory emptied in part opens no more.
+        let emptied = empty(dir).and_then(|()| removed(&dir.join(RESTORING)));
         drop(lock);
         let lock_file = dir.join("LOCK");
         let error = match emptied.and_then(|()| removed(&lock_file)) {
@@ -52,7 +56,7 @@ fn read(zip: &mut (impl Read + io::Seek)) -> std::result::Result<(HashMap<String
     // a manifest lists files its zip holds, so no more than it holds
     let manifest = Manifest::read(zip::open(zip, listed)?, entries.len())?;
     for file in &manifest.files {
-        if !is_inside(&file.name) || file.name == MANIFEST || file.name == "LOCK" {
+        if !is_inside(&file.name) || [MANIFEST, "LOCK", RESTORING].contains(&file.name.as_str()) {
             return Err(format!("{:?}: a path that is not a file of a store's directory", file.name));
         }
         if !entries.contains_key(&file.name) {
@@ -62,9 +66,13 @@ fn read(zip: &mut (impl Read + io::Seek)) -> std::result::Result<(HashMap<String
     Ok((entries, manifest))
 }
 
-/// Makes `dir` when it is absent; one that holds anything is refused.
+/// Makes `dir` when it is absent; one that holds anything is refused, and
+/// one a restore did not finish in says what to do.
 fn claim_empty(dir: &Path) -> Result<()> {
     match fs::read_dir(dir).map(|mut entries| entries.next().is_some()) {
+        Ok(true) if dir.join(RESTORING).exists() => {
+            Err(Error::invalid(format!("the directory is not empty: {HALF_RESTORED}")))
+        }
         Ok(true) => Err(Error::invalid("the directory is not empty: a restore writes into an empty one")),
         Ok(false) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -145,14 +153,32 @@ fn synced(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Puts `RESTORING` in `dir` before any file of the backup's, its name
+/// synced, so that a restore whose process dies leaves a directory no store
+/// opens.
+fn begun(dir: &Path) -> Result<()> {
+    let failed = |error: io::Error| Error::io(RESTORING, error);
+    owned_file(&dir.join(RESTORING)).and_then(|marker| marker.sync_all()).map_err(failed)?;
+    sync_directory(dir).map_err(failed)
+}
+
+/// Removes `RESTORING` once every file and name is synced, and syncs its
+/// removal: the directory opens from then on.
+fn finished(dir: &Path) -> Result<()> {
+    let failed = |error: io::Error| Error::io(RESTORING, error);
+    fs::remove_file(dir.join(RESTORING)).map_err(failed)?;
+    sync_directory(dir).map_err(failed)
+}
+
 /// Removes what a restore that failed wrote, `dir` itself left; what will
 /// not go is said.
 fn empty(dir: &Path) -> std::result::Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|error| format!("{} is left: {error}", dir.display()))?;
     for entry in entries {
         let path = entry.map_err(|error| format!("something of {} is left: {error}", dir.display()))?.path();
-        // The LOCK is held while this runs, and goes once let go.
-        if path.file_name().is_some_and(|name| name == "LOCK") {
+        // The LOCK is held while this runs, and goes once let go; the marker
+        // goes once all else has.
+        if path.file_name().is_some_and(|name| name == "LOCK" || name == RESTORING) {
             continue;
         }
         let removed = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };

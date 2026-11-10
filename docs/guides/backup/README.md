@@ -34,7 +34,8 @@ tinystore restore backups/chat-2026-10-19.zip ./restored
   samples go, is restored with what it names.
 - A restore checks every byte against the manifest and the zip, writes only
   into an empty directory, and leaves nothing when it fails (contract
-  BAK-02).
+  BAK-02). If its process dies before it ends, the directory does not open:
+  remove it and restore again.
 - The store's encryption key and the program's own files are left out unless
   asked for, and a backup without the key says so (contract BAK-03).
 - A backup that fails leaves no zip and no snapshot (contract BAK-04). If

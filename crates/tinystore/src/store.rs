@@ -250,6 +250,7 @@ impl Store {
     pub fn open(dir: impl AsRef<Path>, options: Options) -> Result<Store> {
         let dir = absolute(dir.as_ref())?;
         let lock = take_lock(&dir)?;
+        refuse_half_restored(&dir)?;
         remove_left_snapshots(&dir);
         Self::open_with(dir, options, Some(lock))
     }
@@ -264,6 +265,7 @@ impl Store {
             return Err(Error::not_found(format!("store {}: no such directory", dir.as_ref().display())));
         }
         let dir = absolute(dir.as_ref())?;
+        refuse_half_restored(&dir)?;
         Self::open_with(dir, Options { background: false, ..Options::default() }, None)
     }
 
@@ -836,6 +838,23 @@ pub(crate) fn take_lock(dir: &Path) -> Result<File> {
     }
 }
 
+/// What a restore puts in the directory before any file of the backup's,
+/// and removes once every one is synced: a directory that holds it is part
+/// of a backup, its restore's process gone, and no store opens it.
+pub(crate) const RESTORING: &str = "RESTORING";
+
+/// What to do with a directory a restore did not finish in.
+pub(crate) const HALF_RESTORED: &str = "a restore did not finish in it: remove the directory and restore again";
+
+/// Refuses a directory a restore did not finish in, which a store would
+/// otherwise open as though it held the whole backup.
+fn refuse_half_restored(dir: &Path) -> Result<()> {
+    if dir.join(RESTORING).exists() {
+        return Err(Error::invalid(format!("store {}: {HALF_RESTORED}", dir.display())));
+    }
+    Ok(())
+}
+
 /// How the name of a backup's snapshot in the store's directory starts: a
 /// copy of every engine's files, which holds a `LOCK` of its own while its
 /// backup runs.
@@ -976,6 +995,20 @@ mod tests {
         assert!(programs.is_file(), "a snapshot's directory goes, and nothing else");
         store.close().unwrap();
         drop(backing_up);
+    }
+
+    // contract: BAK-02
+    #[test]
+    fn a_directory_a_restore_did_not_finish_in_opens_neither_held_nor_beside() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("kv.db"), "the part of a backup restored").unwrap();
+        std::fs::write(dir.path().join(RESTORING), "").unwrap();
+        let said = format!("store {}: {HALF_RESTORED}: invalid", dir.path().display());
+        let held = Store::open(dir.path(), Options::default()).unwrap_err();
+        assert_eq!((held.kind(), held.to_string()), (ErrorKind::Invalid, said.clone()));
+        let beside = Store::open_beside(dir.path()).unwrap_err();
+        assert_eq!((beside.kind(), beside.to_string()), (ErrorKind::Invalid, said));
+        assert!(dir.path().join("kv.db").is_file(), "the part restored stays for whoever looks");
     }
 
     // contract: ERR-02, ERR-03

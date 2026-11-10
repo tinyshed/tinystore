@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 use crate::metrics::Series;
+use crate::store::RESTORING;
 use crate::text::hex;
 use crate::{ErrorKind, Options, TestClock, sql};
 
@@ -172,6 +173,31 @@ fn a_restore_writes_into_an_empty_directory_and_none_other() {
     let error = restore(&f.zip, &f.restored).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
     assert_eq!(tree(&f.restored), ["left.txt"], "what was there stays");
+}
+
+// contract: BAK-02
+#[test]
+fn a_directory_a_restore_did_not_finish_in_opens_not_and_takes_no_restore_saying_what_to_do() {
+    let f = fixture();
+    f.filled().backup().write(&f.zip).unwrap();
+    restore(&f.zip, &f.restored).unwrap();
+    assert!(!f.restored.join(RESTORING).exists(), "a restore that ends takes its marker away");
+
+    // what a restore whose process died after its first file leaves
+    let half = f.restored.with_extension("half");
+    fs::create_dir_all(&half).unwrap();
+    fs::copy(f.restored.join("kv.db"), half.join("kv.db")).unwrap();
+    fs::write(half.join(RESTORING), "").unwrap();
+    let opened = Store::open(&half, Options::default()).unwrap_err();
+    assert_eq!(opened.kind(), ErrorKind::Invalid, "{opened}");
+    let again = restore(&f.zip, &half).unwrap_err();
+    assert_eq!(again.kind(), ErrorKind::Invalid, "{again}");
+    let said = "the directory is not empty: a restore did not finish in it: remove the directory and restore again";
+    assert!(again.to_string().contains(said), "{again}");
+    assert!(half.join("kv.db").is_file() && half.join(RESTORING).is_file(), "what was there stays");
+
+    let error = f.open(&f.data).backup().include(RESTORING).write(f.zip.with_extension("refused")).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "a file of the program's never takes the marker's name: {error}");
 }
 
 // contract: BAK-03

@@ -262,9 +262,9 @@ fn check_file(name: &str) -> Result<()> {
 }
 
 /// The names of the store's directory a program's file is none of, beside
-/// the engines' files: `LOCK`, the manifest's, the databases', blobs' and the
-/// server's; each with its journals after a `-`.
-const OWN: [&str; 5] = ["LOCK", MANIFEST, "sql", "blobs", "server"];
+/// the engines' files: `LOCK`, a restore's marker, the manifest's, the
+/// databases', blobs' and the server's; each with its journals after a `-`.
+const OWN: [&str; 6] = ["LOCK", crate::store::RESTORING, MANIFEST, "sql", "blobs", "server"];
 
 /// Whether `name` is a relative path whose parts are each a name: no `..`,
 /// no root, no drive, no `\`.
