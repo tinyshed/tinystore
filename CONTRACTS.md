@@ -101,6 +101,7 @@ These contracts are what does not.
 - **LOCK-04** A hold inside its own hold of the key, or inside a transaction, MUST be refused at once.
 - **LOCK-05** A lease over a connection MUST last its ttl from its last renewal; one that ran out MUST NOT be renewed nor release a key another holds.
 - **LOCK-06** A panic, a cancel or the store's close MUST let the key go and answer every waiter.
+- **LOCK-07** A semaphore's name has one limit in a program: an open of the name with another limit than its first open in the program gave MUST fail `invalid`, naming both.
 
 ### Channels
 

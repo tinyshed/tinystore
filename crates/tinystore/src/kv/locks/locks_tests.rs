@@ -213,6 +213,24 @@ fn a_semaphore_admits_its_limit_a_key_and_a_lock_of_its_name_is_another() {
     }
 }
 
+// contract: LOCK-07
+#[test]
+fn a_semaphore_opened_again_in_the_program_keeps_the_limit_its_first_open_gave() {
+    let f = fixture();
+    let gpu = f.store.semaphore("gpu").limit(1).open().unwrap();
+    let wider = f.store.semaphore("gpu").limit(3).open().unwrap_err();
+    assert_eq!(wider.kind(), ErrorKind::Invalid, "{wider}");
+    assert!(wider.to_string().contains("semaphore gpu: open in this program with a limit of 1, not 3"), "{wider}");
+    let again = f.store.semaphore("gpu").limit(1).open().unwrap();
+    let full = gpu.hold("device-0", |_| {
+        let try_hold = move || again.try_hold("device-0", |_| Ok::<_, Error>(())).unwrap().is_none();
+        Ok::<_, Error>(thread::spawn(try_hold).join().unwrap())
+    });
+    assert!(full.unwrap(), "one of one holds the key, whichever handle asks");
+    f.store.semaphore("tpu").limit(3).open().expect("another name keeps its own limit");
+    f.store.lock("gpu").open().expect("a lock of the name is another");
+}
+
 // contract: LOCK-06
 #[test]
 fn a_panic_lets_the_key_go() {

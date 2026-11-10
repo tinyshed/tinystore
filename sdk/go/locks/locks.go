@@ -102,7 +102,24 @@ func open(store *tinystore.Store, kind, name string, opts []Option) (*keys, erro
 	if _, err := core.Millis(k.ttl, kind+" "+name+": its ttl"); err != nil {
 		return nil, err
 	}
+	if kind == "semaphore" {
+		if err := keepLimit(k.store, name, k.limit); err != nil {
+			return nil, err
+		}
+	}
 	return k, nil
+}
+
+// keepLimit keeps the limit a semaphore's first open on store gives: another
+// limit is ErrInvalid, naming both. One name keeps one limit in a program,
+// and two stores are two programs, each of whose holds the store admits by
+// its own limit.
+func keepLimit(store *core.Store, name string, limit int) error {
+	first := store.Kept("locks.semaphore\x00"+name, func() any { return limit }).(int)
+	if first != limit {
+		return core.Errorf(core.Invalid, "semaphore %s: open in this program with a limit of %d, not %d", name, first, limit)
+	}
+	return nil
 }
 
 // Lock is keys held one holder at a time.

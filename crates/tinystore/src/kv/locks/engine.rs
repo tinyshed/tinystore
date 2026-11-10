@@ -8,6 +8,7 @@
 //! that held them ended with its process and a client learns it at its next
 //! renewal.
 
+use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -34,6 +35,11 @@ const LONGEST_SLEEP: Duration = Duration::from_secs(60);
 pub(crate) struct Locks {
     inner: Arc<Inner>,
     thread: Mutex<Option<JoinHandle<()>>>,
+    /// The limit each semaphore's first open in this program gave. A client's
+    /// holds over a connection pass it by, each admitted by its own limit:
+    /// one server serves several programs, and a program may change its
+    /// limit between deploys while the old one's holds still run.
+    opened: Mutex<HashMap<String, u32>>,
 }
 
 struct Inner {
@@ -64,7 +70,19 @@ impl Locks {
             .name("tinystore-locks".to_owned())
             .spawn(move || timed.run_timer())
             .map_err(|error| Error::io("locks: the timer's thread", error))?;
-        Ok(Arc::new(Locks { inner, thread: Mutex::new(Some(thread)) }))
+        Ok(Arc::new(Locks { inner, thread: Mutex::new(Some(thread)), opened: Mutex::default() }))
+    }
+
+    /// Keeps the limit a semaphore's first open in this program gives: an
+    /// open of the name with another limit is refused, naming both, as
+    /// counters refuse an open that counts another way.
+    pub(crate) fn keep_limit(&self, name: &str, limit: u32) -> Result<()> {
+        let mut opened = lock(&self.opened);
+        let first = *opened.entry(name.to_owned()).or_insert(limit);
+        if first != limit {
+            return Err(Error::invalid(format!("open in this program with a limit of {first}, not {limit}")));
+        }
+        Ok(())
     }
 
     /// Grants the key, puts the ask in line, or answers busy through `reply`;

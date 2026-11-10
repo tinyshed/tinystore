@@ -133,13 +133,13 @@ again holds no lease.
 
 ## Errors
 
-| Kind      | When                                                                            |
-|-----------|---------------------------------------------------------------------------------|
-| `invalid` | a bad name or key; `hold` inside a transaction or inside a hold of the same key |
-| `in use`  | `wait` passed with the key still held                                           |
-| `lost`    | the lease ran out, was revoked at `maxHold`, or its store closed                |
-| `limit`   | the line of waiters for a key is full, 10,000                                   |
-| `closed`  | the store closed                                                                |
+| Kind      | When                                                                                                                                                                                         |
+|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or key; `hold` inside a transaction or inside a hold of the same key; a semaphore opened again in the program with [another limit](semaphores.md#two-opens-with-different-limits) |
+| `in use`  | `wait` passed with the key still held                                                                                                                                                        |
+| `lost`    | the lease ran out, was revoked at `maxHold`, or its store closed                                                                                                                             |
+| `limit`   | the line of waiters for a key is full, 10,000                                                                                                                                                |
+| `closed`  | the store closed                                                                                                                                                                             |
 
 ## See also
 

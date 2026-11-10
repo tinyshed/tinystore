@@ -87,7 +87,10 @@ impl LockBuilder {
 }
 
 impl SemaphoreBuilder {
-    /// How many may hold a key at once, from 1 to 1000.
+    /// How many may hold a key at once, from 1 to 1000. A name has one limit
+    /// in a program: an open with another limit than the name's first open
+    /// in the program gave is `Invalid`. Another program's holds, a client's
+    /// over a connection, are each admitted by their own limit.
     pub fn limit(mut self, limit: u32) -> Self {
         self.limit = Some(limit);
         self
@@ -104,7 +107,9 @@ impl SemaphoreBuilder {
         if !(1..=MOST_LIMIT).contains(&limit) {
             return Err(Error::invalid(format!("a limit of {limit}, not 1 to {MOST_LIMIT}")).within(shown()));
         }
-        Ok(Semaphore { opened: Opened::open(&self.store, Kind::Semaphore, &self.name, limit, self.max_hold)? })
+        let opened = Opened::open(&self.store, Kind::Semaphore, &self.name, limit, self.max_hold)?;
+        opened.locks.keep_limit(&self.name, limit).map_err(|error| error.within(shown()))?;
+        Ok(Semaphore { opened })
     }
 }
 

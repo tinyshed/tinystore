@@ -71,10 +71,37 @@ semaphore lives in memory.
 
 ## Two opens with different limits
 
-The limit is given where the semaphore opens, and a program may change it
-between deploys. A key admits by the limit of the open that waits: a smaller
-limit lets no holder go, it only lets fewer in until the holders above it
-finish.
+Inside one program a name has one limit. A second open of the name with
+another limit fails `invalid` at the open and names both limits. An open with
+the same limit is fine.
+
+```ts
+const gpu = store.semaphore('gpu', { limit: 1 })
+store.semaphore('gpu', { limit: 3 }) // InvalidError: semaphore gpu: open in this program with a limit of 1, not 3
+```
+
+```python
+gpu = store.semaphore("gpu", limit=1)
+store.semaphore("gpu", limit=3)  # InvalidError: semaphore gpu: open in this program with a limit of 1, not 3
+```
+
+```go
+gpu, err := locks.OpenSemaphore(store, "gpu", locks.Limit(1))
+_, err = locks.OpenSemaphore(store, "gpu", locks.Limit(3)) // tinystore.ErrInvalid: ... with a limit of 1, not 3
+```
+
+```rust
+let gpu = store.semaphore("gpu").limit(1).open()?;
+let wider = store.semaphore("gpu").limit(3).open(); // Err: invalid, open in this program with a limit of 1, not 3
+```
+
+A program here is one store you opened: two stores opened on one directory
+are two programs, as two processes are (contract LOCK-07).
+
+Between programs, the limit is given where each one opens the semaphore, and
+a program may change it between deploys. A key admits by the limit of the
+open that waits: a smaller limit lets no holder go, it only lets fewer in
+until the holders above it finish.
 
 ## See also
 

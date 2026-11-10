@@ -96,6 +96,7 @@ export class Semaphore {
 		if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000) {
 			throw new InvalidError(`semaphore ${name}: a limit of ${options.limit}, not 1 to 1000`)
 		}
+		keepLimit(link, name, options.limit)
 		this.name = name
 		this.limit = options.limit
 		this.#keys = new Keys(link, 'semaphore', name, options.limit, options)
@@ -112,6 +113,27 @@ export class Semaphore {
 	tryHold<T>(key: Key, fn: (permit: Permit) => T | Promise<T>): Promise<Tried<T>> {
 		return this.#keys.hold(key, fn, 0, permitOf)
 	}
+}
+
+// The limit each semaphore's first open gave, by the link of the store that
+// opened it: one name keeps one limit in a program, and two stores are two
+// programs, each of whose holds the store admits by its own limit.
+const opened = new WeakMap<Link, Map<string, number>>()
+
+/** Keeps the limit a semaphore's first open on this store gives: another limit is refused, naming both. */
+function keepLimit(link: Link, name: string, limit: number): void {
+	let limits = opened.get(link)
+	if (limits === undefined) {
+		limits = new Map()
+		opened.set(link, limits)
+	}
+	const first = limits.get(name) ?? limit
+	if (first !== limit) {
+		throw new InvalidError(
+			`semaphore ${name}: open in this program with a limit of ${first}, not ${limit}`,
+		)
+	}
+	limits.set(name, first)
 }
 
 function waitOf(options: HoldOptions | undefined): number {

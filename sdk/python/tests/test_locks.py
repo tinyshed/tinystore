@@ -184,3 +184,14 @@ def test_names_and_limits_are_checked_before_anything_is_sent(store: tinystore.S
         store.lock("Invoices")
     with pytest.raises(tinystore.InvalidError):
         store.semaphore("uploads", limit=0)
+
+
+# contract: LOCK-07
+def test_a_semaphore_opened_again_with_another_limit_is_refused_at_the_open_and_with_the_same_limit_is_not(
+    store: tinystore.Store,
+) -> None:
+    store.semaphore("gpu", limit=1)
+    store.semaphore("gpu", limit=1)
+    with pytest.raises(tinystore.InvalidError, match="semaphore gpu: open in this program with a limit of 1, not 3"):
+        store.semaphore("gpu", limit=3)
+    store.semaphore("tpu", limit=3)

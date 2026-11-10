@@ -18,6 +18,7 @@ import contextvars
 import json
 import secrets
 import time
+import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -42,6 +43,21 @@ _WAIT = "10s"
 
 _holding: contextvars.ContextVar[tuple[tuple[int, str], ...]] = contextvars.ContextVar("tinystore holding", default=())
 """The keys the caller holds or waits for, each with the link of the store it is of."""
+
+_opened: weakref.WeakKeyDictionary[Link, dict[str, int]] = weakref.WeakKeyDictionary()
+"""The limit each semaphore's first open gave, by the link of the store that opened it.
+
+One name keeps one limit in a program, and two stores are two programs, each
+of whose holds the store admits by its own limit.
+"""
+
+
+def _keep_limit(link: Link, name: str, limit: int) -> None:
+    """Keeps the limit a semaphore's first open on this store gives: another limit is refused, naming both."""
+    limits = _opened.setdefault(link, {})
+    first = limits.setdefault(name, limit)
+    if first != limit:
+        raise InvalidError(f"semaphore {name}: open in this program with a limit of {first}, not {limit}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,6 +275,7 @@ class Semaphore:
     def __init__(self, link: Link, name: str, limit: int, ttl: Duration, max_hold: Duration | None) -> None:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:  # pyright: ignore[reportUnnecessaryIsInstance]
             raise InvalidError(f"semaphore {name}: a limit of {limit!r}, not 1 to 1000")
+        _keep_limit(link, name, limit)
         self.name = name
         self.limit = limit
         self._keys = _Keys(link, "semaphore", name, limit, ttl, max_hold)

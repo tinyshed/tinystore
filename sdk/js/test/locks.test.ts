@@ -163,5 +163,48 @@ for (const way of ways) {
 			expect(() => store.lock('Invoices')).toThrow(InvalidError)
 			expect(() => store.semaphore('uploads', { limit: 0 })).toThrow(InvalidError)
 		})
+
+		// contract: LOCK-07
+		test('a semaphore opened again with another limit is refused at the open, with the same limit it is not', () => {
+			store.semaphore('gpu', { limit: 1 })
+			expect(() => store.semaphore('gpu', { limit: 1 })).not.toThrow()
+			const wider = () => store.semaphore('gpu', { limit: 3 })
+			expect(wider).toThrow(InvalidError)
+			expect(wider).toThrow('semaphore gpu: open in this program with a limit of 1, not 3')
+			expect(() => store.semaphore('tpu', { limit: 3 })).not.toThrow()
+		})
 	})
 }
+
+const embedded = ways.find(way => way.name === 'the core in this process')!
+
+// contract: LOCK-07
+describe.skipIf(!embedded.ready)('a semaphore of two stores', () => {
+	test('two stores on one directory hold one name each by its own limit, as two programs do', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'tinystore-locks-'))
+		const first = await embedded.open(dir)
+		const second = await embedded.open(dir)
+		try {
+			const narrow = first.semaphore('gpu', { limit: 1 })
+			const wide = second.semaphore('gpu', { limit: 2 })
+			const held = gate()
+			const letGo = gate()
+			const holder = narrow.hold('device-0', async () => {
+				held.open()
+				await letGo.opened
+			})
+			await held.opened
+			expect(await wide.tryHold('device-0', () => 'beside the other program')).toEqual({
+				acquired: true,
+				value: 'beside the other program',
+			})
+			letGo.open()
+			await holder
+		} finally {
+			await first.close()
+			await second.close()
+			await embedded.leave(dir)
+			await removed(dir)
+		}
+	})
+})

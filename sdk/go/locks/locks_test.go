@@ -3,6 +3,7 @@ package locks_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,6 +170,20 @@ func TestASemaphoreAdmitsItsLimitAKeyItsPermitWithoutAFence(t *testing.T) {
 		close(letGoSecond)
 		ways.Must(0, <-firstEnded)
 		ways.Must(0, <-secondEnded)
+	})
+}
+
+// contract: LOCK-07
+func TestASemaphoreOpenedAgainWithAnotherLimitIsRefusedAtTheOpenAndWithTheSameLimitIsNot(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ways.Must(locks.OpenSemaphore(store, "gpu", locks.Limit(1)))
+		ways.Must(locks.OpenSemaphore(store, "gpu", locks.Limit(1)))
+		_, err := locks.OpenSemaphore(store, "gpu", locks.Limit(3))
+		is(t, err, tinystore.ErrInvalid)
+		if want := "semaphore gpu: open in this program with a limit of 1, not 3"; !strings.Contains(err.Error(), want) {
+			t.Fatalf("got %q, want it to say %q", err, want)
+		}
+		ways.Must(locks.OpenSemaphore(store, "tpu", locks.Limit(3)))
 	})
 }
 
