@@ -19,6 +19,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::args::{self, Transport};
 use crate::banner::{self, Shown};
+use crate::frames_out::FramesOut;
 use crate::lines::{self, Lines, Terminal};
 use crate::{connection, local, remote};
 
@@ -173,12 +174,11 @@ async fn stdio(store: &Store, clock: Option<Arc<TestClock>>) -> io::Result<()> {
     Ok(())
 }
 
-/// Where a private child's frames go: a file on its stdout's handle. Tokio's
-/// `stdout()` writes through std's `Stdout`, a line buffer behind a lock
-/// that cuts frames at their newline bytes, and on Windows, under Node's
-/// pipes, a write through it now and then never finished: an answer stopped
-/// part way, and the parent waited for good.
-fn frames_out() -> io::Result<tokio::fs::File> {
+/// Where a private child's frames go: a file on its stdout's handle, which a
+/// write that takes nothing does not end. Tokio's `stdout()` writes through
+/// std's `Stdout`, a line buffer behind a lock that cuts frames at their
+/// newline bytes, and through `write_all`, which does.
+fn frames_out() -> io::Result<FramesOut<std::fs::File>> {
     #[cfg(windows)]
     let handle = {
         use std::os::windows::io::AsHandle as _;
@@ -189,7 +189,7 @@ fn frames_out() -> io::Result<tokio::fs::File> {
         use std::os::fd::AsFd as _;
         io::stdout().as_fd().try_clone_to_owned()?
     };
-    Ok(tokio::fs::File::from_std(std::fs::File::from(handle)))
+    Ok(FramesOut::new(std::fs::File::from(handle)))
 }
 
 /// How a local server runs: whether its clients started it, how long it

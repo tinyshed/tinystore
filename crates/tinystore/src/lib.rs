@@ -73,6 +73,8 @@ mod space;
 pub mod sql;
 #[cfg(feature = "store")]
 pub(crate) mod sqlite;
+#[doc(hidden)]
+pub mod stdout;
 #[cfg(feature = "store")]
 mod store;
 #[cfg(any(feature = "store", feature = "config-load", feature = "mcp"))]

@@ -41,6 +41,7 @@ mod connection;
 mod events;
 mod files;
 mod following;
+mod frames_out;
 mod help;
 mod jobs;
 mod kv;
