@@ -598,7 +598,11 @@ running; then closes every engine, the last opened first, and lets go
 of the directory. The first engine that fails to close is the error;
 the others still close. A second call does nothing, and neither does
 the last clone's drop after. From inside a transaction it is
-`Invalid`: it would wait for the writer the transaction holds.
+`Invalid`: it would wait for the writer the transaction holds. So it is
+from inside one of the handlers it waits for, a worker's, a schedule's
+or a subscription's, blocking or awaited: it would wait for the handler
+that calls it. Such a handler returns first, or stops its worker or its
+subscription, whose stop returns at once there.
 
 ### Store.tx
 
@@ -745,7 +749,9 @@ Closes the store as `crate::Store::close` does, on a thread the call
 starts, so that the executor's thread waits for nothing: the close
 waits for background work, for the handlers running and for each
 engine's last writes. A store whose last handle is dropped closes on
-the dropping thread instead, which may be the executor's.
+the dropping thread instead, which may be the executor's. Awaited
+inside a transaction or a handler it waits for, it is `Invalid` at its
+first poll, as the blocking close is.
 
 ### aio::Store.tx
 
