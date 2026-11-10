@@ -249,7 +249,9 @@ impl Group {
 
     /// Commits batches until the write at the front has a caller of its own to
     /// lead, or the queue is empty. `own` is the write of the caller that
-    /// leads, when it has one.
+    /// leads, when it has one, and it leads on until a batch takes it: a
+    /// caller that took a lead handed elsewhere queued it behind the writes
+    /// submitted before it, which may fill more than one batch.
     fn lead(&self, writer: &Mutex<Connection>, own: Option<&Arc<Write>>) {
         loop {
             if let Some(gate) = &self.gate {
@@ -276,7 +278,7 @@ impl Group {
             if !batch.is_empty() {
                 self.commits.fetch_add(1, Ordering::Relaxed);
             }
-            let leads_on = self.hand_off(batch.len(), held);
+            let leads_on = self.hand_off(batch.len(), held, own);
             answer_all(batch, answers, own);
             if !leads_on {
                 return;
@@ -320,14 +322,15 @@ impl Group {
     }
 
     /// Passes the lead to the caller of the write at the front, and says
-    /// whether this thread leads on because that write was submitted.
-    fn hand_off(&self, answered: usize, held: Duration) -> bool {
+    /// whether this thread leads on because that write was submitted or is
+    /// its `own`: promoted, it would have no caller left to lead it.
+    fn hand_off(&self, answered: usize, held: Duration, own: Option<&Arc<Write>>) -> bool {
         let mut queue = self.lock();
         queue.expected = queue.waiting.len() + answered;
         queue.last_held = held;
         queue.last_ended = Some(Instant::now());
         match queue.waiting.front() {
-            Some(next) if next.is_submitted() => true,
+            Some(next) if next.is_submitted() || is_own(next, own) => true,
             Some(next) => {
                 next.promote();
                 false
@@ -417,13 +420,14 @@ impl Write {
         self.work.lock().unwrap_or_else(PoisonError::into_inner).take()
     }
 
-    /// The write's answer, once the answers given with it are passed on.
+    /// The write's answer, once the answers given with it are passed on. It
+    /// waits only for a close's: a close that took the write from the queue
+    /// while its caller led answers it on the close's thread, maybe after
+    /// that caller stopped leading.
     fn take_answer(&self) -> Result<()> {
-        let answer = match &mut *self.lock_turn() {
-            Turn::Answered(answer) => answer.take(),
-            _ => return Err(Error::internal("a grouped write ended without an answer")),
-        };
-        let Some(Answer { own, passed_on }) = answer else {
+        let answered = self.changed.wait_while(self.lock_turn(), |turn| !matches!(turn, Turn::Answered(_)));
+        let taken = std::mem::replace(&mut *answered.unwrap_or_else(PoisonError::into_inner), Turn::Answered(None));
+        let Turn::Answered(Some(Answer { own, passed_on })) = taken else {
             return Err(Error::internal("a grouped write was answered twice"));
         };
         answer_in_halves(passed_on);
@@ -448,13 +452,17 @@ impl Write {
 fn answer_all(batch: Vec<Arc<Write>>, answers: Vec<Result<()>>, own: Option<&Arc<Write>>) {
     let mut callers = Vec::with_capacity(batch.len());
     for (write, answer) in batch.into_iter().zip(answers) {
-        if write.is_submitted() || own.is_some_and(|own| Arc::ptr_eq(own, &write)) {
+        if write.is_submitted() || is_own(&write, own) {
             write.answer(answer, Vec::new());
         } else {
             callers.push((write, answer));
         }
     }
     answer_in_halves(callers);
+}
+
+fn is_own(write: &Arc<Write>, own: Option<&Arc<Write>>) -> bool {
+    own.is_some_and(|own| Arc::ptr_eq(own, write))
 }
 
 /// Answers callers with two wakes, however many they are: each half through

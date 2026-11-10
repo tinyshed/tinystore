@@ -891,16 +891,31 @@ fn a_lead_dropped_unrun_still_commits_the_writes_behind_it_where_it_is_dropped()
     assert_eq!(count(&file), 1);
 }
 
+/// A pool whose every thread is busy, as with sixteen writes waiting for this
+/// file's writer: its lead, which keeps the jobs it is given unrun, and those
+/// jobs.
 #[cfg(feature = "async")]
-#[test]
-fn a_blocking_write_takes_a_lead_no_thread_of_the_pool_took_yet() {
-    let (_dir, file) = open(Config::default());
-    // a pool whose every thread is busy, as with sixteen writes waiting for this file's writer
+fn a_busy_pool() -> (crate::polled::Lead, Arc<Mutex<Vec<crate::polled::Job>>>) {
     let kept: Arc<Mutex<Vec<crate::polled::Job>>> = Arc::default();
     let lead: crate::polled::Lead = {
         let kept = Arc::clone(&kept);
         Arc::new(move |job| kept.lock().unwrap().push(job))
     };
+    (lead, kept)
+}
+
+/// Runs the jobs a busy pool kept, as its threads do once they come at last.
+#[cfg(feature = "async")]
+fn run_kept(kept: &Mutex<Vec<crate::polled::Job>>) {
+    let jobs: Vec<_> = kept.lock().unwrap().drain(..).collect();
+    jobs.into_iter().for_each(|job| job());
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn a_blocking_write_takes_a_lead_no_thread_of_the_pool_took_yet() {
+    let (_dir, file) = open(Config::default());
+    let (lead, kept) = a_busy_pool();
     let answer = submit_on(&file, &lead, "a");
     let (inserted, caller) = mpsc::channel();
     {
@@ -915,9 +930,81 @@ fn a_blocking_write_takes_a_lead_no_thread_of_the_pool_took_yet() {
     assert_eq!(thread.as_deref(), Some("a-caller"), "the caller committed the write queued before its own");
 
     // the pool's thread comes at last, and finds nothing to lead
-    let jobs: Vec<_> = kept.lock().unwrap().drain(..).collect();
-    jobs.into_iter().for_each(|job| job());
+    run_kept(&kept);
     assert_eq!(count(&file), 2);
     insert(&file, "c").unwrap();
     assert_eq!(count(&file), 3, "the group leads on as before");
+}
+
+/// A blocking write takes the lead a submitted one handed to a busy pool, and
+/// `limits` leave no room for both in one commit, so that the first commit
+/// ends before the caller's own write: that write commits all the same, in
+/// the next, and a write after them still finds a leader.
+#[cfg(feature = "async")]
+fn took_a_lead_behind_a_full_commit(limits: GroupLimits, [submitted, blocking]: [&'static str; 2]) {
+    let (_dir, file) = open(Config { group: limits, ..Config::default() });
+    let before = file.commits();
+    let (lead, kept) = a_busy_pool();
+    let answer = submit_on(&file, &lead, submitted);
+    let led = {
+        let file = Arc::clone(&file);
+        within_a_minute(move || insert(&file, blocking))
+    };
+    assert!(led.is_ok(), "the caller that took the lead commits its own write: {led:?}");
+    let (id, _) = answer.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(id.is_ok(), "{id:?}");
+    assert_eq!(file.commits() - before, 2, "the limits left the caller's write to a commit of its own");
+    assert_eq!(values(&file), [submitted, blocking]);
+
+    // the pool's thread leads the next write, which a group without a leader never commits
+    let after = submit_on(&file, &lead, "after");
+    run_kept(&kept);
+    let (id, _) = after.recv_timeout(Duration::from_secs(10)).expect("the write after them waited for good");
+    assert!(id.is_ok(), "{id:?}");
+    assert_eq!(count(&file), 3);
+}
+
+// contract: DUR-11
+#[cfg(feature = "async")]
+#[test]
+fn a_blocking_write_that_took_a_lead_commits_though_the_writes_before_it_fill_a_commit() {
+    took_a_lead_behind_a_full_commit(GroupLimits { writes: 1, ..GroupLimits::default() }, ["a", "b"]);
+}
+
+// contract: DUR-11
+#[cfg(feature = "async")]
+#[test]
+fn a_blocking_write_that_took_a_lead_commits_though_the_bytes_before_it_fill_a_commit() {
+    // six bytes each, twelve together: more than a commit of ten takes
+    took_a_lead_behind_a_full_commit(GroupLimits { bytes: 10, ..GroupLimits::default() }, ["aaaaaa", "bbbbbb"]);
+}
+
+// contract: STORE-03
+#[cfg(feature = "async")]
+#[test]
+fn a_blocking_write_a_close_took_while_its_caller_led_fails_closed() {
+    let (_dir, file) = open(Config::default());
+    let (lead, _kept) = a_busy_pool();
+    let held = lock(&file.writer);
+    let write =
+        |tx: &Tx<'_>| tx.execute("insert into t (v) values ('a')", []).map_err(|error| sql_error("insert", error));
+    // The close answers this write first, and slowly, so that the caller who
+    // took its lead stops leading before the close answers the caller's own.
+    file.submit_on(&lead, 1, write, |_| thread::sleep(Duration::from_millis(500)));
+    let (inserted, caller) = mpsc::channel();
+    {
+        let file = Arc::clone(&file);
+        thread::spawn(move || inserted.send(insert(&file, "b")).unwrap());
+    }
+    wait_until(|| file.writes_waiting() == 2);
+    let closer = {
+        let file = Arc::clone(&file);
+        thread::spawn(move || file.close())
+    };
+    wait_until(|| file.writes_waiting() == 0);
+    // the caller leads a commit of nothing, since the close took its own write too
+    drop(held);
+    let answer = caller.recv_timeout(Duration::from_secs(10)).expect("the caller waited for good");
+    assert_eq!(answer.unwrap_err().kind(), ErrorKind::Closed);
+    closer.join().unwrap().unwrap();
 }
