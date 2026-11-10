@@ -6,8 +6,9 @@
 //! row that names them, under a content id the transaction takes in its own
 //! rows. A rollback gives the id back and removes the object while the
 //! writer is still held, so that no later write takes the id while the
-//! object lies there; one a crash left lies past what the file reserved, and
-//! the next open removes it.
+//! object lies there; one it could not remove keeps its id in doubt, which a
+//! later write skips, and one a crash left lies past what the file reserved,
+//! and the next open removes it.
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -104,7 +105,7 @@ pub(super) fn write_in(
     }
     let (sha256, size) = (Sha256::digest(bytes).to_vec(), bytes.len() as i64);
     on_file(tx, files, |sql| {
-        let id = files.blobs.id_in(sql)?;
+        let id = id_in(files, sql)?;
         let place = if bytes.len() <= INLINE {
             Place::Inline(bytes.to_vec())
         } else {
@@ -117,6 +118,21 @@ pub(super) fn write_in(
         let (info, _freed) = publication(sql)?;
         Ok(info)
     })
+}
+
+/// A content id taken in the transaction's rows, none that is held. A
+/// rollback gives its id back, and one that could not remove its bytes
+/// leaves the id held in doubt until maintenance removes them: a file given
+/// that id again, its bytes placed over them, would lose its own to that
+/// removal before it commits. Each id skipped is spent once the transaction
+/// commits.
+fn id_in(files: &Files, sql: &crate::sqlite::Tx<'_>) -> Result<i64> {
+    loop {
+        let id = files.blobs.id_in(sql)?;
+        if !files.blobs.ids.holds(id) {
+            return Ok(id);
+        }
+    }
 }
 
 /// Refuses bytes past the files' bound, or of another length than the size

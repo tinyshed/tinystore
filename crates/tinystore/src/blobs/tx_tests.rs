@@ -98,6 +98,40 @@ fn a_file_and_the_row_that_names_it_commit_together_or_neither_does() {
     assert_eq!(f.objects().len(), 1, "the bytes the rollback took are gone at once");
 }
 
+// contract: DUR-06
+#[test]
+fn bytes_a_rollback_could_not_remove_go_without_those_of_the_next_file() {
+    let f = fixture();
+    let db = f.app();
+    let packages = db.files("packages").open().unwrap();
+    let mut placed = None;
+    let failed = db.tx(|tx| -> Result<()> {
+        tx.with(&packages).put("slack-1.0.0.js", bytes(PACKAGE))?;
+        placed = f.objects().pop();
+        Err(Error::invalid("the install changed its mind"))
+    });
+    assert_eq!(failed.unwrap_err().kind(), ErrorKind::Invalid);
+    let left = placed.expect("the rollback's bytes were placed");
+    let id = i64::from_str_radix(&left.file_name().unwrap().to_string_lossy(), 16).unwrap();
+    // as a rollback leaves them when another program holds the file on Windows
+    std::fs::write(&left, b"the rollback's bytes").unwrap();
+    packages.blobs.ids.doubt(id);
+
+    let stripe = bytes(PACKAGE + 1);
+    db.tx(|tx| -> Result<()> {
+        tx.with(&packages).put("stripe-1.0.0.js", &stripe)?;
+        // maintenance settles the doubt before the transaction commits
+        let blobs = Arc::clone(&packages.blobs);
+        std::thread::spawn(move || blobs.ids.doubtful().into_iter().for_each(|id| blobs.resolve(id))).join().unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let mut file = packages.get("stripe-1.0.0.js").unwrap().expect("committed with its row");
+    assert_eq!(file.read_all().unwrap(), stripe, "the next file keeps its bytes");
+    assert!(!left.exists(), "the rollback's bytes are gone");
+    assert_eq!(f.objects().len(), 1);
+}
+
 #[test]
 fn a_delete_a_copy_and_a_create_commit_with_the_rows_too() {
     let f = fixture();

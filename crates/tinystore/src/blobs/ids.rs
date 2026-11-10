@@ -52,7 +52,10 @@ impl Ids {
     pub(crate) fn take(&self, reserve: impl FnOnce(i64) -> Result<i64>) -> Result<i64> {
         let mut reserve = Some(reserve);
         let mut state = lock(&self.state);
-        while state.last == state.end {
+        loop {
+            if let Some(id) = state.hold_next() {
+                return Ok(id);
+            }
             if state.reserving {
                 state = self.reserved.wait(state).unwrap_or_else(PoisonError::into_inner);
                 continue;
@@ -68,15 +71,13 @@ impl Ids {
             state.last = end - BLOCK;
             state.end = end;
         }
-        Ok(state.hold_next())
     }
 
     /// The next id, held, when the block reserved has one left: what a poll
     /// takes, since writing the next block is a commit.
     #[cfg(feature = "async")]
     pub(crate) fn try_take(&self) -> Option<i64> {
-        let mut state = lock(&self.state);
-        (state.last < state.end).then(|| state.hold_next())
+        lock(&self.state).hold_next()
     }
 
     /// Ends an id's hold: its content committed, or its file is gone.
@@ -110,10 +111,18 @@ impl Ids {
 }
 
 impl State {
-    fn hold_next(&mut self) -> i64 {
-        self.last += 1;
-        self.held.insert(self.last);
-        self.last
+    /// The block's next id that nothing holds, held; none when it is spent.
+    /// One held already is in doubt, as a database's rollback leaves the id
+    /// it gave back when its bytes would not go: maintenance removes them,
+    /// and would take the bytes of the id's next file with them.
+    fn hold_next(&mut self) -> Option<i64> {
+        while self.last < self.end {
+            self.last += 1;
+            if self.held.insert(self.last) {
+                return Some(self.last);
+            }
+        }
+        None
     }
 }
 
@@ -181,6 +190,24 @@ mod tests {
         ids.doubt(second);
         assert_eq!(ids.settled_mark(), 2001);
         assert_eq!(ids.doubtful(), [second]);
+    }
+
+    // contract: DUR-06
+    #[test]
+    fn an_id_in_doubt_is_skipped_by_the_block_written_after_it() {
+        let ids = Ids::default();
+        ids.start(2000);
+        // as a database's rollback leaves the id it gave back, its bytes still there
+        ids.doubt(2001);
+        assert_eq!(ids.take(|block| Ok(2000 + block)).unwrap(), 2002);
+        assert_eq!(ids.settled_mark(), 2000, "the mark stays below the doubt");
+        ids.let_go(2001);
+        assert_eq!(ids.take(|_| unreachable!("the block has room")).unwrap(), 2003, "an id skipped is spent");
+        #[cfg(feature = "async")]
+        {
+            ids.doubt(2004);
+            assert_eq!(ids.try_take(), Some(2005), "a poll skips it too");
+        }
     }
 
     #[test]
