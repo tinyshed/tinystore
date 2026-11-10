@@ -246,6 +246,30 @@ fn pages_of_rare_matches_hold_their_limit_but_the_last_and_go_on_without_losing_
 
 // contract: REC-05
 #[test]
+fn a_page_several_windows_fill_goes_on_by_the_times_the_file_keeps_to_the_nanosecond() {
+    let fixture = fixture();
+    let (records, api) = (fixture.records(), fixture.events("api"));
+    // Four head rows of 1024 events a nanosecond apart, as Linux keeps them,
+    // the last 24 of each kept by the filter: a page of 50 takes three windows.
+    // A SystemTime keeps 100 ns on Windows, where 3048 to 3071 read as one time.
+    let start = records.now();
+    let kept = |n: i64| n % 1024 >= 1000;
+    let event = |n: i64| NewEvent::new(&n.to_string()).fields(&json!({ "kept": kept(n) })).kept(start + n);
+    records.append_kept(&records.stream("api").unwrap(), (0..4096).map(event).collect()).unwrap();
+    assert_eq!(fixture.rows("heads"), 4);
+    let oldest: Vec<String> = (0..4096).filter(|n| kept(*n)).map(|n| n.to_string()).collect();
+    let newest: Vec<String> = oldest.iter().rev().cloned().collect();
+    for when in ["waiting", "packed"] {
+        let list = api.list().filter("kept", &true).limit(50);
+        assert_eq!(pages(&list).concat(), oldest, "{when}: every event once, in the order of its time");
+        assert_eq!(pages(&list.newest()).concat(), newest, "{when}: newest first");
+        fixture.pass(Duration::from_hours(1));
+        maintain(&fixture.store).unwrap();
+    }
+}
+
+// contract: REC-05
+#[test]
 fn a_page_of_rows_of_several_events_is_whole_up_to_its_limit_and_the_next_goes_on_from_there() {
     let fixture = fixture();
     let api = fixture.events("api");

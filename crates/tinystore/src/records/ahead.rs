@@ -27,8 +27,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::Scope;
 
 use super::engine::{Records, Stream};
-use super::event::Event;
-use super::read::{Asked, Page, Query, written};
+use super::read::{Asked, Found, Query, Window, written};
 use crate::cancel;
 use crate::{Error, Result};
 
@@ -60,14 +59,14 @@ impl Records {
         query: &Query,
         wide: usize,
         wanted: usize,
-    ) -> Result<(Page, usize)> {
+    ) -> Result<(Window, usize)> {
         let (limit, most) = (query.page_events(), AHEAD * self.threads());
         if wide <= 1 {
-            let page = self.window(stream, query)?;
-            let wide = ranges_for(limit, page.events.len(), 1, most);
-            return Ok((page, wide));
+            let window = self.window(stream, query)?;
+            let wide = ranges_for(limit, window.found.len(), 1, most);
+            return Ok((window, wide));
         }
-        let Some(asked) = self.asked(stream, query)? else { return Ok((Page { events: Vec::new(), next: None }, 1)) };
+        let Some(asked) = self.asked(stream, query)? else { return Ok((Window::EMPTY, 1)) };
         let (handed, mut cut, tokens) = (Handed::default(), Cut::new(&asked), cancel::captured());
         let events = std::thread::scope(|scope| {
             let _closed = handed.closing();
@@ -100,7 +99,7 @@ impl Records {
         })?;
         let next = cut.after().map(|start| written(asked.from(start)));
         let wide = ranges_for(limit, events.len(), cut.back, most);
-        Ok((Page { events, next }, wide))
+        Ok((Window { found: events, next }, wide))
     }
 
     /// Reads the ranges handed out, one after another, until none is left.
@@ -116,13 +115,13 @@ impl Records {
     }
 
     /// The events of a range, both ends in it, read window after window.
-    fn read_range(&self, stream: Option<&Stream>, query: &Query, range: (i64, i64)) -> Result<Vec<Event>> {
+    fn read_range(&self, stream: Option<&Stream>, query: &Query, range: (i64, i64)) -> Result<Vec<Found>> {
         let mut query = query.over(written(range));
         let mut events = Vec::new();
         loop {
-            let page = self.window(stream, &query)?;
-            events.extend(page.events);
-            let Some(next) = page.next else { return Ok(events) };
+            let window = self.window(stream, &query)?;
+            events.extend(window.found);
+            let Some(next) = window.next else { return Ok(events) };
             query = query.over(next);
         }
     }
@@ -241,7 +240,7 @@ struct Hands {
     /// place among them.
     waiting: VecDeque<(usize, (i64, i64))>,
     /// What each range read holds, by its place, until it is taken back.
-    read: HashMap<usize, Result<Vec<Event>>>,
+    read: HashMap<usize, Result<Vec<Found>>>,
     /// The places of the next range handed out and of the next taken back.
     given: usize,
     returned: usize,
@@ -274,14 +273,14 @@ impl Handed {
         }
     }
 
-    fn put(&self, place: usize, read: Result<Vec<Event>>) {
+    fn put(&self, place: usize, read: Result<Vec<Found>>) {
         self.lock().read.insert(place, read);
         self.changed.notify_all();
     }
 
     /// What the first range handed out and not taken back holds, waiting
     /// until it is read.
-    fn take_back(&self) -> Result<Vec<Event>> {
+    fn take_back(&self) -> Result<Vec<Found>> {
         let mut hands = self.lock();
         loop {
             let place = hands.returned;
@@ -322,7 +321,7 @@ impl Drop for Closing<'_> {
 struct Reading<'h> {
     handed: &'h Handed,
     place: usize,
-    read: Option<Result<Vec<Event>>>,
+    read: Option<Result<Vec<Found>>>,
 }
 
 impl Drop for Reading<'_> {

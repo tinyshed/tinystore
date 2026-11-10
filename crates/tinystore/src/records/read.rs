@@ -322,7 +322,8 @@ impl List {
     /// ranges at once to begin with.
     #[cfg(test)]
     pub(super) fn read_ahead(&self, wide: usize) -> Result<(Page, usize)> {
-        self.records.read_ahead(self.stream.as_ref(), &self.query, wide, self.query.page_events())
+        let read = self.records.read_ahead(self.stream.as_ref(), &self.query, wide, self.query.page_events());
+        read.map(|(window, wide)| (window.into_page(), wide))
     }
 }
 
@@ -365,7 +366,8 @@ impl Iterator for All {
             }
             let (list, wanted) = (&self.list, self.list.query.page_events());
             match list.records.read_ahead(list.stream.as_ref(), &list.query, self.wide, wanted) {
-                Ok((page, wide)) => {
+                Ok((window, wide)) => {
+                    let page = window.into_page();
                     self.wide = wide;
                     self.more = page.next.is_some();
                     self.list.query.after = page.next;
@@ -474,12 +476,35 @@ struct Fetched {
     segments: HashMap<i64, Vec<u8>>,
 }
 
-/// An event a read found, with what orders it.
-struct Found {
+/// An event a read found, with what orders it: its time as the file keeps it,
+/// to the nanosecond, which a window and a page are cut and go on by. Its
+/// public time is a `SystemTime`, which keeps 100 ns on Windows.
+pub(super) struct Found {
     at: i64,
     arrival: i64,
     stream: Arc<str>,
     event: Kept,
+}
+
+impl Found {
+    fn into_event(self) -> Event {
+        self.event.into_event(&self.stream)
+    }
+}
+
+/// What one window found, or the windows that follow it a page or a read
+/// ahead reads, in the read's order, and where the next window begins.
+pub(super) struct Window {
+    pub(super) found: Vec<Found>,
+    pub(super) next: Option<String>,
+}
+
+impl Window {
+    pub(super) const EMPTY: Window = Window { found: Vec::new(), next: None };
+
+    fn into_page(self) -> Page {
+        Page { events: self.found.into_iter().map(Found::into_event).collect(), next: self.next }
+    }
 }
 
 /// The rows of a range that may hold what a read asks, from the range's
@@ -534,26 +559,26 @@ impl Records {
             let (window, widened) = match self.read_ahead(stream, &from, wide, asked.limit - events.len()) {
                 Ok(read) => read,
                 Err(error) if events.is_empty() => return Err(error),
-                Err(_) => return Ok(Page { events, next: from.after }),
+                Err(_) => return Ok(Window { found: events, next: from.after }.into_page()),
             };
-            events.extend(window.events);
+            events.extend(window.found);
             match window.next {
                 Some(next) if events.len() < asked.limit => (from, wide) = (from.over(next), widened),
-                next => return filled(events, &asked, next),
+                next => return cut(events, &asked, next).map(Window::into_page),
             }
         }
     }
 
     /// One window: work out the range → pick and fetch its rows → parse and
     /// keep what matches → cut the window as a page is cut.
-    pub(super) fn window(&self, stream: Option<&Stream>, query: &Query) -> Result<Page> {
-        let Some(asked) = self.asked(stream, query)? else { return Ok(Page { events: Vec::new(), next: None }) };
+    pub(super) fn window(&self, stream: Option<&Stream>, query: &Query) -> Result<Window> {
+        let Some(asked) = self.asked(stream, query)? else { return Ok(Window::EMPTY) };
         let (fetched, horizon) = self.fetch(&asked, query)?;
         let bytes: usize = fetched.rows.iter().map(|(picked, _)| picked.size).sum();
         let events: u64 = fetched.rows.iter().map(|(picked, _)| picked.events).sum();
         let _held = self.memory.reserve_for_read(bytes as u64 + events * EVENT_HELD, "records: a read", PATIENCE)?;
         let found = self.found(&asked, query, fetched, horizon)?;
-        cut(found, &asked, horizon)
+        cut(found, &asked, horizon.map(|edge| written(asked.from(edge))))
     }
 
     /// Where each range after `start` would begin, `ranges` of them at most,
@@ -906,26 +931,14 @@ impl Records {
     }
 }
 
-/// A window of what was found: the limit's worth, less the events of a time
-/// the limit would split, and where the next window begins.
-fn cut(mut found: Vec<Found>, asked: &Asked, horizon: Option<i64>) -> Result<Page> {
-    let mut next = horizon.map(|edge| asked.from(edge));
-    if let Some(whole) = whole(&found, asked.limit, |found| found.at)? {
-        next = Some(asked.beyond(found[whole - 1].at));
-        found.truncate(whole);
-    }
-    let next = next.map(written);
-    Ok(Page { events: found.into_iter().map(|found| found.event.into_event(&found.stream)).collect(), next })
-}
-
-/// A page of what its windows held, cut as a window is; the last window's
-/// `next` when they hold no more than the page's events.
-fn filled(mut events: Vec<Event>, asked: &Asked, next: Option<String>) -> Result<Page> {
-    let at = |event: &Event| unix_nanos(event.at);
-    let Some(whole) = whole(&events, asked.limit, at)? else { return Ok(Page { events, next }) };
-    let next = written(asked.beyond(at(&events[whole - 1])));
-    events.truncate(whole);
-    Ok(Page { events, next: Some(next) })
+/// A window, or a page of the windows it read, of what was found: the
+/// limit's worth, less the events of a time the limit would split, and where
+/// the next begins; `next` when they are no more than the limit.
+fn cut(mut found: Vec<Found>, asked: &Asked, next: Option<String>) -> Result<Window> {
+    let Some(whole) = whole(&found, asked.limit, |found| found.at)? else { return Ok(Window { found, next }) };
+    let next = written(asked.beyond(found[whole - 1].at));
+    found.truncate(whole);
+    Ok(Window { found, next: Some(next) })
 }
 
 /// How many of the events found, in a read's order, a page of `limit` holds

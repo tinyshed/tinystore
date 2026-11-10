@@ -698,9 +698,11 @@ fn held_ids(tx: &Tx<'_>, stream: i64, written: &Written) -> Result<HashSet<Strin
     Ok(held)
 }
 
-#[cfg(feature = "sql")]
+// a test appends through it the times Linux keeps, which no SystemTime holds on Windows
+#[cfg(any(feature = "sql", test))]
 impl Records {
     /// Whether `stream` holds the id `id`, as a reader of the file sees it.
+    #[cfg(feature = "sql")]
     pub(super) fn holds_id(&self, stream: &Stream, id: &str) -> Result<bool> {
         self.file.read(|connection| {
             let found = connection.prepare_cached(HELD).and_then(|mut select| select.exists(params![stream.id, id]));
@@ -745,10 +747,9 @@ pub(super) fn window(stream: &Stream, now: i64) -> (i64, i64) {
 }
 
 /// The step between the times of one call's events that give none: the
-/// finest a `SystemTime` keeps on every platform, Windows' 100 ns. An
-/// event's public time is a `SystemTime`, and a page of several windows is
-/// cut by it: a nanosecond apart, a hundred events there read as one time,
-/// which no page splits and a page's `next` begins inside of.
+/// finest a `SystemTime` keeps on every platform, Windows' 100 ns, so that
+/// each event's public time is its own: a nanosecond apart, a hundred events
+/// would read back on Windows as one time.
 const STAMP_STEP: i64 = 100;
 
 /// The time the event at `place` of one call's list takes when it gives
