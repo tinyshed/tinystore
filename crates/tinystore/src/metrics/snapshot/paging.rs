@@ -9,7 +9,9 @@
 //! its series, takes each as far as its share goes, and ends at the start of
 //! the bucket the first of them stopped in, so that every bucket it answers
 //! counts every series of the group; or, sooner, at the first bucket with
-//! samples past the page's `limit`, which counts no bucket without any.
+//! samples past the page's `limit`, which counts no bucket without any. A
+//! group with no sample in the range answers nothing and is left out, and a
+//! page whose groups all were goes on past them, as a walk of `next` would.
 //!
 //! ```text
 //! a group's series   a ──────────╳            a stopped inside 10:05's bucket
@@ -33,7 +35,7 @@ use crate::metrics::engine::Engine;
 use crate::metrics::head;
 use crate::metrics::labels;
 use crate::metrics::matching::{self, Found};
-use crate::metrics::page::{GroupPlace, Paging, Place};
+use crate::metrics::page::{GroupPlace, Paging, Place, Start};
 use crate::metrics::query::Asked;
 use crate::metrics::series::Labels;
 use crate::sqlite::sql_error;
@@ -108,8 +110,35 @@ impl Engine {
     }
 
     /// What a page of an aggregate takes: its groups in their order from
-    /// where the page begins, and where the page after it begins.
+    /// where the page begins, and where the page after it begins. When the
+    /// groups one query finds hold no sample in the range, the page goes on
+    /// past them from its `next`, from a snapshot of its own each time, so
+    /// that only the last page takes no group.
     pub(in crate::metrics) fn take_groups(
+        &self,
+        asked: &Asked,
+        shape: &Shape,
+        paging: &Paging,
+        budget: &mut Budget,
+    ) -> Result<(Vec<TakenGroup>, Option<GroupPlace>)> {
+        let mut paging = paging.clone();
+        loop {
+            let (page, next) = self.groups_once(asked, shape, &paging, budget)?;
+            match next {
+                Some(next) if page.is_empty() => {
+                    crate::cancel::check(|| "an aggregate".to_owned())?;
+                    // the page holds nothing of the groups it passed over
+                    budget.reset();
+                    paging.from = Start::Group(next);
+                }
+                next => return Ok((page, next)),
+            }
+        }
+    }
+
+    /// The groups one snapshot gives a page of an aggregate, and where the
+    /// page after it begins.
+    fn groups_once(
         &self,
         asked: &Asked,
         shape: &Shape,
@@ -192,7 +221,8 @@ impl Reading<'_, '_> {
     /// The groups chosen for an aggregate's page, from the one where it
     /// begins: each whole while the page has room for it, and the one it
     /// stops in up to the start of a bucket; past them the page ends at
-    /// `beyond`, the first group it could not hold.
+    /// `beyond`, the first group it could not hold. A group with no sample
+    /// in the range is left out, since it answers no bucket.
     fn groups_page(
         &mut self,
         engine: &Engine,
@@ -215,6 +245,10 @@ impl Reading<'_, '_> {
                 Paged::Stopped(_) if !page.is_empty() => return Ok((page, place(at))),
                 Paged::Stopped(_) => self.one_bucket(engine, found, asked, shape, at)?,
             };
+            if ended.buckets == 0 {
+                // it ended with the range, and met no sample on the way
+                continue;
+            }
             left = left.saturating_sub(ended.buckets);
             let (name, labels) = group.clone();
             let more = ended.end < asked.to;
@@ -402,8 +436,9 @@ impl Reading<'_, '_> {
                 if whole {
                     sampled.meet(block.times.start);
                 } else if room.first || !sampled.meet_run(from, end, count) {
+                    // a sample past the window may lie in the bucket the range's end cuts
                     block.times.walk(|_, at| {
-                        if at >= window.from {
+                        if (window.from..window.to).contains(&at) {
                             sampled.meet(at)
                         }
                     })?;
@@ -459,7 +494,8 @@ impl Reading<'_, '_> {
                     // a chunk's times alone, its values decoded after the read
                     let mut times = Vec::with_capacity(count);
                     chunk.times(self.zstd, &mut times)?;
-                    times.iter().filter(|point| point.at >= window.from).for_each(|point| sampled.meet(point.at));
+                    let within = times.iter().filter(|point| (window.from..window.to).contains(&point.at));
+                    within.for_each(|point| sampled.meet(point.at));
                 }
                 room.first = false;
             }

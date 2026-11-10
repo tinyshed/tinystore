@@ -474,6 +474,43 @@ fn a_gap_inside_dense_samples_shortens_a_page_and_empties_none() {
     assert_eq!(pages, [95, 20]);
 }
 
+/// A thousand pods' cpu whose one sample is two hours old, then one pod's of
+/// now, written after them: more series than one query finds, all but the
+/// last without a sample in the last hour.
+fn dead_first(f: &Fixture) {
+    let pod = |index: usize, at| Series::gauge("cpu").label("pod", format!("p{index:04}")).sample(at, index as f64);
+    let dead: Vec<Series> = (0..1000).map(|index| pod(index, f.now() - 2 * HOUR)).collect();
+    f.metrics().ingest(&dead).unwrap();
+    f.metrics().ingest(&[pod(1000, f.now())]).unwrap();
+}
+
+// contract: MET-21
+#[test]
+fn an_aggregates_page_goes_on_past_the_groups_without_a_sample_in_its_range() {
+    let f = fixture();
+    dead_first(&f);
+    let query = f.metrics().query().name("cpu").since(HOUR).every(MINUTE).by(&["pod"]);
+    let pages = aggregate_pages(&query, Op::Avg, 10);
+    let pods: Vec<&str> =
+        pages.iter().flat_map(|page| &page.groups).map(|group| group.labels["pod"].as_str()).collect();
+    assert_eq!((pages.len(), pods), (1, vec!["p1000"]), "a thousand groups of nothing make no page");
+}
+
+// contract: MET-21
+#[test]
+fn a_sample_past_the_range_counts_no_bucket_toward_a_page() {
+    let f = fixture();
+    let from = f.now() - 3 * HOUR;
+    let host = |host: &str| Series::gauge("temp").label("host", host);
+    // a's samples reach across the range, the later one into the bucket that the range's end cuts
+    let a = host("a").sample(from - 30 * MINUTE, 1.0).sample(from + 27 * MINUTE, 2.0);
+    f.metrics().ingest(&[a, host("b").sample(from + 5 * MINUTE, 3.0)]).unwrap();
+    let query = f.metrics().query().name("temp").from(from).to(from + 25 * MINUTE).every(10 * MINUTE).by(&["host"]);
+    let whole = query.aggregate(Op::Max).unwrap().groups;
+    assert_eq!(whole.iter().map(|group| group.labels["host"].as_str()).collect::<Vec<_>>(), ["b"]);
+    assert_eq!(joined_groups(&aggregate_pages(&query, Op::Max, 1)), whole, "a's group is on no page");
+}
+
 // contract: MET-17
 #[test]
 fn an_aggregates_cursor_is_refused_with_another_op_or_another_call() {

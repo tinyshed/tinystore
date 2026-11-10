@@ -265,7 +265,9 @@ for group in page.all() {
   enough to have one in every bucket, whose empty buckets count so that the
   page needn't read every sample's time, or when a timer measured nothing in
   a bucket: `avg`, `max` and percentiles leave that bucket out, though its
-  counters have samples there.
+  counters have samples there. A page skips the groups with no samples in
+  the range, however many come first, so a page with `next` always holds a
+  bucket unless every bucket it reached is a timer's that measured nothing.
   `next`, walking a page and writes between pages work as for [a read in
   pages](reading.md#read-a-long-range-in-pages).
 - Each bucket is computed from every series of its group, as without
