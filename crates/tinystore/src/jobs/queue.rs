@@ -300,7 +300,7 @@ where
     /// A page of the queue's jobs; see [`Filter`].
     pub fn list(&self, filter: &Filter) -> Result<Page<V>> {
         let now = self.jobs.now();
-        self.jobs.file().read(|c| read::page(c, &self.state, filter, now)).map_err(|error| self.fail(None, error))
+        read::page(self.jobs.file(), &self.state, filter, now).map_err(|error| self.fail(None, error))
     }
 
     /// Every job `filter` names, a page at a time, holding nothing between

@@ -305,6 +305,35 @@ fn a_page_with_no_prefix_lists_the_jobs_without_ids_after_those_with() {
     assert_eq!(error.kind(), ErrorKind::Invalid, "an id is no cursor: {error}");
 }
 
+// contract: JOB-14, JOB-13
+#[test]
+fn a_page_of_one_state_reads_on_past_the_others_until_it_holds_its_limit() {
+    let f = fixture();
+    let notes = f.store.queue::<Note>("notes").open().unwrap();
+    let waiting = f.store.tx(|tx| -> Result<()> {
+        for at in 0..150 {
+            tx.with(&notes).id(format!("now:{at:03}")).add(&note("now"))?;
+            tx.with(&notes).add(&note("now"))?;
+        }
+        Ok(())
+    });
+    waiting.unwrap();
+    notes.id("~later").delay(HOUR).add(&note("later 0")).unwrap();
+    for at in 1..4 {
+        notes.delay(HOUR).add(&note(&format!("later {at}"))).unwrap();
+    }
+    let scheduled = Filter::default().state(State::Scheduled).limit(3);
+    let texts =
+        |page: &super::Page<Note>| -> Vec<String> { page.jobs.iter().map(|job| job.value.text.clone()).collect() };
+
+    let first = notes.list(&scheduled).unwrap();
+    assert_eq!(texts(&first), ["later 0", "later 1", "later 2"], "past 300 waiting jobs, a page holds its limit");
+    let rest = notes.list(&scheduled.clone().after(first.next.expect("a full page has a next"))).unwrap();
+    assert_eq!((texts(&rest), rest.next), (vec!["later 3".to_owned()], None), "the last page has no next");
+    let walked: Vec<String> = notes.all(scheduled.limit(1)).map(|job| job.unwrap().value.text).collect();
+    assert_eq!(walked, ["later 0", "later 1", "later 2", "later 3"], "each met once");
+}
+
 #[test]
 fn the_failed_jobs_list_the_last_failed_first() {
     let f = fixture();

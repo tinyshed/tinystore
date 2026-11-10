@@ -132,7 +132,9 @@ separator.
 With no prefix a page lists every job the queue holds: those with ids in the
 order of their ids, then those without in the order they run, then those
 without that failed, the last failed first. A state narrows any of them, and
-`failed` with no prefix lists every failed job, the last failed first.
+`failed` with no prefix lists every failed job, the last failed first. A page
+of one state reads on past the jobs in others, so it holds its `limit` unless
+it is the last, which has no `next` (contract JOB-14).
 
 <div data-for="rust">
 

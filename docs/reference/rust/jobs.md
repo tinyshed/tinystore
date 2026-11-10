@@ -640,7 +640,8 @@ pub struct Page<V> {
 }
 ```
 
-One page of jobs, from one snapshot.
+One page of jobs, from one snapshot. A page of one state may read
+several, one for each window of rows it reads past the other states'.
 
 ## State
 

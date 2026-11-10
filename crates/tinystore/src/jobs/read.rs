@@ -1,15 +1,17 @@
 //! Where a job is: one job by its id, or a page of a queue's jobs.
 
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::de::DeserializeOwned;
 
+use super::claim::Lease;
 use super::rows::due_of;
 use super::state::QueueState;
 use super::values;
 use crate::clock::from_unix_millis;
-use crate::sqlite::{TextBytes, prefix_end, query_cached, sql_error};
+use crate::sqlite::{File, TextBytes, prefix_end, query_cached, sql_error};
 use crate::{Error, Result};
 
 /// `ahead` counts this far: a job further back reads it.
@@ -105,7 +107,8 @@ impl Filter {
     }
 }
 
-/// One page of jobs, from one snapshot.
+/// One page of jobs, from one snapshot. A page of one state may read
+/// several, one for each window of rows it reads past the other states'.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page<V> {
     pub jobs: Vec<Job<V>>,
@@ -240,13 +243,12 @@ pub(crate) fn get<V: DeserializeOwned>(
     Ok(Some(job))
 }
 
-/// Reads a page of a queue's jobs from one snapshot.
-pub(crate) fn page<V: DeserializeOwned>(
-    c: &Connection,
-    queue: &QueueState,
-    filter: &Filter,
-    now: i64,
-) -> Result<Page<V>> {
+/// Reads a page of a queue's jobs a window of rows at a time, each window from
+/// a snapshot of its own and as many rows as the page holds and one more, so
+/// that no read is long. Whether a held job runs is memory's to say, so a
+/// page of one state reads on past the rows of the others until it holds its
+/// limit or the queue's rows end (JOB-14).
+pub(crate) fn page<V: DeserializeOwned>(file: &File, queue: &QueueState, filter: &Filter, now: i64) -> Result<Page<V>> {
     let limit = filter.limit.unwrap_or(DEFAULT_PAGE);
     if limit == 0 || limit > PAGE_JOBS {
         return Err(Error::invalid(format!("a page of {limit} jobs, not 1 to {PAGE_JOBS}")));
@@ -254,30 +256,63 @@ pub(crate) fn page<V: DeserializeOwned>(
     if filter.state.is_some_and(|state| matches!(state, State::Done | State::Cancelled)) {
         return Err(Error::invalid("a page lists scheduled, waiting, running or failed jobs"));
     }
-    let found = rows(c, queue, filter, limit + 1, now)?;
     let mut page = Page { jobs: Vec::new(), next: None };
-    let (mut bytes, mut read, mut last) = (0, 0, None);
-    for (at, found) in found.iter().enumerate() {
-        if at == limit || at > 0 && bytes + found.size > PAGE_BYTES {
-            break;
+    let (mut from, mut bytes) = (filter.clone(), 0);
+    loop {
+        let read = file.read(|c| window(c, queue, (&from, limit, now), (&mut page.jobs, &mut bytes)))?;
+        page.next = match read {
+            Window::ReadOn(after) if page.jobs.len() < limit => {
+                from.after = Some(after.to_string());
+                continue;
+            }
+            Window::ReadOn(after) | Window::Full(Some(after)) => Some(after.to_string()),
+            Window::Full(None) => from.after,
+            Window::Ended => None,
+        };
+        return Ok(page);
+    }
+}
+
+/// How one window of a page ended.
+enum Window {
+    /// Every row it fetched read, after the last of which the page reads on.
+    ReadOn(Cursor),
+    /// The page full: the next starts after this row, or where the window
+    /// began when it read none.
+    Full(Option<Cursor>),
+    /// The queue's rows ended.
+    Ended,
+}
+
+/// Reads one window of rows from where `filter` stands at `now`, and adds to
+/// `jobs` those in its state, until they are `limit` or their values
+/// `PAGE_BYTES`.
+fn window<V: DeserializeOwned>(
+    c: &Connection,
+    queue: &QueueState,
+    (filter, limit, now): (&Filter, usize, i64),
+    (jobs, bytes): (&mut Vec<Job<V>>, &mut usize),
+) -> Result<Window> {
+    let found = rows(c, queue, filter, limit + 1, now)?;
+    let mut last = None;
+    for found in &found {
+        let kept = filter.state.is_none_or(|state| state == state_of(queue, found, now).0);
+        if jobs.len() == limit || kept && !jobs.is_empty() && *bytes + found.size > PAGE_BYTES {
+            return Ok(Window::Full(last.map(|last| cursor_of(filter, last))));
         }
-        read += 1;
-        bytes += found.size;
         last = Some(found);
-        // whether a held job runs is memory's to say, so a page of one state
-        // leaves out the rows it read that turn out another, and may hold fewer
-        let job = job_of::<V>(c, queue, found, now).map_err(|error| match &found.key {
-            Some(key) => error.within(format!("id {key:?}")),
-            None => error,
-        })?;
-        if filter.state.is_none_or(|state| state == job.state) {
-            page.jobs.push(job);
+        if kept {
+            *bytes += found.size;
+            jobs.push(job_of::<V>(c, queue, found, now).map_err(|error| match &found.key {
+                Some(key) => error.within(format!("id {key:?}")),
+                None => error,
+            })?);
         }
     }
-    if read < found.len() {
-        page.next = last.map(|found| cursor_of(filter, found).to_string());
-    }
-    Ok(page)
+    Ok(match last {
+        Some(last) if found.len() > limit => Window::ReadOn(cursor_of(filter, last)),
+        _ => Window::Ended,
+    })
 }
 
 /// The rows a page reads, up to `limit`: the walk its cursor names from where
@@ -417,9 +452,10 @@ fn found(row: &Row<'_>) -> rusqlite::Result<Found> {
     })
 }
 
-/// Makes a row a job, its state as memory and the file say together: a row
-/// a lease holds runs once its handler has it, and until then waits.
-fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found, now: i64) -> Result<Job<V>> {
+/// A row's state as memory and the file say together, the time it shows and
+/// the lease that runs it: a row a lease holds runs once its handler has it,
+/// and until then waits.
+fn state_of(queue: &QueueState, found: &Found, now: i64) -> (State, i64, Option<Arc<Lease>>) {
     let held = found.leased.and_then(|_| queue.held(found.id)).filter(|lease| lease.started() && !lease.settled());
     let (state, at) = match found.table {
         Table::Failed => (State::Failed, found.at),
@@ -428,6 +464,11 @@ fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found
         Table::Jobs if due_of(found.time) > now => (State::Scheduled, due_of(found.time)),
         Table::Jobs => (State::Waiting, due_of(found.time)),
     };
+    (state, at, held)
+}
+
+fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found, now: i64) -> Result<Job<V>> {
+    let (state, at, held) = state_of(queue, found, now);
     let attempt = match (&held, found.leased) {
         (Some(_), Some(leased)) => leased,
         _ => found.attempt,
