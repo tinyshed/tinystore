@@ -163,6 +163,49 @@ def _word_char(c: str) -> bool:
     return c.isascii() and (c.isalnum() or c in "_$")
 
 
+def checked(piece: Sql) -> Sql:
+    """A piece as a query takes it.
+
+    What the query writes after a piece, an and, a ), a desc or a where, must
+    stay SQL: a piece that ends inside a -- comment gets the newline that ends
+    it, and one that ends inside a /* comment, which only a */ ends, is refused.
+    """
+    comment = _comment_at_end(piece.text)
+    if comment == "block":
+        why = "a piece of SQL ends inside a /* comment, which would hide what the query writes after it"
+        raise InvalidError(f"{why}: {piece.text}")
+    return replace(piece, text=piece.text + "\n") if comment == "line" else piece
+
+
+def _ended(text: str) -> str:
+    """Text written into another piece, a -- comment at its end ended by a newline."""
+    return text + "\n" if _comment_at_end(text) == "line" else text
+
+
+def _comment_at_end(text: str) -> Literal["line", "block"] | None:
+    """The comment text ends inside, outside quotes and brackets, if it ends inside one: a = 1 -- why."""
+    at = 0
+    while at < len(text):
+        c = text[at]
+        if c in "'\"`":
+            at = _closing(text, at, c)
+        elif c == "[":
+            at = text.find("]", at + 1)
+            if at < 0:
+                return None
+        elif text.startswith("--", at):
+            at = text.find("\n", at)
+            if at < 0:
+                return "line"
+        elif text.startswith("/*", at):
+            at = text.find("*/", at + 2)
+            if at < 0:
+                return "block"
+            at += 1
+        at += 1
+    return None
+
+
 def joined_with(pieces: Sequence[Sql], joiner: str) -> Sql:
     """Pieces joined with and or or, each in parentheses unless it may stand as it is."""
     several = len(pieces) > 1
@@ -249,7 +292,7 @@ def _piece(text: str, values: Sequence[Any]) -> Sql:
             result += "?"
             out.append(cell_of(value, f"value {at + 1}"))
         else:
-            result += inner.text
+            result += _ended(inner.text)
             out.extend(inner.values)
         result += written[at + 1]
     return Sql(result, tuple(out))
@@ -295,7 +338,7 @@ def _template_piece(template: Any) -> Sql:
     for at, interpolation in enumerate(interpolations):
         value = interpolation.value
         if isinstance(value, Sql):
-            text += value.text
+            text += _ended(value.text)
             out.extend(value.values)
         elif _embeddable(value):
             inner = value.embedded()
@@ -340,7 +383,7 @@ def condition_of(condition: Condition | str) -> Sql:
 
 
 def _group(conditions: Sequence[Condition], joiner: str, empty: str) -> Sql:
-    pieces = [condition_of(each) for each in conditions]
+    pieces = [checked(condition_of(each)) for each in conditions]
     if not pieces:
         return Sql(empty)
     joined = joined_with(pieces, joiner)

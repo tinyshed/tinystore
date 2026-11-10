@@ -83,8 +83,11 @@ function apply(query: Query<Record<string, unknown>>, step: Step): Query<Record<
 		case 'groupBy':
 			return query.groupBy(...(argument as string[]))
 		case 'orderBy': {
-			const [column, direction] = argument as [string, 'asc' | 'desc']
-			return query.orderBy(column, direction)
+			const [column, direction] = argument as [unknown, 'asc' | 'desc']
+			return query.orderBy(
+				typeof column === 'string' ? column : (conditionOf(column) as Sql),
+				direction,
+			)
 		}
 		case 'limit':
 			return query.limit(argument as number)
@@ -163,6 +166,11 @@ describe('the query vectors', () => {
 			expect(statement.values.map(kept)).toEqual(vector.values!)
 		})
 	}
+})
+
+test('a piece written into another ends its comment at a newline', () => {
+	expect(sql`${sql('a = 1 -- why')} and b = ${2}`.text).toBe('a = 1 -- why\n and b = ?')
+	expect(sql`${sql('a = 1 -- why\n')} and b = 2`.text).toBe('a = 1 -- why\n and b = 2')
 })
 
 // The same cases as the core's own tests of sql/included.rs: both read a

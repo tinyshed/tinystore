@@ -164,15 +164,20 @@ func keptOf(c Condition) []kept {
 		}
 		return out
 	case Piece:
+		v = checked(v)
 		return []kept{{v, v.bare || grouped(v.text)}}
 	}
-	piece := c.condition()
+	piece := checked(c.condition())
 	return []kept{{piece, piece.bare || grouped(piece.text)}}
 }
 
 // Select is a query's columns, as SQL text, and the type of the row they make.
 func Select[R any](q queried, columns string) *Query[R] {
-	p := q.queryParts().with(func(p *parts) { p.selected = &Piece{text: columns} })
+	selected := checked(Piece{text: columns})
+	p := q.queryParts().with(func(p *parts) {
+		p.fail(selected.err)
+		p.selected = &selected
+	})
 	return &Query[R]{q.queryRunner(), p}
 }
 
@@ -224,6 +229,7 @@ func (q *Query[T]) joined(kind, table string, on any) *Query[T] {
 	default:
 		condition = Piece{err: core.Errorf(core.Invalid, "a join's condition is SQL text or a piece of SQL, not %T", on)}
 	}
+	condition = checked(condition)
 	return q.with(func(p *parts) {
 		ref, err := quotedTable(table)
 		p.fail(err)
@@ -276,6 +282,7 @@ func (q *Query[T]) OrderBy(column any, direction Direction) *Query[T] {
 			p.fail(err)
 			p.order = append(p.order, ordered{Piece{text: quoted}, direction, v})
 		case Piece:
+			v = checked(v)
 			p.fail(v.err)
 			p.order = append(p.order, ordered{v, direction, ""})
 		default:
@@ -499,6 +506,7 @@ func (q *Query[T]) Update(ctx context.Context, set Set) (Result, error) {
 			return Result{}, err
 		}
 		if piece, ok := set[name].(Piece); ok {
+			piece = checked(piece)
 			if piece.err != nil {
 				return Result{}, piece.err
 			}
@@ -1246,7 +1254,7 @@ func (t *Table[T]) Upsert(ctx context.Context, row T, opts ...UpsertOption) (Res
 	values := insert.values
 	if o.where != nil {
 		// in an upsert's update, a column is the row's that holds the key
-		condition := o.where.condition()
+		condition := checked(o.where.condition())
 		if condition.err != nil {
 			return Result{}, condition.err
 		}

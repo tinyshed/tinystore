@@ -79,7 +79,8 @@ def applied(query: Query[Any], step: dict[str, Any]) -> Query[Any]:
         case "groupBy":
             return query.group_by(*argument)
         case "orderBy":
-            return query.order_by(*argument)
+            column, direction = argument
+            return query.order_by(column if isinstance(column, str) else condition_of(column), direction)
         case "limit":
             return query.limit(argument)
         case "offset":
@@ -148,6 +149,11 @@ async def test_a_query_vector(vector: dict[str, Any]) -> None:
     text, values = await sent(vector)
     assert text == vector["text"]
     assert [kept(value) for value in values] == vector["values"]
+
+
+def test_a_piece_written_into_another_ends_its_comment_at_a_newline() -> None:
+    assert sql("? and b = ?", sql("a = 1 -- why"), 2).text == "a = 1 -- why\n and b = ?"
+    assert sql("? and b = 2", sql("a = 1 -- why\n")).text == "a = 1 -- why\n and b = 2"
 
 
 def test_a_selects_columns_are_named_by_themselves_or_by_their_as() -> None:

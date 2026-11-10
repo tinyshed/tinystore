@@ -118,6 +118,9 @@ func applied(t *testing.T, q *Query[Row], step json.RawMessage) *Query[Row] {
 			return q.GroupBy(columns...)
 		case "orderBy":
 			items := argument.([]any)
+			if piece, ok := items[0].(map[string]any); ok {
+				return q.OrderBy(conditionOf(t, piece).condition(), Direction(items[1].(string)))
+			}
 			return q.OrderBy(items[0].(string), Direction(items[1].(string)))
 		case "limit":
 			return q.Limit(int(argument.(float64)))
@@ -270,6 +273,17 @@ func TestEveryQueryVectorIsWrittenAlike(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAPieceWrittenIntoAnotherEndsItsCommentAtANewline(t *testing.T) {
+	for _, each := range []struct{ got, want string }{
+		{SQL("? and b = ?", SQL("a = 1 -- why"), 2).text, "a = 1 -- why\n and b = ?"},
+		{SQL("? and b = 2", SQL("a = 1 -- why\n")).text, "a = 1 -- why\n and b = 2"},
+	} {
+		if each.got != each.want {
+			t.Errorf("%q, want %q", each.got, each.want)
+		}
 	}
 }
 

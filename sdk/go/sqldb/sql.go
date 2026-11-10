@@ -103,7 +103,7 @@ func SQL(text string, values ...any) Piece {
 			if inner.err != nil {
 				return Piece{err: inner.err}
 			}
-			out.text += inner.text
+			out.text += ended(inner.text)
 			out.values = append(out.values, inner.values...)
 		}
 		out.text += parts[i+1]
@@ -204,11 +204,77 @@ func group(pieces []Piece, joiner, empty string) Piece {
 	if len(pieces) == 0 {
 		return Piece{text: empty}
 	}
+	for i := range pieces {
+		pieces[i] = checked(pieces[i])
+	}
 	joined := joinedWith(pieces, joiner)
 	if joined.err != nil {
 		return joined
 	}
 	return Piece{text: "(" + joined.text + ")", values: joined.values}
+}
+
+// checked is a piece as a query takes it. What the query writes after a
+// piece, an and, a ), a desc or a where, must stay SQL: a piece that ends
+// inside a -- comment gets the newline that ends it, and one that ends inside
+// a /* comment, which only a */ ends, is refused.
+func checked(p Piece) Piece {
+	if p.err != nil {
+		return p
+	}
+	switch commentAtEnd(p.text) {
+	case lineComment:
+		p.text += "\n"
+	case blockComment:
+		return Piece{err: core.Errorf(core.Invalid, "a piece of SQL ends inside a /* comment, which would hide what the query writes after it: %s", p.text)}
+	}
+	return p
+}
+
+// ended is text written into another piece, a -- comment at its end ended by
+// a newline.
+func ended(text string) string {
+	if commentAtEnd(text) == lineComment {
+		return text + "\n"
+	}
+	return text
+}
+
+// A comment a piece's text ends inside.
+const (
+	noComment = iota
+	lineComment
+	blockComment
+)
+
+// commentAtEnd is the comment text ends inside, outside quotes and brackets,
+// if it ends inside one: a = 1 -- why ends inside a line comment.
+func commentAtEnd(text string) int {
+	for at := 0; at < len(text); at++ {
+		switch c := text[at]; {
+		case c == '\'' || c == '"' || c == '`':
+			at = closing(text, at, c)
+		case c == '[':
+			end := strings.IndexByte(text[at+1:], ']')
+			if end < 0 {
+				return noComment
+			}
+			at += end + 1
+		case strings.HasPrefix(text[at:], "--"):
+			end := strings.IndexByte(text[at:], '\n')
+			if end < 0 {
+				return lineComment
+			}
+			at += end
+		case strings.HasPrefix(text[at:], "/*"):
+			end := strings.Index(text[at+2:], "*/")
+			if end < 0 {
+				return blockComment
+			}
+			at += end + 3
+		}
+	}
+	return noComment
 }
 
 // joinedWith is pieces joined with and or or, each in parentheses unless it

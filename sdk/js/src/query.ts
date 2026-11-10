@@ -8,6 +8,7 @@ import { check, type StandardSchemaV1 } from './schema.ts'
 import {
 	type Condition,
 	cellOf,
+	checked,
 	conditionOf,
 	type Done,
 	type Embeddable,
@@ -120,7 +121,7 @@ export class Query<T = Row> implements Embeddable {
 
 	/** The columns a row holds, as SQL text, and the shape of the row they make. */
 	select<R = Row>(columns: string | Sql): Query<R> {
-		const select = typeof columns === 'string' ? new Sql(columns, []) : columns
+		const select = checked(typeof columns === 'string' ? new Sql(columns, []) : columns)
 		return new Query<R>(this.#source, { ...this.#parts, select })
 	}
 
@@ -193,7 +194,7 @@ export class Query<T = Row> implements Embeddable {
 		}
 		const order =
 			column instanceof Sql
-				? { piece: column, direction }
+				? { piece: checked(column), direction }
 				: { piece: new Sql(identOf(column), []), column, direction }
 		return this.#with({ order: [...this.#parts.order, order] })
 	}
@@ -344,8 +345,9 @@ export class Query<T = Row> implements Embeddable {
 		for (const name of names) {
 			const value = values[name]
 			if (value instanceof Sql) {
-				sets.push(`${identOf(name)} = ${value.text}`)
-				out.push(...value.values)
+				const set = checked(value)
+				sets.push(`${identOf(name)} = ${set.text}`)
+				out.push(...set.values)
 			} else {
 				sets.push(`${identOf(name)} = ?`)
 				out.push(fieldOf(value, name, this.#source.types))
@@ -406,7 +408,7 @@ export class Query<T = Row> implements Embeddable {
 	}
 
 	#joined(kind: string, table: string, on: string | Sql): Query<T> {
-		const condition = typeof on === 'string' ? new Sql(on, []) : on
+		const condition = checked(typeof on === 'string' ? new Sql(on, []) : on)
 		const ref = tableRef(table)
 		const join = new Sql(`${kind} ${ref.text} on ${condition.text}`, condition.values)
 		return this.#with({ joins: [...this.#parts.joins, join] })
@@ -507,7 +509,7 @@ export class Table<T = Row> extends Query<T> {
 		const values = [...insert.values]
 		if (options.where !== undefined) {
 			// in an upsert's update, a column is the row's that holds the key
-			const where = conditionOf(options.where)
+			const where = checked(conditionOf(options.where))
 			text += ` where ${where.text}`
 			values.push(...where.values)
 		}
@@ -809,21 +811,18 @@ function kept(condition: Condition | string, values: unknown[]): Kept[] {
 				`${counted.positional} placeholders and ${values.length} values: each ? takes one value`,
 			)
 		}
-		return [
-			{
-				piece: new Sql(
-					condition,
-					values.map((value, at) => cellOf(value, `value ${at + 1}`)),
-				),
-				bare: false,
-			},
-		]
+		const piece = new Sql(
+			condition,
+			values.map((value, at) => cellOf(value, `value ${at + 1}`)),
+		)
+		return [{ piece: checked(piece), bare: false }]
 	}
 	if (values.length > 0) {
 		throw new InvalidError('a condition that is not text carries its values: pass it alone')
 	}
 	if (condition instanceof Sql) {
-		return [{ piece: condition, bare: condition.bare || grouped(condition.text) }]
+		const piece = checked(condition)
+		return [{ piece, bare: piece.bare || grouped(piece.text) }]
 	}
 	return Object.keys(condition)
 		.sort()

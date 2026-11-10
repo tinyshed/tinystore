@@ -109,7 +109,10 @@ fn apply<'r>(query: Rows<'r>, step: &Json) -> Rows<'r> {
         "groupBy" => query.group_by(argument.as_array().unwrap().iter().map(|name| name.as_str().unwrap())),
         "orderBy" => {
             let direction = if argument[1] == "desc" { Direction::Desc } else { Direction::Asc };
-            query.order_by(argument[0].as_str().unwrap(), direction)
+            match argument[0].as_str() {
+                Some(column) => query.order_by(column, direction),
+                None => query.order_by_sql(condition(&argument[0]), direction),
+            }
         }
         "limit" => query.limit(argument.as_u64().unwrap()),
         "offset" => query.offset(argument.as_u64().unwrap()),
@@ -275,6 +278,28 @@ fn an_update_or_a_delete_changes_what_its_condition_says_and_refuses_every_row()
     assert_eq!(notes.count().unwrap(), 1);
     let short = notes.filter(sql!("id = ? and author_id = ?", "n2")).all().unwrap_err();
     assert!(short.to_string().contains("2 placeholders and 1 values"), "{short}");
+}
+
+// contract: SQL-10
+#[test]
+fn a_comment_at_the_end_of_a_piece_hides_nothing_the_builder_writes_after_it() {
+    let f = fixture();
+    let db = f.store.database("app").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
+    let notes = db.table::<Note>("notes");
+    notes.insert_all(&[note("n1", 5, "a"), Note { done: true, ..note("n2", 5, "b") }, note("n3", 6, "c")]).unwrap();
+
+    let ids = |rows: Vec<Note>| rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
+    let newest = notes.filter("author_id = 5 -- the first author").order_by("id", Direction::Desc).all();
+    assert_eq!(ids(newest.unwrap()), ["n2", "n1"], "the order after the comment holds");
+    let one = notes.filter("id = 'n1' -- the first note").update([("views", sql!("views + 1 -- one more"))]);
+    assert_eq!(one.unwrap().changes, 1, "an update sets the rows its condition says, not every row");
+    let done = notes.filter("author_id = 5 -- the first author").filter("done = 1").delete();
+    assert_eq!(done.unwrap().changes, 1, "a delete keeps the condition after the comment");
+    assert_eq!(ids(notes.order_by("id", Direction::Asc).all().unwrap()), ["n1", "n3"]);
+
+    let open = notes.filter("done = 1 /* the done ones").all().unwrap_err();
+    assert_eq!(open.kind(), ErrorKind::Invalid, "{open}");
+    assert!(open.to_string().contains("ends inside a /* comment"), "{open}");
 }
 
 #[test]

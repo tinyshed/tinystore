@@ -1,5 +1,5 @@
 {
-  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}. A row, and an update's columns, are [name, value] pairs, in their order. An include step is [name, {table, steps}], the query whose rows the row holds under the name. A list is the statement of a page's first read, {limit}. A query with refused in place of its text and values is refused invalid, by its steps or by the call it ends in, and its error holds those words.",
+  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}. A row, and an update's columns, are [name, value] pairs, in their order. An include step is [name, {table, steps}], the query whose rows the row holds under the name. An orderBy step is [column, direction], or [{sql: [text, ...values]}, direction] for a piece of SQL. A list is the statement of a page's first read, {limit}. A query with refused in place of its text and values is refused invalid, by its steps or by the call it ends in, and its error holds those words.",
   "queries": [
     {
       "name": "equal values in the order of their names, a group of alternatives, an order and a limit",
@@ -738,6 +738,294 @@
         ]
       ],
       "refused": "an update with a limit, offset, order, group, select or include"
+    },
+    {
+      "name": "a piece that ends in a comment ends at a newline, so that the and after it stays SQL",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "sql": [
+              "status = 'old' -- the old ones"
+            ]
+          }
+        },
+        {
+          "where": {
+            "sql": [
+              "archived_at is not null"
+            ]
+          }
+        },
+        {
+          "orderBy": [
+            "id",
+            "asc"
+          ]
+        }
+      ],
+      "text": "select * from \"notes\" where status = 'old' -- the old ones\n and archived_at is not null order by \"id\" asc",
+      "values": []
+    },
+    {
+      "name": "a delete's condition that ends in a comment hides none after it",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "sql": [
+              "status = 'old' -- clean the old"
+            ]
+          }
+        },
+        {
+          "where": {
+            "sql": [
+              "archived_at is not null"
+            ]
+          }
+        }
+      ],
+      "delete": true,
+      "text": "delete from \"notes\" where status = 'old' -- clean the old\n and archived_at is not null",
+      "values": []
+    },
+    {
+      "name": "a column an update sets with a comment at its end keeps the where after it",
+      "table": "notes",
+      "steps": [
+        {
+          "where": {
+            "sql": [
+              "id = 'n1'"
+            ]
+          }
+        }
+      ],
+      "update": [
+        [
+          "views",
+          {
+            "sql": [
+              "views + 1 -- one more"
+            ]
+          }
+        ]
+      ],
+      "text": "update \"notes\" set \"views\" = views + 1 -- one more\n where id = 'n1'",
+      "values": []
+    },
+    {
+      "name": "a select that ends in a comment keeps its from",
+      "table": "notes",
+      "steps": [
+        {
+          "select": "id, title -- what a row shows"
+        },
+        {
+          "where": {
+            "equal": {
+              "done": false
+            }
+          }
+        }
+      ],
+      "text": "select id, title -- what a row shows\n from \"notes\" where \"done\" = ?",
+      "values": [
+        0
+      ]
+    },
+    {
+      "name": "a join's condition that ends in a comment keeps the where after it",
+      "table": "orders as o",
+      "steps": [
+        {
+          "join": [
+            "users as u",
+            "u.id = o.user_id -- the buyer"
+          ]
+        },
+        {
+          "where": {
+            "equal": {
+              "u.active": true
+            }
+          }
+        }
+      ],
+      "text": "select \"o\".* from \"orders\" as \"o\" join \"users\" as \"u\" on u.id = o.user_id -- the buyer\n where \"u\".\"active\" = ?",
+      "values": [
+        1
+      ]
+    },
+    {
+      "name": "an alternative that ends in a comment keeps the or after it",
+      "table": "orders",
+      "steps": [
+        {
+          "where": {
+            "or": [
+              {
+                "sql": [
+                  "total >= ? -- the big ones",
+                  1000
+                ]
+              },
+              {
+                "equal": {
+                  "priority": "high"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "text": "select * from \"orders\" where (total >= ? -- the big ones\n or \"priority\" = ?)",
+      "values": [
+        1000,
+        "high"
+      ]
+    },
+    {
+      "name": "a piece in parentheses that ends in a comment keeps its closing one",
+      "table": "documents",
+      "steps": [
+        {
+          "where": {
+            "sql": [
+              "owner_id = ? or is_public = 1 -- whose",
+              7
+            ]
+          }
+        },
+        {
+          "where": {
+            "equal": {
+              "deleted": false
+            }
+          }
+        }
+      ],
+      "text": "select * from \"documents\" where (owner_id = ? or is_public = 1 -- whose\n) and \"deleted\" = ?",
+      "values": [
+        7,
+        0
+      ]
+    },
+    {
+      "name": "a condition on the groups that ends in a comment keeps the order after it",
+      "table": "orders",
+      "steps": [
+        {
+          "select": "user_id, sum(total) as total"
+        },
+        {
+          "groupBy": [
+            "user_id"
+          ]
+        },
+        {
+          "having": {
+            "sql": [
+              "sum(total) > ? -- the big spenders",
+              100
+            ]
+          }
+        },
+        {
+          "orderBy": [
+            "user_id",
+            "asc"
+          ]
+        }
+      ],
+      "text": "select user_id, sum(total) as total from \"orders\" group by \"user_id\" having sum(total) > ? -- the big spenders\n order by \"user_id\" asc",
+      "values": [
+        100
+      ]
+    },
+    {
+      "name": "an order by a piece that ends in a comment keeps its direction",
+      "table": "notes",
+      "steps": [
+        {
+          "orderBy": [
+            {
+              "sql": [
+                "lower(title) -- as people read it"
+              ]
+            },
+            "desc"
+          ]
+        },
+        {
+          "limit": 10
+        }
+      ],
+      "text": "select * from \"notes\" order by lower(title) -- as people read it\n desc limit cast(? as integer)",
+      "values": [
+        10
+      ]
+    },
+    {
+      "name": "an upsert's condition that ends in a comment keeps its returning",
+      "table": "notes",
+      "upsert": [
+        [
+          [
+            "id",
+            "n1"
+          ],
+          [
+            "title",
+            "Buy oat milk"
+          ],
+          [
+            "author_id",
+            42
+          ]
+        ],
+        {
+          "conflict": "id",
+          "update": [
+            "title"
+          ],
+          "where": {
+            "sql": [
+              "author_id = ? -- its owner",
+              42
+            ]
+          }
+        }
+      ],
+      "text": "insert into \"notes\" (\"id\", \"title\", \"author_id\") values (?, ?, ?) on conflict (\"id\") do update set \"title\" = excluded.\"title\" where author_id = ? -- its owner\n returning *",
+      "values": [
+        "n1",
+        "Buy oat milk",
+        42,
+        42
+      ]
+    },
+    {
+      "name": "a piece that ends inside a block comment is refused, since nothing after it would be SQL",
+      "table": "documents",
+      "steps": [
+        {
+          "where": {
+            "sql": [
+              "deleted_at is null /* the live ones"
+            ]
+          }
+        },
+        {
+          "where": {
+            "equal": {
+              "owner_id": 7
+            }
+          }
+        }
+      ],
+      "refused": "ends inside a /* comment"
     }
   ]
 }

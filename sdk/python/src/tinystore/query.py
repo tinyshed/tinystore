@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from ._rows import SqlArg, SqlValue, check_columns, field_of, fields_of, reader, row_of, value_reader
 from .errors import CorruptError, InvalidError
-from .sql import Condition, Done, Sql, condition_of, grouped, ident_of, joined_with, placeholders, sql
+from .sql import Condition, Done, Sql, checked, condition_of, grouped, ident_of, joined_with, placeholders, sql
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping, Sequence
@@ -117,7 +117,7 @@ class Query[T]:
     def select(self, first: Any, /, *rest: Any) -> Query[Any]:
         """The columns a row holds, as SQL text, and the type of the row they make."""
         of, columns = (None, first) if not rest else (first, rest[0])
-        piece = Sql(columns) if isinstance(columns, str) else cast("Sql", columns)
+        piece = checked(Sql(columns) if isinstance(columns, str) else cast("Sql", columns))
         return Query(self._runner, of, replace(self._parts, select=piece))
 
     def include(self, name: str, query: Query[Any]) -> Query[T]:
@@ -161,7 +161,9 @@ class Query[T]:
         if direction not in ("asc", "desc"):
             raise InvalidError(f"an order is asc or desc, not {direction!r}")
         order = (
-            _Order(column, direction) if isinstance(column, Sql) else _Order(Sql(ident_of(column)), direction, column)
+            _Order(checked(column), direction)
+            if isinstance(column, Sql)
+            else _Order(Sql(ident_of(column)), direction, column)
         )
         return self._with(order=(*self._parts.order, order))
 
@@ -275,8 +277,9 @@ class Query[T]:
         out: list[SqlArg] = []
         for name, value in sets.items():
             if isinstance(value, Sql):
-                texts.append(f"{ident_of(name)} = {value.text}")
-                out.extend(value.values)
+                piece = checked(value)
+                texts.append(f"{ident_of(name)} = {piece.text}")
+                out.extend(piece.values)
             else:
                 texts.append(f"{ident_of(name)} = ?")
                 out.append(field_of(value, name))
@@ -311,7 +314,7 @@ class Query[T]:
         return Query(self._runner, self._of, replace(self._parts, **changed))
 
     def _joined(self, kind: str, table: str, on: str | Sql) -> Query[T]:
-        condition = Sql(on) if isinstance(on, str) else on
+        condition = checked(Sql(on) if isinstance(on, str) else on)
         ref = _table_ref(table)
         return self._with(joins=(*self._parts.joins, Sql(f"{kind} {ref[2]} on {condition.text}", condition.values)))
 
@@ -389,7 +392,7 @@ class Table[T](Query[T]):
         values = list(insert.values)
         if where is not None:
             # in an upsert's update, a column is the row's that holds the key
-            condition = condition_of(where)
+            condition = checked(condition_of(where))
             text += f" where {condition.text}"
             values.extend(condition.values)
         answered = await self._runner.rows(Sql(f"{text} returning *", tuple(values)), "one")
@@ -600,11 +603,12 @@ def _kept(condition: Condition | str, values: Sequence[Any]) -> list[_Kept]:
         counted = placeholders(condition)
         if counted.positional != len(values) or counted.named or counted.numbered:
             raise InvalidError(f"{counted.positional} placeholders and {len(values)} values: each ? takes one value")
-        return [_Kept(sql(condition, *values), False)]
+        return [_Kept(checked(sql(condition, *values)), False)]
     if values:
         raise InvalidError("a condition that is not text carries its values: pass it alone")
     if isinstance(condition, Sql):
-        return [_Kept(condition, condition.bare or grouped(condition.text))]
+        piece = checked(condition)
+        return [_Kept(piece, piece.bare or grouped(piece.text))]
     return [_Kept(condition_of({name: condition[name]}), True) for name in sorted(condition)]
 
 

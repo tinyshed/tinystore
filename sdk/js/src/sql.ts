@@ -193,6 +193,53 @@ export function standsAlone(text: string): boolean {
 	return true
 }
 
+/**
+ * A piece as a query takes it. What the query writes after a piece, an and,
+ * a ), a desc or a where, must stay SQL: a piece that ends inside a --
+ * comment gets the newline that ends it, and one that ends inside a block
+ * comment, which only its closing mark ends, is refused.
+ */
+export function checked(piece: Sql): Sql {
+	switch (commentAtEnd(piece.text)) {
+		case 'line':
+			return new Sql(`${piece.text}\n`, piece.values, piece.bare)
+		case 'block':
+			throw new InvalidError(
+				`a piece of SQL ends inside a /* comment, which would hide what the query writes after it: ${piece.text}`,
+			)
+	}
+	return piece
+}
+
+/** Text written into another piece, a -- comment at its end ended by a newline. */
+function ended(text: string): string {
+	return commentAtEnd(text) === 'line' ? `${text}\n` : text
+}
+
+/**
+ * The comment text ends inside, outside quotes and brackets, if it ends
+ * inside one: `a = 1 -- why` ends inside a line comment.
+ */
+function commentAtEnd(text: string): 'line' | 'block' | undefined {
+	for (let at = 0; at < text.length; at++) {
+		const c = text[at]!
+		if (c === "'" || c === '"' || c === '`') {
+			at = closing(text, at, c)
+		} else if (c === '[') {
+			at = text.indexOf(']', at + 1)
+			if (at < 0) return undefined
+		} else if (c === '-' && text[at + 1] === '-') {
+			at = text.indexOf('\n', at)
+			if (at < 0) return 'line'
+		} else if (c === '/' && text[at + 1] === '*') {
+			at = text.indexOf('*/', at + 2)
+			if (at < 0) return 'block'
+			at++
+		}
+	}
+	return undefined
+}
+
 /** Something that writes itself as SQL inside another piece: a table's query. */
 export interface Embeddable {
 	/** its text and values, wrapped as a subquery is */
@@ -228,7 +275,7 @@ function piece(first: TemplateStringsArray | string, values: unknown[]): Sql {
 	const out: SqlArg[] = []
 	values.forEach((value, at) => {
 		if (value instanceof Sql) {
-			text += value.text
+			text += ended(value.text)
 			out.push(...value.values)
 		} else if (isEmbeddable(value)) {
 			const inner = value.embedded()
@@ -298,7 +345,7 @@ function listed(value: unknown): unknown {
 }
 
 function group(conditions: Condition[], joiner: 'or' | 'and', empty: string): Sql {
-	const pieces = conditions.map(conditionOf)
+	const pieces = conditions.map(condition => checked(conditionOf(condition)))
 	if (pieces.length === 0) {
 		return new Sql(empty, [])
 	}

@@ -189,6 +189,11 @@ A condition that is `undefined` in TypeScript is an error, not "any": a
 request that forgot an id would otherwise read every user's rows. A filter
 that applies only sometimes is an `if` around a `where`.
 
+A piece of SQL may end in a `--` comment: the builder starts what it writes
+after the piece on a new line, so `status = 'old' -- the old ones` keeps the
+`and` that follows it. A piece that ends inside an unclosed `/*` comment is
+refused, `invalid`, since nothing after it would be SQL.
+
 ## Reading
 
 | Call                   | Gives                                                |

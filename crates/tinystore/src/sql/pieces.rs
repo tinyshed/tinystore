@@ -124,6 +124,11 @@ where
 /// A piece whose values are as many as its `?`s, counted outside quotes and
 /// comments, and which names none; another is refused, since it would shift
 /// the values of the pieces after it.
+///
+/// What the builder writes after a piece, an `and`, a `)`, a `desc` or a
+/// `where`, must stay SQL: a piece that ends inside a `--` comment gets the
+/// newline that ends it, and one that ends inside a `/*` comment, which only
+/// a `*/` ends, is refused.
 pub(crate) fn checked(piece: Sql) -> Sql {
     if piece.why_refused().is_some() {
         return piece;
@@ -139,7 +144,52 @@ pub(crate) fn checked(piece: Sql) -> Sql {
             piece.values().len()
         ));
     }
-    piece
+    match comment_at_end(piece.text()) {
+        Some(Comment::Line) => {
+            let bare = piece.is_bare();
+            let (text, values, _) = piece.into_parts();
+            Sql::piece(format!("{text}\n"), values, bare)
+        }
+        Some(Comment::Block) => Sql::refused(format!(
+            "a piece of SQL ends inside a /* comment, which would hide what the query writes after it: {}",
+            piece.text()
+        )),
+        None => piece,
+    }
+}
+
+/// A comment a piece's text ends inside.
+#[derive(Debug, PartialEq, Eq)]
+enum Comment {
+    /// `--`, which a newline ends.
+    Line,
+    /// `/*` with no `*/` after it.
+    Block,
+}
+
+/// The comment `text` ends inside, outside quotes and brackets, if it ends
+/// inside one: `a = 1 -- why` ends inside a line comment.
+fn comment_at_end(text: &str) -> Option<Comment> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut at = 0;
+    while at < chars.len() {
+        let end = match chars[at] {
+            '[' => Some(find(&chars, at + 1, &[']']).unwrap_or(chars.len())),
+            _ => quoted_or_comment_end(&chars, at),
+        };
+        match end {
+            Some(end) if end >= chars.len() => {
+                return match chars[at] {
+                    '-' => Some(Comment::Line),
+                    '/' => Some(Comment::Block),
+                    _ => None,
+                };
+            }
+            Some(end) => at = end + 1,
+            None => at += 1,
+        }
+    }
+    None
 }
 
 /// Pieces joined with `and` or `or`, each in parentheses unless it stands
@@ -333,5 +383,21 @@ mod tests {
         assert!(!stands_alone("(a) or (b)"));
         assert!(!stands_alone("('(') or ('x')"), "a parenthesis in quotes opens nothing");
         assert!(stands_alone("(title = ')')"));
+    }
+
+    #[test]
+    fn a_piece_that_ends_inside_a_comment_ends_at_a_newline_or_is_refused() {
+        assert_eq!(comment_at_end("a = 1 -- why"), Some(Comment::Line));
+        assert_eq!(comment_at_end("a = 1 -- a /* inside"), Some(Comment::Line));
+        assert_eq!(comment_at_end("a = 1 /* open"), Some(Comment::Block));
+        assert_eq!(comment_at_end("a = 1 /*/"), Some(Comment::Block));
+        assert_eq!(comment_at_end("a = 1 /* a -- inside"), Some(Comment::Block));
+        for closed in ["a = 1 -- why\n", "a = 1 /* why */", "a = '--' and b = '/*'", "[c--d] = 1", "a - 1 / 2"] {
+            assert_eq!(comment_at_end(closed), None, "{closed:?}");
+        }
+        assert_eq!(checked(Sql::new("a = 1 -- why")).text(), "a = 1 -- why\n");
+        assert_eq!(checked(Sql::new("a = 1 -- why\n")).text(), "a = 1 -- why\n", "an ended comment stays");
+        let refused = checked(Sql::new("a = 1 /* open"));
+        assert!(refused.why_refused().is_some_and(|why| why.contains("ends inside a /* comment")), "{refused:?}");
     }
 }
