@@ -34,7 +34,7 @@ const MIGRATIONS: &[Migration] = &[
 ];
 
 /// metrics' file in the store's directory.
-const FILE: &str = "metrics.db";
+pub(super) const FILE: &str = "metrics.db";
 
 /// How often maintenance runs on its own: what names keep no longer is
 /// removed, and what is ready is packed.

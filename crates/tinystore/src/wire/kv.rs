@@ -17,9 +17,10 @@ use super::{Lent, Route};
 #[cfg(feature = "sql")]
 use crate::Transaction;
 use crate::clock::from_unix_millis;
+use crate::engine::Home;
 use crate::kv::{
-    Allowance, Batch, Bucket, BucketBuilder, Cell, Counters, Hand, Handed, MAX_KEY, Outcome, PAGE_KEYS, Place, Put,
-    Quota, RateLimit, Raw, Stamp, Version, Waiter, WriteOptions, hand, once_rows,
+    Allowance, Batch, Bucket, BucketBuilder, Cell, Counters, Hand, Handed, Kind, MAX_KEY, Outcome, PAGE_KEYS, Place,
+    Put, Quota, RateLimit, Raw, Scope, Stamp, Version, Waiter, WriteOptions, hand, once_rows,
 };
 #[cfg(feature = "sql")]
 use crate::kv::{call_on_branch, call_on_key, clear_work};
@@ -68,10 +69,11 @@ pub(crate) fn call(
     match called {
         method::KV_BUCKET_OPEN => handles.open(open_bucket(store, lent, KvBucketOpen::decode(body)?, read_only)?),
         method::KV_COUNTERS_OPEN => handles.open(open_counters(store, KvCountersOpen::decode(body)?, read_only)?),
-        method::KV_RATE_LIMIT_OPEN => handles.open(open_rate_limit(store, KvRateLimitOpen::decode(body)?)?),
-        method::KV_QUOTA_OPEN => handles.open(open_quota(store, KvQuotaOpen::decode(body)?)?),
+        method::KV_RATE_LIMIT_OPEN => handles.open(open_rate_limit(store, KvRateLimitOpen::decode(body)?, read_only)?),
+        method::KV_QUOTA_OPEN => handles.open(open_quota(store, KvQuotaOpen::decode(body)?, read_only)?),
         method::KV_ONCE_OPEN => {
             let open = KvOnceOpen::decode(body)?;
+            held(&Home::Store(store.clone()), &open.name, Kind::Once, read_only)?;
             handles.open(Opened::Once(once_rows(store, &open.name, open.keep.map(Duration::from_millis))?))
         }
         method::KV_GET => get(handles, KvCall::decode(body)?),
@@ -293,10 +295,21 @@ impl Handles {
     }
 }
 
+/// Refuses, on a connection that only reads, a name the store does not hold
+/// as `kind`, which an open would make. A name it holds stays, so that the
+/// open after this finds it as this did, and writes nothing.
+fn held(home: &Home, name: &str, kind: Kind, read_only: bool) -> Result<(), Failure> {
+    if read_only {
+        Scope::open_as_it_is(home, name, kind)?;
+    }
+    Ok(())
+}
+
 /// Opens a bucket as the call says. A connection that only reads opens no
 /// encrypted one: what it may read is what the file shows without the key.
 /// Nor does it give the bucket an idle term, under which each read renews a
-/// key's expiry: a write, of a term the writers never chose.
+/// key's expiry: a write, of a term the writers never chose. And it opens
+/// only a bucket the store holds.
 fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen, read_only: bool) -> Result<Opened, Failure> {
     if open.encrypted && read_only {
         return Err(Failure::permission("a read connection opens no encrypted bucket"));
@@ -306,9 +319,14 @@ fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen, read_only: boo
             "a read connection gives a bucket no idle: a read that renews a key writes it",
         ));
     }
-    let mut builder = match open.database {
-        Some(database) => BucketBuilder::in_file(lent(database)?, &open.name),
-        None => store.bucket::<()>(&open.name),
+    let home = match open.database {
+        Some(database) => Home::Shared(lent(database)?),
+        None => Home::Store(store.clone()),
+    };
+    held(&home, &open.name, Kind::Values, read_only)?;
+    let mut builder = match home {
+        Home::Shared(shared) => BucketBuilder::in_file(shared, &open.name),
+        Home::Store(_) => store.bucket::<()>(&open.name),
     };
     if let Some(ttl) = open.ttl {
         builder = builder.ttl(Duration::from_millis(ttl));
@@ -324,12 +342,16 @@ fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen, read_only: boo
 
 /// Opens counters as the call says. How a name's counters count, each change
 /// written or kept in memory, is the process's from its first open, so a
-/// connection that only reads leaves it to the writers.
+/// connection that only reads leaves it to the writers, and opens only
+/// counters the store holds.
 fn open_counters(store: &Store, open: KvCountersOpen, read_only: bool) -> Result<Opened, Failure> {
     if open.flush_every.is_some() && read_only {
         return Err(Failure::permission(
             "a read connection gives counters no flush_every: how they count is the writers'",
         ));
+    }
+    if read_only {
+        return Ok(Opened::Counters(Counters::open_as_it_is(store, &open.name)?));
     }
     let mut builder = store.counters(&open.name);
     if let Some(ttl) = open.ttl {
@@ -341,7 +363,8 @@ fn open_counters(store: &Store, open: KvCountersOpen, read_only: bool) -> Result
     Ok(Opened::Counters(builder.open()?))
 }
 
-fn open_rate_limit(store: &Store, open: KvRateLimitOpen) -> Result<Opened, Failure> {
+fn open_rate_limit(store: &Store, open: KvRateLimitOpen, read_only: bool) -> Result<Opened, Failure> {
+    held(&Home::Store(store.clone()), &open.name, Kind::RateLimit, read_only)?;
     let mut builder = store.rate_limit(&open.name).rate(open.rate, Duration::from_millis(open.per));
     if let Some(burst) = open.burst {
         builder = builder.burst(burst);
@@ -349,7 +372,8 @@ fn open_rate_limit(store: &Store, open: KvRateLimitOpen) -> Result<Opened, Failu
     Ok(Opened::RateLimit(builder.open()?))
 }
 
-fn open_quota(store: &Store, open: KvQuotaOpen) -> Result<Opened, Failure> {
+fn open_quota(store: &Store, open: KvQuotaOpen, read_only: bool) -> Result<Opened, Failure> {
+    held(&Home::Store(store.clone()), &open.name, Kind::Quota, read_only)?;
     let builder = open.windows.iter().fold(store.quota(&open.name), |quota, window| {
         quota.window(&window.name, window.limit, Duration::from_millis(window.per))
     });

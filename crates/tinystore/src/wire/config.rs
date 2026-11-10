@@ -60,8 +60,8 @@ pub(crate) fn call(store: &Store, configs: &Configs, called: u16, body: &[u8], r
 }
 
 /// Opens a config on this connection; one that may only read keeps no
-/// declaration in kv.db. One opened as kv.db keeps it, for a command, takes
-/// the declaration kept there and no layer.
+/// declaration in kv.db, and makes no kv.db. One opened as kv.db keeps it,
+/// for a command, takes the declaration kept there and no layer.
 fn open(store: &Store, configs: &Configs, open: &ConfigOpen, read_only: bool) -> Answered {
     if open.kept {
         let config = store.config_kept(&open.name)?.ok_or_else(|| {
@@ -81,7 +81,7 @@ fn open(store: &Store, configs: &Configs, open: &ConfigOpen, read_only: bool) ->
         strict: open.strict,
         remember: !read_only,
     };
-    let config = store.config_sent(&sent)?;
+    let config = if read_only { store.config_sent_as_it_is(&sent)? } else { store.config_sent(&sent)? };
     let handle = configs.open.keep(config.clone());
     Ok(value(handle, &config))
 }

@@ -103,6 +103,18 @@ impl Kv {
         }
     }
 
+    /// The kv engine `home` keeps, for a connection that may only read: a
+    /// store without kv.db, or a database's file without kv's tables, is
+    /// refused rather than given them.
+    #[cfg(feature = "wire")]
+    pub(crate) fn at_as_it_is(home: &Home) -> Result<Arc<Kv>> {
+        match home {
+            Home::Store(store) => store.holds(FILE)?,
+            Home::Shared(shared) => shared.keeps("_tinystore_kv_buckets", "name")?,
+        }
+        Kv::at(home)
+    }
+
     /// Makes kv's tables in `file` when it has none, and starts its
     /// maintenance and its renewals on the store's background thread.
     fn start(store: &Store, file: Arc<File>, lent_by: Option<String>, claim: Option<Claim>) -> Result<Arc<Kv>> {
@@ -252,6 +264,19 @@ impl Kv {
         Ok(id)
     }
 
+    /// The id of `name` as the file holds it, for a connection that may only
+    /// read: a name the file does not hold is refused rather than made. One it
+    /// holds stays, so that [`name`](Self::name) then finds it and writes
+    /// nothing.
+    #[cfg(feature = "wire")]
+    pub(crate) fn name_as_it_is(&self, name: &str, kind: Kind) -> Result<i64> {
+        let known = lock(&self.names).contains_key(name);
+        if !known && self.file.read(|connection| cells::find_bucket(connection, name))?.is_none() {
+            return Err(crate::engine::not_held("name"));
+        }
+        self.name(name, kind)
+    }
+
     /// The id of `name` in a copy of kv's file: the copy's, or the one its
     /// home makes when the name is new.
     #[cfg(feature = "replication")]
@@ -293,6 +318,13 @@ impl Kv {
             store.every(&format!("{}: {shown}", self.place()), buffer.every(), move || flush(&kv, &flushed))?;
         }
         Ok(buffer)
+    }
+
+    /// The buffer the counters of `id` keep in this process as an open bound
+    /// it, binding none: none while each change is written, or no open said.
+    #[cfg(feature = "wire")]
+    pub(crate) fn buffer_as_bound(&self, id: i64) -> Option<Arc<Buffer>> {
+        lock(&self.counting).get(&id).cloned().flatten()
     }
 
     /// Writes what memory holds, then deletes the cells that expired and those

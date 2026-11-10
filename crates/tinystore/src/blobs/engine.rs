@@ -68,7 +68,7 @@ pub(crate) struct Blobs {
     /// ones runs on: the pool holds no store, so this keeps none open.
     #[cfg(feature = "async")]
     pub(crate) pool: Arc<crate::pool::Pool>,
-    _claim: Claim,
+    _claim: Option<Claim>,
 }
 
 /// The files of `objects/` that the copy of blobs.db in `store_dir` names
@@ -204,13 +204,16 @@ impl Blobs {
     }
 }
 
-/// What opens a blobs engine on its file: where it is kept, the name of its
-/// folder it holds, and its file's history.
+/// What opens a blobs engine on its file: where it is kept, its folder and
+/// the claim on it, and its file's history.
 struct Opening<'s> {
     store: &'s Store,
     file: Arc<File>,
     kept: Kept,
-    claim: Claim,
+    dir: std::path::PathBuf,
+    /// None for one that writes nothing in its folder: a copy of a database's
+    /// file a connection that only reads opened, beside the database's own.
+    claim: Option<Claim>,
     migrations: &'static [Migration],
     #[cfg(feature = "async")]
     pool: Arc<crate::pool::Pool>,
@@ -220,9 +223,10 @@ impl Opening<'_> {
     /// Its folders made, its file migrated, and what a process that died left
     /// removed before anything is written; then its maintenance started.
     fn start(self) -> Result<Arc<Blobs>> {
-        let (store, dir) = (self.store, self.claim.path().to_owned());
-        // a store beside its holder makes nothing in the holder's directory
-        if !store.is_beside() {
+        let (store, dir) = (self.store, self.dir);
+        // a store beside its holder makes nothing in the holder's directory,
+        // nor an engine that holds no claim on its folder
+        if !store.is_beside() && self.claim.is_some() {
             for made in [dir.clone(), dir.join(UPLOADS), dir.join(OBJECTS)] {
                 std::fs::create_dir_all(&made)
                     .map_err(|error| Error::io(format!("blobs: create {}", made.display()), error))?;
@@ -294,10 +298,11 @@ impl Blobs {
             let config = Config::committing(store.durability());
             let file = Arc::new(store.open_file(&format!("{DIR}/{FILE}"), config)?);
             let kept = Kept { file: format!("{DIR}/{FILE}"), folder: DIR.to_owned(), lent_by: None };
+            let (dir, claim) = (claim.path().to_owned(), Some(claim));
             #[cfg(feature = "async")]
-            let opening = Opening { store, file, kept, claim, migrations: MIGRATIONS, pool };
+            let opening = Opening { store, file, kept, dir, claim, migrations: MIGRATIONS, pool };
             #[cfg(not(feature = "async"))]
-            let opening = Opening { store, file, kept, claim, migrations: MIGRATIONS };
+            let opening = Opening { store, file, kept, dir, claim, migrations: MIGRATIONS };
             opening.start()
         })
     }
@@ -320,14 +325,23 @@ impl Blobs {
             })?;
             let file_name = in_store.to_string_lossy().replace('\\', "/");
             let folder = format!("{}.blobs", file_name.strip_suffix(".db").unwrap_or(&file_name));
-            let claim = store.claim(&folder)?;
+            // a copy writes nothing in the folder, which the database's own claims
+            let claim = if shared.file().is_copy() { None } else { Some(store.claim(&folder)?) };
+            let dir = store.dir().join(&folder);
             let kept = Kept { file: file_name, folder, lent_by: Some(shared.owner().to_owned()) };
             let file = Arc::clone(shared.file());
             #[cfg(feature = "async")]
-            let opening =
-                Opening { store, file, kept, claim, migrations: IN_A_DATABASE, pool: crate::pool::Pool::of(store)? };
+            let opening = Opening {
+                store,
+                file,
+                kept,
+                dir,
+                claim,
+                migrations: IN_A_DATABASE,
+                pool: crate::pool::Pool::of(store)?,
+            };
             #[cfg(not(feature = "async"))]
-            let opening = Opening { store, file, kept, claim, migrations: IN_A_DATABASE };
+            let opening = Opening { store, file, kept, dir, claim, migrations: IN_A_DATABASE };
             opening.start()
         })
     }
@@ -492,6 +506,25 @@ impl Blobs {
         Ok(id)
     }
 
+    /// The id of the set of files `name` as the file holds it, for a
+    /// connection that may only read: a set it does not hold is refused
+    /// rather than made. One it holds is kept here as [`set_id`](Self::set_id)
+    /// keeps it, which then finds it and writes nothing.
+    #[cfg(feature = "wire")]
+    fn set_id_as_it_is(&self, name: &str) -> Result<i64> {
+        if let Some(&id) = lock(&self.sets).get(name) {
+            return Ok(id);
+        }
+        let found = self.file.read(|connection| {
+            let failed = |error| sql_error("blobs: a set of files", error);
+            let set = connection.prepare_cached(SELECT_SET);
+            set.and_then(|mut select| select.query_row([name], |row| row.get::<_, i64>(0))).optional().map_err(failed)
+        })?;
+        let id = found.ok_or_else(|| crate::engine::not_held("set of files"))?;
+        lock(&self.sets).insert(name.to_owned(), id);
+        Ok(id)
+    }
+
     /// The store's clock, as the rows keep it: unix milliseconds.
     pub(crate) fn now(&self) -> i64 {
         unix_millis(self.clock.now())
@@ -515,6 +548,28 @@ impl Blobs {
 }
 
 pub(super) use crate::sqlite::query_cached as rows_of;
+
+/// Refuses, for a connection that may only read, the set of files `name`
+/// while the store does not hold it: neither `blobs/` and its file nor the
+/// set is made. Once it is found, an open of the set finds it as this did.
+#[cfg(feature = "wire")]
+pub(crate) fn set_as_it_is(store: &Store, name: &str) -> Result<()> {
+    let within = |error: Error| error.within(format!("files {name}"));
+    crate::text::check_name("a set's", name).map_err(within)?;
+    store.holds(&format!("{DIR}/{FILE}")).map_err(within)?;
+    Blobs::of(store).and_then(|blobs| blobs.set_id_as_it_is(name)).map(drop).map_err(within)
+}
+
+/// Refuses, for a connection that may only read, the set of files `name` in
+/// a database's file while it does not hold it: neither blobs' tables in the
+/// file, nor the folder beside it, nor the set is made.
+#[cfg(all(feature = "wire", feature = "sql"))]
+pub(crate) fn set_in_file_as_it_is(shared: &Arc<crate::engine::SharedFile>, name: &str) -> Result<()> {
+    let within = |error: Error| error.within(format!("{}: files {name}", shared.owner()));
+    crate::text::check_name("a set's", name).map_err(within)?;
+    shared.keeps("_tinystore_blobs_sets", "set of files").map_err(within)?;
+    Blobs::in_file(shared).and_then(|blobs| blobs.set_id_as_it_is(name)).map(drop).map_err(within)
+}
 
 /// The sets of files blobs.db holds, by name. None while the store has no
 /// blobs, which a read beside would otherwise try to make.

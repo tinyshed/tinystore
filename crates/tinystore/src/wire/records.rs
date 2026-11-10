@@ -24,8 +24,8 @@ use super::protocol::{
 };
 use super::{Lent, Link, Route};
 use crate::records::{
-    Aggregate, Damage, Event, Events, FieldInfo, Fields, Level, Lines, List, NewEvent, Number, Part, SpanId, Stats,
-    Tail, TailBatch, TraceId,
+    Aggregate, AllEvents, Damage, Event, Events, FieldInfo, Fields, Level, Lines, List, NewEvent, Number, Part, SpanId,
+    Stats, Tail, TailBatch, TraceId,
 };
 use crate::sync::lock;
 use crate::{Calendar, ErrorKind, Store, unix_nanos};
@@ -128,7 +128,8 @@ impl Handles {
 }
 
 /// Answers a call of one message; a stream opened through a database finds
-/// its file through `lent`.
+/// its file through `lent`. A read connection's is `read_only`, and reads
+/// every stream only as the store holds them.
 pub(crate) fn call(
     store: &Store,
     handles: &Handles,
@@ -136,27 +137,56 @@ pub(crate) fn call(
     (called, body): (u16, &[u8]),
     read_only: bool,
 ) -> Answered {
+    let reading = Reading { store, handles, read_only };
     match called {
         method::RECORDS_OPEN => open(store, handles, lent, RecordsOpen::decode(body)?, read_only),
         method::RECORDS_APPEND => append(handles, RecordsAppend::decode(body)?),
-        method::RECORDS_LIST => list(store, handles, &RecordsQuery::decode(body)?),
-        method::RECORDS_COUNT => count(store, handles, &RecordsQuery::decode(body)?),
-        method::RECORDS_TOP => top(store, handles, &RecordsTopAsked::decode(body)?),
-        method::RECORDS_AGGREGATE => aggregate(store, handles, RecordsAggregateAsked::decode(body)?),
-        method::RECORDS_STREAMS => streams(store),
-        method::RECORDS_FIELD_NAMES => field_names(store, handles, &RecordsFieldNamesAsked::decode(body)?),
-        method::RECORDS_POLL => poll(store, &RecordsPollAsked::decode(body)?),
-        method::RECORDS_DAMAGED => damaged(store),
+        method::RECORDS_LIST => list(&reading, &RecordsQuery::decode(body)?),
+        method::RECORDS_COUNT => count(&reading, &RecordsQuery::decode(body)?),
+        method::RECORDS_TOP => top(&reading, &RecordsTopAsked::decode(body)?),
+        method::RECORDS_AGGREGATE => aggregate(&reading, RecordsAggregateAsked::decode(body)?),
+        method::RECORDS_STREAMS => streams(&reading),
+        method::RECORDS_FIELD_NAMES => field_names(&reading, &RecordsFieldNamesAsked::decode(body)?),
+        method::RECORDS_POLL => poll(&reading, &RecordsPollAsked::decode(body)?),
+        method::RECORDS_DAMAGED => damaged(&reading),
         method::RECORDS_DROP => drop_damage(store, RecordsDamage::decode(body)?),
-        method::RECORDS_FIELDS => fields(store, &RecordsFieldsAsked::decode(body)?),
+        method::RECORDS_FIELDS => fields(&reading, &RecordsFieldsAsked::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
+    }
+}
+
+/// What a read stands on: the store, the streams the connection opened, and
+/// whether the connection may only read.
+struct Reading<'a> {
+    store: &'a Store,
+    handles: &'a Handles,
+    read_only: bool,
+}
+
+impl Reading<'_> {
+    /// Every stream, for a read that names none by its handle: as the store
+    /// holds them, for a connection that only reads, which makes no
+    /// records.db.
+    fn every_stream(&self) -> Result<AllEvents, Failure> {
+        Ok(if self.read_only { self.store.all_events_as_it_is()? } else { self.store.all_events()? })
     }
 }
 
 /// Opens a stream as the call says, through a database when it names one.
 /// A connection that only reads changes no stream's keep: what one keeps is
-/// the writer's to say.
+/// the writer's to say. Nor does it open a stream the store does not hold.
 fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: RecordsOpen, read_only: bool) -> Answered {
+    if asked.keep.is_some() && read_only {
+        return Err(Failure::permission("a read connection gives a stream no keep"));
+    }
+    if read_only {
+        // the database's handle is checked, and its stream is the store's
+        if let Some(database) = asked.database {
+            lent(database)?;
+        }
+        let handle = handles.open.keep(Events::open_as_it_is(store, &asked.stream)?);
+        return Ok(Handle { handle }.encode());
+    }
     let mut events = match asked.database {
         #[cfg(feature = "sql")]
         Some(database) => crate::records::EventsBuilder::in_file(lent(database)?, &asked.stream),
@@ -168,9 +198,6 @@ fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: RecordsOpen, re
         None => store.events(&asked.stream),
     };
     if let Some(keep) = asked.keep {
-        if read_only {
-            return Err(Failure::permission("a read connection gives a stream no keep"));
-        }
         events = events.keep(Duration::from_millis(keep));
     }
     let events = events.open()?;
@@ -244,22 +271,22 @@ fn new_event(place: usize, asked: RecordsNewEvent) -> Result<NewEvent, Failure> 
     }
 }
 
-fn list(store: &Store, handles: &Handles, asked: &RecordsQuery) -> Answered {
-    let page = query(store, handles, asked)?.page()?;
+fn list(reading: &Reading<'_>, asked: &RecordsQuery) -> Answered {
+    let page = query(reading, asked)?.page()?;
     Ok(RecordsPage { events: page.events.into_iter().map(event_of).collect(), next: page.next }.encode())
 }
 
-fn count(store: &Store, handles: &Handles, asked: &RecordsQuery) -> Answered {
-    Ok(RecordsCount { count: query(store, handles, asked)?.count()? }.encode())
+fn count(reading: &Reading<'_>, asked: &RecordsQuery) -> Answered {
+    Ok(RecordsCount { count: query(reading, asked)?.count()? }.encode())
 }
 
-fn top(store: &Store, handles: &Handles, asked: &RecordsTopAsked) -> Answered {
-    let tops = query(store, handles, &asked.query)?.top(&asked.key)?;
+fn top(reading: &Reading<'_>, asked: &RecordsTopAsked) -> Answered {
+    let tops = query(reading, &asked.query)?.top(&asked.key)?;
     let values = tops.into_iter().map(|top| RecordsTop { value: top.value.to_string(), count: top.count });
     Ok(RecordsTops { values: values.collect() }.encode())
 }
 
-fn aggregate(store: &Store, handles: &Handles, asked: RecordsAggregateAsked) -> Answered {
+fn aggregate(reading: &Reading<'_>, asked: RecordsAggregateAsked) -> Answered {
     let mut aggregate = Aggregate::new().by(asked.by).stats(asked.stats).distinct(asked.distinct);
     if let Some(every) = asked.every {
         aggregate = aggregate.every(Duration::from_millis(every));
@@ -267,7 +294,7 @@ fn aggregate(store: &Store, handles: &Handles, asked: RecordsAggregateAsked) -> 
     if let Some((unit, zone)) = Calendar::asked(asked.calendar.as_deref(), asked.time_zone.as_deref())? {
         aggregate = aggregate.calendar(unit, zone);
     }
-    let rows = query(store, handles, &asked.query)?.aggregate(&aggregate)?;
+    let rows = query(reading, &asked.query)?.aggregate(&aggregate)?;
     let rows = rows.into_iter().map(|row| RecordsRow {
         at: unix_nanos(row.at),
         count: row.count,
@@ -278,8 +305,8 @@ fn aggregate(store: &Store, handles: &Handles, asked: RecordsAggregateAsked) -> 
     Ok(RecordsRows { rows: rows.collect() }.encode())
 }
 
-fn streams(store: &Store) -> Answered {
-    let streams = store.all_events()?.streams()?.into_iter().map(|stream| RecordsStream {
+fn streams(reading: &Reading<'_>) -> Answered {
+    let streams = reading.every_stream()?.streams()?.into_iter().map(|stream| RecordsStream {
         name: stream.name,
         keep: crate::clock::millis(stream.keep) as u64,
         retained_from: unix_nanos(stream.retained_from),
@@ -288,8 +315,8 @@ fn streams(store: &Store) -> Answered {
     Ok(RecordsStreams { streams: streams.collect() }.encode())
 }
 
-fn fields(store: &Store, asked: &RecordsFieldsAsked) -> Answered {
-    let carried = store.all_events()?.fields(&asked.stream)?;
+fn fields(reading: &Reading<'_>, asked: &RecordsFieldsAsked) -> Answered {
+    let carried = reading.every_stream()?.fields(&asked.stream)?;
     let info = |info: FieldInfo| RecordsFieldInfo {
         name: info.name,
         kinds: info.kinds.iter().map(|kind| kind.name().to_owned()).collect(),
@@ -307,13 +334,13 @@ fn fields(store: &Store, asked: &RecordsFieldsAsked) -> Answered {
     .encode())
 }
 
-fn field_names(store: &Store, handles: &Handles, asked: &RecordsFieldNamesAsked) -> Answered {
+fn field_names(reading: &Reading<'_>, asked: &RecordsFieldNamesAsked) -> Answered {
     let prefix = asked.prefix.as_deref().unwrap_or_default();
-    Ok(RecordsNames { names: query(store, handles, &asked.query)?.field_names_prefix(prefix)? }.encode())
+    Ok(RecordsNames { names: query(reading, &asked.query)?.field_names_prefix(prefix)? }.encode())
 }
 
-fn poll(store: &Store, asked: &RecordsPollAsked) -> Answered {
-    let all = store.all_events()?;
+fn poll(reading: &Reading<'_>, asked: &RecordsPollAsked) -> Answered {
+    let all = reading.every_stream()?;
     let batch = match asked.limit {
         Some(limit) => all.poll_limit(asked.cursor.as_deref(), usize::try_from(limit).unwrap_or(usize::MAX))?,
         None => all.poll(asked.cursor.as_deref())?,
@@ -322,8 +349,8 @@ fn poll(store: &Store, asked: &RecordsPollAsked) -> Answered {
     Ok(RecordsBatch { events, cursor: batch.cursor, expired: batch.expired }.encode())
 }
 
-fn damaged(store: &Store) -> Answered {
-    let damages = store.all_events()?.damaged()?.into_iter().map(|damage| RecordsDamage {
+fn damaged(reading: &Reading<'_>) -> Answered {
+    let damages = reading.every_stream()?.damaged()?.into_iter().map(|damage| RecordsDamage {
         part: damage.part.to_string(),
         id: damage.id.unsigned_abs(),
         stream: damage.stream,
@@ -352,10 +379,10 @@ fn drop_damage(store: &Store, asked: RecordsDamage) -> Answered {
 
 /// The read a query asks for: of the stream its handle names, or of every
 /// stream without one.
-fn query(store: &Store, handles: &Handles, asked: &RecordsQuery) -> Result<List, Failure> {
+fn query(reading: &Reading<'_>, asked: &RecordsQuery) -> Result<List, Failure> {
     let mut list = match asked.handle {
-        Some(handle) => handles.events(handle)?.list(),
-        None => store.all_events()?.list(),
+        Some(handle) => reading.handles.events(handle)?.list(),
+        None => reading.every_stream()?.list(),
     };
     if let Some(since) = asked.since {
         list = list.since(Duration::from_millis(since));
@@ -462,16 +489,18 @@ fn time_of(nanos: i64) -> SystemTime {
     }
 }
 
-/// Starts the tail a `records.tail` asks for. It sends nothing until
-/// [`Tailing::begin`], once the stream's RESPONSE went out.
+/// Starts the tail a `records.tail` asks for, on stream `number`; a read
+/// connection's is `read_only`. It sends nothing until [`Tailing::begin`],
+/// once the stream's RESPONSE went out.
 pub(crate) fn tail(
     store: &Store,
     handles: &Handles,
-    number: u32,
-    body: &[u8],
+    (number, body): (u32, &[u8]),
     link: Link,
+    read_only: bool,
 ) -> Result<Arc<Tailing>, Failure> {
-    let tail = query(store, handles, &RecordsQuery::decode(body)?)?.tail()?;
+    let reading = Reading { store, handles, read_only };
+    let tail = query(&reading, &RecordsQuery::decode(body)?)?.tail()?;
     let state = TailState { credit: link.credit, ..TailState::default() };
     let tailing = Arc::new_cyclic(|me: &Weak<Tailing>| {
         let waking = me.clone();

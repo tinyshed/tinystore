@@ -198,6 +198,32 @@ where
         Ok(Queue { jobs, state, _value: PhantomData })
     }
 
+    /// The queue `name` where `home` says, as the store holds it, for a
+    /// connection that may only read: neither jobs.db, nor jobs' tables in a
+    /// database's file, nor the queue is made, and its options are the
+    /// writers' to choose.
+    #[cfg(feature = "wire")]
+    pub(crate) fn open_as_it_is(home: &Home, name: &str) -> Result<Queue<V>> {
+        let lent_by = match home {
+            Home::Store(_) => None,
+            Home::Shared(shared) => Some(shared.owner()),
+        };
+        let within = |error: Error| error.within(QueueState::described(lent_by, Kind::Queue, name));
+        let jobs = Jobs::at_as_it_is(home).map_err(within)?;
+        let state = jobs.queue_as_it_is(name)?;
+        Ok(Queue { jobs, state, _value: PhantomData })
+    }
+
+    /// The queue as this process holds it open now. A handle a connection that
+    /// only reads opened before any open here that writes takes that open's
+    /// state once there is one, whose leases say what runs and whose watchers
+    /// hear each change; any other handle has it already.
+    #[cfg(feature = "wire")]
+    pub(crate) fn as_open_now(&self) -> Queue<V> {
+        let state = self.jobs.open_state(&self.state).unwrap_or_else(|| Arc::clone(&self.state));
+        Queue { jobs: Arc::clone(&self.jobs), state, _value: PhantomData }
+    }
+
     /// Adds a job that runs as soon as a worker is free, and returns once it
     /// is on disk. Adds from many callers share a commit.
     pub fn add(&self, value: &V) -> Result<bool> {

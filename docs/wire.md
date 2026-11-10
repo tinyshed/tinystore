@@ -235,11 +235,16 @@ may do anything, `data` reads and writes, and `read` reads only. A `read`
 connection may call only the methods the schema marks `read`, every other
 one being `permission`; and its SQL runs on a reader and is a query, a
 statement that writes, attaches a file or sets a pragma being `permission`
-too. Its opens may still name a bucket, a queue or files the store did not
-have, as any first open does, but choose nothing the writers live with: a
-bucket's `idle`, under which a read renews a key, counters' `flushEvery`, a
-database's `durability` and a stream's `keep` are `permission`. Its reads
-renew no key.
+too. Its opens open only what the store already holds, as it is, and make
+nothing: no file, no name, no row, and no option that binds a later open.
+A file the store does not hold is `not_found`, and so is a read that names
+no handle, such as `records.streams`, on a store without that engine's
+file; a name the store does not hold is `invalid`. What an open chooses is
+the writers' to choose: a read connection's open of a queue or a database
+takes the options and the durability the store has, applies no migration,
+and refuses with `permission` a bucket's `idle`, under which a read renews
+a key, counters' `flushEvery`, a database's `durability` and a stream's
+`keep`. Its reads renew no key.
 
 ## Streams
 
@@ -653,7 +658,7 @@ or a lost worker gets it back without running the step again.
 
 `sql.open` answers a handle on a database by its name, its migrations applied
 and checked; a read connection's applies none and chooses no durability, and
-opens the file as it is.
+opens the file as it is, `not_found` when the store holds none.
 
 <!-- written from protocol/*.wire by `just protocol`: methods of sql -->
 | method   | name        | may   | request         | answer                                     |

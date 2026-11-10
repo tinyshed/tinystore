@@ -24,6 +24,7 @@ use super::{Lent, Route};
 #[cfg(feature = "sql")]
 use crate::TxHandle;
 use crate::clock::from_unix_millis;
+use crate::engine::Home;
 use crate::jobs::{
     Answers, Change, Concurrency, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder, Remote,
     RemoteWork, Report, Seen, State, Subscription, keep_encoded, kept, read_value, start_remote,
@@ -85,17 +86,22 @@ struct Opened {
     schedule: bool,
 }
 
-/// Answers a call that runs to its end on this thread.
+/// Answers a call that runs to its end on this thread; a read connection's
+/// is `read_only`.
 pub(crate) fn call(
     store: &Store,
     handles: &Handles,
     lent: Lent<'_>,
     called: u16,
     body: &[u8],
-    max_body: usize,
+    (max_body, read_only): (usize, bool),
 ) -> Answered {
     match called {
-        method::JOBS_QUEUE_OPEN => handles.open(open_queue(store, lent, JobsQueueOpen::decode(body)?)?, false),
+        method::JOBS_QUEUE_OPEN => {
+            let open = JobsQueueOpen::decode(body)?;
+            let queue = if read_only { queue_as_it_is(store, lent, &open)? } else { open_queue(store, lent, open)? };
+            handles.open(queue, false)
+        }
         method::JOBS_SCHEDULE_OPEN => handles.open(open_schedule(store, JobsScheduleOpen::decode(body)?)?, true),
         method::JOBS_GET => {
             let id = JobsId::decode(body)?;
@@ -213,6 +219,16 @@ fn write_op(handles: &Handles, tx: &Transaction<'_>, op: &JobsOp) -> Result<bool
             "method {called:#06x} is not a write of a transaction, or lacks what it takes"
         ))),
     }
+}
+
+/// A queue the store holds, for a connection that only reads: the options it
+/// asks are the writers' to choose, and left to them.
+fn queue_as_it_is(store: &Store, lent: Lent<'_>, open: &JobsQueueOpen) -> Result<Queue<Raw>, Failure> {
+    let home = match open.database {
+        Some(database) => Home::Shared(lent(database)?),
+        None => Home::Store(store.clone()),
+    };
+    Ok(Queue::<Raw>::open_as_it_is(&home, &open.name)?)
 }
 
 fn open_queue(store: &Store, lent: Lent<'_>, open: JobsQueueOpen) -> Result<Queue<Raw>, Failure> {
@@ -848,11 +864,13 @@ impl Handles {
         Ok(Handle { handle }.encode())
     }
 
+    /// The queue a handle names, as this process holds it open now: a read
+    /// connection's opened before the program's open takes that open's state.
     fn opened(&self, handle: u64) -> Result<Opened, Failure> {
-        self.lock()
-            .get(&handle)
-            .cloned()
-            .ok_or_else(|| Failure::invalid(format!("handle {handle} names no queue this connection opened")))
+        let opened = self.lock().get(&handle).cloned();
+        let opened =
+            opened.ok_or_else(|| Failure::invalid(format!("handle {handle} names no queue this connection opened")))?;
+        Ok(Opened { queue: opened.queue.as_open_now(), ..opened })
     }
 
     /// The job a run of this connection's workers holds, and its queue.

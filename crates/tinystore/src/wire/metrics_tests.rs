@@ -432,6 +432,8 @@ fn a_gauges_stretch_is_replaced_over_the_wire_behind_what_is_packed_and_a_counte
 fn a_read_connection_reads_metrics_and_neither_ingests_nor_counts() {
     let dir = tempfile::tempdir().unwrap();
     let store = store(&dir);
+    // a read connection reads only the metrics.db the store holds
+    store.metrics().unwrap();
     let mut reader = Client::admitted(&store, Capability::Read);
     reader.call::<MetricsNamePage>(method::METRICS_NAMES, &MetricsPageAsked::default()).unwrap();
     let refused = reader.call::<Empty>(method::METRICS_INGEST, &MetricsIngest::default()).unwrap_err();

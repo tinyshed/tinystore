@@ -26,6 +26,10 @@ const SWEEP: Duration = Duration::from_secs(60);
 /// opened by the first handle and closed with the store.
 pub(crate) struct Databases {
     open: Mutex<HashMap<String, Arc<Base>>>,
+    /// Those connections that only read opened while no open that writes
+    /// held them, each read through a file of its own that claims nothing and
+    /// writes nothing: the program's own open still chooses its durability.
+    read: Mutex<HashMap<String, Arc<Base>>>,
 }
 
 /// One application database: `sql/<name>.db`, its writer and its readers,
@@ -40,7 +44,9 @@ pub(crate) struct Base {
     /// writes when it compiles it, and a read call sends those to the writer.
     writes: Mutex<HashSet<String>>,
     durability: Durability,
-    _claim: Claim,
+    /// Held by the database that writes its file; one read through a file
+    /// of its own holds none.
+    _claim: Option<Claim>,
 }
 
 impl Databases {
@@ -48,7 +54,7 @@ impl Databases {
     /// on the store's background thread.
     pub(crate) fn of(store: &Store) -> Result<Arc<Databases>> {
         store.engine(|store| {
-            let databases = Arc::new(Databases { open: Mutex::new(HashMap::new()) });
+            let databases = Arc::new(Databases { open: Mutex::new(HashMap::new()), read: Mutex::new(HashMap::new()) });
             let weak = Arc::downgrade(&databases);
             store.every("sql: idle readers", SWEEP, move || {
                 if let Some(databases) = weak.upgrade() {
@@ -62,7 +68,8 @@ impl Databases {
 
     /// Closes each database's readers unused for long enough.
     fn sweep(&self) {
-        let open: Vec<Arc<Base>> = lock(&self.open).values().cloned().collect();
+        let mut open: Vec<Arc<Base>> = lock(&self.open).values().cloned().collect();
+        open.extend(lock(&self.read).values().cloned());
         for base in open {
             base.file().sweep();
         }
@@ -100,17 +107,30 @@ impl Databases {
         if let Some((drafts, migrations)) = migrations {
             file.migrate_checked(HISTORY, &migrations, Some(&drafts))?;
         }
-        let base = Base {
-            name: name.to_owned(),
-            shared: Arc::new(SharedFile::new(file, format!("sql {name}"), store)),
-            clock: store.clock(),
-            memory: Arc::clone(store.memory()),
-            writes: Mutex::new(HashSet::new()),
-            durability,
-            _claim: claim,
-        };
-        let base = Arc::new(base);
+        let base = Arc::new(Base { _claim: Some(claim), ..Base::opened(store, name, file, durability) });
         open.insert(name.to_owned(), Arc::clone(&base));
+        Ok(base)
+    }
+
+    /// The database `name` as the store holds it, for a connection that may
+    /// only read: the one an open that writes holds, or else one read through
+    /// a file of its own, as a store beside its holder reads it, which claims
+    /// nothing, binds no durability and applies no migration, so that the
+    /// program's own open after it chooses them. A file the store does not
+    /// hold is `NotFound` rather than made.
+    #[cfg(feature = "wire")]
+    pub(crate) fn open_as_it_is(&self, store: &Store, name: &str) -> Result<Arc<Base>> {
+        if let Some(base) = lock(&self.open).get(name) {
+            return Ok(Arc::clone(base));
+        }
+        let mut read = lock(&self.read);
+        if let Some(base) = read.get(name) {
+            return Ok(Arc::clone(base));
+        }
+        let config = config(store.durability());
+        let durability = config.durability;
+        let base = Arc::new(Base::opened(store, name, store.open_to_read(&file_of(name), config)?, durability));
+        read.insert(name.to_owned(), Arc::clone(&base));
         Ok(base)
     }
 }
@@ -119,7 +139,8 @@ impl Engine for Databases {
     /// Closes every database; the first that fails is the error, and the
     /// others close either way.
     fn close(&self) -> Result<()> {
-        let open: Vec<Arc<Base>> = lock(&self.open).drain().map(|(_, base)| base).collect();
+        let mut open: Vec<Arc<Base>> = lock(&self.open).drain().map(|(_, base)| base).collect();
+        open.extend(lock(&self.read).drain().map(|(_, base)| base));
         let mut first_failure = None;
         for base in open {
             if let Err(error) = base.file().close() {
@@ -141,6 +162,20 @@ impl Engine for Databases {
 }
 
 impl Base {
+    /// The database `name` in `file`, its commits going as far as
+    /// `durability` says, holding no claim yet.
+    fn opened(store: &Store, name: &str, file: File, durability: Durability) -> Base {
+        Base {
+            name: name.to_owned(),
+            shared: Arc::new(SharedFile::new(file, format!("sql {name}"), store)),
+            clock: store.clock(),
+            memory: Arc::clone(store.memory()),
+            writes: Mutex::new(HashSet::new()),
+            durability,
+            _claim: None,
+        }
+    }
+
     pub(crate) fn file(&self) -> &File {
         self.shared.file()
     }

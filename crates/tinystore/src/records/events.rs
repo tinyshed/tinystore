@@ -104,6 +104,23 @@ impl Events {
         Ok(Events { records, stream })
     }
 
+    /// The stream `name` as the store holds it, for a connection that may
+    /// only read: neither records.db nor the stream is made, and its keep is
+    /// left as the file says. One opened through a database is the same
+    /// stream, without the outbox only its appends need, whose table would be
+    /// made in the database's file.
+    #[cfg(feature = "wire")]
+    pub(crate) fn open_as_it_is(store: &Store, name: &str) -> Result<Events> {
+        let within = |error: Error| error.within(format!("events {name}"));
+        store.holds(super::engine::FILE).map_err(within)?;
+        let records = Records::of(store).map_err(within)?;
+        let stream = records.stream_as_it_is(name).map_err(within)?;
+        #[cfg(feature = "sql")]
+        return Ok(Events { records, stream, outbox: None });
+        #[cfg(not(feature = "sql"))]
+        Ok(Events { records, stream })
+    }
+
     /// The stream opened from a database: its outbox's table made in the
     /// database's file the first time, and what a crash left there moved.
     #[cfg(feature = "sql")]

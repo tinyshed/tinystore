@@ -2,7 +2,7 @@
 //! client's credit, and what each stream needs of the session to send it.
 
 use std::sync::Arc;
-#[cfg(feature = "sql")]
+#[cfg(any(feature = "sql", feature = "records", feature = "metrics"))]
 use std::sync::atomic::Ordering;
 
 use super::{HELLO_MOST, Input, Shared, guarded};
@@ -177,8 +177,8 @@ impl Shared {
     /// events arrive that its query finds.
     #[cfg(feature = "records")]
     pub(super) fn tail(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
-        let link = self.stream_link(input, stream);
-        match guarded(|| records::tail(&self.store, &self.records, stream, body, link)) {
+        let (link, read_only) = (self.stream_link(input, stream), self.read_only.load(Ordering::Relaxed));
+        match guarded(|| records::tail(&self.store, &self.records, (stream, body), link, read_only)) {
             Ok(tailing) => {
                 self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
                 tailing.begin();
@@ -205,10 +205,11 @@ impl Shared {
     pub(super) fn parts(self: &Arc<Self>, input: &Input, stream: u32, called: u16, body: Vec<u8>) {
         let link = self.stream_link(input, stream);
         let (shared, reading) = (Arc::clone(self), self.reading(stream, called));
+        let read_only = self.read_only.load(Ordering::Relaxed);
         self.run_call(Box::new(move || {
             let bound = crate::wire::part_bound(link.max_body, link.credit, 0);
-            let parted =
-                shared.read_under(stream, reading, || guarded(|| metrics::parts(&shared.store, called, &body, bound)));
+            let asked = || metrics::parts(&shared.store, called, &body, (bound, read_only));
+            let parted = shared.read_under(stream, reading, || guarded(asked));
             match parted {
                 Ok(mut parts) if parts.len() == 1 => shared.answer(stream, Ok(parts.pop_front().unwrap_or_default())),
                 Ok(parts) => {

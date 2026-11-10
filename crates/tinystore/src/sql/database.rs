@@ -97,6 +97,18 @@ impl DatabaseBuilder {
             .and_then(|migrating| Databases::of(&self.store)?.open(&self.store, name, migrating, durability));
         opened.map(|base| Database { base }).map_err(|error| error.within(describe))
     }
+
+    /// Opens the database as the store holds it, for a connection that may
+    /// only read: a file the store does not hold is `NotFound` rather than
+    /// made, no migration runs, and no durability is bound for the program's
+    /// own open.
+    #[cfg(feature = "wire")]
+    pub(crate) fn open_as_it_is(self) -> Result<Database> {
+        let describe = super::engine::described(&self.name);
+        let opened =
+            check_name(&self.name).and_then(|()| Databases::of(&self.store)?.open_as_it_is(&self.store, &self.name));
+        opened.map(|base| Database { base }).map_err(|error| error.within(describe))
+    }
 }
 
 /// An application's database: its reads, its writes, its transactions.

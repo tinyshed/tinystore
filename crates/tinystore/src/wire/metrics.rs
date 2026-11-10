@@ -137,9 +137,15 @@ impl Handles {
     }
 }
 
-/// Answers a call of one message.
-pub(crate) fn call(store: &Store, called: u16, body: &[u8], max_body: usize) -> Answered {
-    let metrics = store.metrics()?;
+/// The store's metrics, for a call on them: as the store holds them, for a
+/// connection that only reads, which makes no metrics.db.
+fn metrics_of(store: &Store, read_only: bool) -> Result<Metrics, Failure> {
+    Ok(if read_only { store.metrics_as_it_is()? } else { store.metrics()? })
+}
+
+/// Answers a call of one message; a read connection's is `read_only`.
+pub(crate) fn call(store: &Store, called: u16, body: &[u8], (max_body, read_only): (usize, bool)) -> Answered {
+    let metrics = metrics_of(store, read_only)?;
     match called {
         method::METRICS_EXPLAIN => explain(&metrics, MetricsAggregateAsked::decode(body)?),
         method::METRICS_NAMES => names(&metrics, MetricsPageAsked::decode(body)?, max_body),
@@ -159,9 +165,14 @@ pub(crate) fn call(store: &Store, called: u16, body: &[u8], max_body: usize) -> 
 }
 
 /// The parts of a read's, the newest samples' or an aggregate's answer, each
-/// of at most `bound` bytes.
-pub(crate) fn parts(store: &Store, called: u16, body: &[u8], bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
-    let metrics = store.metrics()?;
+/// of at most `bound` bytes; a read connection's is `read_only`.
+pub(crate) fn parts(
+    store: &Store,
+    called: u16,
+    body: &[u8],
+    (bound, read_only): (usize, bool),
+) -> Result<VecDeque<Vec<u8>>, Failure> {
+    let metrics = metrics_of(store, read_only)?;
     match called {
         method::METRICS_READ => Ok(read_parts(query(&metrics, MetricsQuery::decode(body)?)?.read()?, bound)),
         method::METRICS_LATEST => Ok(latest_parts(query(&metrics, MetricsQuery::decode(body)?)?.latest()?, bound)),

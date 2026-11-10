@@ -58,6 +58,7 @@ pub(crate) use {
     cells::Cell,
     once::{Hand, Waiter, hand, rows as once_rows},
     path::MAX_PATH as MAX_KEY,
+    scope::{Kind, Scope},
 };
 // What keeps a config's live settings: kv.db, its versions and the configs open in the process.
 #[cfg(feature = "config")]

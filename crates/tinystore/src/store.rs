@@ -354,16 +354,11 @@ impl Store {
         expect(dead_code, reason = "only an engine of files opens one, and channels keep none")
     )]
     pub(crate) fn open_file(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
-        let path = self.inner.dir.join(name);
-        let probe = Some(self.inner.probe.for_file(crate::probe::label(name)));
-        let (memory, gate) = (Some(Arc::clone(&self.inner.memory)), Some(Arc::clone(&self.inner.gate)));
-        let config = crate::sqlite::Config { memory, probe, gate, ..config };
         if self.inner.beside {
-            if !path.exists() {
-                return Err(Error::not_found(format!("{}: it holds no {name}", self.describe())));
-            }
-            return crate::sqlite::File::open_copy(path, config);
+            return self.open_to_read(name, config);
         }
+        let path = self.inner.dir.join(name);
+        let config = self.file_config(name, config);
         #[cfg(feature = "replication")]
         if let Some(node) = &self.inner.node {
             let config =
@@ -385,6 +380,69 @@ impl Store {
             return Ok(node.opened(name, file));
         }
         crate::sqlite::File::open(path, config)
+    }
+
+    /// Opens the file `name` inside the store's directory to read it, as a
+    /// store beside its holder reads each file: through readers alone, none
+    /// written and none checkpointed, by no engine's claim. A file the store
+    /// does not hold is `NotFound` rather than made.
+    #[cfg_attr(
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "sql",
+            feature = "blobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "search"
+        )),
+        expect(dead_code, reason = "only an engine of files opens one, and channels keep none")
+    )]
+    pub(crate) fn open_to_read(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
+        self.holds(name)?;
+        crate::sqlite::File::open_copy(self.inner.dir.join(name), self.file_config(name, config))
+    }
+
+    /// `config` with what the store gives each file it opens: its memory, the
+    /// gate a backup's moment shuts and the file's own probe.
+    #[cfg_attr(
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "sql",
+            feature = "blobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "search"
+        )),
+        expect(dead_code, reason = "only an engine of files opens one, and channels keep none")
+    )]
+    fn file_config(&self, name: &str, config: crate::sqlite::Config) -> crate::sqlite::Config {
+        let probe = Some(self.inner.probe.for_file(crate::probe::label(name)));
+        let (memory, gate) = (Some(Arc::clone(&self.inner.memory)), Some(Arc::clone(&self.inner.gate)));
+        crate::sqlite::Config { memory, probe, gate, ..config }
+    }
+
+    /// Refuses the file `name` inside the store's directory, `NotFound`, while
+    /// the store does not hold it: what may only read, a store beside its
+    /// holder or a connection that only reads, makes none.
+    #[cfg_attr(
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "sql",
+            feature = "blobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "search"
+        )),
+        expect(dead_code, reason = "only an engine of files opens one, and channels keep none")
+    )]
+    pub(crate) fn holds(&self, name: &str) -> Result<()> {
+        if self.inner.dir.join(name).exists() {
+            return Ok(());
+        }
+        Err(Error::not_found(format!("{}: it holds no {name}", self.describe())))
     }
 
     /// Opens a file no node of the store's held before it: written here once

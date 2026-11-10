@@ -246,6 +246,15 @@ impl Records {
         (stream.keep, stream.said) = (Some(keep), Some(keep));
         Ok(stream.clone())
     }
+
+    /// The stream `name` as the file holds it, for a connection that may only
+    /// read: a stream it does not hold is refused rather than made, and its
+    /// keep is left as the file says.
+    #[cfg(feature = "wire")]
+    pub(crate) fn stream_as_it_is(&self, name: &str) -> Result<Stream> {
+        check_name(name)?;
+        self.stream(name).ok_or_else(|| crate::engine::not_held("stream"))
+    }
 }
 
 fn read_streams(file: &File) -> Result<HashMap<String, Stream>> {

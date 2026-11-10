@@ -643,6 +643,326 @@ fn a_read_connection_gives_a_bucket_no_idle_and_counters_no_flush() {
     assert_eq!(entry.expires_at, expires, "a read connection's read renews nothing");
 }
 
+/// Each engine's open a read connection may call, of names no store here
+/// holds, by what it opens.
+#[cfg(all(feature = "jobs", feature = "sql", feature = "blobs", feature = "records", feature = "search"))]
+fn open_names_not_held(client: &mut Client) -> Vec<(&'static str, Result<Handle, Failed>)> {
+    use crate::wire::protocol::{
+        BlobsOpen, JobsQueueOpen, KvBucketOpen, KvRateLimitOpen, RecordsOpen, SearchOpen, SqlOpen,
+    };
+    let window = KvWindow { name: "daily".to_owned(), limit: 100, per: 86_400_000 };
+    let queue = |name: &str| JobsQueueOpen { name: name.to_owned(), ..JobsQueueOpen::default() };
+    let bucket = KvBucketOpen { name: "sessions".to_owned(), ..KvBucketOpen::default() };
+    let counters = KvCountersOpen { name: "visits".to_owned(), ..KvCountersOpen::default() };
+    let limit = KvRateLimitOpen { name: "api".to_owned(), rate: 10, per: 1_000, burst: None };
+    let quota = KvQuotaOpen { name: "ai".to_owned(), windows: vec![window] };
+    let once = KvOnceOpen { name: "payments".to_owned(), ..KvOnceOpen::default() };
+    let files = BlobsOpen { name: "avatars".to_owned(), ..BlobsOpen::default() };
+    let stream = RecordsOpen { stream: "audit".to_owned(), ..RecordsOpen::default() };
+    let index = SearchOpen { name: "products".to_owned(), ..SearchOpen::default() };
+    let database = SqlOpen { name: "app".to_owned(), migrations: None, durability: None };
+    vec![
+        ("bucket sessions", client.call::<Handle>(method::KV_BUCKET_OPEN, &bucket)),
+        ("counters visits", client.call::<Handle>(method::KV_COUNTERS_OPEN, &counters)),
+        ("rate limit api", client.call::<Handle>(method::KV_RATE_LIMIT_OPEN, &limit)),
+        ("quota ai", client.call::<Handle>(method::KV_QUOTA_OPEN, &quota)),
+        ("once payments", client.call::<Handle>(method::KV_ONCE_OPEN, &once)),
+        ("queue emails", client.call::<Handle>(method::JOBS_QUEUE_OPEN, &queue("emails"))),
+        ("queue reports", client.call::<Handle>(method::JOBS_QUEUE_OPEN, &queue("reports"))),
+        ("files avatars", client.call::<Handle>(method::BLOBS_OPEN, &files)),
+        ("stream audit", client.call::<Handle>(method::RECORDS_OPEN, &stream)),
+        ("index products", client.call::<Handle>(method::SEARCH_OPEN, &index)),
+        ("database app", client.call::<Handle>(method::SQL_OPEN, &database)),
+    ]
+}
+
+/// The program's own opens of the names [`open_names_not_held`] asks for:
+/// each kv name as another kind, a queue with options of its own and the
+/// other as a schedule, and a stream and a database with what they keep.
+#[cfg(all(feature = "jobs", feature = "sql", feature = "blobs", feature = "records", feature = "search"))]
+fn open_as_the_program(store: &Store) {
+    let day = std::time::Duration::from_secs(86_400);
+    store.counters("sessions").open().unwrap();
+    store.bucket::<i64>("visits").open().unwrap();
+    store.quota("api").window("daily", 100, day).open().unwrap();
+    store.rate_limit("ai").rate(10, std::time::Duration::from_secs(1)).open().unwrap();
+    store.counters("payments").open().unwrap();
+    let bound = crate::jobs::Concurrency::total(4).group(2);
+    store.queue::<i64>("emails").attempts(3).concurrency(bound).open().unwrap();
+    store.schedule("reports").every(day).open().unwrap();
+    store.files("avatars").open().unwrap();
+    store.events("audit").keep(day * 7).open().unwrap();
+    store.index::<serde_json::Value>("products").field("title", 1.0).open().unwrap();
+    store.database("app").durability(crate::Durability::Os).open().unwrap();
+}
+
+/// Every file and folder under `dir`, by its path there.
+#[cfg(all(feature = "jobs", feature = "sql", feature = "blobs", feature = "records", feature = "search"))]
+fn entries(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let (mut found, mut folders) = (Vec::new(), vec![dir.to_path_buf()]);
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path.clone());
+            }
+            found.push(path.strip_prefix(dir).unwrap().to_path_buf());
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A read connection's opens of names a store never held are refused as a
+/// guest's are, `not_found`, and make nothing: no file, no folder, and no
+/// name or option the program's own opens then meet.
+// contract: SEC-01
+#[cfg(all(feature = "jobs", feature = "sql", feature = "blobs", feature = "records", feature = "search"))]
+#[test]
+fn a_read_connection_opens_nothing_of_a_store_that_holds_none_of_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut reader = Client::admitted(&store, Capability::Read);
+    let before = entries(dir.path());
+    for (what, opened) in open_names_not_held(&mut reader) {
+        let refused = opened.unwrap_err();
+        assert_eq!(refused.code, "not_found", "{what}: {}", refused.message);
+    }
+    assert_eq!(entries(dir.path()), before, "no file and no folder");
+    open_as_the_program(&store);
+}
+
+/// Where each engine's file holds other names, a read connection's open of
+/// one it does not hold is refused, `invalid` as search's is, and leaves no
+/// row: the same open again is refused too, and the program's own opens of
+/// those names as other kinds, or with options of their own, all open.
+// contract: SEC-01
+#[cfg(all(feature = "jobs", feature = "sql", feature = "blobs", feature = "records", feature = "search"))]
+#[test]
+fn a_read_connection_makes_no_name_its_store_does_not_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    store.bucket::<i64>("other").open().unwrap();
+    store.queue::<i64>("other").open().unwrap();
+    store.files("other").open().unwrap();
+    store.events("other").open().unwrap();
+    store.index::<serde_json::Value>("other").field("title", 1.0).open().unwrap();
+    let mut reader = Client::admitted(&store, Capability::Read);
+    for _ in 0..2 {
+        for (what, opened) in open_names_not_held(&mut reader) {
+            // a database's name is its file
+            let code = if what == "database app" { "not_found" } else { "invalid" };
+            let refused = opened.unwrap_err();
+            assert_eq!(refused.code, code, "{what}: {}", refused.message);
+        }
+    }
+    open_as_the_program(&store);
+}
+
+/// A read connection opens what its store holds as it is, whatever options
+/// it asks, and reads it; it binds nothing the program's own opens meet after
+/// it, though it opened each engine first.
+// contract: SEC-01
+#[cfg(all(feature = "jobs", feature = "sql", feature = "blobs", feature = "records", feature = "search"))]
+#[test]
+fn a_read_connection_opens_what_its_store_holds_as_it_is_and_binds_none_of_it() {
+    use crate::wire::protocol::{
+        BlobsAt, BlobsGot, BlobsOpen, BlobsWrite, BlobsWritten, JobsCall, JobsId, JobsJob, JobsQueueOpen, KvBucketOpen,
+        RecordsAppend, RecordsCount, RecordsNewEvent, RecordsOpen, RecordsQuery, SqlDone, SqlMigration, SqlOpen,
+        SqlQuery, SqlRows, SqlStatement,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let options = || Options { background: false, ..Options::default() };
+    let bucket = KvBucketOpen { name: "sessions".to_owned(), ..KvBucketOpen::default() };
+    let counters = KvCountersOpen { name: "hits".to_owned(), ..KvCountersOpen::default() };
+    let queue = JobsQueueOpen { name: "emails".to_owned(), ..JobsQueueOpen::default() };
+    let files = BlobsOpen { name: "avatars".to_owned(), ..BlobsOpen::default() };
+    let stream = RecordsOpen { stream: "audit".to_owned(), ..RecordsOpen::default() };
+    let notes =
+        SqlMigration { name: "0001_notes.sql".to_owned(), sql: "create table notes (title text) strict".to_owned() };
+    let database = SqlOpen { name: "app".to_owned(), migrations: Some(vec![notes]), durability: None };
+    {
+        let store = Store::open(dir.path(), options()).unwrap();
+        let mut owner = Client::admitted(&store, Capability::Data);
+        let handle = owner.call::<Handle>(method::KV_BUCKET_OPEN, &bucket).unwrap().handle;
+        let set = KvCall { handle, key: "s1".to_owned(), value: Some(Row::Bin(b"kept".to_vec())), ..KvCall::default() };
+        owner.call::<KvWritten>(method::KV_SET, &set).unwrap();
+        let handle = owner.call::<Handle>(method::KV_COUNTERS_OPEN, &counters).unwrap().handle;
+        let add = KvCall { handle, key: "home".to_owned(), n: Some(3), ..KvCall::default() };
+        owner.call::<KvCount>(method::KV_COUNTERS_ADD, &add).unwrap();
+        let handle = owner.call::<Handle>(method::JOBS_QUEUE_OPEN, &queue).unwrap().handle;
+        let job = JobsCall { handle, id: Some("e1".to_owned()), value: "1".to_owned(), ..JobsCall::default() };
+        owner.call::<Empty>(method::JOBS_SET, &job).unwrap();
+        let handle = owner.call::<Handle>(method::BLOBS_OPEN, &files).unwrap().handle;
+        let put = BlobsWrite { handle, path: "a.png".to_owned(), bytes: b"png".to_vec(), ..BlobsWrite::default() };
+        owner.call::<BlobsWritten>(method::BLOBS_PUT, &put).unwrap();
+        let handle = owner.call::<Handle>(method::RECORDS_OPEN, &stream).unwrap().handle;
+        let signup = RecordsNewEvent { name: "signup".to_owned(), ..RecordsNewEvent::default() };
+        owner.call::<Empty>(method::RECORDS_APPEND, &RecordsAppend { handle, events: vec![signup] }).unwrap();
+        let handle = owner.call::<Handle>(method::SQL_OPEN, &database).unwrap().handle;
+        let insert = SqlStatement { handle, text: "insert into notes values ('kept')".to_owned(), values: Vec::new() };
+        owner.call::<SqlDone>(method::SQL_EXEC, &insert).unwrap();
+        drop(owner);
+        store.close().unwrap();
+    }
+
+    let store = Store::open(dir.path(), options()).unwrap();
+    let mut reader = Client::admitted(&store, Capability::Read);
+    let asked = JobsQueueOpen { attempts: Some(5), ..queue };
+    let emails = reader.call::<Handle>(method::JOBS_QUEUE_OPEN, &asked).unwrap().handle;
+    let e1 = JobsId { handle: emails, id: "e1".to_owned() };
+    assert!(reader.call::<JobsJob>(method::JOBS_GET, &e1).unwrap().found, "the job the program set");
+    let handle = reader.call::<Handle>(method::KV_BUCKET_OPEN, &bucket).unwrap().handle;
+    let entry: KvEntry =
+        reader.call(method::KV_GET, &KvCall { handle, key: "s1".to_owned(), ..KvCall::default() }).unwrap();
+    assert_eq!(entry.value, Some(Row::Bin(b"kept".to_vec())));
+    let handle = reader.call::<Handle>(method::KV_COUNTERS_OPEN, &counters).unwrap().handle;
+    let home = KvCall { handle, key: "home".to_owned(), ..KvCall::default() };
+    assert_eq!(reader.call::<KvCount>(method::KV_COUNTERS_GET, &home).unwrap().value, 3);
+    let handle = reader.call::<Handle>(method::BLOBS_OPEN, &files).unwrap().handle;
+    let at = BlobsAt { handle, folder: Vec::new(), path: "a.png".to_owned() };
+    assert_eq!(reader.call::<BlobsGot>(method::BLOBS_GET, &at).unwrap().bytes, b"png");
+    let handle = reader.call::<Handle>(method::RECORDS_OPEN, &stream).unwrap().handle;
+    let audit = RecordsQuery { handle: Some(handle), ..RecordsQuery::default() };
+    assert_eq!(reader.call::<RecordsCount>(method::RECORDS_COUNT, &audit).unwrap().count, 1);
+    let handle = reader.call::<Handle>(method::SQL_OPEN, &database).unwrap().handle;
+    let titles =
+        SqlQuery { handle, text: "select title from notes".to_owned(), values: Vec::new(), want: "all".to_owned() };
+    assert_eq!(reader.call::<SqlRows>(method::SQL_QUERY, &titles).unwrap().rows.len(), 1);
+
+    store.counters("hits").flush_every(std::time::Duration::from_secs(1)).open().unwrap();
+    store.queue::<i64>("emails").attempts(3).open().unwrap();
+    store.database("app").durability(crate::Durability::Os).open().unwrap();
+    let again = reader.call::<Handle>(method::JOBS_QUEUE_OPEN, &asked).unwrap().handle;
+    let e1 = JobsId { handle: again, id: "e1".to_owned() };
+    assert!(reader.call::<JobsJob>(method::JOBS_GET, &e1).unwrap().found, "the queue as the program opened it");
+    assert_eq!(reader.call::<SqlRows>(method::SQL_QUERY, &titles).unwrap().rows.len(), 1, "beside the program's");
+}
+
+/// What a read connection's reads that name no handle read is every stream,
+/// the metrics, the indexes and a config's changes the store holds: on a
+/// store that holds none, each is refused as an open of the same file is,
+/// `not_found`, and makes nothing.
+// contract: SEC-01
+#[cfg(all(
+    feature = "jobs",
+    feature = "sql",
+    feature = "blobs",
+    feature = "records",
+    feature = "search",
+    feature = "metrics",
+    feature = "config"
+))]
+#[test]
+fn a_read_connection_reads_nothing_into_a_store_that_holds_none_of_it() {
+    use crate::wire::protocol::{
+        ConfigOpen, MetricsPageAsked, MetricsQuery, RecordsFieldsAsked, RecordsPollAsked, RecordsQuery,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut reader = Client::admitted(&store, Capability::Read);
+    let before = entries(dir.path());
+    let fields = RecordsFieldsAsked { stream: "audit".to_owned() };
+    let config = ConfigOpen {
+        name: "app".to_owned(),
+        declaration: "{}".to_owned(),
+        layers: "[]".to_owned(),
+        ..ConfigOpen::default()
+    };
+    let read = [
+        ("records.streams", reader.call::<Empty>(method::RECORDS_STREAMS, &Empty {})),
+        ("records.list", reader.call::<Empty>(method::RECORDS_LIST, &RecordsQuery::default())),
+        ("records.count", reader.call::<Empty>(method::RECORDS_COUNT, &RecordsQuery::default())),
+        ("records.tail", reader.call::<Empty>(method::RECORDS_TAIL, &RecordsQuery::default())),
+        ("records.poll", reader.call::<Empty>(method::RECORDS_POLL, &RecordsPollAsked::default())),
+        ("records.damaged", reader.call::<Empty>(method::RECORDS_DAMAGED, &Empty {})),
+        ("records.fields", reader.call::<Empty>(method::RECORDS_FIELDS, &fields)),
+        ("metrics.names", reader.call::<Empty>(method::METRICS_NAMES, &MetricsPageAsked::default())),
+        ("metrics.read", reader.call::<Empty>(method::METRICS_READ, &MetricsQuery::default())),
+        ("metrics.damaged", reader.call::<Empty>(method::METRICS_DAMAGED, &Empty {})),
+        ("search.list", reader.call::<Empty>(method::SEARCH_LIST, &Empty {})),
+        ("config.open", reader.call::<Empty>(method::CONFIG_OPEN, &config)),
+    ];
+    for (what, answered) in read {
+        let refused = answered.unwrap_err();
+        assert_eq!(refused.code, "not_found", "{what}: {}", refused.message);
+        assert!(refused.message.contains(": it holds no "), "{what}: {}", refused.message);
+    }
+    assert_eq!(entries(dir.path()), before, "no file and no folder");
+}
+
+/// A read connection's open of a bucket, a queue, files, a table's index or
+/// a stream through a database whose file keeps none of them makes no
+/// engine's tables in it: each is refused as a name the store lacks, and a
+/// stream, the store's, as records.db the store lacks.
+// contract: SEC-01
+#[cfg(all(feature = "jobs", feature = "sql", feature = "blobs", feature = "records", feature = "search"))]
+#[test]
+fn a_read_connection_makes_no_engines_tables_in_a_databases_file() {
+    use crate::wire::codec::Cell;
+    use crate::wire::protocol::{
+        BlobsOpen, JobsQueueOpen, KvBucketOpen, RecordsOpen, SearchOpen, SqlMigration, SqlOpen, SqlQuery, SqlRows,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let notes = "create table notes (id text primary key, title text) strict".to_owned();
+    let notes = SqlMigration { name: "0001_notes.sql".to_owned(), sql: notes };
+    let database = SqlOpen { name: "app".to_owned(), migrations: Some(vec![notes]), durability: None };
+    Client::admitted(&store, Capability::Data).call::<Handle>(method::SQL_OPEN, &database).unwrap();
+    let mut reader = Client::admitted(&store, Capability::Read);
+    let app = reader.call::<Handle>(method::SQL_OPEN, &database).unwrap().handle;
+    let bucket = KvBucketOpen { name: "sessions".to_owned(), database: Some(app), ..KvBucketOpen::default() };
+    let queue = JobsQueueOpen { name: "emails".to_owned(), database: Some(app), ..JobsQueueOpen::default() };
+    let files = BlobsOpen { name: "avatars".to_owned(), database: Some(app), ..BlobsOpen::default() };
+    let table = Some("notes".to_owned());
+    let index = SearchOpen { name: "notes".to_owned(), database: Some(app), table, ..SearchOpen::default() };
+    let stream = RecordsOpen { stream: "audit".to_owned(), database: Some(app), ..RecordsOpen::default() };
+    let opened = [
+        ("bucket sessions", reader.call::<Handle>(method::KV_BUCKET_OPEN, &bucket), "invalid"),
+        ("queue emails", reader.call::<Handle>(method::JOBS_QUEUE_OPEN, &queue), "invalid"),
+        ("files avatars", reader.call::<Handle>(method::BLOBS_OPEN, &files), "invalid"),
+        ("index notes", reader.call::<Handle>(method::SEARCH_OPEN, &index), "invalid"),
+        ("stream audit", reader.call::<Handle>(method::RECORDS_OPEN, &stream), "not_found"),
+    ];
+    for (what, opened, code) in opened {
+        let refused = opened.unwrap_err();
+        assert_eq!(refused.code, code, "{what}: {}", refused.message);
+    }
+    let text = "select count(*) from sqlite_schema where substr(name, 1, 11) = '_tinystore_' \
+                and name <> '_tinystore_migrations'";
+    let tables = SqlQuery { handle: app, text: text.to_owned(), values: Vec::new(), want: "all".to_owned() };
+    assert_eq!(reader.call::<SqlRows>(method::SQL_QUERY, &tables).unwrap().rows, vec![vec![Cell::Int(0)]]);
+}
+
+/// A read connection's open may be the first of jobs in its process: the
+/// lease a process that died left stays as it is, its attempt not counted,
+/// until the program's own open gives it back.
+// contract: SEC-01
+#[cfg(feature = "jobs")]
+#[test]
+fn a_read_connection_gives_back_no_lease_a_process_that_died_held() {
+    use crate::wire::protocol::{JobsId, JobsJob, JobsQueueOpen};
+    let dir = tempfile::tempdir().unwrap();
+    let options = || Options { background: false, ..Options::default() };
+    {
+        let store = Store::open(dir.path(), options()).unwrap();
+        let emails = store.queue::<i64>("emails").open().unwrap();
+        emails.set("e1", &1).unwrap();
+        let claimed = emails.claim().unwrap();
+        assert!(claimed.is_some(), "the job is due at once");
+        drop((claimed, emails)); // its lease stays, as a process that died leaves it
+        store.close().unwrap();
+    }
+    let store = Store::open(dir.path(), options()).unwrap();
+    let mut reader = Client::admitted(&store, Capability::Read);
+    let open = JobsQueueOpen { name: "emails".to_owned(), ..JobsQueueOpen::default() };
+    let handle = reader.call::<Handle>(method::JOBS_QUEUE_OPEN, &open).unwrap().handle;
+    let e1 = JobsId { handle, id: "e1".to_owned() };
+    assert_eq!(reader.call::<JobsJob>(method::JOBS_GET, &e1).unwrap().attempt, 0, "the lease as it was left");
+    store.queue::<i64>("emails").open().unwrap();
+    assert_eq!(reader.call::<JobsJob>(method::JOBS_GET, &e1).unwrap().attempt, 1, "given back by the program's open");
+}
+
 /// A take commits before its answer is sized: one past the agreed body says
 /// the write ran, where `limit` would have the client send it again and find
 /// the key gone.

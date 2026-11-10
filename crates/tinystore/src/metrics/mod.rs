@@ -113,6 +113,14 @@ impl Store {
     pub fn metrics(&self) -> Result<Metrics> {
         Ok(Metrics { engine: engine::Engine::of(self)? })
     }
+
+    /// The store's metrics as it holds them, for a connection that may only
+    /// read: a store without metrics.db is `NotFound` rather than given one.
+    #[cfg(feature = "wire")]
+    pub(crate) fn metrics_as_it_is(&self) -> Result<Metrics> {
+        self.holds(engine::FILE)?;
+        self.metrics()
+    }
 }
 
 /// The store's metrics, a handle that clones cheaply.

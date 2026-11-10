@@ -171,10 +171,12 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
 }
 
 /// The index `name` as it is, for a connection that may only read, or for
-/// the writes a copy passed on: none is made and no setting changed.
+/// the writes a copy passed on: neither search.db nor the index is made, and
+/// no setting changed.
 #[cfg(any(feature = "wire", feature = "replication"))]
 pub(crate) fn open_as_it_is<T: Serialize + DeserializeOwned>(store: &Store, name: &str) -> Result<Index<T>> {
     let within = |error: Error| error.within(format!("index {name}"));
+    store.holds(super::engine::FILE).map_err(within)?;
     let search = Search::of(store).map_err(within)?;
     let open = search.open_existing(name).map_err(within)?;
     Ok(Index::of_documents(search, open))

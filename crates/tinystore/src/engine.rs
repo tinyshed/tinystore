@@ -137,6 +137,13 @@ pub(crate) fn in_batches(mut batch: impl FnMut() -> Result<usize>) -> Result<usi
     Ok(total)
 }
 
+/// What a connection that only reads is told of a name its store does not
+/// hold, as search's open of an index tells it: `what` would have been made.
+#[cfg(feature = "wire")]
+pub(crate) fn not_held(what: &str) -> crate::Error {
+    crate::Error::invalid(format!("no such {what}, and a connection that only reads makes none"))
+}
+
 /// The folder of the store's directory that holds the databases' files,
 /// and with them the buckets and queues opened from a database.
 #[cfg(any(feature = "kv", feature = "sql", feature = "replication"))]

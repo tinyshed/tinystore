@@ -56,8 +56,10 @@ impl Search {
 
     /// Settles the keys a process beside the store left, when no write of
     /// the store's has since: a transaction settles them before it commits.
+    /// A copy's, a database's file a connection that only reads opened among
+    /// them, are its home's to settle.
     fn settle_beside(&self) -> Result<()> {
-        if self.file.read(table::any_pending)? {
+        if !self.file.is_copy() && self.file.read(table::any_pending)? {
             self.file.transaction(|_| Ok::<(), Error>(()))?;
         }
         Ok(())
@@ -479,10 +481,12 @@ pub(crate) fn found_by<T: DeserializeOwned, R>(
     found(index, read_rows, query, None)
 }
 
-/// The table's index `name` as it is, for a connection that may only read.
+/// The table's index `name` as it is, for a connection that may only read:
+/// neither search's tables in the database's file nor the index is made.
 #[cfg(feature = "wire")]
 pub(crate) fn table_as_it_is<T: DeserializeOwned>(shared: &SharedFile, name: &str) -> Result<Index<T>> {
     let within = |error: Error| error.within(format!("index {name}"));
+    shared.keeps("_tinystore_search_indexes", "index").map_err(within)?;
     let search = Search::in_file(shared).map_err(within)?;
     let open = search.open_existing(name).map_err(within)?;
     if open.current().serving.settings.table.is_none() {

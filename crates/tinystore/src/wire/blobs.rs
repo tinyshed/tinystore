@@ -90,17 +90,18 @@ impl Handles {
     }
 }
 
-/// Answers a call of one message: everything but a read and an upload.
+/// Answers a call of one message: everything but a read and an upload. A
+/// read connection's is `read_only`.
 pub(crate) fn call(
     store: &Store,
     handles: &Handles,
     lent: Lent<'_>,
     called: u16,
     body: &[u8],
-    max_body: usize,
+    (max_body, read_only): (usize, bool),
 ) -> Answered {
     match called {
-        method::BLOBS_OPEN => open(store, handles, lent, BlobsOpen::decode(body)?),
+        method::BLOBS_OPEN => open(store, handles, lent, BlobsOpen::decode(body)?, read_only),
         method::BLOBS_PUT => put(handles, BlobsWrite::decode(body)?),
         method::BLOBS_GET => get(handles, &BlobsAt::decode(body)?, max_body),
         method::BLOBS_HEAD => head(handles, &BlobsAt::decode(body)?),
@@ -168,16 +169,30 @@ pub(crate) fn call_in(handles: &Handles, tx: &crate::Transaction<'_>, called: u1
     }
 }
 
-fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: BlobsOpen) -> Answered {
+/// Opens a set of files as the call says; a connection that only reads opens
+/// only one the store holds, found first, so that the open finds it as that
+/// did and makes nothing.
+fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: BlobsOpen, read_only: bool) -> Answered {
     let mut files = match asked.database {
         #[cfg(feature = "sql")]
-        Some(database) => crate::blobs::FilesBuilder::in_file(lent(database)?, &asked.name),
+        Some(database) => {
+            let shared = lent(database)?;
+            if read_only {
+                crate::blobs::set_in_file_as_it_is(&shared, &asked.name)?;
+            }
+            crate::blobs::FilesBuilder::in_file(shared, &asked.name)
+        }
         #[cfg(not(feature = "sql"))]
         Some(database) => {
             let _ = lent;
             return Err(Failure::invalid(format!("database {database}: this server keeps no databases")));
         }
-        None => store.files(&asked.name),
+        None => {
+            if read_only {
+                crate::blobs::set_as_it_is(store, &asked.name)?;
+            }
+            store.files(&asked.name)
+        }
     };
     if let Some(ttl) = asked.ttl {
         files = files.ttl(Duration::from_millis(ttl));

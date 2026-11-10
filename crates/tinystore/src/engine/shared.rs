@@ -9,6 +9,9 @@ use crate::sqlite::File;
 use crate::store::WeakStore;
 use crate::{Error, Result, Store};
 
+#[cfg(feature = "wire")]
+const COUNT_TABLES: &str = "select count(*) from sqlite_schema where type = 'table' and name = ?1";
+
 /// A file one engine opened that others keep their tables in as well: a
 /// database lends its file to the buckets and queues opened from it, which
 /// share its writer and so commit with its rows. Each engine's tables are
@@ -66,6 +69,23 @@ impl SharedFile {
     )]
     pub(crate) fn owner(&self) -> &str {
         &self.owner
+    }
+
+    /// Refuses a file without the table `table`, as a name it does not hold:
+    /// the engine that keeps `what` there never made its tables, which an
+    /// open by a connection that only reads would.
+    #[cfg(feature = "wire")]
+    pub(crate) fn keeps(&self, table: &str, what: &str) -> Result<()> {
+        let tables: i64 = self.file.read(|connection| {
+            connection
+                .prepare_cached(COUNT_TABLES)
+                .and_then(|mut count| count.query_row([table], |row| row.get::<_, i64>(0)))
+                .map_err(|error| crate::sqlite::sql_error(format!("{}: its tables", self.owner), error))
+        })?;
+        if tables == 0 {
+            return Err(super::not_held(what));
+        }
+        Ok(())
     }
 
     /// The engine of type `E` kept in this file, or the one `open` makes; every

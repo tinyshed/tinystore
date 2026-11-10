@@ -76,6 +76,17 @@ pub struct Counters {
 }
 
 impl Counters {
+    /// The counters `name` as the store holds them, for a connection that may
+    /// only read: the name is made by no one, and how they count is left to
+    /// the opens that write. They read the memory an earlier open keeps them
+    /// in, or the file.
+    #[cfg(feature = "wire")]
+    pub(crate) fn open_as_it_is(store: &Store, name: &str) -> Result<Counters> {
+        let scope = Scope::open_as_it_is(&Home::Store(store.clone()), name, Kind::Counters)?;
+        let buffer = scope.kv.buffer_as_bound(scope.id);
+        Ok(Counters { scope, ttl: None, buffer })
+    }
+
     /// Refuses counters kept in memory, which join no transaction or batch.
     pub(crate) fn refuse_in_memory(&self) -> Result<()> {
         if self.buffer.is_none() {

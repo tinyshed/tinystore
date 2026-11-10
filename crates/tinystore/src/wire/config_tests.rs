@@ -161,6 +161,8 @@ fn a_follow_sends_the_value_now_then_each_change_until_cancelled() {
 fn a_read_connection_opens_and_follows_a_config_and_changes_none() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options::default()).unwrap();
+    // a read connection opens a config only where kv.db keeps configs
+    open(&mut Client::admitted(&store, Capability::Data), &json!([]));
     let mut client = Client::admitted(&store, Capability::Read);
     let opened = open(&mut client, &json!([]));
     let stream = client.start(method::CONFIG_FOLLOW, &Handle { handle: opened.handle });

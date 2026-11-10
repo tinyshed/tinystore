@@ -244,6 +244,15 @@ impl Store {
         })
     }
 
+    /// Opens the config an SDK sent, which remembers nothing, for a connection
+    /// that may only read: a store without kv.db, which keeps a config's
+    /// changes, is `NotFound` rather than given one.
+    #[cfg(feature = "wire")]
+    pub(crate) fn config_sent_as_it_is(&self, sent: &Sent<'_>) -> Result<Config<Value>> {
+        self.holds("kv.db").map_err(|error| error.within(format!("config {}", sent.name)))?;
+        self.config_sent(sent)
+    }
+
     /// The config `name` as the store keeps it, for a command: the last
     /// declaration a program opened it with and the changes kv.db keeps,
     /// with no layer of the program's own, its required settings left out;

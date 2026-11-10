@@ -74,7 +74,8 @@ pub(crate) fn call(
         }
         method::SEARCH_LIST => {
             Empty::decode(body)?;
-            Ok(SearchListed { indexes: search::list(store)?.iter().map(listed).collect() }.encode())
+            let indexes = if read_only { search::list_as_it_is(store)? } else { search::list(store)? };
+            Ok(SearchListed { indexes: indexes.iter().map(listed).collect() }.encode())
         }
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }

@@ -51,11 +51,11 @@ tinystore serve ./data --listen tls://0.0.0.0:7443 --tls-cert cert.pem --tls-key
 read fx-o4leY8IHwDw-A-Yr-QwtChi8vDIoF94CANd9XSlk
 ```
 
-| Capability | May                                                      |
-|------------|----------------------------------------------------------|
-| `admin`    | anything, backups included                               |
-| `data`     | read and write the store                                 |
-| `read`     | only reads: SQL on a reader, no migrations, no publishes |
+| Capability | May                                                                                          |
+|------------|----------------------------------------------------------------------------------------------|
+| `admin`    | anything, backups included                                                                   |
+| `data`     | read and write the store                                                                     |
+| `read`     | only read what the store holds, making nothing: SQL on a reader, no migrations, no publishes |
 
 `--listen tls://` refuses to start without a certificate, a key and a tokens
 file. `--listen tcp://` sends tokens in the clear, for a private network its

@@ -94,6 +94,15 @@ impl Store {
     pub fn all_events(&self) -> Result<AllEvents> {
         Ok(AllEvents { records: engine::Records::of(self)? })
     }
+
+    /// Every stream's events as the store holds them, for a connection that
+    /// may only read: a store without records.db is `NotFound` rather than
+    /// given one.
+    #[cfg(feature = "wire")]
+    pub(crate) fn all_events_as_it_is(&self) -> Result<AllEvents> {
+        self.holds(engine::FILE)?;
+        self.all_events()
+    }
 }
 
 /// What each stream with events holds, for the command line. None while the

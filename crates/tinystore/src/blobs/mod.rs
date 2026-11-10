@@ -38,6 +38,11 @@ pub(crate) use engine::{FILE_IN_STORE, is_object, objects_after, objects_missing
 // What the command line lists of a store's names, and what each holds.
 #[cfg(feature = "client")]
 pub(crate) use engine::{held, sets};
+// What a connection that only reads opens: a set of files the store holds.
+#[cfg(feature = "wire")]
+pub(crate) use engine::set_as_it_is;
+#[cfg(all(feature = "wire", feature = "sql"))]
+pub(crate) use engine::set_in_file_as_it_is;
 pub use files::{FileCall, Files, FilesBuilder};
 #[cfg(feature = "async")]
 pub(crate) use files::{Freed, Options as CallOptions};

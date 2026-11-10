@@ -82,6 +82,22 @@ impl Scope {
         Ok(Scope { kv, id, name: name.into(), kind, branch: Ok(Branch::default()) })
     }
 
+    /// Opens `name` as `kind` where `home` says, as the store holds it, for a
+    /// connection that may only read: neither kv.db, nor kv's tables in a
+    /// database's file, nor the name's row is made.
+    #[cfg(feature = "wire")]
+    pub(crate) fn open_as_it_is(home: &Home, name: &str, kind: Kind) -> Result<Scope> {
+        let lent_by = match home {
+            Home::Store(_) => None,
+            Home::Shared(shared) => Some(shared.owner()),
+        };
+        let shown = || described(lent_by, kind, name);
+        check_name(name).map_err(|error| error.within(shown()))?;
+        let kv = Kv::at_as_it_is(home).map_err(|error| error.within(shown()))?;
+        let id = kv.name_as_it_is(name, kind).map_err(|error| error.within(shown()))?;
+        Ok(Scope { kv, id, name: name.into(), kind, branch: Ok(Branch::default()) })
+    }
+
     /// The same name seen from the branch `owner` names under this one.
     pub(crate) fn under(&self, owner: impl Key) -> Scope {
         let branch = match &self.branch {

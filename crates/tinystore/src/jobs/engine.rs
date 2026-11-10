@@ -41,6 +41,10 @@ pub(crate) struct Jobs {
     closed: AtomicBool,
     /// One maintenance at a time.
     maintaining: Mutex<()>,
+    /// Whether the leases a process that died held were given back: by the
+    /// first open that writes, so that a connection that only reads, whose
+    /// open may be the engine's first, changes none of them.
+    leases_ended: Mutex<bool>,
     /// What jobs tells the store's own metrics.
     probe: Arc<crate::probe::Probe>,
     _claim: Option<Claim>,
@@ -69,15 +73,12 @@ impl Jobs {
         }
     }
 
-    /// Makes the tables of jobs in `file` when it has none, gives back the
-    /// leases a process that died held, counting their attempts, and starts
+    /// Makes the tables of jobs in `file` when it has none, and starts
     /// maintenance on the store's background thread.
     fn start(store: &Store, file: Arc<File>, lent_by: Option<String>, claim: Option<Claim>) -> Result<Arc<Jobs>> {
         crate::engine::migrate_in(store, &file, "jobs", MIGRATIONS, lent_by.as_deref())?;
         // A copy's leases are its home's workers', and its home ends them.
-        if !file.is_copy() {
-            file.transaction(|tx| rows::end_dead_leases(tx))?;
-        }
+        let leases_ended = Mutex::new(file.is_copy());
         let task = lent_by.as_ref().map_or_else(|| "jobs".to_owned(), |owner| format!("jobs in {owner}"));
         let jobs = Arc::new(Jobs {
             file,
@@ -89,6 +90,7 @@ impl Jobs {
             workers: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
             maintaining: Mutex::new(()),
+            leases_ended,
             probe: Arc::clone(store.probe()),
             _claim: claim,
         });
@@ -187,6 +189,7 @@ impl Jobs {
             }
             return Ok(Arc::clone(kept));
         }
+        self.end_dead_leases().map_err(|error| error.within(describe()))?;
         let made = crate::sqlite::own_work(|| {
             self.file.transaction(|tx| {
                 let (id, stored, in_group) = rows::queue(tx, name, kind.as_str())?;
@@ -203,6 +206,61 @@ impl Jobs {
         let state = Arc::new(QueueState::new(id, name, kind, policy, self.lent_by.clone()));
         queues.insert(name.to_owned(), Arc::clone(&state));
         Ok(state)
+    }
+
+    /// Gives back the leases a process that died held, counting their
+    /// attempts, once: no lease of this process is taken before, since every
+    /// claim is of a queue such an open registered.
+    fn end_dead_leases(&self) -> Result<()> {
+        let mut ended = lock(&self.leases_ended);
+        if !*ended {
+            crate::sqlite::own_work(|| self.file.transaction(|tx| rows::end_dead_leases(tx)))?;
+            *ended = true;
+        }
+        Ok(())
+    }
+
+    /// The queue `name` as the store holds it, for a connection that may only
+    /// read: the state this process opened it with, whatever options were
+    /// asked, or, while no open here did, one of the reader's own that nothing
+    /// keeps, so that the program's open still chooses them. Nothing is
+    /// registered, no group bound kept and no lease given back.
+    #[cfg(feature = "wire")]
+    pub(crate) fn queue_as_it_is(&self, name: &str) -> Result<Arc<QueueState>> {
+        let describe = || QueueState::described(self.lent_by.as_deref(), Kind::Queue, name);
+        check_name(name).map_err(|error| error.within(describe()))?;
+        if let Some(state) = lock(&self.queues).get(name).filter(|state| state.kind == Kind::Queue) {
+            return Ok(Arc::clone(state));
+        }
+        match self.file.read(|c| rows::find_queue(c, name)).map_err(|error| error.within(describe()))? {
+            Some((id, stored)) if stored == Kind::Queue.as_str() => {
+                let state = QueueState::new(id, name, Kind::Queue, Policy::default(), self.lent_by.clone());
+                Ok(Arc::new(state))
+            }
+            Some((_, stored)) => Err(Error::invalid(format!("the name is a {stored}")).within(describe())),
+            None => Err(crate::engine::not_held("queue").within(describe())),
+        }
+    }
+
+    /// The state this process holds the queue of `state` open with, once an
+    /// open that writes registered it: a connection that only reads opened
+    /// one of its own before.
+    #[cfg(feature = "wire")]
+    pub(crate) fn open_state(&self, state: &QueueState) -> Option<Arc<QueueState>> {
+        let queues = lock(&self.queues);
+        queues.get(&state.name).filter(|open| open.id == state.id && open.kind == state.kind).cloned()
+    }
+
+    /// The jobs engine `home` keeps, for a connection that may only read: a
+    /// store without jobs.db, or a database's file without jobs' tables, is
+    /// refused rather than given them.
+    #[cfg(feature = "wire")]
+    pub(crate) fn at_as_it_is(home: &Home) -> Result<Arc<Jobs>> {
+        match home {
+            Home::Store(store) => store.holds(FILE)?,
+            Home::Shared(shared) => shared.keeps("_tinystore_jobs_queues", "queue")?,
+        }
+        Jobs::at(home)
     }
 
     /// The id and kind of the queue `name` in a copy of jobs' file: the

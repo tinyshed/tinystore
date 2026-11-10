@@ -319,35 +319,28 @@ impl Shared {
 
     fn call_engine(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
         let lent = |handle| self.lent(handle);
+        // a read connection's calls read only what the store holds, as it is
+        let read_only = self.read_only.load(Ordering::Relaxed);
         match method >> 8 {
-            0x01 => {
-                let read_only = self.read_only.load(Ordering::Relaxed);
-                kv::call(&self.store, &self.kv, &lent, method, body, (max_body, read_only))
-            }
+            0x01 => kv::call(&self.store, &self.kv, &lent, method, body, (max_body, read_only)),
             #[cfg(feature = "jobs")]
-            0x02 => jobs::call(&self.store, &self.jobs, &lent, method, body, max_body),
+            0x02 => jobs::call(&self.store, &self.jobs, &lent, method, body, (max_body, read_only)),
             #[cfg(feature = "sql")]
-            0x03 => sql::call(&self.store, &self.sql, method, body, self.read_only.load(Ordering::Relaxed)),
+            0x03 => sql::call(&self.store, &self.sql, method, body, read_only),
             #[cfg(feature = "blobs")]
-            0x04 => blobs::call(&self.store, &self.blobs, &lent, method, body, max_body),
+            0x04 => blobs::call(&self.store, &self.blobs, &lent, method, body, (max_body, read_only)),
             #[cfg(feature = "records")]
-            0x05 => {
-                let read_only = self.read_only.load(Ordering::Relaxed);
-                records::call(&self.store, &self.records, &lent, (method, body), read_only)
-            }
+            0x05 => records::call(&self.store, &self.records, &lent, (method, body), read_only),
             #[cfg(feature = "metrics")]
-            0x06 => metrics::call(&self.store, method, body, max_body),
+            0x06 => metrics::call(&self.store, method, body, (max_body, read_only)),
             #[cfg(feature = "config")]
-            0x07 => config::call(&self.store, &self.config, method, body, self.read_only.load(Ordering::Relaxed)),
+            0x07 => config::call(&self.store, &self.config, method, body, read_only),
             #[cfg(feature = "locks")]
             0x09 => locks::call(&self.store, method, body),
             #[cfg(feature = "channels")]
             0x0a => channels::call(&self.store, method, body),
             #[cfg(feature = "search")]
-            0x0b => {
-                let read_only = self.read_only.load(Ordering::Relaxed);
-                search::call(&self.store, &self.search, &lent, method, body, read_only)
-            }
+            0x0b => search::call(&self.store, &self.search, &lent, method, body, read_only),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }

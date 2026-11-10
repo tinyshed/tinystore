@@ -125,6 +125,14 @@ pub fn list(store: &Store) -> Result<Vec<Listed>> {
     engine::Search::of(store)?.list()
 }
 
+/// Every index as [`list`] gives them, for a connection that may only read:
+/// a store without search.db is `NotFound` rather than given one.
+#[cfg(feature = "wire")]
+pub(crate) fn list_as_it_is(store: &Store) -> Result<Vec<Listed>> {
+    store.holds(engine::FILE)?;
+    list(store)
+}
+
 /// Runs the store's search maintenance now, as a store opened without
 /// background work has to: each index's segments merged into one and the
 /// documents gone purged, in search.db and in each database a table's index
@@ -132,7 +140,8 @@ pub fn list(store: &Store) -> Result<Vec<Listed>> {
 pub fn maintain(store: &Store) -> Result<Maintenance> {
     crate::sqlite::own_work(|| {
         let mut done = engine::Search::of(store)?.maintain(true)?;
-        for search in engine::InFiles::of(store)?.engines() {
+        // a copy's packing and purges are its home's, and reach it as pages
+        for search in engine::InFiles::of(store)?.engines().into_iter().filter(|search| !search.file.is_copy()) {
             let more = search.maintain(true)?;
             done.packed += more.packed;
             done.purged += more.purged;

@@ -180,6 +180,8 @@ fn a_poll_from_no_cursor_finds_nothing_packed_yet_and_gives_a_cursor() {
 fn a_read_connection_reads_and_gives_no_stream_a_keep_nor_appends() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options::default()).unwrap();
+    // a read connection opens only a stream the store holds
+    store.events("audit").open().unwrap();
     let mut client = Client::admitted(&store, Capability::Read);
     let audit = open(&mut client, "audit");
     let page: RecordsPage =

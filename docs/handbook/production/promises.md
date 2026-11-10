@@ -53,7 +53,7 @@ program relies on most, and ends with what TinyStore does not promise.
 | WIRE-05 | a write whose connection ended before its answer surfaces as `outcome unknown`  |
 | WIRE-10 | a read whose client cancels it, or leaves, stops on the server too              |
 | WIRE-11 | an `open` or `connect` you cancel stops at once and keeps no connection         |
-| SEC-01  | a read token only reads                                                         |
+| SEC-01  | a read token only reads what the store holds, and makes nothing                 |
 | SEC-02  | a remote connection shows its token; a local server proves itself to its client |
 | SEC-03  | an encrypted bucket's file shows no value                                       |
 | SEC-06  | no other user of the machine reads `SERVE` or connects to a local server        |
