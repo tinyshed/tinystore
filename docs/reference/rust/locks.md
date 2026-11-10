@@ -105,7 +105,10 @@ A semaphore being opened.
 pub fn limit(self, limit: u32) -> Self
 ```
 
-How many may hold a key at once, from 1 to 1000.
+How many may hold a key at once, from 1 to 1000. A name has one limit
+in a program: an open with another limit than the name's first open
+in the program gave is `Invalid`. Another program's holds, a client's
+over a connection, are each admitted by their own limit.
 
 ### SemaphoreBuilder.max_hold
 
