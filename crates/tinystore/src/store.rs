@@ -250,6 +250,7 @@ impl Store {
     pub fn open(dir: impl AsRef<Path>, options: Options) -> Result<Store> {
         let dir = absolute(dir.as_ref())?;
         let lock = take_lock(&dir)?;
+        remove_left_snapshots(&dir);
         Self::open_with(dir, options, Some(lock))
     }
 
@@ -835,6 +836,35 @@ pub(crate) fn take_lock(dir: &Path) -> Result<File> {
     }
 }
 
+/// How the name of a backup's snapshot in the store's directory starts: a
+/// copy of every engine's files, which holds a `LOCK` of its own while its
+/// backup runs.
+pub(crate) const SNAPSHOT: &str = ".snapshot-";
+
+/// Removes the snapshots a backup's process left when it died, which nothing
+/// else removes: copies of every file of the store, kept for ever otherwise.
+/// A backup beside the holder copies into its directory too, so a snapshot
+/// whose `LOCK` is held is a backup's still running, and stays.
+fn remove_left_snapshots(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let named = entry.file_name().to_str().is_some_and(|name| name.starts_with(SNAPSHOT));
+        // the entry's own type: a link to a directory elsewhere is no snapshot
+        if !named || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let left = entry.path();
+        if take_lock(&left).is_err() {
+            continue;
+        }
+        // its lock let go before: Windows removes no directory with a file open
+        if let Err(error) = fs::remove_dir_all(&left) {
+            let snapshot = left.display();
+            tracing::warn!(target: "tinystore", %error, %snapshot, "a backup's snapshot a dead process left stays");
+        }
+    }
+}
+
 /// Who holds the `LOCK`, as far as the directory says: a server publishes
 /// `server/SERVE` while it serves, and a sidecar serves on after its last
 /// client closed, so a program that opens the directory embedded next is
@@ -923,6 +953,29 @@ mod tests {
         let store = Store::open(&dir, Options::default()).unwrap();
         assert!(dir.join("LOCK").is_file());
         store.close().unwrap();
+    }
+
+    // contract: BAK-04
+    #[test]
+    fn an_open_removes_the_snapshot_a_dead_backup_left_and_keeps_one_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dead, running) = (dir.path().join(".snapshot-dead"), dir.path().join(".snapshot-running"));
+        for snapshot in [&dead, &running] {
+            std::fs::create_dir_all(snapshot.join("sql")).unwrap();
+            std::fs::write(snapshot.join("sql").join("app.db"), "a copy").unwrap();
+        }
+        let backing_up = take_lock(&running).unwrap();
+        let programs = dir.path().join(".snapshot-notes.txt");
+        std::fs::write(&programs, "a file of the program's").unwrap();
+
+        Store::open_beside(dir.path()).unwrap().close().unwrap();
+        assert!(dead.join("sql").join("app.db").is_file(), "a guest removes nothing");
+        let store = Store::open(dir.path(), Options::default()).unwrap();
+        assert!(!dead.exists(), "the snapshot of a backup whose process died is gone");
+        assert!(running.join("sql").join("app.db").is_file(), "a backup still running keeps its snapshot");
+        assert!(programs.is_file(), "a snapshot's directory goes, and nothing else");
+        store.close().unwrap();
+        drop(backing_up);
     }
 
     // contract: ERR-02, ERR-03

@@ -9,6 +9,7 @@
 //! data/.snapshot-1a2b3c/kv.db            kv's, named by kv
 //! data/.snapshot-1a2b3c/sql/app.db       a database no handle opened, from its file
 //! data/.snapshot-1a2b3c/blobs/objects/…  a link to each file blobs.db's copy names
+//! data/.snapshot-1a2b3c/LOCK             held while the backup runs
 //! ```
 
 use std::collections::HashSet;
@@ -21,8 +22,9 @@ use crate::engine::{Copied, Copying, Then};
 use crate::sqlite::Source;
 use crate::{Error, Result, Store, unix_nanos};
 
-/// What a snapshot's directory starts with, which no engine's file does.
-pub(super) const PREFIX: &str = ".snapshot-";
+/// What a snapshot's directory starts with, which no engine's file does, and
+/// a store's open removes once no backup holds it.
+pub(super) const PREFIX: &str = crate::store::SNAPSHOT;
 
 /// The engines' files a store's directory may hold besides those of `sql/`
 /// and `blobs/`, by their names in it.
@@ -38,11 +40,19 @@ pub(super) const FILES: [(&str, &str); 5] = [
 pub(super) struct Snapshot {
     pub(super) dir: PathBuf,
     pub(super) files: Vec<Copied>,
+    /// The `LOCK` of its directory, held while the backup runs: a store that
+    /// opens meanwhile, a holder that came back, leaves it.
+    lock: Option<fs::File>,
 }
 
 impl Drop for Snapshot {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.dir) {
+        // let go first, as Windows removes no directory with a file open; a
+        // store that opens then may remove it before this does
+        drop(self.lock.take());
+        if let Err(error) = fs::remove_dir_all(&self.dir)
+            && error.kind() != io::ErrorKind::NotFound
+        {
             let dir = self.dir.display();
             tracing::warn!(target: "tinystore", %error, %dir, "a backup's snapshot is left in the store's directory");
         }
@@ -53,7 +63,8 @@ impl Drop for Snapshot {
 /// the files of those that are not are found as they lie.
 pub(super) fn take(store: &Store) -> Result<Snapshot> {
     let (engines, claimed) = store.engines_open()?;
-    let mut snapshot = Snapshot { dir: made_dir(store.dir())?, files: Vec::new() };
+    let mut snapshot = Snapshot { dir: made_dir(store.dir())?, files: Vec::new(), lock: None };
+    snapshot.lock = Some(crate::store::take_lock(&snapshot.dir)?);
     let copying = engines.iter().map(|engine| engine.snapshot()).collect::<Result<Vec<Copying<'_>>>>()?;
     let mut files = Vec::new();
     let mut at_the_moment = Vec::new();

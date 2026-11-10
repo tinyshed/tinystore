@@ -3,8 +3,9 @@
 //! asked for, and nothing left by a backup or a restore that fails.
 
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -211,6 +212,48 @@ fn a_backup_that_fails_leaves_no_zip() {
         tree(f.zip.parent().unwrap()).into_iter().filter(|name| name.contains("backup.zip")).collect();
     assert!(beside.is_empty(), "{beside:?}");
     assert!(!tree(&f.data).iter().any(|name| name.starts_with(".snapshot-")), "the snapshot is gone");
+}
+
+/// A zip's writer that stops at its first byte until it is let go, and
+/// keeps nothing.
+struct Stopped {
+    stopped: Option<mpsc::Sender<()>>,
+    go_on: mpsc::Receiver<()>,
+}
+
+impl Write for Stopped {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if let Some(stopped) = self.stopped.take() {
+            stopped.send(()).unwrap();
+            self.go_on.recv().unwrap();
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+// contract: BAK-04
+#[test]
+fn a_store_opened_again_while_a_backup_runs_keeps_its_snapshot() {
+    let f = fixture();
+    let store = f.filled();
+    let (stopped, stops) = mpsc::channel();
+    let (go_on, goes_on) = mpsc::channel();
+    let backup = store.backup();
+    let backing_up = std::thread::spawn(move || backup.write_to(Stopped { stopped: Some(stopped), go_on: goes_on }));
+    stops.recv_timeout(Duration::from_secs(10)).unwrap();
+    // the store opened again while its backup copies, as a server restarted
+    // beside the backup the command line takes
+    store.close().unwrap();
+    let again = f.open(&f.data);
+    assert!(tree(&f.data).iter().any(|name| name.starts_with(".snapshot-")), "the running backup's snapshot stays");
+    go_on.send(()).unwrap();
+    assert_eq!(backing_up.join().unwrap().unwrap().files, 8);
+    assert!(!tree(&f.data).iter().any(|name| name.starts_with(".snapshot-")), "and goes with its backup");
+    again.close().unwrap();
 }
 
 // contract: BAK-03

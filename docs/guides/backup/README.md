@@ -37,7 +37,11 @@ tinystore restore backups/chat-2026-10-19.zip ./restored
   BAK-02).
 - The store's encryption key and the program's own files are left out unless
   asked for, and a backup without the key says so (contract BAK-03).
-- A backup that fails leaves no zip and no snapshot (contract BAK-04).
+- A backup that fails leaves no zip and no snapshot (contract BAK-04). If
+  its process dies instead, its snapshot, a copy of the store's files in a
+  `.snapshot-…` folder of the store's directory, stays until the store next
+  opens there, which removes it. The zip it was writing stays too, beside
+  the zip's name with `.part` at its end.
 
 ## In these guides
 
