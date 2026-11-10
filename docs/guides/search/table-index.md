@@ -98,6 +98,12 @@ commits:
 - an insert, an update or a delete by any statement, a trigger, a cascade or
   a migration reaches the index in the commit that makes it; a rollback
   changes neither (contract SRCH-07);
+- a row SQLite removes to make room for another, as `insert or replace`,
+  `replace into` and `update or replace` do when the other row takes a value
+  of a unique column that is not the key, fires no delete trigger, so the
+  index still holds it. The first search that meets it leaves it out and
+  fills its page with the hits after it, and the next maintenance takes it
+  out of the index, unless the row is back by then;
 - a write by another program beside the store, `tinystore sql --write` or a
   SQLite shell, reaches it at the store's next write to the file, or within a
   second (contract SRCH-08);

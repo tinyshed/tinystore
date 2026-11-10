@@ -75,7 +75,7 @@ impl Vector {
 
 /// A question's vector: as given for the scores, and its direction as
 /// levels for the bounds.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Question {
     values: Vec<f32>,
     length: f64,

@@ -28,6 +28,7 @@ use super::settings::{Settings, Table};
 use super::write::{self, Incoming, Prepared, execute};
 use crate::limits::DOCUMENT_BYTES;
 use crate::sqlite::{Left, Settle, Tx, given_sql_error, sql_error};
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
 const ANY_PENDING: &str = "select exists (select 1 from _tinystore_search_pending)";
@@ -183,6 +184,30 @@ impl Search {
                 return Ok(());
             }
         }
+    }
+
+    /// Reads again, in a commit of its own, each row a search met gone, as a
+    /// settle reads a key a process beside the store left: a row the table
+    /// holds no longer, read on the writer in the commit that takes it out,
+    /// leaves its index, and one that came back meanwhile is set as it is.
+    /// A commit that fails drops the keys it held, rather than meet them at
+    /// every pass: a search that meets their rows notes them again.
+    pub(crate) fn settle_gone_rows(&self) -> Result<()> {
+        let gone = std::mem::take(&mut *lock(&self.gone_rows));
+        if gone.is_empty() {
+            return Ok(());
+        }
+        self.file.transaction(|tx| {
+            let mut targets = Targets::default();
+            for (name, key) in &gone {
+                if let Some(current) = targets.of(tx, name)? {
+                    let target = Target { name, current };
+                    self.read_row(tx, target, key, Left::Before)
+                        .map_err(|error| error.within(format!("index {name}")))?;
+                }
+            }
+            Ok::<(), Error>(())
+        })
     }
 
     /// Sets the row of `key` in its index as the table holds it, or deletes

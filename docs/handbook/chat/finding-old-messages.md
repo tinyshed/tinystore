@@ -104,7 +104,10 @@ The index lives inside `sql/chat.db`, next to the table it follows.
 From now on, every insert, update and delete of a message reaches the index
 in the same commit as the row (contract SRCH-07). There is no sync job and
 no moment when the table and the index disagree. An edited message is found
-by its new words at once, and a deleted one is never found again.
+by its new words at once, and a deleted one is never found again. The one
+exception is a row SQLite removes itself for an `insert or replace` on
+another unique column: no search returns it, and it leaves the index when a
+search next meets it.
 
 ## Search by words
 

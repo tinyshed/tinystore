@@ -86,6 +86,10 @@ pub(crate) struct Search {
     /// opened them. A settle runs on the writer, so these are all it holds.
     table_sets: AtomicU64,
     reached: Mutex<HashSet<String>>,
+    /// The keys of rows searches of a table's index met gone, by the index's
+    /// name, which maintenance takes out of it: SQLite removes the row a
+    /// `replace` takes the place of without the trigger that would say so.
+    pub(super) gone_rows: Mutex<Vec<(String, rusqlite::types::Value)>>,
     _claim: Option<Claim>,
 }
 
@@ -182,6 +186,7 @@ impl Search {
             wake: OnceLock::new(),
             table_sets: AtomicU64::new(0),
             reached: Mutex::default(),
+            gone_rows: Mutex::default(),
             _claim: claim,
         });
         let sampler: std::sync::Weak<dyn crate::probe::Sample> = Arc::downgrade(&search) as std::sync::Weak<Search>;
@@ -571,14 +576,15 @@ impl Search {
         let _one = lock(&self.maintaining);
         let mut done = Maintenance::default();
         self.keep_reached()?;
+        // One index that fails keeps no other from its maintenance, nor do
+        // the rows searches met gone that fail to settle; the first failure
+        // is the pass's error, which the scheduler says once.
+        let mut failed = self.settle_gone_rows().err();
         self.table_sets.store(0, Ordering::Relaxed);
         let indexes: Vec<Arc<OpenIndex>> = lock(&self.indexes).values().cloned().collect();
         // Lists a release before wrote go into their base segments before
         // any merge would join every segment into one.
         self.convert_legacy(everything)?;
-        // One index that fails keeps no other from its maintenance; the
-        // first failure is the pass's error, which the scheduler says once.
-        let mut failed = None;
         for open in indexes {
             if let Err(error) = self.maintain_one(&open, everything, &mut done) {
                 failed.get_or_insert(error.within(format!("index {}", open.name)));

@@ -381,6 +381,39 @@ fn a_table_s_index_follows_one_table_by_a_key_of_unique_values() {
     assert!(opened(index("n").table("articles").field("title", 1.0)).contains("follows table notes by slug"));
 }
 
+const PAGES: &str = "create table pages (id integer primary key, slug text not null unique, body text not null)";
+
+// contract: SRCH-07
+#[test]
+fn a_row_a_replace_removed_leaves_its_index_once_a_search_meets_it_and_the_page_fills_past_it() {
+    let f = fixture();
+    f.db.exec(PAGES).unwrap();
+    let pages = f.db.search_index::<Value>("pages_search").table("pages").field("body", 1.0).open().unwrap();
+    f.ready(&pages);
+    let held = || -> i64 {
+        f.db.scalar(sql!("select documents from _tinystore_search_indexes where name = 'pages_search'")).unwrap()
+    };
+    let found = |text: &str, limit: usize| ids(&pages.search(text).limit(limit).run().unwrap()).join(" ");
+    f.db.exec(sql!("insert into pages (slug, body) values ('home', 'old words')")).unwrap();
+    f.db.exec(sql!("insert into pages (slug, body) values ('about', 'old words kept')")).unwrap();
+    // SQLite removes row 1, whose slug the new row takes, and no delete trigger tells the index
+    f.db.exec(sql!("insert or replace into pages (slug, body) values ('home', 'new words')")).unwrap();
+    assert_eq!(held(), 3, "the removed row's document is still in the index");
+    assert_eq!(found("old", 1), "2", "the page filled past the row gone, the shorter and first");
+    search::maintain(&f.store).unwrap();
+    assert_eq!(held(), 2, "the document of the row gone left the index");
+    assert_eq!((found("old", 10), found("new", 10)), ("2".to_owned(), "3".to_owned()));
+    f.db.exec(sql!("update or replace pages set slug = 'about' where id = 3")).unwrap();
+    assert_eq!(found("kept", 10), "", "row 2, which update or replace removed, answers nothing");
+    f.db.exec(sql!("insert into pages (id, slug, body) values (2, 'kept', 'kept again')")).unwrap();
+    search::maintain(&f.store).unwrap();
+    assert_eq!((found("again", 10), held()), ("2".to_owned(), 2), "a row back since a search met it gone stays");
+    f.db.exec(sql!("replace into pages (slug, body) values ('kept', 'replaced words')")).unwrap();
+    assert_eq!(found("again", 10), "", "row 2, which replace into removed, answers nothing");
+    search::maintain(&f.store).unwrap();
+    assert_eq!((found("replaced", 10), found("again", 10), held()), ("4".to_owned(), String::new(), 2));
+}
+
 #[test]
 fn a_column_added_reads_the_table_again_beside_the_index_and_a_drop_takes_the_triggers_off() {
     let f = fixture();

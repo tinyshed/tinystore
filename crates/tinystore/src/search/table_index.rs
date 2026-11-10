@@ -17,12 +17,17 @@ use super::settings::{Settings, Table, Wanted};
 use super::table;
 use crate::engine::{Host, SharedFile};
 use crate::sqlite::{Settle, sql_error};
+use crate::sync::lock;
 use crate::transaction::sealed::Sealed;
 use crate::{Error, Memory, Result, Transaction, TxHandle};
 
 /// How often a database's file is looked at for keys a process beside the
 /// store left, when no write of the store's settled them sooner.
 const PENDING: Duration = Duration::from_secs(1);
+/// The keys of rows gone a store holds noted at most until maintenance takes
+/// them: without background work nothing does until the program maintains
+/// the store, and noting one walks those held, so they are held in bounds.
+const GONE_ROWS: usize = 1024;
 
 const READ_COLUMNS: &str = "select name, pk from pragma_table_info(?1)";
 const UNIQUE_BY: &str = "select exists (select 1 from pragma_index_list(?1) as list
@@ -61,6 +66,28 @@ impl Search {
     /// The file as an error names it: `search.db`, or `sql app`.
     pub(crate) fn place(&self) -> &str {
         self.lent_by.as_deref().unwrap_or(FILE)
+    }
+
+    /// Notes the keys of rows a search of the index `name` met gone, for
+    /// maintenance to take out of it, and wakes it: a search holds a reader,
+    /// and writes nothing itself. A key past [`GONE_ROWS`] noted is not, and
+    /// is noted when a search next meets it.
+    fn note_gone_rows(&self, name: &str, keys: Vec<SqlValue>) {
+        if keys.is_empty() {
+            return;
+        }
+        let mut gone = lock(&self.gone_rows);
+        for key in keys {
+            if gone.len() >= GONE_ROWS {
+                break;
+            }
+            let noted = (name.to_owned(), key);
+            if !gone.contains(&noted) {
+                gone.push(noted);
+            }
+        }
+        drop(gone);
+        self.wake();
     }
 }
 
@@ -352,10 +379,10 @@ pub(crate) type RowsReader<'r, R> =
 
 /// The hits of `query` in a table's index, each with its row as its value,
 /// read in the snapshot the search read, or in the transaction `tx` of the
-/// table's database, seeing what it wrote. A row a process beside the store
-/// deleted that its index has not settled yet is left out. Where a hit
-/// matched is read after, from the columns the index reads of its row, read
-/// with the row.
+/// table's database, seeing what it wrote. A hit whose row the table holds
+/// no longer is left out, and its page filled past it, as [`filled`] says.
+/// Where a hit matched is read after, from the columns the index reads of
+/// its row, read with the row.
 pub(crate) fn found<T, R>(
     index: &Index<T>,
     read_rows: RowsReader<'_, R>,
@@ -372,13 +399,19 @@ pub(crate) fn found<T, R>(
         };
         Ok((rows, columns))
     };
-    let (answer, (rows, mut columns)) = match tx {
-        None => index.search.search_then(&index.open, query, read)?,
-        Some(tx) => {
-            tx.takes(&index.search.file, index.search.place())?;
-            tx.call(|writer| index.search.search_in(writer, &index.open, query, read))?
+    // `read` captures shared references alone, so it is `Copy`: each search takes its own.
+    let search = |query: Query| -> Result<Searched<R>> {
+        match tx {
+            None => index.search.search_then(&index.open, query, read),
+            Some(tx) => {
+                tx.takes(&index.search.file, index.search.place())?;
+                tx.call(|writer| index.search.search_in(writer, &index.open, query, read))
+            }
         }
     };
+    let limit = query.limit;
+    let (answer, (rows, mut columns)) =
+        filled(query, search, |gone| index.search.note_gone_rows(&index.open.name, gone))?;
     columns.resize(rows.len(), None);
     let Answer { hits, corrected, sought, .. } = answer;
     let hits = hits.into_iter().zip(rows).zip(columns).filter_map(|((ranked, row), columns)| {
@@ -387,7 +420,42 @@ pub(crate) fn found<T, R>(
         let Ranked { id, score, text_score, similarity, .. } = ranked;
         row.map(|value| Hit { id, value, score, matches, text_score, similarity })
     });
-    Ok(Found { hits: hits.collect(), corrected })
+    Ok(Found { hits: hits.take(limit).collect(), corrected })
+}
+
+/// A search's answer, and its hits' rows and the columns read of them.
+type Searched<R> = (Answer, (Vec<Option<R>>, Columns));
+
+/// Searches until the page holds its `limit` of hits whose rows the table
+/// holds, or the search finds no more. SQLite removes the row a `replace`
+/// takes the place of without the delete trigger that would say so, so its
+/// document stays: each hit whose row is gone is noted for maintenance to
+/// take out, and the search asks again for more hits, as many as were gone
+/// or twice as many as it asked, within the most a search reaches.
+///
+/// ```text
+/// limit 3, b and d gone:  asked 3: a b c → a c    asked 6: a b c d e f → a c e f    the page: a c e
+/// ```
+fn filled<R>(
+    query: Query,
+    search: impl Fn(Query) -> Result<Searched<R>>,
+    note: impl Fn(Vec<SqlValue>),
+) -> Result<Searched<R>> {
+    let limit = query.limit;
+    let reach = (crate::limits::SEARCH_HITS.bound as usize).saturating_sub(query.offset);
+    let mut asked = limit;
+    loop {
+        let (answer, (rows, columns)) = search(Query { limit: asked, ..query.clone() })?;
+        let gone = answer.hits.iter().zip(&rows).filter(|(_, row)| row.is_none());
+        let gone: Vec<SqlValue> = gone.map(|(hit, _)| table::hit_key(&hit.value)).collect::<Result<_>>()?;
+        let (found, held) = (answer.hits.len(), answer.hits.len() - gone.len());
+        let more = (limit + gone.len()).max(asked * 2).min(reach);
+        note(gone);
+        if held >= limit || found < asked || more <= asked {
+            return Ok((answer, (rows, columns)));
+        }
+        asked = more;
+    }
 }
 
 /// The columns the index reads of each hit's row, for where it matched;

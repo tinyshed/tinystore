@@ -45,8 +45,10 @@ let result = articles.search("хлеба").filter(eq("author_id", &42)).run()?;
   SRCH-03).
 - A document set is found by the next search; a deleted one never again
   (contract SRCH-04).
-- A table's index changes in the commit that changes the row (contract
-  SRCH-07).
+- A table's index changes in the commit that changes the row. The one
+  exception is a row SQLite removes itself for a `replace` on a unique
+  column other than the key: it leaves the index when a search next meets
+  it, and that search never returns it (contract SRCH-07).
 - A misspelt word is read as its nearest, and `corrected` says so; a word
   that matches is never changed (contract SRCH-09).
 

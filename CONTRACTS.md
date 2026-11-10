@@ -216,7 +216,7 @@ These contracts are what does not.
 - **SRCH-04** A set MUST be seen by the next search; a deleted document MUST never answer again.
 - **SRCH-05** `set_many` MUST set every document in one commit or none.
 - **SRCH-06** A change that needs the documents read again MUST NOT expose a half-built index: the old one answers and takes writes until the new one switches in, and a restart goes on.
-- **SRCH-07** A table's index MUST change in the commit that changes the row, and a rollback MUST change neither; a search in the transaction that wrote MUST see its writes.
+- **SRCH-07** A table's index MUST change in the commit that changes the row, and a rollback MUST change neither; a search in the transaction that wrote MUST see its writes. A row SQLite itself removes for a `replace` on a unique column other than the key, which no trigger tells of, MUST leave its index when a search next meets it, and such a hit MUST never be answered.
 - **SRCH-08** A write from beside the store MUST reach a table's index at the store's next write to the file, or within a second.
 - **SRCH-09** A misspelt word MUST be read as its nearest and `corrected` MUST say so; a word that matches MUST never be changed.
 - **SRCH-10** An index MUST answer after a restart as before.

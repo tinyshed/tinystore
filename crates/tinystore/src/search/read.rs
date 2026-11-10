@@ -81,7 +81,7 @@ const NARROW_VECTORS: u64 = 4;
 
 /// A search's text as the analyzer normalized it, its words found in it,
 /// its vector, how it combines the two if it says, and the hits it asks for.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Query {
     pub(crate) normal: String,
     pub(crate) words: Vec<Word>,
