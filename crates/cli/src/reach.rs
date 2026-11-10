@@ -45,6 +45,19 @@ pub(crate) fn write<T: Send + 'static>(
     Writer::new(dir, command).write(call)
 }
 
+/// Writes through the server of `dir` with `call`, a job or an event `id`
+/// names or none, as `Writer::write` does. One without an id goes again only
+/// when the server never ran it: sent again after its answer was lost, it
+/// would be written twice, so its caller hears that the outcome is unknown.
+pub(crate) fn write_by_id<T: Send + 'static>(
+    dir: &Path,
+    command: &'static str,
+    id: Option<&str>,
+    call: impl Fn(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T> + Send + Sync + 'static,
+) -> Result<T, Refused> {
+    Writer { again: Again::of_id(id), ..Writer::new(dir, command) }.write(call)
+}
+
 /// Writes through the server of `dir` with `call`, once: a call that, sent
 /// again, would do what it does twice, as a message published.
 pub(crate) fn write_once<T: Send + 'static>(
@@ -63,11 +76,39 @@ pub(crate) struct Writer {
     dir: PathBuf,
     command: &'static str,
     connection: Option<Connection>,
+    again: Again,
+}
+
+/// What a write does sent a second time, which says when it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Again {
+    /// Nothing more: a key set, an ingest whose samples carry their times, a
+    /// job or an event its id names.
+    Harmless,
+    /// What it did once more: a job or an event without an id.
+    Twice,
+}
+
+impl Again {
+    fn of_id(id: Option<&str>) -> Again {
+        if id.is_some() { Again::Harmless } else { Again::Twice }
+    }
+
+    /// Whether a write that failed `kind` goes again: one the server never
+    /// ran, `unavailable`, always; one that may have run, `outcome_unknown`,
+    /// only when a second send writes nothing more.
+    fn after(self, kind: ErrorKind) -> bool {
+        match kind {
+            ErrorKind::Unavailable => true,
+            ErrorKind::OutcomeUnknown => self == Again::Harmless,
+            _ => false,
+        }
+    }
 }
 
 impl Writer {
     pub(crate) fn new(dir: &Path, command: &'static str) -> Writer {
-        Writer { dir: dir.to_owned(), command, connection: None }
+        Writer { dir: dir.to_owned(), command, connection: None, again: Again::Harmless }
     }
 
     /// Reaches the server before the first write, so that a directory no
@@ -88,9 +129,10 @@ impl Writer {
     }
 
     /// Writes with `call`, sending it again on a new connection when the
-    /// connection was lost: a call written to change nothing the second
-    /// time, such as an ingest whose samples carry their times. What the
-    /// server answered, a refusal among them, once it was reached.
+    /// connection was lost: before the server ran it, or, for a call written
+    /// to change nothing the second time, such as an ingest whose samples
+    /// carry their times, after. What the server answered, a refusal among
+    /// them, once it was reached.
     pub(crate) fn try_write<T: Send + 'static>(
         &mut self,
         call: impl Fn(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T> + Send + Sync + 'static,
@@ -107,7 +149,7 @@ impl Writer {
             let (kept, answer) = connection.call(self.command, move |client| sent(client));
             self.connection = kept;
             match answer {
-                Err(error) if lost(error.kind()) && attempt < ATTEMPTS => continue,
+                Err(error) if self.again.after(error.kind()) && attempt < ATTEMPTS => continue,
                 answer => return Ok(answer),
             }
         }
@@ -122,10 +164,6 @@ pub(crate) fn stream<T>(
     call: impl FnOnce(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T>,
 ) -> Result<T, Refused> {
     connected(dir, command)?.run(call).map_err(failed)
-}
-
-fn lost(kind: ErrorKind) -> bool {
-    matches!(kind, ErrorKind::OutcomeUnknown | ErrorKind::Unavailable)
 }
 
 /// Refuses a directory that holds no store, before anything is read or
@@ -269,4 +307,22 @@ fn detached(serve: &mut Command) {
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     serve.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // contract: DUR-05
+    #[test]
+    fn a_write_whose_outcome_is_unknown_goes_again_only_when_a_second_send_writes_nothing_more() {
+        let unnamed = Again::of_id(None);
+        assert_eq!(unnamed, Again::Twice, "a job or an event without an id");
+        assert!(!unnamed.after(ErrorKind::OutcomeUnknown), "its caller hears the outcome is unknown");
+        assert!(unnamed.after(ErrorKind::Unavailable), "the server never ran it");
+        let named = Again::of_id(Some("welcome-42"));
+        assert!(named.after(ErrorKind::OutcomeUnknown), "a second add finds the id taken and adds nothing");
+        assert!(!named.after(ErrorKind::Conflict) && !unnamed.after(ErrorKind::Invalid), "a refusal is the answer");
+        assert!(Writer::new(Path::new("data"), "kv set").again.after(ErrorKind::OutcomeUnknown), "a key set");
+    }
 }

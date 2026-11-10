@@ -60,9 +60,12 @@ fn append_one(asked: &Asked, dir: &Path, stream: &str, name: &str, fields: &[Str
         at: asked.value("--at").map(window::time).transpose().map_err(wrong)?,
         id: asked.value("--id").map(str::to_owned),
     };
-    let id = event.id.clone().unwrap_or_default();
+    let id = event.id.clone();
     let into = stream.to_owned();
-    let held = reach::write(dir, "events append", move |client| client.append(&into, std::slice::from_ref(&event)))?;
+    let held = reach::write_by_id(dir, "events append", id.as_deref(), move |client| {
+        client.append(&into, std::slice::from_ref(&event))
+    })?;
+    let id = id.unwrap_or_default();
     if held == 0 {
         outln!("appended {name} to {stream}")
     } else {

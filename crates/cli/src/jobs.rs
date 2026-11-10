@@ -55,7 +55,7 @@ fn add(asked: Asked) -> Done {
         return Err(wrong("--delay or --at, not both"));
     }
     let (named, sent) = (queue.clone(), job.clone());
-    let added = reach::write(&dir, "jobs add", move |client| {
+    let added = reach::write_by_id(&dir, "jobs add", job.id.as_deref(), move |client| {
         let database = database.as_deref().map(|database| client.database(database)).transpose()?;
         let queue = client.queue(&named, database)?;
         client.add(queue, &sent)

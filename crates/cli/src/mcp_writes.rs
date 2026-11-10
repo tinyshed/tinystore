@@ -267,9 +267,9 @@ fn jobs(dir: &Path, name: &str, given: &Arguments) -> Result<Value, Refused> {
         })?;
         return Ok(json!({ "cancelled": cancelled }));
     }
-    let job =
-        NewJob { value: given.json("job")?.to_string(), id: given.text("id"), delay: given.span("delay")?, at: None };
-    let added = reach::write(dir, "mcp", move |client| {
+    let id = given.text("id");
+    let job = NewJob { value: given.json("job")?.to_string(), id: id.clone(), delay: given.span("delay")?, at: None };
+    let added = reach::write_by_id(dir, "mcp", id.as_deref(), move |client| {
         let database = database.as_deref().map(|database| client.database(database)).transpose()?;
         let queue = client.queue(&queue, database)?;
         client.add(queue, &job)
@@ -305,8 +305,11 @@ fn events(dir: &Path, given: &Arguments) -> Result<Value, Refused> {
         None => None,
     };
     let fields = given.0.get("fields").map(Value::to_string);
-    let event = Event { name: given.needed("name")?, fields, level, at: None, id: given.text("id") };
-    let held = reach::write(dir, "mcp", move |client| client.append(&stream, std::slice::from_ref(&event)))?;
+    let id = given.text("id");
+    let event = Event { name: given.needed("name")?, fields, level, at: None, id: id.clone() };
+    let held = reach::write_by_id(dir, "mcp", id.as_deref(), move |client| {
+        client.append(&stream, std::slice::from_ref(&event))
+    })?;
     Ok(json!({ "written": held == 0 }))
 }
 
