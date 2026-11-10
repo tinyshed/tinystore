@@ -59,6 +59,29 @@ fn a_handler_settles_its_job_by_what_it_returns() {
     assert_eq!((fail.state, fail.error.as_deref()), (State::Failed, Some("the provider no longer knows the token")));
 }
 
+// contract: ERR-03, JOB-01
+#[test]
+fn a_retry_or_a_snooze_to_a_time_no_job_may_have_fails_its_attempt_and_names_the_time() {
+    let f = fixture();
+    let pushes = f.store.queue::<Push>("pushes").attempts(5).open().unwrap();
+    pushes.id("retry").add(&Push { user: 1 }).unwrap();
+    pushes.id("snooze").add(&Push { user: 2 }).unwrap();
+    let year_10000 = std::time::UNIX_EPOCH + Duration::from_secs(253_402_300_800);
+    pushes
+        .run_due(|push: Push, run: &Run| -> Result<super::Outcome> {
+            // a span this long once read as a parked job, which an unpark moved back to run early
+            Ok(if push.user == 1 { run.retry(year_10000) } else { run.snooze(Duration::MAX) })
+        })
+        .unwrap();
+    for id in ["retry", "snooze"] {
+        let job = pushes.get(id).unwrap().unwrap();
+        assert_eq!((job.state, job.attempt), (State::Scheduled, 1), "{id}: the handler's failure, counted");
+        assert!(job.at <= f.now() + 2 * SECOND, "{id}: again after its backoff: {:?}", job.at);
+        let error = job.error.unwrap_or_default();
+        assert!(error.contains("outside the years 1 to 9999"), "{id}: {error}");
+    }
+}
+
 // contract: JOB-07
 #[test]
 fn a_retry_waits_longer_each_time_then_fails_for_good() {

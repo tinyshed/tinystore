@@ -558,14 +558,15 @@ impl Work {
 }
 
 /// How a client's answer settles its job; a time given as a delay counts from
-/// `now`, the server's clock.
+/// `now`, the server's clock. A time no job may have is refused, and settles
+/// nothing.
 fn how_of(answer: JobsAnswer, now: i64) -> Result<How, Failure> {
     let at = match (answer.at, answer.delay) {
         (Some(_), Some(_)) => return Err(Failure::invalid("an answer's time given twice: at or delay, not both")),
         (at, None) => at,
         (None, Some(delay)) => Some(now.saturating_add(i64::try_from(delay).unwrap_or(i64::MAX))),
     };
-    Ok(match answer.how.as_str() {
+    let how = match answer.how.as_str() {
         "done" => How::Done,
         "retry" => How::Retry { at, cause: answer.error.unwrap_or_else(|| "its handler asked for a retry".to_owned()) },
         "snooze" => How::Snooze { at: at.ok_or_else(|| Failure::invalid("a snooze without its time"))? },
@@ -575,7 +576,11 @@ fn how_of(answer: JobsAnswer, now: i64) -> Result<How, Failure> {
             let known = "done, retry, snooze, fail, back, progress or stop";
             return Err(Failure::invalid(format!("an answer of {other:?}, not {known}")));
         }
-    })
+    };
+    match how.outside_years() {
+        Some(at) => Err(Failure::invalid(format!("an answer's time outside the years 1 to 9999, {at} in unix ms"))),
+        None => Ok(how),
+    }
 }
 
 /// A work stream's side of its worker: the jobs the loop hands it go out in

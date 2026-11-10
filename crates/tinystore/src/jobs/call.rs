@@ -21,6 +21,11 @@ const MAX_ID: usize = 1024;
 const EARLIEST: i64 = -62_135_596_800_000;
 const LATEST: i64 = 253_402_300_799_999;
 
+/// Whether a job may have time `at`, in unix milliseconds.
+pub(crate) fn in_years(at: i64) -> bool {
+    (EARLIEST..=LATEST).contains(&at)
+}
+
 /// A call on one job with what it asks beside its value, run by its last
 /// step: `later.id(&key).at(nine_am).add(&draft)`.
 #[must_use = "a job's call runs at its last step: add, set or update"]
@@ -220,7 +225,7 @@ impl Asked {
             Some(When::After(span)) => now.saturating_add(millis(span)),
             None => repeat.as_ref().and_then(|repeat| repeat.next(now)).unwrap_or(now),
         };
-        if !(EARLIEST..=LATEST).contains(&at) {
+        if !in_years(at) {
             return Err(Error::invalid("a time outside the years 1 to 9999"));
         }
         Ok(Prepared {

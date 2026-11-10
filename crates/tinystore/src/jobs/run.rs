@@ -194,15 +194,23 @@ impl Outcome {
         Outcome(Answer::Fail(cause))
     }
 
-    /// The settlement this answer asks for at `now`.
+    /// The settlement this answer asks for at `now`. A time no job may have
+    /// is the handler's failure, its attempt counted.
     pub(crate) fn how(self, now: i64) -> How {
-        match self.0 {
+        let how = match self.0 {
             Answer::Done => How::Done,
             Answer::Retry(when) => {
                 How::Retry { at: Some(when.at(now)), cause: "the handler asked to retry".to_owned() }
             }
             Answer::Snooze(when) => How::Snooze { at: when.at(now) },
             Answer::Fail(cause) => How::Fail { cause },
+        };
+        match how.outside_years() {
+            Some(at) => {
+                let cause = format!("the handler answered a time outside the years 1 to 9999, {at} in unix ms");
+                How::Retry { at: None, cause }
+            }
+            None => how,
         }
     }
 }

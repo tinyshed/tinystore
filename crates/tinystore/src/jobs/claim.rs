@@ -8,6 +8,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use super::call::in_years;
 use super::policy::Policy;
 use super::repeat::Repeat;
 use super::rows::{self, PARKED_BY, execute};
@@ -529,6 +530,17 @@ pub(crate) enum How {
     Extend {
         until: i64,
     },
+}
+
+impl How {
+    /// The time a retry or a snooze asks for when no job may have it: one
+    /// outside the years 1 to 9999, past which a job's time reads as parked.
+    pub(crate) fn outside_years(&self) -> Option<i64> {
+        match self {
+            How::Retry { at: Some(at), .. } | How::Snooze { at } if !in_years(*at) => Some(*at),
+            _ => None,
+        }
+    }
 }
 
 /// What a settlement changed that memory follows once it commits.

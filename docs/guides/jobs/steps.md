@@ -75,6 +75,11 @@ A handler's answer decides what happens to the job:
 | returns `run.snooze('10m')` | runs again in ten minutes, not counted                           |
 | returns `run.fail(reason)`  | fails for good now, with the reason as its error                 |
 
+The time of a retry or a snooze lies in the years 1 to 9999, as an `add`'s
+does. A Rust handler that answers one outside them has failed its attempt,
+with the time in the job's error. An SDK's answer with one is refused
+`invalid`, and ends its worker's stream as any refused answer does.
+
 ```ts
 pushes.work(async (push, run) => {
 	const answer = await provider.send(push)

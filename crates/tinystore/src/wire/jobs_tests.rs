@@ -203,6 +203,27 @@ fn a_job_the_client_holds_when_its_worker_ends_fails_that_attempt() {
     assert!(failed.error.unwrap_or_default().contains("ended with the job in hand"));
 }
 
+// contract: ERR-03, ERR-06
+#[test]
+fn an_answer_with_a_time_no_job_may_have_is_refused_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "emails");
+    add(&mut client, &job(handle, "e1", "null"));
+    let stream = work(&mut client, handle, None);
+    let first = held(&mut client, stream);
+
+    answer(&mut client, stream, &JobsAnswer { delay: Some(u64::MAX), ..how(first.run, "snooze") });
+    let refused = client.next_on(stream);
+    assert_eq!(refused.flags, frame::END | frame::ERROR, "a refused answer fails its stream, as every one does");
+    let failure = answered::<Empty>(&refused).unwrap_err();
+    assert_eq!(failure.code, "invalid", "{}", failure.message);
+    assert!(failure.message.contains("outside the years 1 to 9999"), "{}", failure.message);
+    let failed = get(&mut client, handle, "e1");
+    assert_eq!((failed.state.as_str(), failed.attempt), ("scheduled", 1), "the snooze wrote nothing");
+    assert!(failed.error.unwrap_or_default().contains("ended with the job in hand"), "its worker's end did");
+}
+
 #[test]
 fn a_client_that_leaves_with_a_job_in_hand_fails_that_attempt() {
     let dir = tempfile::tempdir().unwrap();
