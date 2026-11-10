@@ -56,6 +56,15 @@ own. A bucket has one or the other, never both. `expiresAt` is
 `expires_at` in Python and `kv.ExpiresAt` in Go, and `expire` takes a time
 as `ExpireAt` in Go.
 
+A write with a `ttl` of zero is refused `invalid` and writes nothing, as a
+bucket's `ttl` of zero is: a span of zero is a mistake in the code, never
+what it meant. A write with an `expiresAt` that is not after now is written,
+and the key is gone at once (contract KV-03). A time is data: one a moment
+ahead when your code took it may be past when the store reads its clock, and
+refusing it would fail the write of a short-lived key now and then for
+nothing. `expire` with a span of zero or a time past ends a key now: it says
+whether the key was there, and the key is gone.
+
 ## What "expired" means
 
 An expired key is absent to every call at once (contract KV-03): `get`

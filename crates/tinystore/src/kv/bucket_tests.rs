@@ -351,6 +351,27 @@ fn a_set_keeps_the_expiry_a_live_key_has_and_expire_gives_a_new_one() {
     assert!(!codes.expire("code", MINUTE).unwrap(), "an expired key is not there to expire");
 }
 
+// contract: ERR-03, ERR-06, KV-03
+#[test]
+fn a_write_with_a_ttl_of_zero_is_refused_and_one_at_a_time_past_is_gone_at_once() {
+    let f = fixture();
+    let codes = f.store.bucket::<i64>("codes").open().unwrap();
+    // a span the program wrote, never right, as a bucket's own ttl of zero is
+    let zero = codes.key("a").ttl(Duration::ZERO).set(&1).unwrap_err();
+    assert_eq!(zero.kind(), ErrorKind::Invalid, "{zero}");
+    assert_eq!(f.rows("_tinystore_kv_cells"), 0, "no row was written");
+
+    // a time is data: one a moment ahead when the program took it may be past when the store reads it
+    codes.key("a").expires_at(f.store.now() - MINUTE).set(&1).unwrap();
+    assert!(codes.key("b").expires_at(f.store.now()).create(&2).unwrap());
+    assert_eq!((codes.get("a").unwrap(), codes.has("b").unwrap()), (None, false), "each gone at once");
+
+    codes.set("c", &3).unwrap();
+    assert!(codes.expire("c", Duration::ZERO).unwrap(), "an expire to now ends a key that is there");
+    assert_eq!(codes.get("c").unwrap(), None);
+    assert!(!codes.expire("c", Duration::ZERO).unwrap(), "and finds none the second time");
+}
+
 #[test]
 fn an_idle_key_lives_on_while_it_is_read() {
     let f = fixture();

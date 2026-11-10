@@ -222,6 +222,19 @@ impl WriteOptions {
             Expires::At(time) => unix_millis(time),
         })
     }
+
+    /// The expiry of a key written at `now`. A ttl of zero is refused, as a
+    /// bucket's is: a span the program wrote, and never right. A time not
+    /// after now is written, the key gone at once: a time is data, and one a
+    /// moment ahead when the program took it may be past when this reads.
+    fn written_expires(self, now: i64) -> Result<Option<i64>> {
+        match self.expires {
+            Some(Expires::In(span)) if span.is_zero() => {
+                Err(Error::invalid("a ttl of zero, which writes a key already gone"))
+            }
+            _ => Ok(self.expires(now)),
+        }
+    }
 }
 
 /// How a write treats the key it finds.
@@ -615,6 +628,7 @@ impl<V> Bucket<V> {
             return Err(too_large.within(self.scope.shown_key(key)));
         }
         let now = self.scope.now();
+        let given = options.written_expires(now).map_err(|error| error.within(self.scope.shown_key(key)))?;
         let path = self.scope.path(key)?;
         let raw =
             if seal { self.kept(&path, raw).map_err(|error| error.within(self.scope.shown_key(key)))? } else { raw };
@@ -626,7 +640,7 @@ impl<V> Bucket<V> {
             now,
             put,
             if_version: options.if_version,
-            given: options.expires(now),
+            given,
             default: self.default_expires(now),
             // a write is a use of an idle key, which lives on from it; a key with a ttl keeps its own
             keeps_its_expiry: !matches!(self.expiry, Expiry::Idle(_)),
