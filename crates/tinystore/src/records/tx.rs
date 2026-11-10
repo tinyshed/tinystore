@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::engine::FILE;
 use super::event::{Kept, NewEvent};
-use super::events::{EventCall, Events, check, window};
+use super::events::{EventCall, Events, check, stamped, window};
 use crate::engine::{LentWrite, Wrote};
 use crate::transaction::sealed::Sealed;
 use crate::{Error, Result, Transaction, TxHandle};
@@ -114,14 +114,16 @@ impl Events {
         })
     }
 
-    /// Each of `events` as the stream keeps it, at the store's time unless
-    /// it has one: a refused one names its place in the list and its name.
+    /// Each of `events` as the stream keeps it, at its place's time from the
+    /// store's unless it has one, as an append outside a database takes them:
+    /// a refused one names its place in the list and its name. The outbox
+    /// keeps each time, which its move appends as it is.
     fn checked(&self, events: Vec<NewEvent>) -> Result<Vec<Kept>> {
         let now = self.records.now();
         let window = window(&self.stream, now);
         let checked = events.into_iter().enumerate().map(|(place, event)| {
             let named = format!("event {place} {:?}", event.name);
-            check(event, now, window).map_err(|error| error.within(named))
+            check(event, stamped(now, place), window).map_err(|error| error.within(named))
         });
         checked.collect()
     }

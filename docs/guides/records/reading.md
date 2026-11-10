@@ -139,8 +139,13 @@ counted once: a page asked with `after` reads the range its first page had.
 
 ## Events with the same time
 
-Events often share a time to the nanosecond. For example, all the events of
-one `append` that give no `at` take the time of the call:
+The events of one `append` that give no `at` take the time of the call, 100
+nanoseconds apart in the order you list them: the first takes the call's
+time, the next 100 ns more, and so on. 100 ns is the finest step a clock
+keeps on every platform, Windows included, so each event reads back with the
+time it was given. An event that gives its own `at` keeps it. So a list reads
+back in the order you appended it, and a page can end between any two of its
+events, however many there are:
 
 ```ts
 await audit.append([{ name: 'cart.created' }, { name: 'item.added' }, { name: 'checkout' }])
@@ -162,12 +167,19 @@ audit.append_all([NewEvent::new("cart.created"), NewEvent::new("item.added"), Ne
 let page = audit.list().since(Duration::from_mins(1)).page()?; // cart.created, item.added, checkout
 ```
 
+Events still share a time to the nanosecond when you give them the same
+`at`, or when two appends that run at the same time give theirs the same
+times.
+
 - Events that share a time come in the order they were appended. This holds
   across appends and across streams, for [late events](#which-events-are-late)
   too, and before and after TinyStore packs and merges them. With `newest`,
   they come in the reverse order.
-- Two appends that run at the same time come in the order the store wrote
-  them, and every read gives that same order.
+- Events of one time from two appends that run at the same time come in the
+  order the store wrote them, and every read gives that same order.
+- A page never splits a time, so more events of one time than its `limit`
+  fail the page with a `limit` error. Give such events times apart, or ask
+  for a larger `limit`.
 - Events that TinyStore v0.1.0 packed are the exception. They keep the order
   that v0.1.0 gave them, the same on every read, which is not always the
   order they were appended (contract NOT-12): in one stream a late event may

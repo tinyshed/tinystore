@@ -117,12 +117,63 @@ fn an_event_and_an_append_have_the_bytes_they_carry_at_most() {
     assert_eq!(api.list().page().unwrap().events.len(), 20);
 }
 
+// contract: REC-03, REC-05
+#[test]
+fn the_events_of_one_call_that_give_no_time_take_100_ns_each_and_read_back_in_pages() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let now = fixture.now();
+    api.append_all((0..1001).map(|n| NewEvent::new(&n.to_string()))).unwrap();
+    let page = api.list().since(HOUR).page().unwrap();
+    let next = page.next.expect("a page of 1000 of 1001 events goes on");
+    assert_eq!((page.events.len(), page.events[0].name.as_str(), page.events[999].name.as_str()), (1000, "0", "999"));
+    let at = (page.events[0].at, page.events[1].at, page.events[999].at);
+    let step = |count: u64| now + Duration::from_nanos(100 * count);
+    assert_eq!(at, (now, step(1), step(999)), "the first at the call's time, each after it 100 ns on");
+    let rest = api.list().since(HOUR).after(&next).page().unwrap();
+    assert_eq!((names(&rest.events), rest.next), (vec!["1000"], None));
+    let many = fixture.events("many");
+    many.append_all((0..10_001).map(|n| NewEvent::new(&n.to_string()))).unwrap();
+    assert_eq!(many.list().since(HOUR).count().unwrap(), 10_001);
+    assert_eq!(many.list().since(HOUR).all().map(Result::unwrap).count(), 10_001);
+    let largest = many.list().since(HOUR).limit(10_000).page().unwrap();
+    assert_eq!((largest.events.len(), largest.next.is_some()), (10_000, true));
+}
+
+// contract: REC-05
+#[test]
+fn a_page_several_windows_fill_with_one_calls_events_goes_on_between_any_two_of_them() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    // Four head rows of 1024 events, the last 24 of each kept by the filter. A
+    // window reads a row, which holds more events than the page's limit, and
+    // keeps 24 of them, so a page of 50 takes three windows and is cut by the
+    // events' public times: a nanosecond apart, Windows would read 3048 to
+    // 3071 as one time and begin the next page inside 2024 to 2047.
+    let kept = |n: usize| n % 1024 >= 1000;
+    let event = |n: usize| NewEvent::new(&n.to_string()).fields(&serde_json::json!({ "kept": kept(n) }));
+    api.append_all((0..4096).map(event)).unwrap();
+    assert_eq!(fixture.rows("heads"), 4);
+    let list = || api.list().since(HOUR).filter("kept", &true).limit(50);
+    let (mut read, mut next) = (Vec::new(), None::<String>);
+    for _ in 0..10 {
+        let page = next.as_deref().map_or_else(list, |after| list().after(after)).page().unwrap();
+        read.extend(page.events.into_iter().map(|event| event.name));
+        let Some(after) = page.next else { break };
+        next = Some(after);
+    }
+    let expected: Vec<String> = (0..4096).filter(|n| kept(*n)).map(|n| n.to_string()).collect();
+    assert_eq!(read, expected, "every event once, none twice, in the order given");
+}
+
 #[test]
 fn an_append_is_cut_into_rows_of_the_events_and_the_bytes_a_row_holds() {
     let fixture = fixture();
     let api = fixture.events("api");
     api.append_all((0..2500).map(|n| NewEvent::new("small").fields(&serde_json::json!({ "n": n })))).unwrap();
     assert_eq!(fixture.rows("heads"), 3);
+    // a second on, so that the large events, 100 ns apart, read after the 2,500 small ones
+    fixture.pass(SECOND);
     api.append_all((0..3).map(|_| NewEvent::new("large").message(&"x".repeat(100 << 10)))).unwrap();
     assert_eq!(fixture.rows("heads"), 5);
     let read = api.list().limit(10_000).page().unwrap().events;

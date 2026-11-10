@@ -447,15 +447,16 @@ impl Records {
     }
 
     /// The events of an append, each one the file keeps, and the store's time
-    /// they were checked at: a refused one names its place and its name. Of
-    /// the events of one id, the first stands.
+    /// they were checked at: a refused one names its place and its name, and
+    /// one that gives no time takes its place's, as [`stamped`] says. Of the
+    /// events of one id, the first stands.
     fn check_append(&self, stream: &Stream, events: Vec<NewEvent>) -> Result<(Vec<Kept>, i64)> {
         let now = self.now();
         let window = window(stream, now);
         let mut checked = Vec::with_capacity(events.len());
         for (place, event) in events.into_iter().enumerate() {
             let named = format!("event {place} {:?}", event.name);
-            checked.push(check(event, now, window).map_err(|error| error.within(named))?);
+            checked.push(check(event, stamped(now, place), window).map_err(|error| error.within(named))?);
         }
         let mut ids = HashSet::new();
         checked.retain(|event| event.id.as_ref().is_none_or(|id| ids.insert(id.clone())));
@@ -475,8 +476,8 @@ impl Records {
         let now = self.now();
         let window = window(stream, now);
         let (mut lost, mut pieces, mut piece, mut weight) = (0, Vec::new(), Vec::new(), 0);
-        for event in events {
-            let Ok(event) = check(event, now, window) else {
+        for (place, event) in events.into_iter().enumerate() {
+            let Ok(event) = check(event, stamped(now, place), window) else {
                 lost += 1;
                 continue;
             };
@@ -726,9 +727,32 @@ pub(super) fn window(stream: &Stream, now: i64) -> (i64, i64) {
     (now.saturating_sub(nanos(stream.keeps())), now.saturating_add(nanos(AHEAD)))
 }
 
-/// An event with its time, once it is one the file keeps: a name, fields
-/// within their bounds, a time within its stream's window.
-pub(super) fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Kept> {
+/// The step between the times of one call's events that give none: the
+/// finest a `SystemTime` keeps on every platform, Windows' 100 ns. An
+/// event's public time is a `SystemTime`, and a page of several windows is
+/// cut by it: a nanosecond apart, a hundred events there read as one time,
+/// which no page splits and a page's `next` begins inside of.
+const STAMP_STEP: i64 = 100;
+
+/// The time the event at `place` of one call's list takes when it gives
+/// none: the call's `now`, [`STAMP_STEP`] later for each event before it, so
+/// that what one call appends reads back in the order it was given and a page
+/// may end between any two of them. A store's `now` on Windows is a multiple
+/// of the step, so each time reads back as it was written. An append carries
+/// 4 MiB of events at most, some 50,000 of 85 bytes, so its last is some
+/// 5 ms past `now`, far inside the ten minutes ahead of it a stream takes.
+///
+/// ```text
+/// append_all([a, b.at(t), c])  →  a at now, b at t, c at now + 200 ns
+/// ```
+pub(super) fn stamped(now: i64, place: usize) -> i64 {
+    now.saturating_add(i64::try_from(place).unwrap_or(i64::MAX).saturating_mul(STAMP_STEP))
+}
+
+/// An event with its time, `at` unless it gives one, once it is one the file
+/// keeps: a name, fields within their bounds, a time within its stream's
+/// window.
+pub(super) fn check(event: NewEvent, at: i64, (oldest, newest): (i64, i64)) -> Result<Kept> {
     if let Some(refused) = &event.refused {
         return Err(Error::invalid(refused.clone()));
     }
@@ -745,7 +769,7 @@ pub(super) fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> 
             return Err(Error::invalid(format!("{} keys in its {what}, past {MAX_KEYS}", fields.len())));
         }
     }
-    let at = event.at.map_or(now, unix_nanos);
+    let at = event.at.map_or(at, unix_nanos);
     let event = event.kept(at);
     if event.weight() > MAX_EVENT {
         let refused = format!("{} bytes, past the {MAX_EVENT} an event weighs", event.weight());

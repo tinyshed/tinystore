@@ -127,8 +127,10 @@ fn what_a_read_looks_for_is_found_in_a_block_as_in_a_head() {
 fn a_segment_is_cut_into_blocks_of_the_events_and_the_bytes_a_block_holds() {
     let fixture = fixture();
     let api = fixture.events("api");
-    api.append_all((0..2500).map(|n| NewEvent::new(&n.to_string()))).unwrap();
-    api.append_all((0..3).map(|_| NewEvent::new("large").message(&"x".repeat(100 << 10)))).unwrap();
+    // of one time given, since the events of a call that gives none take 100 ns each
+    let now = fixture.now();
+    api.append_all((0..2500).map(|n| NewEvent::new(&n.to_string()).at(now))).unwrap();
+    api.append_all((0..3).map(|_| NewEvent::new("large").message(&"x".repeat(100 << 10)).at(now))).unwrap();
     fixture.pass(HOUR);
     maintain(&fixture.store).unwrap();
     // 2503 events of one time: two blocks of 1024, and the rest cut where the large ones pass a block's bytes

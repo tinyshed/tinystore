@@ -62,7 +62,10 @@ fn of_a_list_the_first_event_of_an_id_is_written_and_the_rest_of_it_whole() {
     };
     let first = [event("a", Some("x")), event("b", None), event("c", Some("x")), event("d", Some("y"))];
     assert_eq!(deploys.append_all(first).unwrap(), 3);
+    // a second on, as a program's next call comes, so that its events read after the first's
+    fixture.pass(SECOND);
     assert_eq!(deploys.append_all([event("e", Some("y")), event("f", Some("z"))]).unwrap(), 1);
+    fixture.pass(SECOND);
     // a refused event refuses the list, and holds none of its ids
     let refused = deploys.append_all([event("g", Some("w")), NewEvent::new("")]).unwrap_err();
     assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
