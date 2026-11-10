@@ -153,6 +153,20 @@ the store, at any depth:
 - A message's text is left as it is: put secrets in fields, never in the
   message, so `redact` can find them.
 
+<div data-for="rust">
+
+In Rust, a field logged with `?` reaches the logger as one string, the
+value's `Debug` text. `redact` hides a URL's password inside that string, but
+it doesn't look for a secret's key in it. Log a secret as a field of its own,
+so that its key hides it:
+
+```rust
+tracing::info!(client = ?client, "connected"); // client="Client { id: 7, api_key: \"sk-4f2a\" }": the key shows
+tracing::info!(client = client.id, api_key = %client.api_key, "connected"); // client=7 api_key=[redacted]
+```
+
+</div>
+
 ## Options
 
 A logger also takes `level`, the least level kept and printed, which can
