@@ -127,6 +127,14 @@ lets the other commits through as it waits. A file that blobs keeps is linked
 into the snapshot rather than copied, so a large file costs the snapshot a
 directory entry until the zip is written.
 
+The snapshot sits in the store's directory, on the store's disk. Before it
+copies anything, the backup checks that the disk has room for every SQLite
+file and its WAL on top of the space the store keeps free, `keep_free`, 1 GiB
+unless the store's options say otherwise. Without that room the backup fails
+with `limit` at once, saying how much its snapshot needs and how much is
+free, and copies nothing. The zip needs room of its own where it is written,
+which the backup does not check.
+
 ## See also
 
 - [Backup](README.md): the engine's overview.

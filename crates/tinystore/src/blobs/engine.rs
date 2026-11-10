@@ -22,7 +22,6 @@ use super::disk::{Disk, OBJECTS, UPLOADS};
 use super::ids::Ids;
 use super::scrub::Scrubbing;
 use crate::engine::{Claim, Copied, Copying, Engine, Host, Then, to_copy};
-use crate::limits::Limit;
 use crate::sqlite::{Config, File, Migration, Tx, own_work, sql_error};
 use crate::sync::lock;
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_millis};
@@ -358,21 +357,7 @@ impl Blobs {
     /// Refuses `coming` bytes that would leave the disk less free than the
     /// store keeps, asking the system how much is free now.
     pub(crate) fn room(&self, coming: u64) -> Result<()> {
-        if self.keep_free == 0 {
-            return Ok(());
-        }
-        let free = crate::space::available(self.disk.dir())
-            .map_err(|error| Error::io("blobs: the disk's free space", error))?;
-        if free >= self.keep_free.saturating_add(coming) {
-            return Ok(());
-        }
-        let refused = format!(
-            "{coming} bytes more would leave the disk {} bytes free, under the {} the store keeps",
-            free.saturating_sub(coming),
-            self.keep_free
-        );
-        let space = Limit { name: "disk space", bound: free.saturating_sub(self.keep_free) };
-        Err(space.refuse(coming, refused))
+        crate::space::room(self.disk.dir(), self.keep_free, coming).map_err(|error| error.within("blobs"))
     }
 
     /// Takes up the file's marks and removes what a process that died left:

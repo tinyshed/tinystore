@@ -67,7 +67,7 @@ pub mod replication;
 mod schedule;
 #[cfg(feature = "search")]
 pub mod search;
-#[cfg(any(feature = "blobs", feature = "metrics", feature = "replication"))]
+#[cfg(any(feature = "blobs", feature = "metrics", feature = "replication", feature = "backup"))]
 mod space;
 #[cfg(feature = "sql")]
 pub mod sql;

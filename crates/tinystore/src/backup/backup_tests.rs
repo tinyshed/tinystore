@@ -240,6 +240,35 @@ fn a_backup_that_fails_leaves_no_zip() {
     assert!(!tree(&f.data).iter().any(|name| name.starts_with(".snapshot-")), "the snapshot is gone");
 }
 
+// contract: BAK-04, ERR-05
+#[test]
+fn a_backup_the_disk_has_no_room_for_fails_limit_before_it_copies() {
+    let f = fixture();
+    f.filled().close().unwrap();
+    // a disk with a gibibyte less than the store keeps free
+    let keep_free = crate::space::available(&f.data).unwrap().saturating_add(1 << 30);
+    let options = Options { clock: Some(f.clock.clone()), background: false, keep_free, ..Options::default() };
+    let store = Store::open(&f.data, options).unwrap();
+    let error = store.backup().write(&f.zip).unwrap_err();
+    assert_eq!((error.kind(), error.fact("limit")), (ErrorKind::Limit, Some("disk space")), "{error}");
+    let said = error.to_string();
+    assert!(
+        error.fact("bound").is_some() && said.contains("its snapshot: ") && said.contains("where the disk has"),
+        "{said}"
+    );
+    // what each SQLite file and its WAL hold, the photo's bytes linked
+    let sqlite: u64 = tree(&f.data)
+        .iter()
+        .filter(|name| name.ends_with(".db") || name.ends_with(".db-wal"))
+        .map(|name| fs::metadata(f.data.join(name)).unwrap().len())
+        .sum();
+    assert_eq!(error.fact("wanted"), Some(sqlite.to_string().as_str()), "{error}");
+    let beside: Vec<String> =
+        tree(f.zip.parent().unwrap()).into_iter().filter(|name| name.contains("backup.zip")).collect();
+    assert!(beside.is_empty(), "{beside:?}");
+    assert!(!tree(&f.data).iter().any(|name| name.starts_with(".snapshot-")), "the snapshot is gone");
+}
+
 /// A zip's writer that stops at its first byte until it is let go, and
 /// keeps nothing.
 struct Stopped {

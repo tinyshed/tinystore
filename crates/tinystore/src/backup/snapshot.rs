@@ -75,6 +75,7 @@ pub(super) fn take(store: &Store) -> Result<Snapshot> {
     let named: HashSet<String> = files.iter().map(|(copied, _)| copied.name.clone()).collect();
     let unopened = Unopened { store: store.dir(), into: &snapshot.dir, claimed: &claimed, named: &named };
     files.extend(unopened.databases()?);
+    room_for(store, &files)?;
     let mut to_copy = Vec::with_capacity(files.len());
     for (copied, source) in files {
         to_copy.push((source, unopened.target(&copied.name)?));
@@ -93,6 +94,24 @@ pub(super) fn take(store: &Store) -> Result<Snapshot> {
         snapshot.files.extend(unopened.objects(&folder)?);
     }
     Ok(snapshot)
+}
+
+/// Refuses a snapshot that would leave the disk less free than the store
+/// keeps, before a byte of it is copied: it lies on the disk of the store's
+/// files, beside them. A copy holds every page of its file, those of its WAL
+/// among them, so an SQLite file needs its size and its WAL's; a file blobs
+/// keeps is linked, which needs no room.
+fn room_for(store: &Store, files: &[(Copied, Source)]) -> Result<()> {
+    let needs: u64 = files.iter().map(|(copied, _)| bytes_of(&store.dir().join(&copied.name))).sum();
+    crate::space::room(store.dir(), store.keep_free(), needs).map_err(|error| error.within("its snapshot"))
+}
+
+/// The bytes of an SQLite file and of its WAL, either of them absent none.
+fn bytes_of(file: &Path) -> u64 {
+    let mut wal = file.as_os_str().to_owned();
+    wal.push("-wal");
+    let size = |path: &Path| fs::metadata(path).map_or(0, |metadata| metadata.len());
+    size(file) + size(Path::new(&wal))
 }
 
 fn made_dir(store: &Path) -> Result<PathBuf> {

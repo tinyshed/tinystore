@@ -5,6 +5,25 @@
 use std::io;
 use std::path::Path;
 
+/// Refuses `coming` bytes more on the disk that holds `dir` when they would
+/// leave it less free than the store keeps, `keep_free`, asking the system
+/// how much is free now; a store that keeps none asks nothing.
+#[cfg(any(feature = "blobs", feature = "backup"))]
+pub(crate) fn room(dir: &Path, keep_free: u64, coming: u64) -> crate::Result<()> {
+    if keep_free == 0 {
+        return Ok(());
+    }
+    let free = available(dir).map_err(|error| crate::Error::io("the disk's free space", error))?;
+    if free >= keep_free.saturating_add(coming) {
+        return Ok(());
+    }
+    let refused = format!(
+        "{coming} bytes more, where the disk has {free} free, would leave it less than the {keep_free} the store keeps"
+    );
+    let space = crate::limits::Limit { name: "disk space", bound: free.saturating_sub(keep_free) };
+    Err(space.refuse(coming, refused))
+}
+
 /// The bytes this process may still write on the file system that holds
 /// `path`, as the system counts them: a quota and a root's reserve left out.
 #[cfg(all(unix, not(target_vendor = "apple")))]

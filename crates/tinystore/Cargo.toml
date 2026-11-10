@@ -34,7 +34,7 @@ jobs = ["store", "dep:jiff"]
 sql = ["store"]
 blobs = ["store", "dep:sha2", "dep:libc"]
 # a backup of every engine as one zip, checked by SHA-256, and its restore
-backup = ["store", "dep:sha2"]
+backup = ["store", "dep:sha2", "dep:libc"]
 # a store a node: a log of each file's commits, entries chained by SHA-256
 replication = ["store", "dep:sha2", "dep:zstd", "dep:libc"]
 # a node's links through TLS, rustls with ring's cryptography: off unless asked,
