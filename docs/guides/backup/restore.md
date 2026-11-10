@@ -43,7 +43,7 @@ store, err := tinystore.Open(ctx, "./data")
 |--------------------------------------------|---------------------------------------------|
 | the directory is empty or absent           | `invalid`: a restore never mixes two stores |
 | no store holds the directory               | `in use`                                    |
-| the manifest reads, of format `1`          | `invalid`, naming both formats              |
+| the manifest reads, of format `1`          | `corrupt`, naming both formats              |
 | each file's CRC-32, size and SHA-256 match | `corrupt`, naming the file                  |
 
 - The restore holds the directory's `LOCK` meanwhile, so no store opens there

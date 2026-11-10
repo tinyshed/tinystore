@@ -10,7 +10,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use super::manifest::{Listed, MANIFEST, MOST_BYTES, Manifest};
+use super::manifest::{Listed, MANIFEST, Manifest};
 use super::{Backup, is_inside, zip};
 use crate::durable::sync_directory;
 use crate::text::hex;
@@ -49,12 +49,8 @@ fn read(zip: &mut (impl Read + io::Seek)) -> std::result::Result<(HashMap<String
     let entries: HashMap<String, zip::Entry> =
         zip::entries(zip)?.into_iter().map(|entry| (entry.name.clone(), entry)).collect();
     let listed = entries.get(MANIFEST).ok_or("a zip without the manifest a backup holds")?;
-    if listed.size > MOST_BYTES {
-        return Err(format!("a manifest of {} bytes, past the {MOST_BYTES} a restore reads", listed.size));
-    }
-    let mut text = Vec::new();
-    zip::open(zip, listed)?.read_to_end(&mut text).map_err(|error| error.to_string())?;
-    let manifest = Manifest::read(&text)?;
+    // a manifest lists files its zip holds, so no more than it holds
+    let manifest = Manifest::read(zip::open(zip, listed)?, entries.len())?;
     for file in &manifest.files {
         if !is_inside(&file.name) || file.name == MANIFEST || file.name == "LOCK" {
             return Err(format!("{:?}: a path that is not a file of a store's directory", file.name));

@@ -442,6 +442,97 @@ fn a_file_whose_sha256_is_not_its_manifests_is_refused_though_its_crc_is_the_zip
     assert!(tree(&f.restored).is_empty());
 }
 
+/// A file as a manifest lists it, with `padding` spaces inside its object,
+/// as JSON allows.
+fn listing(name: &str, bytes: &[u8], padding: usize) -> String {
+    let (size, sha256, spaces) = (bytes.len(), hex(&Sha256::digest(bytes)), " ".repeat(padding));
+    format!(r#"{{"name":"{name}","engine":"program","size":{size},{spaces}"sha256":"{sha256}"}}"#)
+}
+
+/// A manifest of format 1 that lists `listings`.
+fn manifest_of(listings: impl Iterator<Item = String>) -> String {
+    let mut text = String::from(r#"{"format":1,"created":0,"files":["#);
+    for (at, listing) in listings.enumerate() {
+        if at > 0 {
+            text.push(',');
+        }
+        text.push_str(&listing);
+    }
+    text.push_str("]}\n");
+    text
+}
+
+/// Writes a zip of `files` and `manifest` at `path`.
+fn zipped(path: &Path, files: &[(String, Vec<u8>)], manifest: &str) {
+    let mut writer = zip::Writer::new(Vec::new());
+    for (name, bytes) in files {
+        writer.add(name, bytes.len() as u64, bytes.as_slice(), |_| {}).unwrap();
+    }
+    writer.add(MANIFEST, manifest.len() as u64, manifest.as_bytes(), |_| {}).unwrap();
+    fs::write(path, writer.finish().unwrap()).unwrap();
+}
+
+// contract: BAK-02
+#[test]
+fn a_restore_reads_a_manifest_longer_than_64_mib() {
+    let f = fixture();
+    // spaces in each file's field, so that a few files make a manifest that
+    // long, as some hundreds of thousands of files do
+    let files: Vec<(String, Vec<u8>)> = (0..70_u8).map(|n| (format!("notes/{n:02}"), vec![n])).collect();
+    let manifest = manifest_of(files.iter().map(|(name, bytes)| listing(name, bytes, 1_000_000)));
+    assert!(manifest.len() > 64 << 20, "{} bytes", manifest.len());
+    zipped(&f.zip, &files, &manifest);
+    drop(manifest);
+    let restored = restore(&f.zip, &f.restored).unwrap();
+    assert_eq!((restored.files, restored.bytes), (70, 70));
+    assert_eq!(fs::read(f.restored.join("notes/69")).unwrap(), [69]);
+}
+
+// contract: BAK-02
+#[test]
+fn a_manifest_lists_no_more_files_than_its_zip_holds_nor_a_field_past_a_mebibyte() {
+    let f = fixture();
+    let files = vec![("kv.db".to_owned(), b"kv's bytes".to_vec())];
+    let (name, bytes) = &files[0];
+    zipped(&f.zip, &files, &manifest_of((0..3).map(|_| listing(name, bytes, 0))));
+    let error = restore(&f.zip, &f.restored).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
+    assert!(error.to_string().contains("more files than the 2 its zip holds"), "{error}");
+
+    zipped(&f.zip, &files, &manifest_of(std::iter::once(listing(name, bytes, 1_100_000))));
+    let error = restore(&f.zip, &f.restored).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
+    assert!(error.to_string().contains("past 1048576 bytes"), "{error}");
+    assert!(!f.restored.exists(), "a restore writes nothing before its manifest reads");
+}
+
+// contract: BAK-02
+#[test]
+fn a_manifest_an_older_release_wrote_reads_as_it_did_and_the_one_written_now_alike() {
+    // with the spaces of the releases before, which every release reads
+    let older = r#"{
+  "created": 1800000000000,
+  "files": [
+    {
+      "engine": "kv",
+      "name": "kv.db",
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "size": 8192
+    }
+  ],
+  "format": 1,
+  "keyLeftOut": true
+}
+"#;
+    let sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".to_owned();
+    let kv = manifest::Listed { name: "kv.db".to_owned(), engine: "kv", size: 8192, sha256 };
+    let read = Manifest::read(older.as_bytes(), 2).unwrap();
+    assert_eq!(read, Manifest { created: 1_800_000_000_000, files: vec![kv], key_left_out: true });
+    let written = read.to_json();
+    assert!(!written.contains(' '), "written without the spaces: {written}");
+    assert_eq!(Manifest::read(written.as_bytes(), 2).unwrap(), read);
+}
+
 #[test]
 fn an_archive_shorter_than_a_zip_end_is_corrupt() {
     let f = fixture();
