@@ -1,6 +1,5 @@
 use std::fmt;
 use std::marker::PhantomData;
-#[cfg(any(feature = "sql", feature = "wire"))]
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -767,7 +766,7 @@ impl<V> Bucket<V> {
         };
         let mut cell = opened(self.encrypted.as_ref(), &path, cell)?;
         if let Some(renewal) = self.renewal_due(&cell, now)
-            && cells::renew(tx, id, &path, (renewal.version, renewal.seen), renewal.until)?
+            && cells::renew(tx, id, &path, (renewal.version, renewal.seen), (renewal.until, now))?
         {
             cell.expires = Some(renewal.until);
         }
@@ -839,9 +838,9 @@ impl<V> Bucket<V> {
             renewals.ask(self.scope.id, path, renewal);
             return cell;
         }
-        let (id, written_path) = (self.scope.id, path.clone());
+        let (id, written_path, kv) = (self.scope.id, path.clone(), Arc::clone(&self.scope.kv));
         let at_once = move |tx: &Tx<'_>, _: &Revision| {
-            cells::renew(tx, id, &written_path, (renewal.version, renewal.seen), renewal.until)
+            cells::renew(tx, id, &written_path, (renewal.version, renewal.seen), (renewal.until, kv.now()))
         };
         match self.scope.write(key, 0, at_once) {
             Ok(true) => cell.expires = Some(renewal.until),
@@ -935,8 +934,9 @@ impl<V> Bucket<V> {
             self.scope.kv.renewals().ask(id, path, renewal);
             return Ok(false);
         }
+        let kv = Arc::clone(&self.scope.kv);
         self.scope.write(key, 0, move |tx: &Tx<'_>, _: &Revision| {
-            cells::renew(tx, id, &path, (renewal.version, renewal.seen), renewal.until)
+            cells::renew(tx, id, &path, (renewal.version, renewal.seen), (renewal.until, kv.now()))
         })
     }
 

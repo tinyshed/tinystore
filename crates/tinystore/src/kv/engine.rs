@@ -120,7 +120,7 @@ impl Kv {
             kept: AtomicI64::new(revision),
             names: Mutex::new(HashMap::new()),
             counting: Mutex::new(HashMap::new()),
-            renewals: Renewals::default(),
+            renewals: Renewals::new(store.clock()),
             runs: Runs::default(),
             #[cfg(feature = "replication")]
             passed: Mutex::default(),

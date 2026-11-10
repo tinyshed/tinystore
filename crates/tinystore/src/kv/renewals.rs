@@ -3,14 +3,15 @@
 //! A copy's reads ask its home for theirs, passed on together once a second.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::cells;
 #[cfg(feature = "replication")]
 use super::forward;
-use crate::Result;
 use crate::sqlite::File;
 use crate::sync::lock;
+use crate::{Clock, Result, unix_millis};
 
 /// Renewals that may wait at once; past them a key's next read asks again.
 const MOST_WAITING: usize = 100_000;
@@ -27,12 +28,20 @@ const PASSED: usize = 1024;
 #[cfg(feature = "replication")]
 const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-#[derive(Debug, Default)]
 pub(crate) struct Renewals {
     waiting: Mutex<HashMap<(i64, Vec<u8>), Renewal>>,
     /// A copy's renewals, which the answers of those passed on put back when
     /// they found no way home.
     passing: Arc<Passing>,
+    /// The store's clock, which a flush reads as it writes, so that a key that
+    /// expired while its renewal waited stays expired.
+    clock: Arc<dyn Clock>,
+}
+
+impl fmt::Debug for Renewals {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Renewals").field("waiting", &self.lock().len()).finish_non_exhaustive()
+    }
 }
 
 /// A key by its bucket's id and its path.
@@ -57,6 +66,10 @@ pub(crate) struct Renewal {
 type Asked = ((i64, Vec<u8>), Renewal);
 
 impl Renewals {
+    pub(crate) fn new(clock: Arc<dyn Clock>) -> Renewals {
+        Renewals { waiting: Mutex::default(), passing: Arc::default(), clock }
+    }
+
     /// Keeps a renewal for the next flush, the latest one a key.
     pub(crate) fn ask(&self, bucket: i64, path: Vec<u8>, renewal: Renewal) {
         let mut waiting = self.lock();
@@ -78,8 +91,8 @@ impl Renewals {
         }
         let mut renewed = 0;
         for (index, batch) in asked.chunks(BATCH).enumerate() {
-            let batch = batch.to_vec();
-            match file.write(0, move |tx| write(tx, &batch)) {
+            let (batch, clock) = (batch.to_vec(), Arc::clone(&self.clock));
+            match file.write(0, move |tx| write(tx, &batch, unix_millis(clock.now()))) {
                 Ok(written) => renewed += written,
                 Err(error) => {
                     self.give_back(&asked[index * BATCH..]);
@@ -217,10 +230,11 @@ fn keep_again(passing: &Passing, passed: Passed) {
     }
 }
 
-fn write(tx: &crate::sqlite::Tx<'_>, batch: &[Asked]) -> Result<usize> {
+/// Writes a batch of renewals at `now`, as their commit is built.
+fn write(tx: &crate::sqlite::Tx<'_>, batch: &[Asked], now: i64) -> Result<usize> {
     let mut renewed = 0;
     for ((bucket, path), renewal) in batch {
-        if cells::renew(tx, *bucket, path, (renewal.version, renewal.seen), renewal.until)? {
+        if cells::renew(tx, *bucket, path, (renewal.version, renewal.seen), (renewal.until, now))? {
             renewed += 1;
         }
     }

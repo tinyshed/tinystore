@@ -408,6 +408,20 @@ fn a_renewal_never_extends_a_key_written_again_since_its_read() {
     assert_eq!(sessions.get("token").unwrap(), None);
 }
 
+// contract: KV-03
+#[test]
+fn a_renewal_written_after_its_key_expired_leaves_it_expired() {
+    let f = fixture();
+    let sessions = f.store.bucket::<Session>("sessions").idle(30 * MINUTE).open().unwrap();
+    sessions.set("token", &session(1)).unwrap();
+    f.clock.advance(27 * MINUTE);
+    assert!(sessions.get("token").unwrap().is_some(), "three minutes left: its renewal waits for the flush");
+    f.clock.advance(4 * MINUTE);
+    assert_eq!(sessions.get("token").unwrap(), None, "it expired before the flush");
+    assert_eq!(kv::maintain(&f.store).unwrap().renewed, 0, "the renewal brings back no expired key");
+    assert_eq!(sessions.get("token").unwrap(), None);
+}
+
 #[test]
 fn a_write_of_an_idle_key_is_a_use_and_a_ttl_key_keeps_its_expiry() {
     let f = fixture();

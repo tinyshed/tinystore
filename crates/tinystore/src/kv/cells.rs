@@ -107,8 +107,8 @@ const INSERT_SPILLED: &str = "insert into _tinystore_kv_spilled (value) values (
 const DELETE_SPILLED: &str = "delete from _tinystore_kv_spilled where id = ?1";
 const DELETE_CELL: &str = "delete from _tinystore_kv_cells where bucket = ?1 and path = ?2";
 const UPDATE_EXPIRES: &str = "update _tinystore_kv_cells set expires = ?3 where bucket = ?1 and path = ?2";
-const RENEW: &str =
-    "update _tinystore_kv_cells set expires = ?5 where bucket = ?1 and path = ?2 and version = ?3 and expires = ?4";
+const RENEW: &str = "update _tinystore_kv_cells set expires = ?5
+    where bucket = ?1 and path = ?2 and version = ?3 and expires = ?4 and expires > ?6";
 const COUNT_UNDER: &str = "select count(*) from (
     select 1 from _tinystore_kv_cells where bucket = ?1 and path >= ?2 and path < ?3 limit cast(?4 as integer))";
 const DELETE_UNDER: &str =
@@ -279,13 +279,20 @@ pub(crate) fn set_expires(connection: &Connection, bucket: i64, path: &[u8], exp
     execute(connection, UPDATE_EXPIRES, params![bucket, path, expires], "an expiry").map(drop)
 }
 
-/// Moves a key's expiry on, unless it was written or touched since it was
-/// read, and says whether it did.
-pub(crate) fn renew(connection: &Connection, bucket: i64, path: &[u8], seen: (i64, i64), expires: i64) -> Result<bool> {
+/// Moves a key's expiry on to `expires`, unless it was written or touched
+/// since it was read, or expired before `now`, when the renewal is written;
+/// says whether it did.
+pub(crate) fn renew(
+    connection: &Connection,
+    bucket: i64,
+    path: &[u8],
+    seen: (i64, i64),
+    (expires, now): (i64, i64),
+) -> Result<bool> {
     let (version, seen_expires) = seen;
     let changed = connection
         .prepare_cached(RENEW)
-        .and_then(|mut renew| renew.execute(params![bucket, path, version, seen_expires, expires]))
+        .and_then(|mut renew| renew.execute(params![bucket, path, version, seen_expires, expires, now]))
         .map_err(|error| sql_error("a renewal", error))?;
     Ok(changed > 0)
 }
