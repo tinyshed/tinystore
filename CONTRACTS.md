@@ -82,7 +82,7 @@ These contracts are what does not.
 - **CFG-04** A change MUST reach every handle and watcher before it returns, versions in order; `if_version` MUST refuse a change made since.
 - **CFG-05** A change that `validate` or any open handle's declaration refuses MUST keep nothing.
 - **CFG-06** A secret MUST print as `***` wherever it goes — debug, logs, errors, JSON — and only `reveal` gives it; a secret MUST NOT be changed at run time.
-- **CFG-07** A kept change that no longer fits the declaration MUST be ignored and said, and applied again once it fits; `strict` MUST refuse to open instead.
+- **CFG-07** A kept change that no longer fits the declaration, or that holds a secret as the program's type reads it, as another program's change of a map whose values hold none in its own type, MUST be ignored and said, and applied again once it fits; `strict` MUST refuse to open instead.
 - **CFG-08** Files, variables, `NAME_FILE` and `.env` MUST read the same in every language.
 - **CFG-09** `explain` MUST give each setting every value it was given, newest first, each with where it came from as data the same in every language: the declaration, a layer by its place, a file by its path, a variable with the `.env` file or the `NAME_FILE` file its text came from, or a change with its version and time; a line's `from` and `over` MUST be that data as text, and a secret's value MUST be `***` in it too.
 - **CFG-10** A config loaded without a store MUST read the same layers, rules and secrets as one opened from a store, write nothing to disk, and refuse a live setting when it opens, naming it.

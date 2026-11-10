@@ -408,6 +408,46 @@ fn a_change_that_holds_a_secret_is_refused_before_another_handles_check_could_qu
     assert!(error.contains("mirrors holds a secret, which only a layer gives") && !error.contains("kept?"), "{error}");
 }
 
+/// Another program's declaration of `Sites`' mirrors, whose type holds no secret.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct PlainSites {
+    mirrors: Live<BTreeMap<String, PlainInstance>>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct PlainInstance {
+    host: String,
+    password: String,
+}
+
+// contract: CFG-06, CFG-07
+#[test]
+fn a_kept_change_of_a_map_whose_type_here_holds_a_secret_inside_is_ignored_and_said_and_strict_refuses_to_open() {
+    let f = fixture();
+    let toml = file(&f, "sites.toml", "[mirrors.aimee]\nhost = \"10.0.0.1\"\npassword = \"of-the-file\"\n");
+    let opening = || f.store.config("sites", Sites::default()).file(toml.as_path());
+    let sites = opening().open().unwrap();
+    let plain = f.store.config("sites", PlainSites::default()).open().unwrap();
+    let another = PlainInstance { host: "h".to_owned(), password: "of-another".to_owned() };
+    plain.update(|value| drop(value.mirrors.insert("aimee".to_owned(), another.clone()))).unwrap();
+    assert_eq!(plain.get().mirrors["aimee"].password, "of-another", "a type with no secret there takes it");
+
+    let password = |config: &Config<Sites>| config.get().mirrors["aimee"].password.reveal().clone();
+    let reopened = opening().open().unwrap();
+    assert_eq!((password(&sites), password(&reopened)), ("of-the-file".to_owned(), "of-the-file".to_owned()));
+    for config in [&sites, &reopened] {
+        let notes = config.explain().notes;
+        assert!(notes.len() == 1 && notes[0].starts_with("mirrors: the change of version "), "{notes:?}");
+        assert!(notes[0].ends_with("is ignored: it holds a secret, which only a layer gives"), "{notes:?}");
+        let printed = format!("{0}{0:?}", config.explain());
+        assert!(!printed.contains("of-another"), "{printed}");
+    }
+    let error = refused(opening().strict().open()).to_string();
+    assert!(error.contains("mirrors: the change of version ") && !error.contains("of-another"), "{error}");
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Dashbin {

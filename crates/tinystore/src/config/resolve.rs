@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use super::declaration::{Declaration, Group, Item, Kind, Node, Setting, at, gives_secret};
+use super::declaration::{Declaration, Group, Item, Kind, Node, Setting, at, gives_secret, holds_secret};
 use super::explain::Origin;
 use super::hub::{Change, Kept};
 use super::layers::{Base, Layer, Stacked, not_read_from, set};
@@ -55,7 +55,7 @@ pub(super) struct Resolved<T> {
     pub(super) foreign: Vec<String>,
 }
 
-impl<T: DeserializeOwned> Making<'_, T> {
+impl<T: Serialize + DeserializeOwned> Making<'_, T> {
     /// The value the layers alone make, or every problem with it, each named
     /// by the layer whose value broke it.
     pub(super) fn layered(&self, base: &Base) -> Result<(T, Value), Vec<String>> {
@@ -101,6 +101,12 @@ impl<T: DeserializeOwned> Making<'_, T> {
         let mut next = tree.clone();
         set(&mut next, path, value);
         let built = self.built(&next).map_err(|why| said(setting, &why))?;
+        // Another program's type of a map may hold no secret where this one's
+        // does, so its change is read as this type writes it, with its marks.
+        let read = marked(&built).map_err(|_| "does not write as its type".to_owned())?;
+        if at(&read, path).is_some_and(holds_secret) {
+            return Err("it holds a secret, which only a layer gives".to_owned());
+        }
         if let Some(validate) = self.validate {
             validate(&built)?;
         }

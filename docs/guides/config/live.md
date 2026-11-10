@@ -142,6 +142,11 @@ A kept change of a setting a program does not declare may be another
 program's: it is neither applied nor warned about, and `explain` lists it
 apart.
 
+A live map or list is kept whole. When your type of it holds a secret, a
+`Secret` field in each entry, and another program's type holds none, your
+program ignores that program's change of it as one that no longer fits: a
+secret comes only from a layer.
+
 ## Limits and defaults
 
 | What                               | Limit          |
