@@ -844,6 +844,128 @@ fn a_commit_that_panics_outside_its_writes_leaves_a_leader_for_the_next() {
     assert_eq!(count(&file), 1);
 }
 
+/// Held by each test whose completions panic, so that they run one at a time.
+/// While a single subscriber is set, tracing asks the subscriber of the thread
+/// that first meets a line whether it wants it, and keeps the answer for every
+/// thread: a close's thread, with none, would leave the subscriber of the test
+/// that counts the line deaf to it.
+static PANICKING: Mutex<()> = Mutex::new(());
+
+/// Inserts `value` through `submit`, its answer sent on `answers`, or a
+/// panic in its completion where it `panics`.
+fn submit_panicking(file: &File, value: &'static str, panics: bool, answers: mpsc::Sender<(&'static str, Result<()>)>) {
+    let write = move |tx: &Tx<'_>| {
+        tx.execute("insert into t (v) values (?1)", [value]).map(drop).map_err(|error| sql_error("insert", error))
+    };
+    file.submit(value.len(), write, move |answer| {
+        assert!(!panics, "a bug in a completion");
+        answers.send((value, answer)).unwrap();
+    });
+}
+
+// contract: DUR-03
+#[test]
+fn a_completion_that_panics_leaves_every_write_beside_it_answered_and_a_leader_for_the_next() {
+    let _alone = PANICKING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_dir, file) = open(Config { group: GroupLimits { writes: 3, ..GroupLimits::default() }, ..Config::default() });
+    let (answers, answered) = mpsc::channel();
+    let held = lock(&file.writer);
+    let leader = {
+        let (file, answers) = (Arc::clone(&file), answers.clone());
+        // with no commit running, the first submission leads, and waits for the writer
+        thread::spawn(move || submit_panicking(&file, "a", true, answers))
+    };
+    wait_until(|| file.writes_waiting() == 1);
+    let (inserted, caller) = mpsc::channel();
+    {
+        let file = Arc::clone(&file);
+        thread::spawn(move || inserted.send(insert(&file, "b")).unwrap());
+    }
+    wait_until(|| file.writes_waiting() == 2);
+    submit_panicking(&file, "c", true, answers.clone());
+    // the commit takes three, and this one waits behind it for the next
+    submit_panicking(&file, "d", false, answers);
+    assert_eq!(file.writes_waiting(), 4);
+    drop(held);
+
+    let beside = caller.recv_timeout(Duration::from_secs(10)).expect("the caller beside them waited for good");
+    assert!(beside.is_ok(), "{beside:?}");
+    let (behind, answer) = answered.recv_timeout(Duration::from_secs(10)).expect("the write behind waited for good");
+    assert_eq!(behind, "d");
+    assert!(answer.is_ok(), "{answer:?}");
+    leader.join().expect("the leader went on past the panics");
+    let later = {
+        let file = Arc::clone(&file);
+        within_a_minute(move || insert(&file, "e"))
+    };
+    assert!(later.is_ok(), "a later write found a leader: {later:?}");
+    assert_eq!(values(&file), ["a", "b", "c", "d", "e"], "every write committed");
+}
+
+/// Counts the warnings the store logs.
+#[cfg(feature = "console")]
+struct Warned(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(feature = "console")]
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warned {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        let said = event.metadata();
+        if said.target() == "tinystore" && *said.level() == tracing::Level::WARN {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+#[cfg(feature = "console")]
+#[test]
+fn completions_that_panic_are_said_once_however_many() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let _alone = PANICKING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_dir, file) = open(Config::default());
+    let (answers, _answered) = mpsc::channel();
+    let warned = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let subscriber = tracing_subscriber::registry().with(Warned(Arc::clone(&warned)));
+    // with no commit running, each submission leads its own, here
+    tracing::subscriber::with_default(subscriber, || {
+        for value in ["a", "b", "c"] {
+            submit_panicking(&file, value, true, answers.clone());
+        }
+    });
+    assert_eq!(values(&file), ["a", "b", "c"]);
+    assert_eq!(warned.load(std::sync::atomic::Ordering::SeqCst), 1, "three panics, said once");
+}
+
+// contract: STORE-03
+#[test]
+fn a_completion_that_panics_as_a_close_answers_it_leaves_the_writes_after_it_answered() {
+    let _alone = PANICKING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_dir, file) = open(Config::default());
+    let (answers, _answered) = mpsc::channel();
+    let held = lock(&file.writer);
+    let leader = {
+        let (file, answers) = (Arc::clone(&file), answers.clone());
+        thread::spawn(move || submit_panicking(&file, "a", true, answers))
+    };
+    wait_until(|| file.writes_waiting() == 1);
+    let (inserted, caller) = mpsc::channel();
+    {
+        let file = Arc::clone(&file);
+        thread::spawn(move || inserted.send(insert(&file, "b")).unwrap());
+    }
+    wait_until(|| file.writes_waiting() == 2);
+    let closer = {
+        let file = Arc::clone(&file);
+        thread::spawn(move || file.close())
+    };
+    wait_until(|| file.writes_waiting() == 0);
+    drop(held);
+    let answer = caller.recv_timeout(Duration::from_secs(10)).expect("the caller after it waited for good");
+    assert_eq!(answer.unwrap_err().kind(), ErrorKind::Closed);
+    closer.join().expect("the close went on past the panic").unwrap();
+    leader.join().unwrap();
+}
+
 /// A settler that counts the transactions it settled whole, the first of
 /// them failing, as kv's revision would on a file that no longer writes.
 #[derive(Default)]

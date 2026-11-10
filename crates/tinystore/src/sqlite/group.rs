@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -75,6 +75,9 @@ pub(crate) struct Group {
     checkpoints: Arc<Checkpoints>,
     probe: Option<FileProbe>,
     gate: Option<Arc<super::Gate>>,
+    /// Whether the log said that a submitted write's `done` panicked: once,
+    /// since one that panics may panic on every write.
+    told_a_panic: AtomicBool,
 }
 
 #[derive(Default)]
@@ -140,6 +143,7 @@ impl Group {
             checkpoints,
             probe: config.probe.clone(),
             gate: config.gate.clone(),
+            told_a_panic: AtomicBool::new(false),
         }
     }
 
@@ -178,7 +182,7 @@ impl Group {
         let write = Arc::new(Write::submitted(bytes, work, done, self.queued()));
         let elsewhere = crate::polled::lead();
         match (self.enqueue(&write, elsewhere.is_some()), elsewhere) {
-            (Err(error), _) => return write.answer(Err(error), Vec::new()),
+            (Err(error), _) => return self.answer(&write, Err(error)),
             // the lead, and the checkpoints after it, run where the scope says
             (Ok(true), Some(lead)) => return lead(Handed::job(Arc::clone(self), Arc::clone(writer))),
             (Ok(false), Some(_)) => return,
@@ -203,9 +207,18 @@ impl Group {
             std::mem::take(&mut queue.waiting)
         };
         for write in waiting {
-            write.answer(Err(Error::closed("a grouped write")), Vec::new());
+            self.answer(&write, Err(Error::closed("a grouped write")));
         }
         self.grew.notify_all();
+    }
+
+    /// Answers `write` alone, and says once in the log that a submitted
+    /// write's `done` panicked.
+    fn answer(&self, write: &Write, own: Result<()>) {
+        if write.answer(own, Vec::new()) && !self.told_a_panic.swap(true, Ordering::Relaxed) {
+            let said = "a submitted write's completion panicked; the writes beside it were answered; said once";
+            tracing::warn!(target: "tinystore", "{said}");
+        }
     }
 
     /// Queues a write and says whether its caller leads: one that will hand
@@ -280,7 +293,7 @@ impl Group {
                 self.commits.fetch_add(1, Ordering::Relaxed);
             }
             let leads_on = self.hand_off(batch.len(), held, own);
-            answer_all(batch, answers, own);
+            answer_all(self, batch, answers, own);
             if !leads_on {
                 return;
             }
@@ -407,14 +420,18 @@ impl Write {
     }
 
     /// Answers the write, and gives its caller the answers it passes on. A
-    /// submitted write has no caller to pass any on, and is given none.
-    fn answer(&self, own: Result<()>, passed_on: Vec<(Arc<Write>, Result<()>)>) {
+    /// submitted write has no caller to pass any on, and is given none: its
+    /// `done` runs here, and this says whether it panicked. The panic is
+    /// caught, since this thread answers the writes after it and may lead the
+    /// file's queue on, which no other thread would.
+    fn answer(&self, own: Result<()>, passed_on: Vec<(Arc<Write>, Result<()>)>) -> bool {
         let done = self.done.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(done) = done {
-            return done(own);
+            return catch_unwind(AssertUnwindSafe(|| done(own))).is_err();
         }
         *self.lock_turn() = Turn::Answered(Some(Answer { own, passed_on }));
         self.changed.notify_one();
+        false
     }
 
     fn take_work(&self) -> Option<Work> {
@@ -450,11 +467,11 @@ impl Write {
 /// rust-slice-2026-10-10). So the callers wake one another, in halves. The
 /// leader's own write is given none to pass on, since its thread may lead
 /// the next commit first.
-fn answer_all(batch: Vec<Arc<Write>>, answers: Vec<Result<()>>, own: Option<&Arc<Write>>) {
+fn answer_all(group: &Group, batch: Vec<Arc<Write>>, answers: Vec<Result<()>>, own: Option<&Arc<Write>>) {
     let mut callers = Vec::with_capacity(batch.len());
     for (write, answer) in batch.into_iter().zip(answers) {
         if write.is_submitted() || is_own(&write, own) {
-            write.answer(answer, Vec::new());
+            group.answer(&write, answer);
         } else {
             callers.push((write, answer));
         }
