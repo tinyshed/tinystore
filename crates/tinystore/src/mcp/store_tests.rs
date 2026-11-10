@@ -108,6 +108,30 @@ fn a_bucket_and_a_queue_a_program_opened_from_its_database_are_read_with_that_da
     assert_eq!((jobs[0]["id"].as_str(), jobs[0]["state"].as_str()), (Some("fern-1"), Some("scheduled")));
 }
 
+// contract: MCP-04
+#[cfg(feature = "sql")]
+#[test]
+fn a_query_of_more_rows_than_a_call_answers_is_refused_rather_than_cut() {
+    // users 1 to 201, one more than a call answers
+    const USERS: &str = "with recursive n(x) as (select 1 union all select x + 1 from n where x < 201)
+        insert into users select x from n";
+    let dir = tempfile::tempdir().unwrap();
+    let store = held(dir.path());
+    let users = [("0001_users.sql", "create table users (id integer primary key)")];
+    let db = store.database("app").migrations(users).open().unwrap();
+    db.exec(USERS).unwrap();
+    let query = |text: &str| called(&store, "sql_query", json!({ "database": "app", "query": text }));
+    let why = query("select id from users order by id").unwrap_err();
+    assert!(why.contains("the query gives more than the 200 rows a call answers: add limit and offset"), "{why}");
+    let rest = query("select id from users order by id limit 200 offset 200;").unwrap();
+    assert_eq!(rest, json!([{ "id": 201 }]), "a page of it, its last ; taken off");
+    db.exec("delete from users where id = 201").unwrap();
+    let rows = query("select id from users order by id").unwrap();
+    assert_eq!((rows.as_array().unwrap().len(), rows[199]["id"].as_i64()), (200, Some(200)));
+    let why = query("select id fro users").unwrap_err();
+    assert!(why.contains("select id fro users") && !why.contains("limit 201"), "in the query's own words: {why}");
+}
+
 // contract: MCP-07
 #[cfg(feature = "sql")]
 #[test]

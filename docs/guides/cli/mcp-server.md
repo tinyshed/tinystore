@@ -217,6 +217,7 @@ mcp::server("dashbin", env!("CARGO_PKG_VERSION"))
 | Methods                       | `initialize`, `ping`, `tools/list`, `tools/call`               |
 | Calls that run at once        | no limit: a thread per blocking call, a future per awaited one |
 | A store tool's list           | 200 items at most, `logs` 50 by default                        |
+| `sql_query`'s rows            | 200 at most: a query that gives more is refused, not cut       |
 | Two tools with the same name  | refused by `serve` with an `Invalid` error                     |
 | A schema that isn't an object | refused by `serve` with an `Invalid` error                     |
 

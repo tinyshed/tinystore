@@ -23,13 +23,15 @@ arguments `mcp` and the store's directory.
 | `kv_get`      | `bucket`, `key`, `database`                     | one value                                                 |
 | `kv_list`     | `bucket`, `branch`, `database`, `limit`         | a bucket's keys and values, in key order                  |
 | `jobs_list`   | `queue`, `prefix`, `state`, `database`, `limit` | jobs with their state, attempts and last error            |
-| `sql_query`   | `database`, `query`                             | the rows of one statement that reads                      |
+| `sql_query`   | `database`, `query`                             | the rows of one statement that reads, 200 at most         |
 | `search_list` | nothing                                         | the store's search indexes, with their documents          |
 
 - Every tool reads as [every read](README.md#how-it-behaves) of the command
   line does, beside whoever holds the directory (contract CLI-01).
 - `sql_query` runs on a read-only connection: a statement that writes is
-  refused.
+  refused. A query that gives more than 200 rows is refused too, rather than
+  cut, so that an agent never takes the first 200 rows for all of them: it
+  pages with `limit` and `offset`.
 - `jobs_list` with `state: 'failed'` and no prefix gives a queue's failed
   jobs, the last failed first: where a question about an error usually
   starts.

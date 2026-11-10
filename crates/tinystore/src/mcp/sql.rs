@@ -11,9 +11,9 @@ use serde_json::{Value, json};
 use super::given::database_held;
 use super::store::{Arguments, MOST, Opener, opened as store_opened, schema, text};
 use super::tool::Tool;
-use crate::Store;
 use crate::sql::Database;
 use crate::text::hex;
+use crate::{ErrorKind, Store};
 
 pub(super) fn tools(open: &Opener) -> Vec<Tool> {
     let open = Arc::clone(open);
@@ -21,7 +21,8 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
         "database": text("the database, as app"),
         "query": text("one statement that reads, as select count(*) from users"),
     });
-    let description = "Rows of a read-only SQL query on one of the application's databases, sql/<database>.db.";
+    let description = "Rows of a read-only SQL query on one of the application's databases, sql/<database>.db, 200 \
+                       rows at most: a query that gives more is refused, so page it with limit and offset.";
     vec![Tool::reads("sql_query", description, schema(takes, &["database", "query"]), move |given, _| {
         let given = Arguments { tool: "sql_query", given };
         Ok(rows(&store_opened(&open)?, given.needed("database")?, given.needed("query")?, MOST)?)
@@ -35,10 +36,38 @@ pub fn opened(store: &Store, database: &str) -> Result<Database, String> {
     store.database(database).open().map_err(|error| error.to_string())
 }
 
-/// A query's rows as JSON, `most` at most, each an object of its columns.
+/// A query's rows as JSON, each an object of its columns, `most` at most: a
+/// query that gives more is refused rather than cut, and its rows are read
+/// no further than the one past `most`.
 pub fn rows(store: &Store, database: &str, statement: &str, most: usize) -> Result<Value, String> {
-    let rows: Vec<Row> = opened(store, database)?.all(statement).map_err(|error| error.to_string())?;
-    Ok(Value::Array(rows.iter().take(most).map(Row::json).collect()))
+    let db = opened(store, database)?;
+    let whole = || db.all::<Row>(statement);
+    let read = match bounded(statement, most) {
+        // A query that fails is read again as it was given, so that its
+        // error names the query rather than the one it was read within.
+        Some(within) => db.all::<Row>(within).or_else(|error| match error.kind() {
+            ErrorKind::Cancelled => Err(error),
+            _ => whole(),
+        }),
+        None => whole(),
+    };
+    let rows = read.map_err(|error| error.to_string())?;
+    if rows.len() > most {
+        return Err(format!("the query gives more than the {most} rows a call answers: add limit and offset"));
+    }
+    Ok(Value::Array(rows.iter().map(Row::json).collect()))
+}
+
+/// A query read as a subquery whose rows stop one past `most`, so that more
+/// rows are known without reading them: a `select`, a `with` or a `values`,
+/// its last `;` taken off. None for another statement, as an `explain`,
+/// which is read whole.
+fn bounded(statement: &str, most: usize) -> Option<String> {
+    let query = statement.trim_end().trim_end_matches(';');
+    let first: String = query.trim_start().chars().take_while(char::is_ascii_alphabetic).collect();
+    let reads = ["select", "with", "values"].iter().any(|word| first.eq_ignore_ascii_case(word));
+    // on a line of its own, so that a comment the query ends with ends before the `)`
+    reads.then(|| format!("select * from (\n{query}\n) limit {}", most.saturating_add(1)))
 }
 
 /// A row by its columns in their order.
@@ -207,6 +236,19 @@ mod tests {
         );
         assert_eq!(rows[1].0[1].1, Cell::Null);
         assert_eq!(Cell::Blob(vec![1, 2]).to_string(), "x'0102' (2 bytes)");
+    }
+
+    #[test]
+    fn a_query_is_read_within_a_bound_one_past_its_most_and_another_statement_as_it_is() {
+        assert_eq!(bounded("select 1;", 200).as_deref(), Some("select * from (\nselect 1\n) limit 201"));
+        let with = "  WITH x AS (select 1) select * from x -- the last\n";
+        assert_eq!(
+            bounded(with, 2).as_deref(),
+            Some("select * from (\n  WITH x AS (select 1) select * from x -- the last\n) limit 3")
+        );
+        assert!(bounded("values (1), (2)", 200).is_some());
+        assert_eq!(bounded("explain query plan select 1", 200), None);
+        assert_eq!(bounded("selection", 200), None, "a word that starts like select is not one");
     }
 
     #[test]
