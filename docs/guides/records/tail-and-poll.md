@@ -1,8 +1,8 @@
 # Tail and poll
 
 Two ways to read events as they are written, for two jobs. `tail` is for a
-person watching now: a live page of errors, `tinystore logs -f`. It skips
-what it cannot keep up with and says so. `poll` is for a copy that must be
+person watching now, such as a live page of errors. It skips what it cannot
+keep up with and says so. `poll` is for a copy that must be
 whole: shipping every event to a warehouse once, from a cursor the program
 keeps.
 

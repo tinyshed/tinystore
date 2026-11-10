@@ -105,7 +105,7 @@ tinystore logs ./data --stream api --grep "connection reset"
 
 ```log
 19:42:24.252 ERROR worker  json  level=error msg=boom code=7
-19:42:24.252 WARN  worker  level=warn msg="disk low" free=3
+19:42:24.252 WARN  worker  logfmt  level=warn msg="disk low" free=3
 ```
 
 | Flag              | Does                                                           |
@@ -120,8 +120,10 @@ tinystore logs ./data --stream api --grep "connection reset"
 
 `logs` prints a line as the logger's [console](../records/console.md) does,
 so `-f` in a terminal reads like the program's own output.
-`-f` is a [tail](../records/tail-and-poll.md): a reader slower than the
-writers is told how many lines it skipped.
+`-f` reads the store again every half second, from ten seconds before the
+newest line it printed, and prints the lines it hasn't printed yet. So a line
+that another process commits a little late, with an earlier time, still
+shows.
 
 Like the console, `logs` never passes a [control
 character](../records/console.md#control-characters-in-what-you-log) from a
