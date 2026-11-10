@@ -66,8 +66,11 @@ in the store's log, once, with every path that names it:
 blobs: a file's bytes are changed  content=4471 paths=["docs/contracts/2026/acme.pdf"]
 ```
 
-A file missing from the disk, or shorter than its size, is said the same way.
-With the store's own metrics on, `tinystore_blobs_damaged_total` counts them.
+A file missing from the disk, shorter than its size, or one the disk will not
+read is said the same way, and the scrub goes on past it. With the store's own
+metrics on, `tinystore_blobs_damaged_total` counts them. A file another
+program holds for now, as a virus scanner may on Windows, is not damaged: the
+scrub passes over it, logs that once, and reads it on its next pass.
 
 A disk that rots a byte is found within a month, whether or not anyone reads
 the file, while last month's backup still holds it whole.

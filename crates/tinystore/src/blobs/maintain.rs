@@ -39,7 +39,8 @@ pub struct Maintenance {
     pub removed: usize,
     /// Bytes the scrub read.
     pub scrubbed: u64,
-    /// Contents the scrub found changed or missing.
+    /// Contents the scrub found changed, missing, or that the disk will not
+    /// read.
     pub damaged: usize,
 }
 

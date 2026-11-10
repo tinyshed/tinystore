@@ -7,7 +7,7 @@ use std::io;
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
-use super::disk::read_at;
+use super::disk::{held_elsewhere, read_at};
 use super::engine::Blobs;
 use crate::Result;
 use crate::sqlite::sql_error;
@@ -50,6 +50,11 @@ impl Blobs {
     /// last slice stopped; says how many bytes it read and how many contents
     /// it found damaged. A slice for which the store's memory is taken waits
     /// for the next minute.
+    ///
+    /// A file the disk will not read is damaged, as a program's read of it
+    /// fails too; one another program holds for now is passed over until the
+    /// next pass, and the slice fails once it has kept its place, so that the
+    /// store logs it once.
     pub(crate) fn scrub(&self) -> Result<(u64, usize)> {
         let Ok(_reserved) = self.memory.try_reserve(BUFFER as u64, "the scrub's buffer") else {
             return Ok((0, 0));
@@ -57,6 +62,7 @@ impl Blobs {
         let (mut content, mut pace) = self.scrub_place()?;
         let mut state = lock(&self.scrubbing).take();
         let (mut read, mut damaged) = (0_u64, 0);
+        let mut held = None;
         let mut buffer = vec![0_u8; BUFFER];
         while read < u64::try_from(pace).unwrap_or(0) {
             let Some(next) = self.next_to_scrub(content)? else {
@@ -79,7 +85,18 @@ impl Blobs {
                     content = next.id + 1;
                     continue;
                 }
-                Err(error) => return Err(crate::Error::io("blobs: scrub a file", error)),
+                Err(error) if next.inline => return Err(crate::Error::io("blobs: scrub an inline body", error)),
+                Err(error) if held_elsewhere(&error) || error.kind() == io::ErrorKind::Interrupted => {
+                    let path = self.disk.object_path(next.id);
+                    held.get_or_insert_with(|| crate::Error::io(format!("blobs: scrub {}", path.display()), error));
+                    content = next.id + 1;
+                    continue;
+                }
+                Err(_) => {
+                    damaged += usize::from(self.judge(&next, "unreadable")?);
+                    content = next.id + 1;
+                    continue;
+                }
             }
             if scrubbing.offset < next.size {
                 state = Some(scrubbing);
@@ -96,7 +113,7 @@ impl Blobs {
                 .map(drop)
                 .map_err(|error| sql_error("blobs: the scrub's place", error))
         })?;
-        Ok((read, damaged))
+        held.map_or(Ok((read, damaged)), Err)
     }
 
     /// Where the scrub stopped and the bytes a slice reads in this pass; a

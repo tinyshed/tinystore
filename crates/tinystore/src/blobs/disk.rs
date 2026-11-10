@@ -312,16 +312,16 @@ impl DirSync {
     }
 }
 
-/// Whether a rename failed because another program, a scanner or a backup
-/// tool, opened the file without sharing it.
+/// Whether a rename or a read failed because another program, a scanner or a
+/// backup tool, opened the file without sharing it.
 #[cfg(windows)]
-fn held_elsewhere(error: &io::Error) -> bool {
+pub(crate) fn held_elsewhere(error: &io::Error) -> bool {
     const ERROR_SHARING_VIOLATION: i32 = 32;
     error.kind() == io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
 }
 
 #[cfg(not(windows))]
-fn held_elsewhere(_: &io::Error) -> bool {
+pub(crate) fn held_elsewhere(_: &io::Error) -> bool {
     false
 }
 

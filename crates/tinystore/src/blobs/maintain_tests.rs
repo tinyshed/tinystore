@@ -1,9 +1,10 @@
 use std::io::Write as _;
+use std::path::PathBuf;
 
 use rusqlite::params;
 
 use super::*;
-use crate::blobs::fixture::{HOUR, bytes, fixture, flip};
+use crate::blobs::fixture::{Fixture, HOUR, bytes, fixture, flip};
 use crate::{Error, ErrorKind};
 
 #[test]
@@ -107,6 +108,66 @@ fn the_scrub_finds_a_changed_byte_and_a_read_of_it_is_corrupt() {
     assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
     assert_eq!(docs.get("small").unwrap().unwrap().read_all().unwrap(), b"inline and fine");
     assert_eq!(maintain(&f.store).unwrap().damaged, 0, "a damaged content is judged once");
+}
+
+// contract: ERR-07, BLOB-02
+#[test]
+#[cfg(unix)]
+fn the_scrub_marks_a_file_the_disk_will_not_read_and_goes_past_it() {
+    let f = fixture();
+    let docs = f.files("docs");
+    docs.put("unreadable", bytes(512 << 10)).unwrap();
+    docs.put("changed", bytes(256 << 10)).unwrap();
+    let [(unreadable, _), (changed, _)] = <[_; 2]>::try_from(contents(&f)).unwrap();
+    // a directory in its place opens, and each read of it fails as a bad sector's does
+    std::fs::remove_file(&unreadable).unwrap();
+    std::fs::create_dir(&unreadable).unwrap();
+    flip(&changed, 4096);
+    let done = maintain(&f.store).unwrap();
+    assert_eq!(done.damaged, 2, "the file after one the disk will not read is scrubbed too");
+    for path in ["unreadable", "changed"] {
+        let error = docs.get(path).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Corrupt, "{path}: {error}");
+    }
+}
+
+// contract: ERR-07, BLOB-02
+#[test]
+#[cfg(windows)]
+fn the_scrub_passes_over_a_file_another_program_holds_and_reads_it_on_its_next_pass() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let f = fixture();
+    let docs = f.files("docs");
+    docs.put("held", bytes(512 << 10)).unwrap();
+    docs.put("changed", bytes(256 << 10)).unwrap();
+    let [(held, _), (changed, _)] = <[_; 2]>::try_from(contents(&f)).unwrap();
+    flip(&changed, 4096);
+    // as a scanner holds a file: shared with no one, so the scrub cannot open it
+    let holder = std::fs::OpenOptions::new().read(true).share_mode(0).open(held).unwrap();
+    let error = maintain(&f.store).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Io, "the slice fails, for the store to log once: {error}");
+    let damaged: Vec<bool> = contents(&f).into_iter().map(|(_, damaged)| damaged).collect();
+    assert_eq!(damaged, [false, true], "a held file is not damaged, and the one after it is scrubbed");
+    drop(holder);
+    let done = maintain(&f.store).unwrap();
+    assert_eq!((done.scrubbed, done.damaged), (512 << 10, 0), "the next pass reads the held file whole");
+    assert_eq!(docs.get("held").unwrap().unwrap().read_all().unwrap(), bytes(512 << 10));
+}
+
+/// Each content's file and whether the scrub marked it damaged, in the order
+/// of their ids.
+fn contents(f: &Fixture) -> Vec<(PathBuf, bool)> {
+    let blobs = f.blobs();
+    let rows: Vec<(i64, bool)> = blobs
+        .file
+        .read(|connection| {
+            let mut statement =
+                connection.prepare("select id, damaged from _tinystore_blobs_contents order by id").unwrap();
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            Ok(rows.map(Result::unwrap).collect())
+        })
+        .unwrap();
+    rows.into_iter().map(|(id, damaged)| (blobs.disk.object_path(id), damaged)).collect()
 }
 
 // contract: BLOB-02
