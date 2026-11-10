@@ -392,6 +392,30 @@ fn a_page_that_meets_a_value_that_no_longer_reads_names_its_job() {
     assert_eq!(failed.jobs[0].value, serde_json::json!({ "text": "from before" }), "kept as it was");
 }
 
+// contract: ERR-02, ERR-07, JOB-12
+#[test]
+fn a_walk_meets_a_job_whose_value_no_longer_reads_as_its_error_and_goes_on() {
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Renamed {
+        body: String,
+    }
+    let f = fixture();
+    let raw = f.store.queue::<serde_json::Value>("notes").open().unwrap();
+    raw.id("a").delay(HOUR).add(&serde_json::json!({ "body": "first" })).unwrap();
+    raw.delay(HOUR).add(&serde_json::json!({ "text": "an older shape" })).unwrap();
+    raw.delay(HOUR).add(&serde_json::json!({ "body": "last" })).unwrap();
+    let renamed = f.store.queue::<Renamed>("notes").open().unwrap();
+
+    let walked: Vec<Result<String>> = renamed.all(Filter::default()).map(|job| job.map(|job| job.value.body)).collect();
+    assert_eq!(walked.len(), 3, "the walk goes on past it: {walked:?}");
+    assert_eq!((walked[0].as_deref().ok(), walked[2].as_deref().ok()), (Some("first"), Some("last")));
+    let error = walked[1].as_ref().unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Corrupt);
+    assert!(error.to_string().contains("without an id, due at unix ms"), "named by where it lies: {error}");
+    let failed = renamed.list(&Filter::default()).unwrap_err();
+    assert!(failed.to_string().contains("without an id, due at unix ms"), "a page names it the same: {failed}");
+}
+
 #[test]
 fn a_value_comes_back_as_the_json_it_went_in() {
     let f = fixture();

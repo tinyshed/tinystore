@@ -116,6 +116,13 @@ pub struct Page<V> {
     pub next: Option<String>,
 }
 
+/// A page as a walk reads it: each job, or the error of one whose value no
+/// longer reads, which names the job, so that a walk goes on past it.
+pub(crate) struct Listed<V> {
+    pub(crate) jobs: Vec<Result<Job<V>>>,
+    pub(crate) next: Option<String>,
+}
+
 /// A job's row as a read finds it, in the queue's rows or kept failed or done.
 #[derive(Debug)]
 struct Found {
@@ -247,8 +254,14 @@ pub(crate) fn get<V: DeserializeOwned>(
 /// a snapshot of its own and as many rows as the page holds and one more, so
 /// that no read is long. Whether a held job runs is memory's to say, so a
 /// page of one state reads on past the rows of the others until it holds its
-/// limit or the queue's rows end (JOB-14).
-pub(crate) fn page<V: DeserializeOwned>(file: &File, queue: &QueueState, filter: &Filter, now: i64) -> Result<Page<V>> {
+/// limit or the queue's rows end (JOB-14). A job whose value no longer reads
+/// takes its place on the page as its error.
+pub(crate) fn page<V: DeserializeOwned>(
+    file: &File,
+    queue: &QueueState,
+    filter: &Filter,
+    now: i64,
+) -> Result<Listed<V>> {
     let limit = filter.limit.unwrap_or(DEFAULT_PAGE);
     if limit == 0 || limit > PAGE_JOBS {
         return Err(Error::invalid(format!("a page of {limit} jobs, not 1 to {PAGE_JOBS}")));
@@ -256,7 +269,7 @@ pub(crate) fn page<V: DeserializeOwned>(file: &File, queue: &QueueState, filter:
     if filter.state.is_some_and(|state| matches!(state, State::Done | State::Cancelled)) {
         return Err(Error::invalid("a page lists scheduled, waiting, running or failed jobs"));
     }
-    let mut page = Page { jobs: Vec::new(), next: None };
+    let mut page = Listed { jobs: Vec::new(), next: None };
     let (mut from, mut bytes) = (filter.clone(), 0);
     loop {
         let read = file.read(|c| window(c, queue, (&from, limit, now), (&mut page.jobs, &mut bytes)))?;
@@ -291,7 +304,7 @@ fn window<V: DeserializeOwned>(
     c: &Connection,
     queue: &QueueState,
     (filter, limit, now): (&Filter, usize, i64),
-    (jobs, bytes): (&mut Vec<Job<V>>, &mut usize),
+    (jobs, bytes): (&mut Vec<Result<Job<V>>>, &mut usize),
 ) -> Result<Window> {
     let found = rows(c, queue, filter, limit + 1, now)?;
     let mut last = None;
@@ -303,10 +316,7 @@ fn window<V: DeserializeOwned>(
         last = Some(found);
         if kept {
             *bytes += found.size;
-            jobs.push(job_of::<V>(c, queue, found, now).map_err(|error| match &found.key {
-                Some(key) => error.within(format!("id {key:?}")),
-                None => error,
-            })?);
+            jobs.push(job_of::<V>(c, queue, found, now).map_err(|error| error.within(named(found))));
         }
     }
     Ok(match last {
@@ -414,6 +424,16 @@ fn cursor_of(filter: &Filter, found: &Found) -> Cursor {
         (Some(key), _) if !by_failure => Cursor::Id(key.clone()),
         (_, Table::Failed) => Cursor::Failed(found.time, found.id),
         (_, _) => Cursor::Queued(found.time, found.id),
+    }
+}
+
+/// A job as its error names it: by its id, or, for one without, by its number
+/// and its time, unix milliseconds, which say where it lies in the queue.
+fn named(found: &Found) -> String {
+    match (&found.key, found.table) {
+        (Some(key), _) => format!("id {key:?}"),
+        (None, Table::Failed) => format!("job {} without an id, failed at unix ms {}", found.id, found.time),
+        (None, _) => format!("job {} without an id, due at unix ms {}", found.id, due_of(found.time)),
     }
 }
 

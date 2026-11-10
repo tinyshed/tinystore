@@ -144,9 +144,11 @@ it is the last, which has no `next` (contract JOB-14).
 <div data-for="rust">
 
 In Rust, a job whose value no longer reads as the queue's type, kept failed
-after the type changed, makes a page or a `get` that meets it fail `corrupt`,
-and the error names the job's id. The same queue opened as
-`store.queue::<serde_json::Value>(name)` reads it, and `cancel` removes it.
+after the type changed, makes a page or a `get` that meets it fail `corrupt`.
+`all` gives it as an error in its place and goes on to the next job. The
+error names the job by its id, or, for one without, by its number and its
+time. The same queue opened as `store.queue::<serde_json::Value>(name)` reads
+it, and `cancel` removes one that has an id.
 
 </div>
 

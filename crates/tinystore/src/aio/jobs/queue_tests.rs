@@ -296,6 +296,25 @@ async fn a_claimed_value_that_no_longer_reads_fails_its_job_and_the_claim_takes_
     f.store.close().await.unwrap();
 }
 
+// contract: ERR-07, JOB-12
+#[tokio::test]
+async fn a_walk_yields_a_job_whose_value_no_longer_reads_as_its_error_and_goes_on() {
+    let f = fixture();
+    let imports = f.store.queue::<Draft>("imports").open().unwrap();
+    let as_text = f.store.queue::<String>("imports").open().unwrap();
+    imports.id("a").delay(HOUR).add(&draft(1)).await.unwrap();
+    as_text.id("b").delay(HOUR).add(&"a value of an older type".to_owned()).await.unwrap();
+    imports.id("c").delay(HOUR).add(&draft(3)).await.unwrap();
+    let mut all = imports.all(Filter::default());
+    let mut walked = Vec::new();
+    while let Some(job) = next(&mut all).await {
+        walked.push(job.map(|job| job.id).map_err(|error| error.kind()));
+    }
+    let read = |id: &str| -> std::result::Result<Option<String>, ErrorKind> { Ok(Some(id.to_owned())) };
+    assert_eq!(walked, [read("a"), Err(ErrorKind::Corrupt), read("c")], "the walk goes on past it");
+    f.store.close().await.unwrap();
+}
+
 // contract: JOB-02
 #[tokio::test]
 async fn a_queue_joins_an_awaited_transaction_through_its_blocking_calls() {

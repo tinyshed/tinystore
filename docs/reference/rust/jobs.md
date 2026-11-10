@@ -209,7 +209,8 @@ named; one customer's backlog cannot hold back the others.
 pub struct All<V> { /* private fields */ }
 ```
 
-Every job a filter names, a page at a time.
+Every job a filter names, a page at a time; a job whose value no longer
+reads is its error, and the walk goes on past it.
 
 ## Claimed
 
@@ -1011,7 +1012,8 @@ pub struct All<V> { /* private fields */ }
 
 Every job a filter names, a page at a time: a `Stream` whose next page
 is read on the store's pool once the last one is used up. Dropped, it
-stops, and so does a page under way.
+stops, and so does a page under way. A job whose value no longer reads is
+its error, and the walk goes on past it.
 
 ## aio::jobs::Claimed
 

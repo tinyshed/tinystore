@@ -178,6 +178,14 @@ where
         crate::aio::run::read(&self.pool, format!("{queue:?}: a list"), move || queue.list(&filter))
     }
 
+    /// A page for a walk, read on the store's pool: a job whose value no
+    /// longer reads is its error in its place.
+    fn walked(&self, filter: &Filter) -> Reading<V> {
+        let (queue, filter) = (self.queue.clone(), filter.clone());
+        let page = move || queue.read_page(&filter).map(|page| (page.jobs, page.next));
+        Box::pin(crate::aio::run::read(&self.pool, format!("{:?}: a list", self.queue), page))
+    }
+
     /// Every job `filter` names, a page at a time, each page read on the
     /// store's pool once the one before is used up and nothing held between
     /// pages; a job written during the walk may or may not be met.
@@ -449,18 +457,20 @@ impl<V: fmt::Debug> fmt::Debug for Claimed<V> {
 
 /// Every job a filter names, a page at a time: a [`Stream`] whose next page
 /// is read on the store's pool once the last one is used up. Dropped, it
-/// stops, and so does a page under way.
+/// stops, and so does a page under way. A job whose value no longer reads is
+/// its error, and the walk goes on past it.
 pub struct All<V> {
     queue: Queue<V>,
     /// The filter of the next page; none once the last page was read.
     filter: Option<Filter>,
-    page: VecDeque<Job<V>>,
+    page: VecDeque<Result<Job<V>>>,
     /// The page under way, and the filter it was asked with.
     reading: Option<(Filter, Reading<V>)>,
 }
 
-/// A page read on the store's pool.
-type Reading<V> = Pin<Box<dyn Future<Output = Result<Page<V>>> + Send>>;
+/// A page read on the store's pool: each job, or the error of one whose value
+/// no longer reads, and where the next page starts.
+type Reading<V> = Pin<Box<dyn Future<Output = Result<(Vec<Result<Job<V>>>, Option<String>)>> + Send>>;
 
 /// No field is pinned: the page under way is boxed.
 impl<V> Unpin for All<V> {}
@@ -475,7 +485,7 @@ where
         let all = self.get_mut();
         loop {
             if let Some(job) = all.page.pop_front() {
-                return Poll::Ready(Some(Ok(job)));
+                return Poll::Ready(Some(job));
             }
             let (filter, reading) = match &mut all.reading {
                 Some(reading) => reading,
@@ -483,7 +493,7 @@ where
                     let Some(filter) = all.filter.take() else {
                         return Poll::Ready(None);
                     };
-                    let reading = Box::pin(all.queue.list(&filter));
+                    let reading = all.queue.walked(&filter);
                     all.reading.insert((filter, reading))
                 }
             };
@@ -491,9 +501,9 @@ where
             let filter = filter.clone();
             all.reading = None;
             match page {
-                Ok(page) => {
-                    all.filter = page.next.map(|next| filter.after(next));
-                    all.page.extend(page.jobs);
+                Ok((jobs, next)) => {
+                    all.filter = next.map(|next| filter.after(next));
+                    all.page.extend(jobs);
                 }
                 Err(error) => return Poll::Ready(Some(Err(error))),
             }

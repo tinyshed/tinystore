@@ -300,8 +300,18 @@ where
 
     /// A page of the queue's jobs; see [`Filter`].
     pub fn list(&self, filter: &Filter) -> Result<Page<V>> {
+        let page = self.read_page(filter)?;
+        let jobs = page.jobs.into_iter().collect::<Result<Vec<Job<V>>>>()?;
+        Ok(Page { jobs, next: page.next })
+    }
+
+    /// A page with each job whose value no longer reads as its error, which
+    /// names the queue and the job, for a walk to go on past it.
+    pub(crate) fn read_page(&self, filter: &Filter) -> Result<read::Listed<V>> {
         let now = self.jobs.now();
-        read::page(self.jobs.file(), &self.state, filter, now).map_err(|error| self.fail(None, error))
+        let page = read::page(self.jobs.file(), &self.state, filter, now).map_err(|error| self.fail(None, error))?;
+        let jobs = page.jobs.into_iter().map(|job| job.map_err(|error| self.fail(None, error))).collect();
+        Ok(read::Listed { jobs, next: page.next })
     }
 
     /// Every job `filter` names, a page at a time, holding nothing between
@@ -823,12 +833,13 @@ impl<V: fmt::Debug> fmt::Debug for Claimed<V> {
     }
 }
 
-/// Every job a filter names, a page at a time.
+/// Every job a filter names, a page at a time; a job whose value no longer
+/// reads is its error, and the walk goes on past it.
 pub struct All<V> {
     queue: Queue<V>,
     /// The filter of the next page; none once the last page was read.
     filter: Option<Filter>,
-    page: VecDeque<Job<V>>,
+    page: VecDeque<Result<Job<V>>>,
 }
 
 impl<V> Iterator for All<V>
@@ -840,7 +851,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         while self.page.is_empty() {
             let filter = self.filter.take()?;
-            match self.queue.list(&filter) {
+            match self.queue.read_page(&filter) {
                 Ok(page) => {
                     self.filter = page.next.map(|next| filter.after(next));
                     self.page.extend(page.jobs);
@@ -848,7 +859,7 @@ where
                 Err(error) => return Some(Err(error)),
             }
         }
-        self.page.pop_front().map(Ok)
+        self.page.pop_front()
     }
 }
 
