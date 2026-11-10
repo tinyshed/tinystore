@@ -220,6 +220,63 @@ fn a_settlement_polled_once_lets_its_job_go_though_its_future_is_dropped() {
     f.store.blocking().close().unwrap();
 }
 
+/// A waker that says whether it was woken.
+struct Woken(std::sync::atomic::AtomicBool);
+
+impl std::task::Wake for Woken {
+    fn wake(self: Arc<Self>) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Claims blocking until a claim takes a job, failing the test after its
+/// patience: on a clock that stands still, no lease runs out meanwhile.
+fn claimed_again(queue: &Queue<Draft>) -> jobs::Claimed<Draft> {
+    let mut claimed = None;
+    holds_within(PATIENCE, "the job came back", || {
+        claimed = queue.blocking().claim().unwrap();
+        claimed.is_some()
+    });
+    claimed.unwrap()
+}
+
+// contract: JOB-11
+#[test]
+fn a_claim_dropped_before_it_answered_gives_its_job_back_uncounted() {
+    let f = fixture();
+    let imports = f.store.queue::<Draft>("imports").open().unwrap();
+    imports.blocking().id("a").add(&draft(1)).unwrap();
+    // dropped while its lease waits for the writer, as a select! whose tick came first drops it
+    let (release, holder) = hold_the_writer(&imports);
+    {
+        let mut claiming = pin!(imports.claim());
+        assert!(claiming.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+    }
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    let again = claimed_again(&imports);
+    assert_eq!((again.run().id(), again.run().attempt()), (Some("a"), 1), "given back, its attempt not counted");
+    again.settle(()).unwrap();
+
+    // dropped once its answer came, which it never took
+    imports.blocking().id("b").add(&draft(2)).unwrap();
+    let (release, holder) = hold_the_writer(&imports);
+    let woken = Arc::new(Woken(std::sync::atomic::AtomicBool::new(false)));
+    {
+        let waker = Waker::from(Arc::clone(&woken));
+        let mut claiming = pin!(imports.claim());
+        assert!(claiming.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        holds_within(PATIENCE, "the claim's answer came", || woken.0.load(std::sync::atomic::Ordering::SeqCst));
+    }
+    let again = claimed_again(&imports);
+    assert_eq!((again.run().id(), again.run().attempt()), (Some("b"), 1), "given back, its attempt not counted");
+    again.settle(()).unwrap();
+    drop(imports);
+    f.store.blocking().close().unwrap();
+}
+
 // contract: JOB-12
 #[tokio::test]
 async fn a_claimed_value_that_no_longer_reads_fails_its_job_and_the_claim_takes_the_next() {

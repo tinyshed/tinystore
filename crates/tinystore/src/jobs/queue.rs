@@ -767,6 +767,13 @@ impl Settling {
         Settling { lease, queue, jobs, how: outcome.how(now), now }
     }
 
+    /// A claimed job given back before anything began it, as a stopping
+    /// worker gives one back: due at its own time, its attempt not counted.
+    #[cfg(feature = "async")]
+    pub(crate) fn given_back(run: &Run) -> Settling {
+        Settling { how: claim::How::GiveBack, ..Settling::of(run, Outcome::from(())) }
+    }
+
     fn write(&self) -> impl FnOnce(&SqlTx<'_>) -> Result<claim::Settled> + Send + 'static {
         let (lease, queue, how, now) = (Arc::clone(&self.lease), Arc::clone(&self.queue), self.how.clone(), self.now);
         move |tx: &SqlTx<'_>| claim::settle(tx, &queue, &lease, &how, now)

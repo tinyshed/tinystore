@@ -1271,8 +1271,9 @@ Takes the next due job for a loop of the program's own, which settles
 it with `Claimed::settle`; none when nothing is due, never waiting
 for a job. Its lease is a write at jobs.db's writer, and a value kept
 in a row of its own is read after the commit, in the poll when a
-reader is idle. Dropped once its write was queued, the job comes back
-when its lease, the queue's timeout, ends, the attempt counted.
+reader is idle. Dropped once its write was queued and before it
+answered, it gives the job back as a stopping worker does, due at once
+and its attempt not counted.
 
 ### aio::jobs::Queue.watch
 

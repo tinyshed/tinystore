@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::run::Run;
-use crate::jobs::{self, Change, Concurrency, Filter, Job, Outcome, Page, Took};
+use crate::jobs::{self, Change, Concurrency, Filter, Job, Lease, Outcome, Page, Took};
 use crate::pool::Pool;
 use crate::{ErrorKind, Result, Transaction, TxHandle};
 
@@ -209,23 +209,22 @@ where
     /// it with [`Claimed::settle`]; none when nothing is due, never waiting
     /// for a job. Its lease is a write at jobs.db's writer, and a value kept
     /// in a row of its own is read after the commit, in the poll when a
-    /// reader is idle. Dropped once its write was queued, the job comes back
-    /// when its lease, the queue's timeout, ends, the attempt counted.
+    /// reader is idle. Dropped once its write was queued and before it
+    /// answered, it gives the job back as a stopping worker does, due at once
+    /// and its attempt not counted.
     pub fn claim(&self) -> impl Future<Output = Result<Option<Claimed<V>>>> + Send + 'static {
         let queue = self.clone();
         async move {
             loop {
-                let (claiming, what) = (queue.queue.clone(), format!("{:?}: a claim", queue.queue));
-                let took = crate::aio::run::write(&queue.pool, what, move |answer| {
-                    claiming.claim_then(move |took| answer.send(took));
-                });
-                let lease = match took.await? {
-                    Took::Job(lease) => lease,
-                    Took::More => continue,
-                    Took::Nothing => return Ok(None),
+                let (run, unhanded) = match queue.claim_one().await? {
+                    Taken::Job(run, unhanded) => (run, unhanded),
+                    Taken::More => continue,
+                    Taken::Nothing => return Ok(None),
                 };
-                let run = Run::of(&queue, lease);
-                let value = match run.value::<V>().await {
+                let value = run.value::<V>().await;
+                // the claim's own from here: settled below, handed over, or left to its lease
+                unhanded.handed();
+                let value = match value {
                     Ok(value) => value,
                     Err(error) if error.kind() == ErrorKind::Invalid => {
                         Claimed { value: (), run }.settle(Outcome::fail_with(error.to_string())).await?;
@@ -238,6 +237,66 @@ where
                 }
                 // a cancel took it as it was claimed
             }
+        }
+    }
+
+    /// One claim's write, the job it takes held by what gives it back unless
+    /// the claim hands it over.
+    fn claim_one(&self) -> impl Future<Output = Result<Taken>> + Send + 'static + use<V> {
+        let (claiming, giving, what) = (self.queue.clone(), self.clone(), format!("{:?}: a claim", self.queue));
+        crate::aio::run::write(&self.pool, what, move |answer| {
+            claiming.claim_then(move |took| answer.send(took.map(|took| Taken::of(&giving, took))));
+        })
+    }
+}
+
+/// What one claim's write took: a job, held until the claim hands it over;
+/// none yet, though another claim may find one; or none.
+enum Taken {
+    Job(Run, Unhanded),
+    More,
+    Nothing,
+}
+
+impl Taken {
+    fn of<V>(queue: &Queue<V>, took: Took) -> Taken {
+        match took {
+            Took::Job(lease) => {
+                let run = Run::of(queue, lease);
+                let unhanded = Unhanded::of(&run);
+                Taken::Job(run, unhanded)
+            }
+            Took::More => Taken::More,
+            Took::Nothing => Taken::Nothing,
+        }
+    }
+}
+
+/// Gives a claimed job back unless the claim says it handed it over, as a
+/// stopping worker gives back one it had not begun (JOB-11): its claim's
+/// future dropped first, before the answer came or after, lets the answer
+/// go, and this with it.
+struct Unhanded(Option<(Arc<Lease>, jobs::Settling, Arc<Pool>)>);
+
+impl Unhanded {
+    fn of(run: &Run) -> Unhanded {
+        let back = jobs::Settling::given_back(&run.run);
+        Unhanded(Some((Arc::clone(&run.run.lease), back, Arc::clone(&run.pool))))
+    }
+
+    fn handed(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Unhanded {
+    /// A job a cancel took settles nothing, as a worker's does not. The drop
+    /// runs on the program's executor, or on the thread that answered the
+    /// claim, so the give back's commit is led on the pool.
+    fn drop(&mut self) {
+        let Some((lease, back, pool)) = self.0.take() else { return };
+        if !lease.cancelled() {
+            crate::polled::leading_on(&crate::aio::run::lead_on(&pool), || back.submit(drop));
         }
     }
 }

@@ -41,7 +41,7 @@
 //! |--------------------------|----------------------------------------------------|---------------------------------|
 //! | `add`, `set`, `update`   | queued at jobs.db's writer; commit on the pool     | commits; its answer is let go   |
 //! | `cancel`, `settle`       | queued at jobs.db's writer; commit on the pool     | commits; its answer is let go   |
-//! | `claim`                  | its lease a write, a spilled value a point read    | commits; its lease runs out     |
+//! | `claim`                  | its lease a write, a spilled value a point read    | commits; its job goes back      |
 //! | `get`, `list`            | on the store's pool                                | stops; its reader goes back     |
 //! | `all`, `watch`: streams  | each read on the store's pool                      | stops; a read under way stops   |
 //! | `work`, `run_due`        | handlers in the future; claims on a store thread   | [below](#a-worker-is-a-future)  |
@@ -49,12 +49,14 @@
 //! | `run.step`'s keep        | queued at jobs.db's writer; commit on the pool     | commits                         |
 //!
 //! None of them commits, syncs the disk or waits on the thread that polls its
-//! future. A claim dropped once its lease was written gives its job back when
-//! the lease, the queue's timeout, runs out, the attempt counted, as a
-//! blocking claim never settled does. The other calls, opening a queue or a
-//! schedule among them, do no I/O or are made once at start, since a first
-//! open may migrate jobs.db. Inside a transaction's closure, `tx.with(&queue)`
-//! gives the blocking [`TxQueue`](crate::jobs::TxQueue)'s calls.
+//! future. A claim dropped before it answered gives its job back as its lease
+//! commits, uncounted, as a stopping worker gives back what it had not begun;
+//! one it handed over and the program never settled comes back when the lease,
+//! the queue's timeout, runs out, the attempt counted, as a blocking claim's
+//! does. The other calls, opening a queue or a schedule among them, do no I/O
+//! or are made once at start, since a first open may migrate jobs.db. Inside a
+//! transaction's closure, `tx.with(&queue)` gives the blocking
+//! [`TxQueue`](crate::jobs::TxQueue)'s calls.
 //!
 //! # A worker is a future
 //!
