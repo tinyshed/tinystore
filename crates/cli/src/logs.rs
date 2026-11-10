@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jiff::Zoned;
 use nu_ansi_term::{Color, Style};
+use tinystore::console::{escaped, lines_of, push_below};
 use tinystore::mcp::logs::json;
 pub(crate) use tinystore::mcp::logs::level_named;
 use tinystore::records::{AllEvents, Event, Level, List};
@@ -35,6 +36,8 @@ const EVERY: Duration = Duration::from_millis(500);
 /// How far before the newest line printed following reads again: a line
 /// another process logged may commit up to a second late, its buffer's.
 const LATE: Duration = Duration::from_secs(10);
+/// What ends every colour a terminal shows.
+const RESET: &str = "\x1b[0m";
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
     asked::run(&help::LOGS, args, logs)
@@ -235,7 +238,9 @@ impl Printer {
         if self.json { outln!("{}", json(event)) } else { outln!("{}", self.pretty(event)) }
     }
 
-    /// `11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200`
+    /// `11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200`, and
+    /// below it, as the console lays them out, the message's further lines
+    /// and each value of several lines.
     fn pretty(&self, event: &Event) -> String {
         let paint = |style: Style, text: &str| paint(self.colours, style, text);
         let dim = Style::new().dimmed();
@@ -253,35 +258,106 @@ impl Printer {
             Some(_) => Color::Purple.dimmed(),
             None => Color::Green.normal(),
         };
-        let said = event.message.as_deref().filter(|message| !message.is_empty()).unwrap_or(&event.name);
+        let mut message = lines_of(event.message.as_deref().unwrap_or_default());
+        let said = message.next().filter(|first| !first.is_empty()).unwrap_or(&event.name);
         let mut line = format!(
             "{} {} {}  {}",
             paint(dim, &time),
             paint(shade, &format!("{level:<5}")),
             paint(Style::new().bold(), &event.stream),
-            said
+            shown(said, self.colours)
         );
-        let fields: Vec<String> = event
-            .fields
-            .iter()
-            .chain(event.context.iter())
-            .map(|(key, json)| format!("{}{}", paint(dim, &format!("{key}=")), value(json)))
-            .collect();
+        let (fields, below) = self.fields(event);
         if !fields.is_empty() {
             line.push_str("  ");
             line.push_str(&fields.join(" "));
         }
+        push_below(&mut line, None, message, |out, part| out.push_str(&shown(part, self.colours)));
+        for (key, text) in below {
+            let show = |out: &mut String, part: &str| out.push_str(&paint(dim, &shown(part, self.colours)));
+            push_below(&mut line, Some(key), lines_of(&text), show);
+        }
         line
+    }
+
+    /// An event's fields and context as its line shows them, and those whose
+    /// text is of several lines, which go below it instead, each by its key.
+    fn fields<'e>(&self, event: &'e Event) -> (Vec<String>, Vec<(&'e str, String)>) {
+        let (mut fields, mut below) = (Vec::new(), Vec::new());
+        for (key, json) in event.fields.iter().chain(event.context.iter()) {
+            match value(json, self.colours) {
+                (text, true) => below.push((key, text)),
+                (text, false) => {
+                    let key = paint(self.colours, Style::new().dimmed(), format!("{}=", shown(key, self.colours)));
+                    fields.push(format!("{key}{text}"));
+                }
+            }
+        }
+        (fields, below)
     }
 }
 
-/// A field's value as a pretty line shows it: a string bare unless it holds
-/// a space, a quote or an `=`, anything else as its JSON.
-fn value(json: &str) -> String {
-    match serde_json::from_str::<String>(json) {
-        Ok(text) if !text.is_empty() && !text.contains([' ', '"', '=']) => text,
-        _ => json.to_owned(),
+/// How a field's value shows on a pretty line, and whether it is text of
+/// several lines, which goes below the line instead, as it is: a string bare
+/// unless it holds a space, a quote or an `=`, and then in quotes as JSON
+/// spells it; anything else as its JSON. Text in it shows as [`shown`] shows
+/// a stored text.
+fn value(json: &str, colours: bool) -> (String, bool) {
+    let Ok(text) = serde_json::from_str::<String>(json) else { return (escaped(json), false) };
+    if text.contains('\n') {
+        return (text, true);
     }
+    let plain = with_colours(&text, false, str::to_owned);
+    if !plain.is_empty() && !plain.contains([' ', '"', '=']) {
+        return (shown(&text, colours), false);
+    }
+    let spelled = |part: &str| {
+        let json = serde_json::Value::from(part).to_string();
+        escaped(&json[1..json.len() - 1])
+    };
+    (format!("\"{}\"", with_colours(&text, colours, spelled)), false)
+}
+
+/// A text the store holds as `logs` shows it: as the console shows what a
+/// program logged, each control character but a tab, and DEL, as its escape,
+/// but for the colours another program wrote into its output.
+///
+/// ```text
+/// "\x1b[31mfailed\x1b[0m\r\x1b[2K"  →  failed, in red where logs paints, then \r\u001b[2K
+/// ```
+fn shown(text: &str, colours: bool) -> String {
+    with_colours(text, colours, escaped)
+}
+
+/// `text` with each colour sequence in it, `ESC [` then digits, `;` and `:`
+/// alone and then `m`, left out where `logs` paints no colours, so that a
+/// pipe gets no escape byte, and let through where it does, a reset after
+/// the text then, so that a colour it never reset ends with it rather than
+/// colour what prints next; `spell` writes what lies between them.
+fn with_colours(text: &str, colours: bool, spell: impl Fn(&str) -> String) -> String {
+    let (mut out, mut rest, mut painted) = (String::with_capacity(text.len()), text, false);
+    while let Some((start, end)) = colour_in(rest) {
+        out.push_str(&spell(&rest[..start]));
+        if colours {
+            out.push_str(&rest[start..end]);
+            painted = true;
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(&spell(rest));
+    if painted {
+        out.push_str(RESET);
+    }
+    out
+}
+
+/// Where the first colour sequence of `text` begins and where it ends.
+fn colour_in(text: &str) -> Option<(usize, usize)> {
+    text.match_indices("\x1b[").find_map(|(start, _)| {
+        let after = &text[start + 2..];
+        let length = after.find(|c: char| !matches!(c, '0'..='9' | ';' | ':'))?;
+        after[length..].starts_with('m').then_some((start, start + 2 + length + 1))
+    })
 }
 
 #[cfg(test)]
@@ -311,6 +387,97 @@ mod tests {
         assert!(line.ends_with(" WARN  api  slow request  ms=1200 requestId=7f3a why=\"a b\""), "{line}");
         let object: serde_json::Value = serde_json::from_str(&json(&events[0])).unwrap();
         assert_eq!((object["level"].as_str(), object["ms"].as_u64()), (Some("WARN"), Some(1200)));
+    }
+
+    /// An event's pretty line with colours off and on.
+    fn printed(event: &Event) -> (String, String) {
+        let print = |colours| Printer { colours, json: false, today: today() }.pretty(event);
+        (print(false), print(true))
+    }
+
+    /// Whether a printed event holds a control character a terminal acts on,
+    /// an escape byte among them unless `escapes` lets it through, or a line
+    /// below its own that does not begin indented, as a line of its own would.
+    fn raw(printed: &str, escapes: bool) -> bool {
+        let acts =
+            |line: &str| line.chars().any(|c| (c < ' ' && c != '\t' && !(escapes && c == '\x1b')) || c == '\x7f');
+        let mut lines = printed.split('\n');
+        lines.next().is_some_and(acts) || lines.any(|line| acts(line) || !line.starts_with("    "))
+    }
+
+    #[test]
+    fn logs_prints_a_stored_messages_control_characters_as_their_escapes_and_its_colours_only_where_it_paints() {
+        // a stored message; how logs shows it with colours off; and with them on
+        let cases = [
+            ("\x1b[2Kerased", r"\u001b[2Kerased", r"\u001b[2Kerased"),
+            ("one\rtwo", r"one\rtwo", r"one\rtwo"),
+            ("del\x7f", r"del\u007f", r"del\u007f"),
+            ("tab\there", "tab\there", "tab\there"),
+            ("first\nsec\rond\r\nthird\r\n", "first\n    sec\\rond\n    third", "first\n    sec\\rond\n    third"),
+            ("\x1b[31mfailed\x1b[0m", "failed", "\x1b[31mfailed\x1b[0m\x1b[0m"),
+            ("\x1b[31mfailed", "failed", "\x1b[31mfailed\x1b[0m"),
+            (
+                "\x1b[31mred one\nred two\x1b[0m",
+                "red one\n    red two",
+                "\x1b[31mred one\x1b[0m\n    red two\x1b[0m\x1b[0m",
+            ),
+            ("\x1b[38;5;196mx\x1b[m", "x", "\x1b[38;5;196mx\x1b[m\x1b[0m"),
+            ("\x1b[38:2::255:0:0mx", "x", "\x1b[38:2::255:0:0mx\x1b[0m"),
+            ("\x1b[?25lhidden", r"\u001b[?25lhidden", r"\u001b[?25lhidden"),
+            ("\x1b]52;c;aGk=\x07", r"\u001b]52;c;aGk=\u0007", r"\u001b]52;c;aGk=\u0007"),
+            ("\x1b[31", r"\u001b[31", r"\u001b[31"),
+            ("été\x1b[1mgras", "étégras", "été\x1b[1mgras\x1b[0m"),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let worker = store.events("worker").open().unwrap();
+        for (message, ..) in cases {
+            worker.event("log").level(Level::ERROR).message(message).append(&serde_json::json!({})).unwrap();
+        }
+        let beside = Store::open_beside(dir.path()).unwrap();
+        let events = first(&narrowed(beside.all_events().unwrap().list(), &wanted(), None), &wanted()).unwrap();
+        assert_eq!(events.len(), cases.len());
+        let mut wrong = Vec::new();
+        for (event, (message, off, on)) in events.iter().zip(cases) {
+            let (plain, painted) = printed(event);
+            let right = plain.ends_with(&format!("ERROR worker  {off}")) && painted.ends_with(&format!("  {on}"));
+            if !right || raw(&plain, false) || raw(&painted, true) {
+                wrong.push(format!("{message:?}: {plain:?} {painted:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn events_list_prints_a_stored_events_name_and_values_so_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let audit = store.events("audit").open().unwrap();
+        let fields = serde_json::json!({
+            "note": "a b\x7f",
+            "reason": "\x1b[31mcard \"declined\"\x1b[0m",
+            "tint": "\x1b[32mok\x1b[0m",
+            "who": "ann\n12:00:00.000 INFO  api  admin signed in\n",
+            "z\x1b[2J": 1,
+        });
+        audit.event("\x1b[31msignup\x1b[0m\x1b[2K\r").append(&fields).unwrap();
+        let beside = Store::open_beside(dir.path()).unwrap();
+        let page = beside.all_events().unwrap().list().streams(["audit"]).page().unwrap();
+        let (plain, painted) = printed(&page.events[0]);
+        // a value of several lines goes below the line, each of its lines indented
+        let below = "\n    who: ann\n    12:00:00.000 INFO  api  admin signed in";
+        let shown = r#"note="a b\u007f" reason="card \"declined\"" tint=ok z\u001b[2J=1"#;
+        assert!(plain.ends_with(&format!("EVENT audit  signup\\u001b[2K\\r  {shown}{below}")), "{plain:?}");
+        let dim = |text: &str| paint(true, Style::new().dimmed(), text);
+        let (note, reason, tint, z) = (dim("note="), dim("reason="), dim("tint="), dim(r"z\u001b[2J="));
+        let (red, green, reset) = ("\x1b[31m", "\x1b[32m", "\x1b[0m");
+        let shown = format!(
+            r#"{note}"a b\u007f" {reason}"{red}card \"declined\"{reset}{reset}" {tint}{green}ok{reset}{reset} {z}1"#
+        );
+        let below = format!("\n    {}\n    {}", dim("who: ann"), dim("12:00:00.000 INFO  api  admin signed in"));
+        let named = format!("{red}signup{reset}\\u001b[2K\\r{reset}");
+        assert!(painted.ends_with(&format!("  {named}  {shown}{below}")), "{painted:?}");
+        assert!(!raw(&plain, false) && !raw(&painted, true), "{plain:?} {painted:?}");
     }
 
     #[test]

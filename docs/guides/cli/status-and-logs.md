@@ -123,6 +123,17 @@ so `-f` in a terminal reads like the program's own output.
 `-f` is a [tail](../records/tail-and-poll.md): a reader slower than the
 writers is told how many lines it skipped.
 
+Like the console, `logs` never passes a [control
+character](../records/console.md#control-characters-in-what-you-log) from a
+stored line to the terminal. A message's lines after the first, and a value
+of several lines, go under the event's line, indented four spaces, as a stack
+trace's lines do, so no stored line looks like a log line of its own. Any
+other control character except a tab prints as its escape, such as `\u001b`
+or `\r`. The exception is a colour that another program wrote into its
+output, such as `\x1b[31m`: it shows when `logs` prints colour itself, reset
+at the end of its line so it doesn't colour what follows, and is dropped in a
+pipe or with colour off, so plain output holds no escape codes.
+
 ## In a script
 
 ```sh

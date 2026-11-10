@@ -96,6 +96,10 @@ pub use layer::{Layer, Replace};
 pub use line::Time;
 pub use redact::SECRETS;
 
+// the command line shows the text a store holds as the console shows what a program logged
+#[doc(hidden)]
+pub use line::{escaped, lines_of, push_below};
+
 pub(crate) use env::Environment;
 #[cfg(all(feature = "records", feature = "config"))]
 pub(crate) use env::{FORMATS, LEVELS, TIMES};

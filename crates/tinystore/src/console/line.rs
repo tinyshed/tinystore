@@ -169,12 +169,9 @@ pub(crate) fn pretty(line: &Line, look: &Look) -> String {
     if let Some(trace) = line.trace {
         field(&mut out, "trace", &crate::text::hex(&trace[..4]));
     }
-    for part in further {
-        out.push_str("\n    ");
-        out.push_str(&escaped(part));
-    }
+    push_below(&mut out, None, further, |out, part| out.push_str(&escaped(part)));
     for (key, text) in below {
-        push_below(&mut out, paint, key, &text);
+        push_below(&mut out, Some(key), lines_of(&text), |out, part| paint.text(out, DIM, &escaped(part)));
     }
     out.push('\n');
     out
@@ -191,13 +188,28 @@ fn label_of(level: Option<i32>) -> (String, &'static str) {
     }
 }
 
-/// A value of more than one line, below its line: each line of it indented,
-/// the first after its key.
-fn push_below(out: &mut String, paint: Painter, key: &str, text: &str) {
-    for (place, part) in lines_of(text).enumerate() {
+/// Lines below a line a person reads, a message's further lines or a value's
+/// of several, each on a line of its own indented four spaces, so that none
+/// starts where a line does; a value's first after its key. `show` writes
+/// each as it shows.
+///
+/// ```text
+/// 11:02:11.123 ERROR api  charge failed  userId=42
+///     err: Error: card declined
+///         at charge (pay.ts:12:9)
+/// ```
+pub fn push_below<'t>(
+    out: &mut String,
+    key: Option<&str>,
+    lines: impl IntoIterator<Item = &'t str>,
+    show: impl Fn(&mut String, &str),
+) {
+    for (place, part) in lines.into_iter().enumerate() {
         out.push_str("\n    ");
-        let part = if place == 0 { escaped(&format!("{key}: {part}")) } else { escaped(part) };
-        paint.text(out, DIM, &part);
+        match key {
+            Some(key) if place == 0 => show(out, &format!("{key}: {part}")),
+            _ => show(out, part),
+        }
     }
 }
 
@@ -221,7 +233,7 @@ fn message_of(line: &Line) -> (String, Vec<&str>) {
 /// ```text
 /// "line one\r\nline two\r\n"  →  line one, line two
 /// ```
-fn lines_of(text: &str) -> impl Iterator<Item = &str> {
+pub fn lines_of(text: &str) -> impl Iterator<Item = &str> {
     text.trim_end_matches(['\r', '\n']).split('\n').map(|part| part.strip_suffix('\r').unwrap_or(part))
 }
 
@@ -233,7 +245,7 @@ fn lines_of(text: &str) -> impl Iterator<Item = &str> {
 /// ```text
 /// "\x1b[2J"  →  \u001b[2J    "a\rb"  →  a\rb    "\x7f"  →  \u007f
 /// ```
-fn escaped(text: &str) -> String {
+pub fn escaped(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         if (c < ' ' && c != '\t') || c == '\x7f' {
