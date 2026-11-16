@@ -41,12 +41,12 @@ pub(crate) use forward::BLOBS;
 pub(crate) use forward::JOBS;
 #[cfg(feature = "kv")]
 pub(crate) use forward::KV;
+#[cfg(any(feature = "kv", feature = "jobs"))]
+pub(crate) use forward::Lenders;
 #[cfg(feature = "search")]
 pub(crate) use forward::SEARCH;
 #[cfg(feature = "sql")]
 pub(crate) use forward::SQL;
-#[cfg(any(feature = "kv", feature = "jobs"))]
-pub(crate) use forward::Lenders;
 pub(crate) use forward::{catching_up, database_file, database_of, enqueue, make_in, pass_on, queued, tag_of};
 #[cfg(feature = "kv")]
 pub(crate) use forward::{pass_on_all_then, pass_on_then};
