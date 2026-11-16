@@ -36,7 +36,7 @@ use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-pub use restore::restore;
+pub use restore::{restore, verify};
 
 #[cfg(feature = "kv")]
 use crate::kv::keys_sealed_in;

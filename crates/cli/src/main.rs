@@ -96,6 +96,7 @@ fn main() -> ExitCode {
         Some("stop") => stop::run(rest),
         Some("backup") => backup::backup(rest),
         Some("restore") => backup::restore(rest),
+        Some("verify") => backup::verify(rest),
         Some("mcp") => mcp::run(rest),
         Some("token") => token::run(rest),
         Some("node") => node::run(rest),

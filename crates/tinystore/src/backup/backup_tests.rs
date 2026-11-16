@@ -686,3 +686,42 @@ fn an_archive_shorter_than_a_zip_end_is_corrupt() {
         assert_eq!(error.kind(), ErrorKind::Corrupt, "{length} bytes: {error}");
     }
 }
+
+// contract: BAK-06
+#[test]
+fn verify_checks_what_a_restore_checks_and_writes_nothing() {
+    let f = fixture();
+    let written = f.filled().backup().write(&f.zip).unwrap();
+    let around = tree(f.zip.parent().unwrap());
+    let zip = fs::read(&f.zip).unwrap();
+    assert_eq!(verify(&f.zip).unwrap(), written, "the files and the bytes a restore writes");
+    assert_eq!(tree(f.zip.parent().unwrap()), around, "nothing written beside the zip");
+    assert_eq!(fs::read(&f.zip).unwrap(), zip, "the zip as it was");
+    assert!(!f.restored.exists());
+
+    let mut changed = zip.clone();
+    let at = changed.windows(4).position(|bytes| bytes == b"SQLi").expect("an SQLite file's header") + 200;
+    changed[at] ^= 0xff;
+    fs::write(&f.zip, &changed).unwrap();
+    let error = verify(&f.zip).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
+    assert!(error.to_string().contains(".db: "), "names the file: {error}");
+    assert_eq!(restore(&f.zip, &f.restored).unwrap_err().kind(), ErrorKind::Corrupt, "a restore refuses it too");
+
+    fs::write(&f.zip, &zip[..zip.len() - 30]).unwrap();
+    assert_eq!(verify(&f.zip).unwrap_err().kind(), ErrorKind::Corrupt, "a zip cut short");
+}
+
+// contract: BAK-06
+#[test]
+fn verify_refuses_a_file_whose_sha256_is_not_its_manifests_or_that_its_zip_lacks_naming_it() {
+    let f = fixture();
+    let (bytes, other) = (b"kv's bytes".to_vec(), b"kv's other".to_vec());
+    zipped(&f.zip, &[("kv.db".to_owned(), bytes)], &manifest_of(std::iter::once(listing("kv.db", &other, 0))));
+    let error = verify(&f.zip).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
+    assert!(error.to_string().contains("kv.db: its SHA-256 is not its manifest's"), "{error}");
+    zipped(&f.zip, &[], &manifest_of(std::iter::once(listing("sql/app.db", b"rows", 0))));
+    let error = verify(&f.zip).unwrap_err();
+    assert!(error.kind() == ErrorKind::Corrupt && error.to_string().contains("sql/app.db: listed by"), "{error}");
+}

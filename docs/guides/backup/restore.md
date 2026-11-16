@@ -72,6 +72,54 @@ store, err := tinystore.Open(ctx, "./data")
 tinystore restore: restore full.zip into ./data: the directory is not empty: a restore writes into an empty one: invalid
 ```
 
+## Check a backup without restoring it
+
+`tinystore verify` makes every check of the table above that reads the zip,
+and writes nothing: no directory, no file, no `LOCK` (contract BAK-06). It
+prints the bytes a restore of it would write, so you can check the disk has
+room before one.
+
+```sh
+tinystore verify backups/chat-2026-10-19.zip
+```
+
+```text
+● backups/chat-2026-10-19.zip  ok · 3 files · 52 KiB · checked in 0.1s
+  a restore of it writes 53248 bytes
+```
+
+A file that does not match exits 1, naming it:
+
+```text
+tinystore verify: verify backups/chat-2026-10-19.zip: sql/chat.db: its SHA-256 is not its manifest's: corrupt
+```
+
+In Rust it is a function, `tinystore::backup::verify`, which answers what
+the backup holds as `restore` does. The SDKs have no restore, so they have
+no verify either: run the command.
+
+```rust
+let backup = tinystore::backup::verify("backups/chat-2026-10-19.zip")?; // Backup { files, bytes, .. }
+```
+
+```ts
+await Bun.$`tinystore verify ${zip}`
+```
+
+```python
+subprocess.run(["tinystore", "verify", zip_path], check=True)
+```
+
+```go
+if err := exec.CommandContext(ctx, "tinystore", "verify", zip).Run(); err != nil {
+	return err
+}
+```
+
+Verify reads every byte, as a restore does, so it takes about as long as one
+without the writes. It tells you the zip is whole, not that it holds the
+rows you expect: that is what a restore you test, below, is for.
+
 ## Test your restores
 
 A backup nobody restored is a hope. Restore last night's into a scratch

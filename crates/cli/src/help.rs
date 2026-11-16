@@ -353,6 +353,17 @@ pub(crate) const RESTORE: Command = Command {
     more: "Every byte is checked against the backup's manifest, or nothing is left behind.",
 };
 
+pub(crate) const VERIFY: Command = Command {
+    name: "verify",
+    takes: "<zip>",
+    does: "check a backup as a restore would, writing nothing",
+    flags: &[],
+    examples: &["tinystore verify backup.zip"],
+    more: "The zip's directory, its manifest and every file's size, CRC-32 and SHA-256, and on Windows the names \
+           Windows reads as devices. It prints the bytes a restore writes; a file that does not match exits 1, \
+           naming it.",
+};
+
 pub(crate) const MCP: Command = Command {
     name: "mcp",
     takes: "[dir]",
@@ -686,7 +697,7 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &EVENTS_APPEND,
         ],
     ),
-    ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN, &LOCK_HOLD, &COMPLETION]),
+    ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &VERIFY, &MCP, &TOKEN, &LOCK_HOLD, &COMPLETION]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),
 ];

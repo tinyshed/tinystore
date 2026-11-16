@@ -42,6 +42,23 @@ before a store opens there; the store's `LOCK` is held meanwhile, so that
 none opens before the restore ends. A file that does not match what the
 backup says of it fails the restore `Corrupt`, and leaves `dir` empty.
 
+## verify
+
+```rust
+pub fn verify(archive: impl AsRef<Path>) -> Result<Backup>
+```
+
+Checks the backup at `archive` as `restore` checks it, and writes
+nothing: its zip's directory and manifest, each file's size, CRC-32 and
+SHA-256, and on Windows the names Windows reads as devices. What it
+answers is what a restore of it writes; a file that does not match what
+the backup says of it is `Corrupt`, naming the file.
+
+```rust
+let backup = tinystore::backup::verify("backup-2026-10-13.zip")?;
+println!("{} files, {} bytes a restore writes", backup.files, backup.bytes);
+```
+
 ## Backup
 
 ```rust

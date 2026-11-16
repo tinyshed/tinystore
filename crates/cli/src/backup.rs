@@ -1,15 +1,17 @@
-//! `tinystore backup` and `tinystore restore`: a store's directory as one
-//! checked zip, and that zip back into an empty directory. A backup reads
-//! beside a program or a server that holds the directory, and alone when
-//! none does.
+//! `tinystore backup`, `restore` and `verify`: a store's directory as one
+//! checked zip, that zip back into an empty directory, and that zip checked
+//! as a restore checks it, nothing written. A backup reads beside a program
+//! or a server that holds the directory, and alone when none does.
 //!
 //! ```text
 //! tinystore backup ./data backup-2026-10-13.zip [--include secret.key]… [--include-encryption-key]
 //! tinystore restore backup-2026-10-13.zip ./data
+//! tinystore verify backup-2026-10-13.zip
 //! ```
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Instant;
 
 use tinystore::{ErrorKind, Options, Store};
 
@@ -22,6 +24,10 @@ pub(crate) fn backup(args: &[String]) -> ExitCode {
 
 pub(crate) fn restore(args: &[String]) -> ExitCode {
     asked::run(&help::RESTORE, args, put_back)
+}
+
+pub(crate) fn verify(args: &[String]) -> ExitCode {
+    asked::run(&help::VERIFY, args, check)
 }
 
 fn back_up(asked: Asked) -> Done {
@@ -84,6 +90,25 @@ fn put_back(asked: Asked) -> Done {
     outln!("● {dir}  restored from {zip} · {} files, {}", restored.files, crate::on_disk::bytes(restored.bytes))?;
     if restored.key_left_out {
         outln!("  its encrypted buckets open with the store's key, which the backup left out: put it back first")?;
+    }
+    Ok(())
+}
+
+fn check(asked: Asked) -> Done {
+    let [zip] = &asked.words[..] else {
+        return Err(wrong("a zip: verify backup.zip"));
+    };
+    let began = Instant::now();
+    let checked = tinystore::backup::verify(zip).map_err(failed)?;
+    outln!(
+        "● {zip}  ok · {} files · {} · checked in {:.1}s",
+        checked.files,
+        crate::on_disk::bytes(checked.bytes),
+        began.elapsed().as_secs_f64()
+    )?;
+    outln!("  a restore of it writes {} bytes", checked.bytes)?;
+    if checked.key_left_out {
+        outln!("  its encrypted buckets open with the store's key, which the backup left out: keep it beside")?;
     }
     Ok(())
 }

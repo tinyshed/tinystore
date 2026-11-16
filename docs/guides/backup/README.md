@@ -59,7 +59,7 @@ on with its other work.
 
 | Page                                    | Covers                                        |
 |-----------------------------------------|-----------------------------------------------|
-| [Restore](restore.md)                   | the command, Rust's `restore`, what it checks |
+| [Restore](restore.md)                   | `restore`, `verify`, Rust's too, their checks |
 | [The encryption key](encryption-key.md) | `includeEncryptionKey`, a key kept apart      |
 
 New to backups? [Keeping it](../../handbook/chat/keeping-it.md) in the
@@ -85,6 +85,7 @@ let sent = store.backup().write_to(upload).await?; // upload: any Write + Send +
 | `store.backup().write("backups/chat.zip")?`                   | `store.backup().write("backups/chat.zip").await?`    |
 | `store.backup().write_to(upload)?`                            | `store.backup().write_to(upload).await?`             |
 | `tinystore::backup::restore("backups/chat.zip", "restored")?` | the same blocking call: it runs before a store opens |
+| `tinystore::backup::verify("backups/chat.zip")?`              | the same blocking call: it reads a zip, not a store  |
 
 The backup runs on the store's own threads, and `write_to` writes `upload` on
 that thread. On a large store a backup takes minutes, and every engine keeps

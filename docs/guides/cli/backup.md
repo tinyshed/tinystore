@@ -2,11 +2,13 @@
 
 `tinystore backup` writes the whole store into one checked zip while its
 program runs. `tinystore restore` puts a zip back into an empty directory,
-checking every byte, or leaves nothing.
+checking every byte, or leaves nothing. `tinystore verify` checks a zip as a
+restore would, and writes nothing.
 
 ```sh
 tinystore backup ./data backups/2026-10-19.zip
 tinystore backup ./data backups/full.zip --include app.json --include-encryption-key
+tinystore verify backups/2026-10-19.zip
 tinystore restore backups/2026-10-19.zip ./restored
 ```
 
@@ -51,6 +53,20 @@ before it names a file, or fails and leaves the directory empty, as
   its encrypted buckets open with the store's key, which the backup left out: put it back first
 ```
 
+## verify
+
+It makes every check of a restore that reads the zip, its directory, its
+manifest and each file's size, CRC-32 and SHA-256, and on Windows the names
+Windows reads as devices, and writes nothing (contract BAK-06). It prints
+the bytes a restore would write, so the disk can be checked before one:
+
+```text
+● backups/2026-10-19.zip  ok · 3 files · 52 KiB · checked in 0.1s
+  a restore of it writes 53248 bytes
+```
+
+A file that does not match exits 1, naming it and what broke, `corrupt`.
+
 ## Every night
 
 ```sh
@@ -58,6 +74,7 @@ before it names a file, or fails and leaves the directory empty, as
 set -e
 zip="/backups/chat-$(date +%F).zip"
 tinystore backup /srv/chat "$zip"
+tinystore verify "$zip"
 tinystore restore "$zip" /tmp/restore-check && rm -rf /tmp/restore-check
 find /backups -name 'chat-*.zip' -mtime +30 -delete
 ```

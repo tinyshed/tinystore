@@ -131,6 +131,10 @@
     "example": "tinystore restore backup.zip ./data2",
     "prints": "● ./data2  restored from backup.zip · 6 files, 347 KiB"
   },
+  "verify": {
+    "example": "tinystore verify backup.zip",
+    "prints": "● backup.zip  ok · 6 files · 347 KiB · checked in 0.1s\n  a restore of it writes 355328 bytes"
+  },
   "mcp": {
     "example": "claude mcp add tinystore -- tinystore mcp ./data",
     "prints": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"serverInfo\":{\"name\":\"tinystore\"}}}"

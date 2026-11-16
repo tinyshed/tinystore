@@ -1,7 +1,8 @@
 //! A backup put back into a directory before a store opens there: every
 //! file checked against its manifest's size and SHA-256 and its zip's
 //! CRC-32 as it is written, and nothing left in the directory when one does
-//! not match.
+//! not match. A backup checked alone, `verify`, makes each of those checks
+//! and writes nothing.
 
 use std::collections::HashMap;
 use std::fs;
@@ -46,6 +47,31 @@ pub fn restore(archive: impl AsRef<Path>, dir: impl AsRef<Path>) -> Result<Backu
         return Err(within(error));
     }
     drop(lock);
+    Ok(manifest.summary())
+}
+
+/// Checks the backup at `archive` as [`restore`] checks it, and writes
+/// nothing: its zip's directory and manifest, each file's size, CRC-32 and
+/// SHA-256, and on Windows the names Windows reads as devices. What it
+/// answers is what a restore of it writes; a file that does not match what
+/// the backup says of it is `Corrupt`, naming the file.
+///
+/// ```no_run
+/// # fn main() -> tinystore::Result<()> {
+/// let backup = tinystore::backup::verify("backup-2026-10-13.zip")?;
+/// println!("{} files, {} bytes a restore writes", backup.files, backup.bytes);
+/// # Ok(())
+/// # }
+/// ```
+pub fn verify(archive: impl AsRef<Path>) -> Result<Backup> {
+    let archive = archive.as_ref();
+    let within = |error: Error| error.within(format!("verify {}", archive.display()));
+    let mut zip = io::BufReader::new(fs::File::open(archive).map_err(|error| within(Error::io("open", error)))?);
+    let (entries, manifest) = read(&mut zip).map_err(|why| within(Error::new(ErrorKind::Corrupt, why)))?;
+    refuse_devices(&manifest).map_err(within)?;
+    for file in &manifest.files {
+        copy_checked(&mut zip, &entries, file, &mut io::sink()).map_err(within)?;
+    }
     Ok(manifest.summary())
 }
 
@@ -117,12 +143,7 @@ fn put(
     dir: &Path,
     file: &Listed,
 ) -> Result<()> {
-    let corrupt = |why: String| Error::new(ErrorKind::Corrupt, format!("{}: {why}", file.name));
     let failed = |error: io::Error| Error::io(file.name.clone(), error);
-    let entry = &entries[&file.name];
-    if entry.size != file.size {
-        return Err(corrupt(format!("{} bytes in the zip, where its manifest says {}", entry.size, file.size)));
-    }
     let target = dir.join(&file.name);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(failed)?;
@@ -130,6 +151,27 @@ fn put(
     let partial = target
         .with_file_name(format!("{}.partial", target.file_name().and_then(|name| name.to_str()).unwrap_or("file")));
     let mut out = owned_file(&partial).map_err(failed)?;
+    copy_checked(zip, entries, file, &mut out)?;
+    out.sync_all().map_err(failed)?;
+    drop(out);
+    fs::rename(&partial, &target).map_err(failed)
+}
+
+/// Copies one file of the zip into `out`, checked as it goes by: its size
+/// against its manifest's, its CRC-32 against the zip's as `zip::open`'s
+/// reader ends, and its SHA-256 against its manifest's once all of it went.
+fn copy_checked(
+    zip: &mut (impl Read + io::Seek),
+    entries: &HashMap<String, zip::Entry>,
+    file: &Listed,
+    out: &mut impl Write,
+) -> Result<()> {
+    let corrupt = |why: String| Error::new(ErrorKind::Corrupt, format!("{}: {why}", file.name));
+    let failed = |error: io::Error| Error::io(file.name.clone(), error);
+    let entry = &entries[&file.name];
+    if entry.size != file.size {
+        return Err(corrupt(format!("{} bytes in the zip, where its manifest says {}", entry.size, file.size)));
+    }
     let mut bytes = zip::open(zip, entry).map_err(corrupt)?;
     let mut sha = Sha256::new();
     let mut buffer = vec![0; 1 << 16];
@@ -149,9 +191,7 @@ fn put(
     if hex(&sha.finalize()) != file.sha256 {
         return Err(corrupt("its SHA-256 is not its manifest's".to_owned()));
     }
-    out.sync_all().map_err(failed)?;
-    drop(out);
-    fs::rename(&partial, &target).map_err(failed)
+    Ok(())
 }
 
 /// A new file only its owner reads and writes, as the files of a store and

@@ -111,3 +111,29 @@ fn backup_of_a_directory_that_is_not_there_makes_no_store() {
     assert!(said(&backed).contains("no store is there"), "{}", said(&backed));
     assert!(!typo.exists() && !zip.exists());
 }
+
+// contract: BAK-06
+#[test]
+fn verify_says_a_whole_backup_is_ok_and_a_changed_one_corrupt_writing_nothing() {
+    let dirs = tempfile::tempdir().unwrap();
+    let (data, zip) = (dirs.path().join("data"), dirs.path().join("backup.zip"));
+    filled(&data);
+    let backed = tinystore(&[&"backup", &data, &zip]);
+    assert!(backed.status.success(), "{}", said(&backed));
+    let checked = tinystore(&[&"verify", &zip]);
+    assert!(checked.status.success(), "{}", said(&checked));
+    assert!(said(&checked).contains("  ok · "), "{}", said(&checked));
+    assert!(said(&checked).contains("a restore of it writes"), "{}", said(&checked));
+
+    let mut bytes = std::fs::read(&zip).unwrap();
+    let at = bytes.windows(4).position(|header| header == b"SQLi").unwrap() + 200;
+    bytes[at] ^= 0xff;
+    std::fs::write(&zip, &bytes).unwrap();
+    let listed = std::fs::read_dir(dirs.path()).unwrap().count();
+    let refused = tinystore(&[&"verify", &zip]);
+    assert_eq!(refused.status.code(), Some(1), "{}", said(&refused));
+    assert!(said(&refused).contains(".db: ") && said(&refused).contains("corrupt"), "{}", said(&refused));
+    assert_eq!(std::fs::read_dir(dirs.path()).unwrap().count(), listed, "nothing written");
+    let usage = tinystore(&[&"verify"]);
+    assert_eq!(usage.status.code(), Some(2), "{}", said(&usage));
+}

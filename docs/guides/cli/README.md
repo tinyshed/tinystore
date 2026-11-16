@@ -50,6 +50,7 @@ tinystore kv ./data set flags beta on --ttl 1h
 |         | `stop <dir>`                          | stop the server of a directory, its work finished                 |
 |         | `backup <dir> <zip>`                  | the whole store in one checked zip, while it runs                 |
 |         | `restore <zip> <dir>`                 | a backup into an empty directory                                  |
+|         | `verify <zip>`                        | check a backup as a restore would, writing nothing                |
 |         | `mcp [dir]`                           | let an AI agent read the store, and write what `--write` names    |
 |         | `token new [admin\|data\|read]`       | a token line for `serve`'s `--tokens`                             |
 |         | `lock <dir> hold <lock> <key> -- <c>` | run a command while it holds a key of a lock                      |

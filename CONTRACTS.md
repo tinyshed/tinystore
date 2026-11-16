@@ -278,6 +278,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **BAK-02** A restore MUST check every byte against the manifest and the zip, write only into an empty directory, and leave nothing when it fails; on Windows it MUST refuse a backup that holds a file whose name Windows reads as a device, as a database named `nul`, before it writes anything; a directory whose restore's process died before the restore ended MUST NOT open, as a store or as a guest.
 - **BAK-03** The store's encryption key and the program's own files MUST be left out unless asked for, and a backup without the key MUST say so.
 - **BAK-04** A backup that fails MUST leave no zip and no snapshot.
+- **BAK-06** A backup's verify MUST make every check its restore makes, the zip's directory, the manifest, each file's size, CRC-32 and SHA-256 and on Windows the names read as devices, fail `corrupt` naming the file that does not match, and write nothing.
 
 ## 9. The command line
 

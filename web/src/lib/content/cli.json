@@ -920,6 +920,17 @@
       "takes": "<zip> <dir>"
     },
     {
+      "does": "check a backup as a restore would, writing nothing",
+      "examples": [
+        "tinystore verify backup.zip"
+      ],
+      "flags": [],
+      "group": "Run",
+      "more": "The zip's directory, its manifest and every file's size, CRC-32 and SHA-256, and on Windows the names Windows reads as devices. It prints the bytes a restore writes; a file that does not match exits 1, naming it.",
+      "name": "verify",
+      "takes": "<zip>"
+    },
+    {
       "does": "let an AI agent read the store, and write what --write names",
       "examples": [
         "claude mcp add tinystore -- tinystore mcp ./data",
