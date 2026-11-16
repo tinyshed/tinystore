@@ -32,9 +32,11 @@ const HAS_CONTENT: &str = "select 1 from _tinystore_blobs_contents where id = ?1
 const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
     Migration::of(2, "0002_names.sql", include_str!("migrations/0002_names.sql")),
+    Migration::of(3, "0003_directories.sql", include_str!("migrations/0003_directories.sql")),
 ];
 /// A database's files, whose tables are made with blobs.db's names of its
-/// step 2: a step after it goes to both histories, the next of each.
+/// step 2: a step after it goes to both histories, the next of each, but for
+/// a directory's tables, which blobs.db alone keeps.
 #[cfg(feature = "sql")]
 const IN_A_DATABASE: &[Migration] =
     &[Migration::of(1, "0001_in_a_database.sql", include_str!("migrations/0001_in_a_database.sql"))];
@@ -61,6 +63,8 @@ pub(crate) struct Blobs {
     /// The disk the store keeps free, which no file may take.
     keep_free: u64,
     sets: Mutex<HashMap<String, i64>>,
+    /// The scans of directories under way, which a second scan waits on.
+    pub(crate) scans: super::directory::Scans,
     /// The store, for the writes a copy passes to its home.
     #[cfg(feature = "replication")]
     store: crate::store::WeakStore,
@@ -251,6 +255,7 @@ impl Opening<'_> {
             clock: store.clock(),
             keep_free: store.keep_free(),
             sets: Mutex::new(HashMap::new()),
+            scans: super::directory::Scans::default(),
             #[cfg(feature = "replication")]
             store: store.downgrade(),
             #[cfg(feature = "async")]
@@ -495,6 +500,7 @@ impl Blobs {
             return Ok(id);
         }
         let owned = name.to_owned();
+        let in_store = self.kept.lent_by.is_none();
         // Found before it is made, so that a copy, which writes nothing,
         // opens a set its home made.
         let made = own_work(|| {
@@ -503,6 +509,9 @@ impl Blobs {
                 let found = tx.query_row(SELECT_SET, [&owned], |row| row.get(0)).optional().map_err(failed)?;
                 if let Some(id) = found {
                     return Ok(id);
+                }
+                if in_store {
+                    super::directory::refuse_a_directory(tx, &owned)?;
                 }
                 tx.execute(INSERT_SET, [&owned]).map_err(failed)?;
                 tx.query_row(SELECT_SET, [&owned], |row| row.get(0)).map_err(failed)

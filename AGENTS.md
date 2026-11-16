@@ -192,10 +192,12 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   Config stands at the root, since `config::load` opens no store, and only its
   `store.rs` names kv, whose file keeps the live settings' changes and whose
   engine keeps the configs open in the process.
-- **`unsafe` lives in nine places**: `sqlite::memory`, `sqlite::mutex`,
+- **`unsafe` lives in ten places**: `sqlite::memory`, `sqlite::mutex`,
   `sqlite::deferred`, which asks SQLite whether a foreign key a transaction
   defers to its commit stands broken,
   `space`, which asks the system for the disk's free space,
+  `blobs::directory::opener`, which opens a directory's file a segment at a
+  time with `openat` on Unix, following no link,
   `console::terminal`, which asks a Windows console to read colours,
   `crates/ffi`, the command line's `owner_only`, which gives what a Windows server
   keeps to its user, `server\`, `SERVE` and the pipe, a DACL of that user's
@@ -203,7 +205,7 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   it starts on Windows, since std's `inherit_handles` is not stable, and the
   test `metrics_memory`, whose allocator counts the heap an
   ingest holds against what it reserves. The workspace denies
-  `unsafe_code` everywhere else, each of the nine allows it at its module's
+  `unsafe_code` everywhere else, each of the ten allows it at its module's
   top, and clippy's `undocumented_unsafe_blocks` makes every block carry a
   `SAFETY:` comment saying what it relies on.
 - **A dependency is a decision**, and every program linking TinyStore pays for
@@ -217,7 +219,7 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   yaml-rust2, without its encodings, for a config's files, fst and
   levenshtein_automata for a misspelt name's nearest words, sysinfo, with `system` alone, for the machine among a store's own metrics,
   unicode-normalization, unicode-segmentation and rust-stemmers, pinned, for
-  a search's words, libc on Unix for the disk's free space, and futures-core,
+  a search's words, libc on Unix for the disk's free space and a directory's `openat`, and futures-core,
   with `async` alone, for the `Stream` trait every runtime's stream helpers
   take, a trait with no code to run. The command line adds windows-sys on
   Windows alone, the release tokio already builds, for the DACL of a server's

@@ -8,6 +8,16 @@ Every public type, trait and function of the Blobs engine in `tinystore::blobs` 
 impl Store
 ```
 
+### Store.directory
+
+```rust
+pub fn directory(&self, name: &str) -> DirectoryBuilder<'_>
+```
+
+The directory `name`: a folder of this machine, which the store lists
+and reads and never writes. Its name is a set of files' too, and the
+two never share one.
+
 ### Store.files
 
 ```rust
@@ -31,6 +41,254 @@ pub fn files(&self, name: &str) -> FilesBuilder<'_>
 
 The set of files `name`, made the first time it opens, as
 `crate::Store::files` opens it.
+
+## Change
+
+```rust
+pub enum Change {
+    Added,
+    Changed,
+    Removed,
+}
+```
+
+What became of a file since a cursor.
+
+## Changes
+
+```rust
+pub struct Changes {
+    pub items: Vec<FileChange>,
+    pub next: String,
+}
+```
+
+A page of changes in the order the scans wrote them, and the cursor to ask
+from next: with no items, the one to ask from after the next scan.
+
+## ChangesCall
+
+```rust
+pub struct ChangesCall<'d> { /* private fields */ }
+```
+
+A page of a directory's changes, its cursor before `ChangesCall::page`.
+
+### ChangesCall.after
+
+```rust
+pub fn after(self, cursor: impl Into<String>) -> Self
+```
+
+The changes past this cursor, a page's `next`.
+
+### ChangesCall.page
+
+```rust
+pub fn page(self) -> Result<Changes>
+```
+
+## Directory
+
+```rust
+pub struct Directory { /* private fields */ }
+```
+
+A directory, or a folder of it: what its scans listed, and its files read
+from the disk.
+
+### Directory.changes
+
+```rust
+pub fn changes(&self) -> ChangesCall<'_>
+```
+
+The changes of every file since a cursor, or from the first file the
+directory ever listed, each `added`.
+
+### Directory.list
+
+```rust
+pub fn list(&self) -> DirectoryList<'_>
+```
+
+A page of this folder's files and of the folders in it, in the byte
+order of their paths, as the last scan wrote them down.
+
+### Directory.usage
+
+```rust
+pub fn usage(&self) -> Result<Usage>
+```
+
+The files of this folder and of the folders in it, and their bytes, as
+the last scan wrote them down.
+
+### Directory.folder
+
+```rust
+pub fn folder(&self, segment: impl Key) -> Directory
+```
+
+The folder in this one that `segment` names, whose paths are relative
+to it.
+
+### Directory.scan
+
+```rust
+pub fn scan(&self) -> Result<Scan>
+```
+
+Walks the folder and writes down what appeared, changed or went since
+the last scan. One scan of a directory runs at a time: a second waits
+for the first and answers as it does.
+
+### Directory.get
+
+```rust
+pub fn get(&self, path: &str) -> Result<Option<StoredFile>>
+```
+
+The file at the path as a scan listed it and as the disk holds it now:
+none when no scan listed it, or when it is gone since.
+
+### Directory.head
+
+```rust
+pub fn head(&self, path: &str) -> Result<Option<FileInfo>>
+```
+
+What the last scan wrote down of the file at the path; it reads no disk.
+
+### Directory.forget
+
+```rust
+pub fn forget(&self) -> Result<()>
+```
+
+Removes every file of the list, each told `removed`, and nothing on
+the disk: for a folder that was truly emptied, which a scan refuses to
+believe.
+
+## DirectoryBuilder
+
+```rust
+pub struct DirectoryBuilder<'s> { /* private fields */ }
+```
+
+What opens a directory: its folder on this machine, how often the store
+scans it, the names it passes over, and whether its files grow as they
+are read.
+
+### DirectoryBuilder.path
+
+```rust
+pub fn path(self, path: impl AsRef<Path>) -> Self
+```
+
+The folder on this machine. It is not kept in the store: a directory
+opened without one lists what its scans wrote and reads nothing.
+
+### DirectoryBuilder.every
+
+```rust
+pub fn every(self, period: Duration) -> Self
+```
+
+Scans the folder on the store's background work, the first a period
+after the open; a period is minutes, not seconds.
+
+### DirectoryBuilder.ignore
+
+```rust
+pub fn ignore<I, S>(self, patterns: I) -> Self
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+```
+
+Names a scan passes over, a file's or a folder's, `*` for any run of
+characters within one name: a folder passed over is not entered.
+
+### DirectoryBuilder.growing
+
+```rust
+pub fn growing(self, growing: bool) -> Self
+```
+
+For a folder whose files are written while they are read: a read holds
+to no version, and goes up to the size the file has as it reads.
+
+### DirectoryBuilder.open
+
+```rust
+pub fn open(self) -> Result<Directory>
+```
+
+## DirectoryList
+
+```rust
+pub struct DirectoryList<'d> { /* private fields */ }
+```
+
+A page of a folder's files, its options before `DirectoryList::page`.
+
+### DirectoryList.prefix
+
+```rust
+pub fn prefix(self, prefix: impl Into<String>) -> Self
+```
+
+Only the files whose path within the folder starts with this text.
+
+### DirectoryList.after
+
+```rust
+pub fn after(self, path: impl Into<String>) -> Self
+```
+
+The page that starts past this path, as a page's `next` says it.
+
+### DirectoryList.limit
+
+```rust
+pub fn limit(self, files: usize) -> Self
+```
+
+### DirectoryList.page
+
+```rust
+pub fn page(self) -> Result<Page>
+```
+
+## FileChange
+
+```rust
+pub struct FileChange {
+    pub path: String,
+    pub change: Change,
+    pub info: Option<FileInfo>,
+}
+```
+
+One file of a page of changes: its whole path in the directory, and what
+it carries now, none once it is removed.
+
+## Scan
+
+```rust
+pub struct Scan {
+    pub added: u64,
+    pub changed: u64,
+    pub removed: u64,
+    pub skipped: u64,
+    pub count: u64,
+    pub size: u64,
+}
+```
+
+What a scan found: the files it told added, changed and removed, what it
+met and could not list, and what the list holds once it ended.
 
 ## FileCall
 
@@ -426,6 +684,12 @@ A file and its bytes as `Files::get` found it. A whole read, from its
 first byte to its last in order, is checked against the SHA-256 taken when
 it was written, and its last bytes are held back until it matches; a range
 is not checked.
+
+A directory's file, as [`Directory::get`](super::Directory::get) opened
+it, has no hash: each piece read holds to the size and the time it was
+opened with, and fails `conflict` once the file moved. In a growing
+directory a read holds to no version, and its [`info`](Self::info) takes
+the file's size and time from each piece read in order.
 
 ### StoredFile.info
 

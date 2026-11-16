@@ -15,6 +15,7 @@
 //! ```
 
 mod change;
+mod directory;
 mod disk;
 mod engine;
 mod files;
@@ -39,6 +40,7 @@ pub(crate) use engine::{FILE_IN_STORE, is_object, objects_after, objects_missing
 #[cfg(feature = "client")]
 pub(crate) use engine::{held, sets};
 // What a connection that only reads opens: a set of files the store holds.
+pub use directory::{Change, Changes, ChangesCall, Directory, DirectoryBuilder, DirectoryList, FileChange, Scan};
 #[cfg(feature = "wire")]
 pub(crate) use engine::set_as_it_is;
 #[cfg(all(feature = "wire", feature = "sql"))]

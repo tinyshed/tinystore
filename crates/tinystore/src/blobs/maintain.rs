@@ -1,6 +1,7 @@
 //! What the store runs every minute: expired files and the files marked
 //! clears hid, removed a batch at a time; the files of contents no row names
-//! any more; what uploads left; the settled mark; and a slice of the scrub.
+//! any more; the lines of directories' files removed 30 days ago; what
+//! uploads left; the settled mark; and a slice of the scrub.
 
 use std::sync::Arc;
 
@@ -66,6 +67,7 @@ impl Blobs {
         keep(self.expire().map(|expired| done.expired = expired));
         keep(self.drop_cleared().map(|cleared| done.cleared = cleared));
         keep(self.remove_unnamed().map(|removed| done.removed = removed));
+        keep(self.purge_removed().map(drop));
         keep(self.disk.sweep_uploads(&self.ids).map(drop));
         for id in self.ids.doubtful() {
             self.resolve(id);

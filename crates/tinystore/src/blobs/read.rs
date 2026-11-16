@@ -7,6 +7,7 @@ use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
 use super::change::hidden;
+use super::directory::{Outside, time_of, version_etag};
 use super::disk::{being_removed, read_at};
 use super::files::Files;
 use super::info::{FileInfo, FileRow, file_columns};
@@ -35,6 +36,12 @@ const SELECT_OPEN: &str = concat!(
 /// first byte to its last in order, is checked against the SHA-256 taken when
 /// it was written, and its last bytes are held back until it matches; a range
 /// is not checked.
+///
+/// A directory's file, as [`Directory::get`](super::Directory::get) opened
+/// it, has no hash: each piece read holds to the size and the time it was
+/// opened with, and fails `conflict` once the file moved. In a growing
+/// directory a read holds to no version, and its [`info`](Self::info) takes
+/// the file's size and time from each piece read in order.
 pub struct StoredFile {
     info: FileInfo,
     body: Body,
@@ -53,6 +60,8 @@ enum Body {
     Inline(Vec<u8>),
     /// A file held open: the engine can remove it, and this reader reads on.
     File(std::fs::File),
+    /// A directory's file on the disk, held to the version it opened.
+    Outside(Outside),
 }
 
 impl std::fmt::Debug for StoredFile {
@@ -151,6 +160,20 @@ impl StoredFile {
         }))
     }
 
+    /// A directory's file, as its `get` opened it.
+    pub(crate) fn outside(info: FileInfo, outside: Outside, label: String) -> StoredFile {
+        let hashed = info.size;
+        StoredFile {
+            info,
+            body: Body::Outside(outside),
+            label,
+            sha256: Vec::new(),
+            position: 0,
+            hash: Sha256::new(),
+            hashed,
+        }
+    }
+
     pub fn info(&self) -> &FileInfo {
         &self.info
     }
@@ -159,7 +182,10 @@ impl StoredFile {
     /// condition compares it: quoted or not, in either case.
     #[cfg(feature = "wire")]
     pub(crate) fn matches(&self, etag: &str) -> bool {
-        super::info::matches(etag, &self.sha256)
+        match &self.body {
+            Body::Outside(_) => etag.trim_matches('"') == self.info.etag.trim_matches('"'),
+            Body::Inline(_) | Body::File(_) => super::info::matches(etag, &self.sha256),
+        }
     }
 
     /// What its errors call it: `files avatars: "users/42/1.png"`.
@@ -233,6 +259,9 @@ impl StoredFile {
     /// Reads at `offset` without moving where the next read begins, from
     /// several threads at once; like any range it is not checked.
     pub fn read_at(&self, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+        if let Body::Outside(outside) = &self.body {
+            return outside.read_at(bytes, offset).map(|piece| piece.read).map_err(|error| self.labelled(error));
+        }
         if offset >= self.info.size {
             return Ok(0);
         }
@@ -244,6 +273,7 @@ impl StoredFile {
                 wanted
             }
             Body::File(file) => read_at(file, &mut bytes[..wanted], offset)?,
+            Body::Outside(_) => unreachable!("a directory's file reads above"),
         };
         if read == 0 && wanted > 0 {
             return Err(io::Error::other(self.corrupt("its file ends before it does")));
@@ -280,6 +310,13 @@ impl StoredFile {
         Ok(())
     }
 
+    /// An error of a directory's read, said of the file.
+    fn labelled(&self, error: io::Error) -> io::Error {
+        let ours = error.get_ref().is_some_and(|inner| inner.is::<Error>());
+        let error = self.error_of(error);
+        io::Error::other(if ours { error.within(&self.label) } else { error })
+    }
+
     fn corrupt(&self, why: &str) -> Error {
         Error::corrupt(why).within(&self.label)
     }
@@ -302,6 +339,16 @@ struct Gone(i64);
 
 impl Read for StoredFile {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if let Body::Outside(outside) = &self.body {
+            let piece = outside.read_at(bytes, self.position).map_err(|error| self.labelled(error))?;
+            if outside.is_growing() {
+                self.info.size = piece.size;
+                self.info.last_modified = time_of(piece.modified);
+                self.info.etag = version_etag(piece.size, piece.modified);
+            }
+            self.position += piece.read as u64;
+            return Ok(piece.read);
+        }
         if self.position >= self.info.size {
             return Ok(0);
         }

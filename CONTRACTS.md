@@ -156,6 +156,12 @@ These contracts are what does not.
 - **BLOB-07** A file past `max_file_size`, or one that would leave the disk less free than the store keeps, MUST be refused and leave nothing.
 - **BLOB-08** A path MUST be its own bytes on every file system.
 - **BLOB-09** Memory MUST NOT follow a file's size.
+- **BLOB-10** The store MUST NOT write, rename or remove anything under a directory's path.
+- **BLOB-11** A file that appeared, went, or whose size or modification time changed MUST be told by the next scan that reads its folder, and a reader that follows its cursor, or walks from the start, MUST end with what the list holds.
+- **BLOB-12** A scan MUST NOT tell a file removed whose folder it could not read, MUST NOT enter a folder on another file system, and a scan of a missing, unreadable or newly empty folder MUST fail and change nothing.
+- **BLOB-13** A read MUST hand back only bytes of the version its `get` opened, and fail `conflict` once the file moved; in a `growing` directory each piece MUST bring the size and the time of the file as it was read. A copy MUST NOT serve a file whose size or time is not the list's.
+- **BLOB-14** No read MUST leave the directory's folder, through a link or a path, even one swapped for a link between the scan and the read.
+- **BLOB-16** A scan's memory MUST NOT follow the number of files.
 
 ### Records
 
