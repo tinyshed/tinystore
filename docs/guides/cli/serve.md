@@ -88,6 +88,11 @@ LimitError: this server takes 256 connections at most, and holds 256: try again 
 | `--self-metrics`                | measure the store into its own [metrics](../metrics/self-metrics.md) |
 | `--no-system-metrics`           | with `--self-metrics`, leave out the machine                         |
 | `--max-series <count>`          | the metrics series the store holds at most; 100,000 by default       |
+| `--directory <name=path>`       | a folder this server lists and reads as a directory; again for more  |
+
+A client with a token names no path of the server's machine: it opens a
+directory by its name alone, and reaches only the folders `--directory`
+gave.
 
 ## Output
 

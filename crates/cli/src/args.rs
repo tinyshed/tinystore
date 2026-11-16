@@ -14,6 +14,7 @@
 //!
 //! Every flag is named in `help::SERVE`, which `serve --help` prints.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -61,6 +62,9 @@ pub(crate) struct Serve {
     pub(crate) max_series: Option<u64>,
     /// The node the store is, when a node's flag says so.
     pub(crate) node: Option<Node>,
+    /// The folders of this machine the server opens as directories, by name,
+    /// `--directory movies=/mnt/media`: the only ones a token reaches.
+    pub(crate) directories: BTreeMap<String, PathBuf>,
 }
 
 /// What `--node-listen`, `--from` and `--node-config` say of the node the
@@ -150,7 +154,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let self_metrics =
         given.self_metrics.then_some(tinystore::metrics::SelfMetrics { system: !given.no_system_metrics });
     let (keep_free, encryption_key_file, max_series) = (given.keep_free, given.encryption_key_file, given.max_series);
-    let older_encryption_keys = given.older_encryption_keys;
+    let (older_encryption_keys, directories) = (given.older_encryption_keys, given.directories);
     Ok(Serve {
         dir,
         transport,
@@ -167,6 +171,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         self_metrics,
         max_series,
         node,
+        directories,
     })
 }
 
@@ -195,6 +200,7 @@ struct Given {
     max_connections: Option<usize>,
     node: Node,
     node_config: Option<PathBuf>,
+    directories: BTreeMap<String, PathBuf>,
 }
 
 impl Given {
@@ -239,6 +245,12 @@ impl Given {
                 "--node-listen" => given.node.listen = Some(value("--node-listen")?),
                 "--from" => given.node.from.push(value("--from")?),
                 "--node-config" => given.node_config = Some(PathBuf::from(value("--node-config")?)),
+                "--directory" => {
+                    let (name, path) = directory(&value("--directory")?)?;
+                    if given.directories.insert(name.clone(), path).is_some() {
+                        return Err(format!("--directory {name} given twice"));
+                    }
+                }
                 "--durability" => {
                     let word = value("--durability")?;
                     let durability =
@@ -381,6 +393,16 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + of_cycle - 719_468
 }
 
+/// `--directory`'s `name=path`: a directory's name and its folder on this machine.
+fn directory(given: &str) -> Result<(String, PathBuf), String> {
+    let refused = || format!("--directory {given}: name=path, as movies=/mnt/media");
+    let (name, path) = given.split_once('=').ok_or_else(refused)?;
+    if name.is_empty() || path.is_empty() {
+        return Err(refused());
+    }
+    Ok((name.to_owned(), PathBuf::from(path)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +456,14 @@ mod tests {
         assert!(serve(&args("d --max-connections 2")).unwrap_err().contains("--listen's"));
         assert_eq!(serve(&args("d --max-series 0")).unwrap_err(), "--max-series 0: a count above 0");
         assert_eq!(serve(&args("d --max-series many")).unwrap_err(), "--max-series many: a count above 0");
+        let given = serve(&args("d --directory movies=/mnt/media --directory photos=/mnt/photos")).unwrap();
+        assert_eq!(given.directories.get("movies"), Some(&PathBuf::from("/mnt/media")));
+        assert_eq!(given.directories.len(), 2);
+        assert_eq!(
+            serve(&args("d --directory movies")).unwrap_err(),
+            "--directory movies: name=path, as movies=/mnt/media"
+        );
+        assert_eq!(serve(&args("d --directory a=/x --directory a=/y")).unwrap_err(), "--directory a given twice");
     }
 
     #[test]

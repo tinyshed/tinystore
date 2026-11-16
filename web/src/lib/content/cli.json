@@ -860,6 +860,11 @@
           "value": "<count>"
         },
         {
+          "means": "a folder the store lists and reads as a directory, all a token reaches; again for more",
+          "name": "--directory",
+          "value": "<name=path>"
+        },
+        {
           "means": "JSON lines to a file as well",
           "name": "--log-file",
           "value": "<file>"

@@ -313,6 +313,12 @@ pub(crate) const SERVE: Command = Command {
         under("store", "--self-metrics", "", "measure the store into its own metrics, as tinystore_ names"),
         under("store", "--no-system-metrics", "", "with --self-metrics, leave out the machine it runs on"),
         under("store", "--max-series", "<count>", "the metrics series the store holds at most; 100000 by default"),
+        under(
+            "store",
+            "--directory",
+            "<name=path>",
+            "a folder the store lists and reads as a directory, all a token reaches; again for more",
+        ),
         under("output", "--log-file", "<file>", "JSON lines to a file as well"),
         under("output", "--quiet", "", "the banner, warnings and errors only"),
         under(HIDDEN, "--local", "", "a sidecar an SDK started"),

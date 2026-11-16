@@ -102,11 +102,13 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         }
     };
     let private = matches!(serve.transport, Transport::Stdio);
+    // every connection is given them; one that came with a token reaches no other folder
+    let directories = (!serve.directories.is_empty()).then(|| Arc::new(serve.directories.clone()));
     let served = on_a_runtime(private, async {
         match serve.transport {
-            Transport::Stdio => stdio(&store, clock).await,
+            Transport::Stdio => stdio(&store, clock, directories).await,
             Transport::Local { sidecar } => {
-                let listening = Listening { sidecar, idle: serve.idle, console, started, shown };
+                let listening = Listening { sidecar, idle: serve.idle, console, started, shown, directories };
                 listen(&store, listening, remote).await
             }
         }
@@ -180,9 +182,9 @@ fn open(dir: &Path, options: Options) -> Result<Store, (ExitCode, String)> {
 
 /// A private child: one client, the parent, on stdin and stdout. The end of
 /// stdin asks the server to leave, once what was asked of it is answered.
-async fn stdio(store: &Store, clock: Option<Arc<TestClock>>) -> io::Result<()> {
+async fn stdio(store: &Store, clock: Option<Arc<TestClock>>, directories: Option<Directories>) -> io::Result<()> {
     let (closing, closed) = watch::channel(false);
-    let connect = Connect { stop: Some(stop_by(closing)), clock, ..Connect::default() };
+    let connect = Connect { stop: Some(stop_by(closing)), clock, directories, ..Connect::default() };
     connection::serve(tokio::io::stdin(), frames_out()?, store, connect, closed).await;
     Ok(())
 }
@@ -213,13 +215,17 @@ struct Listening {
     idle: Option<Duration>,
     console: Console,
     started: Instant,
+    directories: Option<Directories>,
 }
+
+/// The folders `--directory` gave the server, by their directory's name.
+type Directories = Arc<std::collections::BTreeMap<String, std::path::PathBuf>>;
 
 /// A server for as many clients as come, until it is stopped, idles out or
 /// hears Ctrl+C: on a socket or a named pipe that `SERVE` names, and on TCP
 /// when `--listen` says.
 async fn listen(store: &Store, listening: Listening, remote: Option<remote::Ready>) -> io::Result<()> {
-    let Listening { shown, sidecar, idle, console, started } = listening;
+    let Listening { shown, sidecar, idle, console, started, directories } = listening;
     let server = local::server_dir(store.dir())?;
     local::unpublish(&server)?;
     let (listener, endpoint) = Listener::bind(store.dir(), &server)?;
@@ -235,7 +241,12 @@ async fn listen(store: &Store, listening: Listening, remote: Option<remote::Read
     let serve = local::Serve::new(endpoints, sidecar)?;
     let (closing, closed) = watch::channel(false);
     let stop = stop_by(closing.clone());
-    let connect = Connect { prove: Some(serve.prove()), stop: Some(Arc::clone(&stop)), ..Connect::default() };
+    let connect = Connect {
+        prove: Some(serve.prove()),
+        stop: Some(Arc::clone(&stop)),
+        directories: directories.clone(),
+        ..Connect::default()
+    };
     local::publish(&server, &serve)?;
     console.serving(&shown, store.dir(), &serve.endpoints, sidecar, started.elapsed());
     let (clients, counted) = watch::channel(0usize);
@@ -245,7 +256,7 @@ async fn listen(store: &Store, listening: Listening, remote: Option<remote::Read
         let Some((tcp, ready)) = remote else {
             return std::future::pending::<io::Result<()>>().await;
         };
-        let connect = Connect { stop: Some(stop), admit: Some(ready.admit), ..Connect::default() };
+        let connect = Connect { stop: Some(stop), admit: Some(ready.admit), directories, ..Connect::default() };
         let door = Door { tls: ready.tls, most: ready.max_connections, held: Arc::default() };
         accept_remote(tcp, door, store, &connect, &closed, &clients).await
     };
