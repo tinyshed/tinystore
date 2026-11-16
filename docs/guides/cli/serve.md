@@ -94,7 +94,7 @@ only errors on stderr and keeps every line from `info` in the file.
 ## In a container
 
 ```sh
-docker run -v /srv/chat:/data -p 7443:7443 ghcr.io/tinyshed/tinystore:0.7 \
+docker run -v /srv/chat:/data -p 7443:7443 ghcr.io/tinyshed/tinystore:0.8 \
   serve /data --listen tls://0.0.0.0:7443 --tls-cert /data/cert.pem --tls-key /data/key.pem --tokens /data/tokens.txt
 ```
 

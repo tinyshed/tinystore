@@ -4,6 +4,10 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.8.0](v0.8.0.md)** · 16 November 2026\
+  Migrations written as drafts and applied again, each half's score of a
+  search by words and a vector, a read token that only reads, and fifty-four
+  fixes.
 - **[TinyStore 0.7.1](v0.7.1.md)** · 6 November 2026\
   Metrics aggregates in pages past 1,000 series a group at a time, and no
   empty pages over a range that is mostly empty.
