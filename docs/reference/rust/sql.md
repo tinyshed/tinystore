@@ -212,6 +212,26 @@ pub fn scalar<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<T
 The one value of the one row a statement gives, as `count(*)` does;
 `Option` takes a `NULL`, as `max` over no rows gives.
 
+### Database.each
+
+```rust
+pub fn each<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Each<T>>
+```
+
+The rows a statement gives, one at a time, each read as `all` reads
+it: read a part at a time from one snapshot, so that memory holds a
+part and not the rows, however many there are. The snapshot lasts
+five seconds at most: a walk that takes longer fails `limit`, and is
+read a page at a time with a table's `list`, or ordered by its key
+with a table's `each`, which reads on past it. A write with
+`returning` gives its rows as `all` does.
+
+```rust
+for order in db.each::<Order>("select * from orders")? {
+    let order = order?;
+}
+```
+
 ### Database.exec
 
 ```rust
@@ -339,6 +359,16 @@ pub struct Done {
 What a write changed: the rows, and SQLite's rowid of the row it inserted,
 `0` when it inserted none. The rowid is a table's key only for an `integer
 primary key`.
+
+## Each
+
+```rust
+pub struct Each<T> { /* private fields */ }
+```
+
+The rows of a statement, each as a `T`, as `Database::each` and
+[`Query::each`](super::Query::each) give them. Dropped, it stops its read
+and gives its reader back.
 
 ## Migrations
 
@@ -649,6 +679,26 @@ pub fn one(&self) -> Result<Option<T>>
 pub fn scalar<V: DeserializeOwned>(&self) -> Result<V>
 ```
 
+### Query.each
+
+```rust
+pub fn each(&self) -> Result<Each<T>>
+```
+
+The rows one at a time, read a part at a time from one snapshot, so
+that memory holds a part and not the rows: for more than fits in
+memory. A snapshot lasts five seconds at most. Ordered by columns by
+their names, a unique one last, as `list` is, the walk reads on past
+that in a snapshot of its own, after the last row it gave, which sees
+the rows as they are then; any other walk fails `limit` there. Inside
+a transaction it gives the rows `all` reads.
+
+```rust
+for order in db.table::<Order>("orders").order_by("id", Direction::Asc).each()? {
+    let order = order?;
+}
+```
+
 ### Query.list
 
 ```rust
@@ -845,6 +895,18 @@ db.tx(|tx| -> tinystore::Result<()> {
 })?;
 ```
 
+## aio::sql::Each
+
+```rust
+pub struct Each<T> { /* private fields */ }
+```
+
+The rows of a statement, each as a `T`, as
+[`Database::each`](super::Database::each) and
+[`Query::each`](super::Query::each) give them: a `Stream` that begins its
+walk at its first poll. Dropped, it stops its read at the next row and
+gives its reader back. A failure is its last item.
+
 ## aio::sql::DatabaseBuilder
 
 ```rust
@@ -950,6 +1012,20 @@ where
 
 The one value of the one row a statement gives, as
 `sql::Database::scalar` reads it; it runs as `Database::all` does.
+
+### aio::sql::Database.each
+
+```rust
+pub fn each<T>(&self, statement: impl Into<Sql>) -> Each<T>
+where
+    T: DeserializeOwned + Send + 'static,
+```
+
+The rows a statement gives, one at a time, as `sql::Database::each`
+walks them: a `Stream` whose parts are read on the store's pool from
+one snapshot, each row decoded as it is polled, so that memory holds
+a part and not the rows. Its walk begins at its first poll; past five
+seconds of one snapshot it fails `limit`.
 
 ### aio::sql::Database.exec
 
@@ -1274,6 +1350,24 @@ pub fn list(
 A page after the last row of the one before, by the query's order, as
 `sql::Query::list` reads one; its `next` reads the next page, and
 only of this query.
+
+### aio::sql::Query.each
+
+```rust
+pub fn each(&self) -> Each<T>
+```
+
+The rows one at a time, as `sql::Query::each` walks them: a `Stream`
+whose parts are read on the store's pool, each row decoded as it is
+polled. Ordered by columns by their names, a unique one last, it reads
+on past one snapshot's five seconds.
+
+```rust
+let mut orders = db.table::<Order>("orders").order_by("id", Direction::Asc).each();
+while let Some(order) = orders.next().await {
+    let order = order?;
+}
+```
 
 ## aio::sql::Table
 

@@ -1,11 +1,13 @@
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
+use crate::TestClock;
 use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::{Cell, Message};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlMigration, SqlOpen, SqlQuery,
-    SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
+    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlMigration, SqlOpen, SqlOrder,
+    SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
 };
 
 const NOTES: &str =
@@ -31,7 +33,7 @@ fn exec(client: &mut Client, handle: u64, sql: &str, values: Vec<Cell>) -> SqlDo
 }
 
 fn query(client: &mut Client, handle: u64, sql: &str, want: &str) -> SqlRows {
-    let query = SqlQuery { handle, text: sql.to_owned(), values: Vec::new(), want: want.to_owned() };
+    let query = SqlQuery { handle, text: sql.to_owned(), values: Vec::new(), want: want.to_owned(), order: None };
     client.call(method::SQL_QUERY, &query).unwrap()
 }
 
@@ -137,6 +139,7 @@ fn rows_past_one_message_come_in_parts_within_the_clients_credit() {
         text: "select id, title from notes order by id".to_owned(),
         values: Vec::new(),
         want: "all".to_owned(),
+        order: None,
     };
     let stream = client.start(method::SQL_QUERY, &asked);
     let head = client.next_on(stream);
@@ -182,6 +185,7 @@ fn a_download_holds_the_stores_memory_until_its_last_part_is_sent() {
         text: "select id, title from notes order by id".to_owned(),
         values: Vec::new(),
         want: "all".to_owned(),
+        order: None,
     };
     let stream = client.start(method::SQL_QUERY, &asked);
     assert_eq!(client.next_on(stream).kind, Kind::Response);
@@ -199,6 +203,162 @@ fn a_download_holds_the_stores_memory_until_its_last_part_is_sent() {
         }
     }
     assert_eq!(store.memory().used(), 0, "the last part gave the rest back");
+    drop(client);
+    store.close().unwrap();
+}
+
+/// A client of a store of its own, on `clock`, within `memory`, which takes
+/// `credit` bytes of a stream before it grants more.
+fn walking_client(
+    dir: &std::path::Path,
+    memory: Option<u64>,
+    clock: &Arc<TestClock>,
+    credit: u64,
+) -> (crate::Store, Client) {
+    let options = crate::Options { memory, clock: Some(clock.clone()), background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir, options).unwrap();
+    let mut client = Client::over(crate::pipe::Pipe::connect(&store, crate::pipe::Connect::default()).unwrap());
+    client.greet(Hello { protocol: 1, stream_credit: Some(credit), ..Hello::default() }).unwrap();
+    (store, client)
+}
+
+fn each(handle: u64, text: &str, order: Option<Vec<SqlOrder>>) -> SqlQuery {
+    SqlQuery { handle, text: text.to_owned(), values: Vec::new(), want: "each".to_owned(), order }
+}
+
+/// Reads a walk's parts to its last, granting back what each took once the
+/// stream goes silent, and calling `each_part` with each: the rows it gave,
+/// and how the stream ended.
+fn walked(client: &mut Client, stream: u32, mut each_part: impl FnMut(&SqlRows)) -> Result<(), String> {
+    let mut taken = 0u64;
+    loop {
+        while client.silent_on(stream, Duration::from_millis(20)) {
+            client.write(Frame::new(Kind::Credit, stream, u32::try_from(taken).unwrap().to_le_bytes().to_vec()));
+            taken = 0;
+        }
+        let part = client.next_on(stream);
+        taken += part.body.len() as u64;
+        match answered::<SqlRows>(&part) {
+            Ok(rows) => each_part(&rows),
+            Err(failure) => return Err(format!("{}: {}", failure.code, failure.message)),
+        }
+        if part.flags & frame::END != 0 {
+            return Ok(());
+        }
+    }
+}
+
+#[test]
+fn each_sends_rows_past_what_all_holds_as_its_reader_reads_them() {
+    // contract: SQL-13
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_secs(1_791_547_200)));
+    let (store, mut client) = walking_client(dir.path(), Some(16 << 20), &clock, 1 << 20);
+    let handle = open(&mut client);
+    exec(&mut client, handle, "create table big (id integer primary key, data blob not null)", Vec::new());
+    let rows = "with recursive n(i) as (select 1 union all select i + 1 from n where i < 280) \
+                insert into big (id, data) select i, zeroblob(262144) from n";
+    exec(&mut client, handle, rows, Vec::new());
+
+    let all = SqlQuery { want: "all".to_owned(), ..each(handle, "select id, data from big order by id", None) };
+    assert_eq!(client.call::<SqlRows>(method::SQL_QUERY, &all).unwrap_err().code, "limit", "all holds every row");
+
+    let stream = client.start(method::SQL_QUERY, &each(handle, "select id, data from big order by id", None));
+    let head = client.next_on(stream);
+    assert_eq!((head.kind, head.flags), (Kind::Response, 0), "the rows go in parts");
+    let (mut ids, mut bytes, mut most) = (Vec::new(), 0, 0);
+    let ended = walked(&mut client, stream, |part| {
+        for row in &part.rows {
+            let (Cell::Int(id), Cell::Bin(data)) = (&row[0], &row[1]) else { panic!("{row:?}") };
+            ids.push(*id);
+            bytes += data.len();
+        }
+        most = most.max(store.memory().used());
+    });
+    assert_eq!(ended, Ok(()));
+    assert_eq!(ids, (1..=280).collect::<Vec<_>>());
+    assert_eq!(bytes, 280 << 18, "70 MiB of rows");
+    assert!(most <= 8 << 20, "the store held a few parts at once, not the rows: {most} bytes");
+    assert_eq!(client.pipe.streams(), 0);
+    drop(client);
+    store.close().unwrap();
+}
+
+#[test]
+fn each_answers_a_few_rows_whole_and_a_statement_that_fails_as_all_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client);
+    insert(&mut client, handle, "n1", "Buy milk");
+
+    let few: SqlRows = client.call(method::SQL_QUERY, &each(handle, "select id, title from notes", None)).unwrap();
+    assert_eq!(
+        (few.columns, few.rows),
+        (vec!["id".to_owned(), "title".to_owned()], vec![vec![text("n1"), text("Buy milk")]])
+    );
+    let none: SqlRows = client.call(method::SQL_QUERY, &each(handle, "select id from notes where 0", None)).unwrap();
+    assert_eq!((none.columns, none.rows.len()), (vec!["id".to_owned()], 0), "no rows, its columns named");
+    let wrong = client.call::<SqlRows>(method::SQL_QUERY, &each(handle, "select nothing from nowhere", None));
+    assert_eq!(wrong.unwrap_err().code, "invalid");
+    let written = each(handle, "update notes set done = 1 returning id", None);
+    assert_eq!(client.call::<SqlRows>(method::SQL_QUERY, &written).unwrap().rows, [vec![text("n1")]], "a write's rows");
+    assert_eq!(client.pipe.streams(), 0);
+}
+
+/// A database of 60 notes of 10 KiB, three to a part of a walk within
+/// `walking_client`'s 64 KiB of credit.
+fn sixty_notes(client: &mut Client) -> u64 {
+    let handle = open(client);
+    let rows = "with recursive n(i) as (select 1 union all select i + 1 from n where i < 60) \
+                insert into notes (id, title) select printf('n%03d', i), replace(hex(zeroblob(5120)), '0', 'x') from n";
+    exec(client, handle, rows, Vec::new());
+    handle
+}
+
+/// Takes the parts the first credit carries, waits while the walk's reader
+/// fills the parts ahead of a client that grants nothing, then moves the
+/// clock past one snapshot's five seconds and lets the reader find it. Gives
+/// the bytes taken and their rows.
+fn outlast_the_snapshot(client: &mut Client, stream: u32, clock: &TestClock) -> (u64, Vec<Vec<Cell>>) {
+    let (mut taken, mut rows) = (0, Vec::new());
+    while !client.silent_on(stream, Duration::from_millis(300)) {
+        let part = client.next_on(stream);
+        taken += part.body.len() as u64;
+        rows.extend(SqlRows::decode(&part.body).unwrap().rows);
+    }
+    clock.advance(Duration::from_secs(6));
+    std::thread::sleep(Duration::from_millis(300));
+    (taken, rows)
+}
+
+#[test]
+fn each_ordered_by_its_key_reads_on_past_its_snapshot_and_without_one_fails_limit_naming_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_secs(1_791_547_200)));
+    let (store, mut client) = walking_client(dir.path(), None, &clock, 64 << 10);
+    let handle = sixty_notes(&mut client);
+    let notes = "select id, title from notes order by id";
+
+    let order = vec![SqlOrder { column: "id".to_owned(), descending: false }];
+    let stream = client.start(method::SQL_QUERY, &each(handle, notes, Some(order)));
+    assert_eq!(client.next_on(stream).kind, Kind::Response);
+    let (taken, mut rows) = outlast_the_snapshot(&mut client, stream, &clock);
+    exec(&mut client, handle, "update notes set title = 'changed' where id = 'n055'", Vec::new());
+    insert(&mut client, handle, "n061", "new");
+    client.write(Frame::new(Kind::Credit, stream, u32::try_from(taken).unwrap().to_le_bytes().to_vec()));
+    assert_eq!(walked(&mut client, stream, |part| rows.extend(part.rows.iter().cloned())), Ok(()));
+    let ids: Vec<Cell> = rows.iter().map(|row| row[0].clone()).collect();
+    let every: Vec<Cell> = (1..=61).map(|n| text(&format!("n{n:03}"))).collect();
+    assert_eq!(ids, every, "each row once, in order, the new one among them");
+    assert!(rows.iter().any(|row| row == &vec![text("n055"), text("changed")]), "read as it is after the snapshot");
+
+    let stream = client.start(method::SQL_QUERY, &each(handle, notes, None));
+    assert_eq!(client.next_on(stream).kind, Kind::Response);
+    let (taken, _) = outlast_the_snapshot(&mut client, stream, &clock);
+    client.write(Frame::new(Kind::Credit, stream, u32::try_from(taken).unwrap().to_le_bytes().to_vec()));
+    let failed = walked(&mut client, stream, |_| {}).unwrap_err();
+    assert!(failed.starts_with("limit") && failed.contains("list"), "{failed}");
+    assert_eq!(client.pipe.streams(), 0);
     drop(client);
     store.close().unwrap();
 }
@@ -463,7 +623,8 @@ fn a_query_its_client_cancels_stops_and_frees_its_worker_and_reader() {
         select count(*) from c";
     let slow: Vec<u32> = (0..20)
         .map(|_| {
-            let asked = SqlQuery { handle, text: text.to_owned(), values: Vec::new(), want: "scalar".to_owned() };
+            let asked =
+                SqlQuery { handle, text: text.to_owned(), values: Vec::new(), want: "scalar".to_owned(), order: None };
             client.start(method::SQL_QUERY, &asked)
         })
         .collect();
@@ -494,7 +655,8 @@ fn the_queries_of_a_client_that_leaves_stop() {
     let text = "with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000) \
         select count(*) from c";
     for _ in 0..20 {
-        let asked = SqlQuery { handle, text: text.to_owned(), values: Vec::new(), want: "scalar".to_owned() };
+        let asked =
+            SqlQuery { handle, text: text.to_owned(), values: Vec::new(), want: "scalar".to_owned(), order: None };
         leaving.start(method::SQL_QUERY, &asked);
     }
     std::thread::sleep(Duration::from_millis(100));
@@ -690,7 +852,7 @@ fn writes_through_a_query_in_flight_hold_no_thread_of_the_session() {
             .map(|n| {
                 let text = "insert into notes (id, title) values (?, 'b') returning id".to_owned();
                 let values = vec![Cell::Str(format!("n{n}"))];
-                client.start(method::SQL_QUERY, &SqlQuery { handle, text, values, want: "one".to_owned() })
+                client.start(method::SQL_QUERY, &SqlQuery { handle, text, values, want: "one".to_owned(), order: None })
             })
             .collect();
         // more writes wait than the session has threads, and a read is still answered
@@ -753,7 +915,8 @@ fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
         "pragma query_only = 0".to_owned(),
     ];
     for text in writes {
-        let asked = SqlQuery { handle: read, text: text.clone(), values: Vec::new(), want: "all".to_owned() };
+        let asked =
+            SqlQuery { handle: read, text: text.clone(), values: Vec::new(), want: "all".to_owned(), order: None };
         let refused = reader.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err();
         assert_eq!(refused.code, "permission", "{text}: {}", refused.message);
         let by_columns = SqlStatement { handle: read, text: text.clone(), values: Vec::new() };
@@ -782,7 +945,7 @@ fn a_connection_that_writes_attaches_no_file_and_ends_no_transaction() {
     insert(&mut client, handle, "n1", "kept");
     let kv = dir.path().join("kv.db").display().to_string().replace(char::from(b'\\'), "/");
     for text in [format!("attach database '{kv}' as kv"), "pragma query_only = off".to_owned(), "commit".to_owned()] {
-        let asked = SqlQuery { handle, text: text.clone(), values: Vec::new(), want: "all".to_owned() };
+        let asked = SqlQuery { handle, text: text.clone(), values: Vec::new(), want: "all".to_owned(), order: None };
         let refused = client.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err();
         assert_eq!(refused.code, "invalid", "a query of {text}: {}", refused.message);
         let statement = SqlStatement { handle, text: text.clone(), values: Vec::new() };
@@ -878,7 +1041,7 @@ fn columns_past_one_message_come_in_parts_of_the_same_rows_within_the_clients_cr
         }
     }
     assert!(parts > 3, "{parts} parts");
-    let asked = SqlQuery { handle, text: read.to_owned(), values: Vec::new(), want: "all".to_owned() };
+    let asked = SqlQuery { handle, text: read.to_owned(), values: Vec::new(), want: "all".to_owned(), order: None };
     let stream = client.start(method::SQL_QUERY, &asked);
     client.next_on(stream);
     let mut whole = Vec::new();
@@ -907,7 +1070,7 @@ fn a_row_larger_than_a_message_is_limit_by_columns_as_by_rows() {
     let refused = client.call::<SqlColumns>(method::SQL_COLUMNS, &asked).unwrap_err();
     assert_eq!(refused.code, "limit", "{}", refused.message);
     assert!(refused.message.contains("past the 32768 one message of this connection carries"), "{}", refused.message);
-    let asked = SqlQuery { handle, text: asked.text, values: Vec::new(), want: "all".to_owned() };
+    let asked = SqlQuery { handle, text: asked.text, values: Vec::new(), want: "all".to_owned(), order: None };
     assert_eq!(client.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err().code, "limit");
 }
 

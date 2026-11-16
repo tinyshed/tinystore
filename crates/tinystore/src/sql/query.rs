@@ -9,11 +9,13 @@
 //! the same statements on the store's pool.
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::database::{Database, Done};
+use super::each::Each;
 use super::included::{literal_of, names_of};
 use super::pieces::{checked, joined_with, quote, quote_all};
 use super::rows::{Nested, Rows};
@@ -21,6 +23,7 @@ use super::run::Wanted;
 use super::statement::Sql;
 use super::tx::Tx;
 use super::values::{Value, row_of};
+use super::walk::Key;
 use crate::{Error, Result};
 
 /// What runs a table's statements: the database, or a transaction of it.
@@ -390,6 +393,34 @@ impl<T: DeserializeOwned> Query<'_, T> {
         self.runner.rows_of(&self.parts.to_sql()?, Wanted::Scalar)?.scalar()
     }
 
+    /// The rows one at a time, read a part at a time from one snapshot, so
+    /// that memory holds a part and not the rows: for more than fits in
+    /// memory. A snapshot lasts five seconds at most. Ordered by columns by
+    /// their names, a unique one last, as `list` is, the walk reads on past
+    /// that in a snapshot of its own, after the last row it gave, which sees
+    /// the rows as they are then; any other walk fails `limit` there. Inside
+    /// a transaction it gives the rows `all` reads.
+    ///
+    /// ```no_run
+    /// # use tinystore::sql::Direction;
+    /// # #[derive(serde::Deserialize)] struct Order { id: i64 }
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let db = tinystore::Store::open("data", Default::default())?.database("app").open()?;
+    /// for order in db.table::<Order>("orders").order_by("id", Direction::Asc).each()? {
+    ///     let order = order?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn each(&self) -> Result<Each<T>> {
+        let statement = self.parts.to_sql()?;
+        let nested: Arc<[Nested]> = self.parts.nested().into();
+        match &self.runner {
+            Runner::Database(database) => Each::walk(database, statement, self.parts.walk_key(), nested),
+            runner => Ok(Each::read(runner.rows_of(&statement, Wanted::All)?, nested, |error| error)),
+        }
+    }
+
     /// A page after the last row of the one before, by the query's order,
     /// which ends in a unique column so that no row is read twice or skipped;
     /// `next` reads the next page, and only of this query.
@@ -554,6 +585,20 @@ impl Parts {
         Ok((render(&parts)?, paging))
     }
 
+    /// The columns the query's rows are ordered by, as its rows name them,
+    /// when each is a column by its name: a walk of them reads on past one
+    /// snapshot by them, as `list` pages by them.
+    pub(crate) fn walk_key(&self) -> Option<Vec<Key>> {
+        if self.order.is_empty() {
+            return None;
+        }
+        let key = |order: &Order| {
+            let column = order.column.as_deref()?;
+            Some(Key { column: column.rsplit('.').next().unwrap_or(column).to_owned(), direction: order.direction })
+        };
+        self.order.iter().map(key).collect()
+    }
+
     /// What `update` runs: the columns `sets` names set on the rows the
     /// conditions match.
     pub(crate) fn update_sql<I, S>(&self, sets: I) -> Result<Sql>
@@ -657,6 +702,26 @@ impl Paging {
         let next = if full && self.limit > 0 { last.map(|values| cursor_text(&values, &self.digest)) } else { None };
         Ok(Page { rows: decoded, next })
     }
+}
+
+/// A walk's statement read on after the row whose key is `after`: its rows
+/// past that row in its order, as a page after a cursor reads them, whatever
+/// limit, offset or include the statement has.
+///
+/// ```text
+/// select * from (select * from "orders" order by "id" asc) where "id" > ? order by "id" asc
+/// ```
+pub(crate) fn read_on(statement: &Sql, key: &[Key], after: &[Value]) -> Result<Sql> {
+    let ordered = |key: &Key| {
+        let piece = Sql::piece(quote(&key.column).map_err(Error::invalid)?, Vec::new(), true);
+        Ok(Order { piece, column: Some(key.column.clone()), direction: key.direction })
+    };
+    let order = key.iter().map(ordered).collect::<Result<Vec<_>>>()?;
+    let past = keyset(&order, after);
+    let by: Vec<String> = order.iter().map(|each| format!("{} {}", each.piece.text(), each.direction.text())).collect();
+    let text = format!("select * from ({}) where {} order by {}", statement.text(), past.text(), by.join(", "));
+    let values = statement.values().iter().chain(past.values()).cloned().collect();
+    Ok(Sql::piece(text, values, false))
 }
 
 /// What `insert` and `insert_all` run: an insert of rows of one shape that

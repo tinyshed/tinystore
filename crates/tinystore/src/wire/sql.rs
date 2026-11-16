@@ -6,20 +6,22 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use super::codec::{Cell, Map, Message};
 use super::protocol::{
-    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlOpen, SqlQuery, SqlRows,
+    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlOpen, SqlOrder, SqlQuery, SqlRows,
     SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
 };
 use super::{Route, codec, msgpack};
 use crate::engine::SharedFile;
 use crate::limits::{ANSWER_BYTES, Limit};
 use crate::sql::{
-    Answer, Column, Columns, Database, Done, Held, Keep, Kept, Migrations, Rows, Sql, TX_HELD, Tx, Value, Wanted, Write,
+    Answer, Column, Columns, Database, Direction, Done, End, First, Held, Keep, Kept, Key, Migrations, Part, Rows, Sql,
+    TX_HELD, Taken, Tx, Value, Walk, Walking, Wanted, Write, is_query,
 };
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, Transaction};
@@ -58,7 +60,7 @@ pub(crate) struct Link {
 #[derive(Default)]
 pub(crate) struct Handles {
     open: super::ByHandle<Database>,
-    downloads: Mutex<HashMap<u32, Arc<Downloading>>>,
+    downloads: Arc<Downloads>,
     txs: Mutex<HashMap<u32, Arc<Txing>>>,
 }
 
@@ -212,12 +214,161 @@ pub(crate) fn query(
             .and_then(|asked| Ok((handles.database(asked.handle)?, statement(asked.text, asked.values)?, Wanted::All)));
         return read_into::<Columns>(asked, link, read_only, done);
     }
-    let asked = SqlQuery::decode(body).and_then(|asked| {
-        let wanted = Wanted::named(&asked.want)
-            .ok_or_else(|| Failure::invalid(format!("want {:?}: a query wants all, one or scalar", asked.want)))?;
+    let asked = SqlQuery::decode(body);
+    if let Ok(each) = asked.as_ref().map(|asked| asked.want == "each")
+        && each
+    {
+        let walked = asked.and_then(|asked| {
+            let key = asked.order.map(|order| order.into_iter().map(key_of).collect());
+            Ok((handles.database(asked.handle)?, statement(asked.text, asked.values)?, key))
+        });
+        return walk(walked, link, read_only, done);
+    }
+    let asked = asked.and_then(|asked| {
+        let wanted = Wanted::named(&asked.want).ok_or_else(|| {
+            Failure::invalid(format!("want {:?}: a query wants all, one, scalar or each", asked.want))
+        })?;
         Ok((handles.database(asked.handle)?, statement(asked.text, asked.values)?, wanted))
     });
     read_into::<Kept<RowBytes>>(asked, link, read_only, done);
+}
+
+/// Walks a query's rows, `want: each`, on this thread: its parts are sent as
+/// they are read, within the client's credit, rather than once every row is.
+/// Its first answer goes as [`query`] sends one, whole when one part holds
+/// every row; a statement that writes is read as `all` reads it.
+fn walk(
+    asked: Result<(Database, Sql, Option<Vec<Key>>), Failure>,
+    link: &Link,
+    read_only: bool,
+    done: impl FnOnce(Result<Queried, Failure>) + Send + 'static,
+) {
+    let (database, statement, key) = match asked {
+        Ok(asked) => asked,
+        Err(failure) => return done(Err(failure)),
+    };
+    if database.known_to_write(&statement) || (read_only && !is_query(statement.text())) {
+        return read_into::<Kept<RowBytes>>(Ok((database, statement, Wanted::All)), link, read_only, done);
+    }
+    let walking = Walking { database: database.clone(), statement: statement.clone(), key, bound: part_bound(link) };
+    let (walk, reader) = match Walk::<RowPart>::new(walking) {
+        Ok(walk) => walk,
+        Err(error) => return done(Err(Failure::from(database.failed_by(&statement)(error)))),
+    };
+    let waiting = Arc::new(Mutex::new(Some(walk)));
+    let first = FirstAnswer {
+        walk: Arc::downgrade(&waiting),
+        done: Mutex::new(Some(Box::new(done))),
+        asked: (database, statement),
+        link: link.clone(),
+        read_only,
+    };
+    if let Some(walk) = lock(&waiting).as_ref() {
+        walk.on_change(Arc::new(move || first.answer()));
+    }
+    // held here while the reader runs, so that the first answer finds the walk
+    let _waiting = waiting;
+    reader.run();
+}
+
+/// What a walk over the wire answers its first part with.
+type Answering = Box<dyn FnOnce(Result<Queried, Failure>) + Send>;
+
+/// A walk's first answer, which waits for the walk to tell it: its rows
+/// whole, how it failed, or that its parts follow the RESPONSE. The walk
+/// holds it, and it holds the walk weakly until it gives it away.
+struct FirstAnswer {
+    walk: Weak<Mutex<Option<Walk<RowPart>>>>,
+    done: Mutex<Option<Answering>>,
+    asked: (Database, Sql),
+    link: Link,
+    read_only: bool,
+}
+
+impl FirstAnswer {
+    fn answer(&self) {
+        let Some(waiting) = self.walk.upgrade() else { return };
+        let mut waiting = lock(&waiting);
+        let Some(found) = waiting.as_ref().and_then(Walk::first) else { return };
+        let (Some(done), Some(walk)) = (lock(&self.done).take(), waiting.take()) else { return };
+        drop(waiting);
+        match found {
+            First::Whole(part) => done(Ok(Queried::Whole(part.map(|part| part.message).unwrap_or_default()))),
+            First::End(End::Failed(error)) => done(Err(Failure::from(error))),
+            First::End(End::Writes) => {
+                let (database, statement) = &self.asked;
+                database.remember_write(statement);
+                let asked = Ok((database.clone(), statement.clone(), Wanted::All));
+                read_into::<Kept<RowBytes>>(asked, &self.link, self.read_only, done);
+            }
+            First::End(End::Done) | First::Parts => done(Ok(Queried::Walk(walk))),
+        }
+    }
+}
+
+fn key_of(order: SqlOrder) -> Key {
+    Key { column: order.column, direction: if order.descending { Direction::Desc } else { Direction::Asc } }
+}
+
+/// A walk's part as the client reads it, a `sql.Rows`: its cells written as
+/// its rows are read, its message once its last is in. The walk's first
+/// part names the columns.
+pub(crate) struct RowPart {
+    columns: Option<Arc<[String]>>,
+    cells: Vec<u8>,
+    rows: usize,
+    /// What its message takes, its head among it, within `bound`.
+    bytes: usize,
+    bound: usize,
+    message: Vec<u8>,
+    held: Held,
+}
+
+impl Part for RowPart {
+    fn begin(columns: &Arc<[String]>, first: bool, bound: usize, held: Held) -> RowPart {
+        let head = if first { columns.iter().map(|name| name.len() + 5).sum::<usize>() + 16 } else { 16 };
+        let columns = first.then(|| Arc::clone(columns));
+        RowPart { columns, cells: Vec::new(), rows: 0, bytes: head, bound, message: Vec::new(), held }
+    }
+
+    fn weight(row: &[Value]) -> usize {
+        row.iter().map(weight_of).sum::<usize>() + 5
+    }
+
+    fn push(&mut self, row: Vec<Value>, weight: usize) -> crate::Result<()> {
+        if weight + 16 > self.bound {
+            return Err(row_past_a_message(weight, self.bound));
+        }
+        msgpack::write_array_head(&mut self.cells, row.len());
+        for value in row {
+            codec::write_cell(&mut self.cells, &cell_of(value));
+        }
+        self.rows += 1;
+        self.bytes += weight;
+        self.held.reach(self.bytes as u64)
+    }
+
+    fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    fn seal(&mut self) {
+        let mut out = Vec::with_capacity(self.cells.len() + 64);
+        let mut map = Map::open(&mut out);
+        if let Some(columns) = self.columns.as_ref().filter(|columns| !columns.is_empty()) {
+            map.field(&mut out, 1);
+            codec::write_list(&mut out, columns, codec::write_str);
+        }
+        if self.rows > 0 {
+            map.field(&mut out, 2);
+            msgpack::write_array_head(&mut out, self.rows);
+            out.extend_from_slice(&self.cells);
+        }
+        map.close(&mut out);
+        self.message = out;
+        self.cells = Vec::new();
+        self.held.settle();
+    }
 }
 
 /// Reads what a query asked into an `A`, its rows or their columns, and
@@ -342,17 +493,31 @@ fn queried(mut rows: impl Parted, bound: usize) -> Result<Queried, Failure> {
 /// a cancel that came before finds nothing, and the parts still go. The
 /// store's memory the rows held is given back as their parts go.
 pub(crate) fn download(handles: &Handles, stream: u32, (parts, held): (VecDeque<Vec<u8>>, Held), link: &Link) {
-    let state = DownloadState { parts, held, credit: link.credit, ended: false };
-    let download = Arc::new(Downloading { stream, state: Mutex::new(state), link: link.clone() });
-    lock(&handles.downloads).insert(stream, Arc::clone(&download));
+    let download = Downloading::begun(handles, stream, Source::Read(parts, held), link);
     download.flush(&handles.downloads);
 }
 
-/// A query's answer: its rows whole, or their parts and the store's memory
-/// they hold.
+/// Sends a walk's parts as it reads them, within the client's credit, its
+/// RESPONSE gone out: each part once the next or the walk's end is known, so
+/// that the last ends the stream.
+pub(crate) fn download_walk(handles: &Handles, stream: u32, walk: Walk<RowPart>, link: &Link) {
+    let download = Downloading::begun(handles, stream, Source::Walk(walk), link);
+    let (downloading, downloads) = (Arc::downgrade(&download), Arc::downgrade(&handles.downloads));
+    let flush: Wake = Arc::new(move || {
+        if let (Some(download), Some(downloads)) = (downloading.upgrade(), downloads.upgrade()) {
+            download.flush(&downloads);
+        }
+    });
+    let _ = download.wake.set(flush);
+    download.flush(&handles.downloads);
+}
+
+/// A query's answer: its rows whole, their parts and the store's memory they
+/// hold, or a walk of them that sends its parts as it reads them.
 pub(crate) enum Queried {
     Whole(Vec<u8>),
     Parts(VecDeque<Vec<u8>>, Held),
+    Walk(Walk<RowPart>),
 }
 
 fn part_bound(link: &Link) -> usize {
@@ -385,8 +550,12 @@ fn row_parts(rows: Rows, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
 }
 
 fn past_a_message(weight: usize, bound: usize) -> Failure {
+    Failure::from(row_past_a_message(weight, bound))
+}
+
+fn row_past_a_message(weight: usize, bound: usize) -> Error {
     let refused = format!("a row of {weight} bytes, past the {bound} one message of this connection carries");
-    Failure::from(Limit { name: "row bytes", bound: bound as u64 }.refuse(weight as u64, refused))
+    Limit { name: "row bytes", bound: bound as u64 }.refuse(weight as u64, refused)
 }
 
 /// What a row of a packed column takes of a message: its eight bytes, and
@@ -494,35 +663,99 @@ pub(crate) struct Downloading {
     stream: u32,
     state: Mutex<DownloadState>,
     link: Link,
+    /// Held by the one thread that sends: one that finds it held leaves
+    /// `again` set, which the sender sees before it lets go. A walk wakes its
+    /// download from the thread that reads it, which may be sending already.
+    sending: Mutex<()>,
+    again: AtomicBool,
+    /// What a walk calls once it has a part or its end.
+    wake: OnceLock<Wake>,
 }
 
+type Downloads = Mutex<HashMap<u32, Arc<Downloading>>>;
+type Wake = Arc<dyn Fn() + Send + Sync>;
+
 struct DownloadState {
-    parts: VecDeque<Vec<u8>>,
-    held: Held,
+    source: Source,
     credit: u64,
     ended: bool,
 }
 
+/// Where a download's parts come from: rows read whole, and the store's
+/// memory they hold, or a walk that reads them as they go.
+enum Source {
+    Read(VecDeque<Vec<u8>>, Held),
+    Walk(Walk<RowPart>),
+}
+
 impl Downloading {
-    fn grant(&self, credit: u32, downloads: &Mutex<HashMap<u32, Arc<Downloading>>>) {
+    fn begun(handles: &Handles, stream: u32, source: Source, link: &Link) -> Arc<Downloading> {
+        let state = Mutex::new(DownloadState { source, credit: link.credit, ended: false });
+        let (sending, again, wake) = (Mutex::new(()), AtomicBool::new(false), OnceLock::new());
+        let download = Arc::new(Downloading { stream, state, link: link.clone(), sending, again, wake });
+        lock(&handles.downloads).insert(stream, Arc::clone(&download));
+        download
+    }
+
+    fn grant(&self, credit: u32, downloads: &Downloads) {
         lock(&self.state).credit += u64::from(credit);
         self.flush(downloads);
     }
 
-    /// Sends the parts the credit takes; the last ends the stream.
-    fn flush(&self, downloads: &Mutex<HashMap<u32, Arc<Downloading>>>) {
-        let mut state = lock(&self.state);
-        while !state.ended {
-            let Some(next) = state.parts.front() else {
+    /// Sends the parts the credit takes, on one thread at a time.
+    fn flush(&self, downloads: &Downloads) {
+        self.again.store(true, Ordering::SeqCst);
+        loop {
+            let Ok(sending) = self.sending.try_lock() else {
                 return;
             };
-            if next.len() as u64 > state.credit {
+            while self.again.swap(false, Ordering::SeqCst) {
+                self.send(downloads);
+            }
+            drop(sending);
+            if !self.again.load(Ordering::SeqCst) {
                 return;
             }
-            let part = state.parts.pop_front().unwrap_or_default();
-            state.credit -= part.len() as u64;
-            state.held.give_back(part.len() as u64);
-            if state.parts.is_empty() {
+        }
+    }
+
+    /// Sends the parts the credit takes; the last ends the stream.
+    fn send(&self, downloads: &Downloads) {
+        let mut state = lock(&self.state);
+        while !state.ended {
+            let credit = state.credit;
+            let (part, last) = match &mut state.source {
+                Source::Read(parts, held) => {
+                    let Some(next) = parts.front() else { return };
+                    if next.len() as u64 > credit {
+                        return;
+                    }
+                    let part = parts.pop_front().unwrap_or_default();
+                    held.give_back(part.len() as u64);
+                    let last = parts.is_empty();
+                    (part, last)
+                }
+                Source::Walk(walk) => {
+                    let wake = self.wake.get().cloned().unwrap_or_else(|| Arc::new(|| {}));
+                    let fits = |part: &RowPart, followed: bool| followed && part.message.len() as u64 <= credit;
+                    match walk.take(fits, wake) {
+                        (Taken::Part(part), last) => (part.message, last),
+                        (Taken::Pending, _) => return,
+                        (Taken::End(ended), _) => {
+                            state.ended = true;
+                            drop(state);
+                            lock(downloads).remove(&self.stream);
+                            let last = match ended {
+                                End::Failed(error) => Err(Failure::from(error)),
+                                End::Done | End::Writes => Ok(SqlRows::default().encode()),
+                            };
+                            return (self.link.finish)(last);
+                        }
+                    }
+                }
+            };
+            state.credit = credit.saturating_sub(part.len() as u64);
+            if last {
                 state.ended = true;
                 drop(state);
                 lock(downloads).remove(&self.stream);

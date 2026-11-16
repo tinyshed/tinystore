@@ -32,11 +32,12 @@ pub(crate) struct SharedFile {
             feature = "search",
             feature = "records",
             feature = "replication",
-            feature = "async"
+            feature = "async",
+            feature = "sql"
         )),
         expect(
             dead_code,
-            reason = "read by kv's, jobs', blobs', search's and records' guests, a copy's writes and the async API's databases"
+            reason = "read by kv's, jobs', blobs', search's and records' guests, a copy's writes and a database's walks"
         )
     )]
     store: WeakStore,
@@ -54,7 +55,7 @@ impl SharedFile {
     }
 
     /// The store the file is open in, while it is open.
-    #[cfg(all(feature = "sql", any(feature = "records", feature = "replication", feature = "async")))]
+    #[cfg(feature = "sql")]
     pub(crate) fn store(&self) -> Result<Store> {
         self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: the store closed", self.owner)))
     }

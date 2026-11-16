@@ -619,3 +619,49 @@ fn a_tables_index_drops_in_the_databases_line_and_runs_though_its_future_is_drop
     assert_eq!(refused.kind(), ErrorKind::Invalid, "a handle of it is refused from then on: {refused}");
     f.store.blocking().close().unwrap();
 }
+
+/// The next item of a stream, as `StreamExt::next` gives it.
+async fn next<S: futures_core::Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
+    std::future::poll_fn(|context| std::pin::Pin::new(&mut *stream).poll_next(context)).await
+}
+
+#[test]
+fn each_is_a_stream_of_rows_past_what_all_holds_with_a_few_parts_in_memory() {
+    // contract: SQL-13
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options { memory: Some(16 << 20), background: false, ..Options::default() };
+    let store = Store::open(dir.path(), options).unwrap();
+    let big = "create table big (id integer primary key, data blob not null);
+               with recursive n(i) as (select 1 union all select i + 1 from n where i < 140)
+               insert into big (id, data) select i, zeroblob(524288) from n";
+    let db = store.database("app").migrations([("0001_big.sql", big)]).open().unwrap();
+    let runtime = runtime();
+
+    let all = runtime.block_on(db.all::<(i64, Vec<u8>)>("select id, data from big")).unwrap_err();
+    assert_eq!(all.kind(), ErrorKind::Limit, "{all}");
+    let rows = db.table::<(i64, Vec<u8>)>("big").select::<(i64, Vec<u8>)>("id, data").order_by("id", Direction::Asc);
+    let (count, bytes, most) = runtime.block_on(async {
+        let (mut count, mut bytes, mut most) = (0, 0, 0);
+        let mut each = rows.each();
+        while let Some(row) = next(&mut each).await {
+            let (id, data) = row.unwrap();
+            count += 1;
+            assert_eq!(id, count);
+            bytes += data.len();
+            most = most.max(store.blocking().memory().used());
+        }
+        (count, bytes, most)
+    });
+    assert_eq!((count, bytes), (140, 140 << 19), "every row of 70 MiB");
+    assert!(most <= 8 << 20, "a few parts held at once: {most} bytes");
+
+    let written = runtime.block_on(async {
+        let mut each = db.each::<i64>("insert into big (id, data) values (141, x'00') returning id");
+        let first = next(&mut each).await;
+        (first.map(Result::unwrap), next(&mut each).await.is_none())
+    });
+    assert_eq!(written, (Some(141), true), "a write's rows, as all gives them");
+    let failed = runtime.block_on(async { next(&mut db.each::<i64>("select nothing from nowhere")).await });
+    assert_eq!(failed.unwrap().unwrap_err().kind(), ErrorKind::Invalid);
+    store.blocking().close().unwrap();
+}

@@ -25,6 +25,7 @@ mod batch;
 #[cfg(feature = "wire")]
 mod columns;
 mod database;
+mod each;
 mod engine;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
@@ -37,9 +38,11 @@ mod run;
 mod statement;
 mod tx;
 mod values;
+mod walk;
 
 pub use batch::Write;
 pub use database::{Database, DatabaseBuilder, Done};
+pub use each::Each;
 pub use migrations::Migrations;
 pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};
 pub use query::{Direction, Page, Query, Table, Upsert};
@@ -50,18 +53,28 @@ pub use tx::Tx;
 #[cfg(feature = "wire")]
 pub(crate) use {
     columns::{Column, Columns},
+    database::is_query,
     rows::{Answer, Held, Keep, Kept},
     tx::{BOUND as TX_BOUND, HELD as TX_HELD},
     values::Value,
+    walk::{First, Part},
 };
 
-// What the wire and the async API both take: a statement's rows, and what a call wants of them.
+// What the wire and the async API both take: a statement's rows, what a call wants of them, and a walk of them.
 #[cfg(any(feature = "wire", feature = "async"))]
-pub(crate) use {rows::Rows, run::Wanted};
+pub(crate) use {
+    rows::Rows,
+    run::Wanted,
+    walk::{End, Key, Taken, Walk, Walking},
+};
 
-// What the async API's queries are made of: the blocking builder's parts and statements.
+// What the async API's queries are made of: the blocking builder's parts and statements, and a walk's rows.
 #[cfg(feature = "async")]
-pub(crate) use query::{Paging, Parts, insert_sql, plan_of, upsert_sql};
+pub(crate) use {
+    each::PART_BYTES,
+    query::{Paging, Parts, insert_sql, plan_of, upsert_sql},
+    rows::{Decoding, Nested},
+};
 
 // What a table's search index reads of its hits' rows.
 #[cfg(all(feature = "search", feature = "wire"))]

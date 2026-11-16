@@ -143,6 +143,7 @@ These contracts are what does not.
 - **SQL-10** Every SDK's query builder MUST write the same statement from the same steps, and refuse the same steps; a comment at the end of a piece MUST NOT hide what the builder writes after it, and a piece that ends inside a `/*` comment MUST be refused.
 - **SQL-11** A database's name MUST NOT leave `sql/` nor meet another's on a file system that folds case, and a new database MUST NOT take a name Windows reads as a device, on any platform; one a store already holds under such a name MUST still open.
 - **SQL-12** A migration named `….draft.sql` MUST be applied only after every one that shipped and with a copy of the database from before the first draft kept; a draft edited since it was applied MUST refuse the open, naming the command that takes the database back, and the store MUST NOT take it back by itself; `--redo-drafts` MUST take the database back to that copy and apply the drafts again; a draft renamed without `.draft`, its text the same, MUST become a migration that shipped, and its copy MUST go.
+- **SQL-13** `each` MUST hold a part of its rows in memory, not all of them, and see one snapshot for as long as that snapshot lasts; a walk ordered by columns by their names MUST read on past it only after the last row it gave, and any other walk MUST fail `limit` there.
 
 ### Blobs
 

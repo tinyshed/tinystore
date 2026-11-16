@@ -617,6 +617,8 @@ func NewMessage(name string) Message {
 		return &SqlText{}
 	case "sql.Statement":
 		return &SqlStatement{}
+	case "sql.Order":
+		return &SqlOrder{}
 	case "sql.Query":
 		return &SqlQuery{}
 	case "sql.Rows":
@@ -12776,16 +12778,67 @@ func (m SqlStatement) IsZero() bool {
 		len(m.Values) == 0
 }
 
+// SqlOrder is the schema's sql.Order.
+//
+// A column a statement's rows are ordered by, named as its rows name it.
+type SqlOrder struct {
+	Column     string `wire:"1,column"`
+	Descending bool   `wire:"2,descending"`
+}
+
+func (m SqlOrder) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Column != "" {
+		w.Uint(1)
+		w.Str(m.Column)
+		n++
+	}
+	if m.Descending {
+		w.Uint(2)
+		w.Bool(m.Descending)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SqlOrder) Read(r *Reader) {
+	*m = SqlOrder{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Column = r.Str()
+		case 2:
+			m.Descending = r.Bool()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SqlOrder writes as no field at all.
+func (m SqlOrder) IsZero() bool {
+	return m.Column == "" &&
+		!m.Descending
+}
+
 // SqlQuery is the schema's sql.Query.
 //
-// What a statement gives back: its rows, one row or none, or one value. A
-// write with returning runs on the writer, its rows given once it is durable.
+// What a statement gives back: its rows, one row or none, one value, or each
+// row as the reader reads it. A write with returning runs on the writer, its
+// rows given once it is durable. Each reads one snapshot of five seconds at
+// most; with order, the columns its text orders its rows by, a unique one
+// last, it reads on past that after the last row it sent, and without it
+// fails limit there.
 type SqlQuery struct {
 	Handle uint64 `wire:"1,handle"`
 	Text   string `wire:"2,text"`
 	Values []Cell `wire:"3,values"`
-	// all, one or scalar
-	Want string `wire:"4,want"`
+	// all, one, scalar or each
+	Want  string      `wire:"4,want"`
+	Order *[]SqlOrder `wire:"5,order"`
 }
 
 func (m SqlQuery) Write(w *Writer) {
@@ -12814,6 +12867,14 @@ func (m SqlQuery) Write(w *Writer) {
 		w.Str(m.Want)
 		n++
 	}
+	if m.Order != nil {
+		w.Uint(5)
+		w.Array(len(*m.Order))
+		for _, item0 := range *m.Order {
+			item0.Write(w)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -12836,6 +12897,15 @@ func (m *SqlQuery) Read(r *Reader) {
 			m.Values = v
 		case 4:
 			m.Want = r.Str()
+		case 5:
+			v := []SqlOrder{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SqlOrder
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Order = &v
 		default:
 			r.Skip()
 		}
@@ -12848,7 +12918,8 @@ func (m SqlQuery) IsZero() bool {
 	return m.Handle == 0 &&
 		m.Text == "" &&
 		len(m.Values) == 0 &&
-		m.Want == ""
+		m.Want == "" &&
+		m.Order == nil
 }
 
 // SqlRows is the schema's sql.Rows.

@@ -11348,16 +11348,71 @@ impl Message for SqlStatement {
     }
 }
 
-/// What a statement gives back: its rows, one row or none, or one value. A
-/// write with returning runs on the writer, its rows given once it is durable.
+/// A column a statement's rows are ordered by, named as its rows name it.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlOrder {
+    pub(crate) column: String,
+    pub(crate) descending: bool,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlOrder {
+    const NAME: &'static str = "sql.Order";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.column = codec::str(r, "column")?,
+                2 => message.descending = codec::bool(r, "descending")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.column.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.column);
+        }
+        if self.descending {
+            map.field(out, 2);
+            codec::write_bool(out, &self.descending);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.column.len()
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.column.is_empty()
+            && !self.descending
+    }
+}
+
+/// What a statement gives back: its rows, one row or none, one value, or each
+/// row as the reader reads it. A write with returning runs on the writer, its
+/// rows given once it is durable. Each reads one snapshot of five seconds at
+/// most; with order, the columns its text orders its rows by, a unique one
+/// last, it reads on past that after the last row it sent, and without it
+/// fails limit there.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlQuery {
     pub(crate) handle: u64,
     pub(crate) text: String,
     pub(crate) values: Vec<Cell>,
-    /// All, one or scalar.
+    /// All, one, scalar or each.
     pub(crate) want: String,
+    pub(crate) order: Option<Vec<SqlOrder>>,
 }
 
 #[cfg(feature = "sql")]
@@ -11373,6 +11428,7 @@ impl Message for SqlQuery {
                 2 => message.text = codec::str(r, "text")?,
                 3 => message.values = codec::list(r, "values", codec::cell)?,
                 4 => message.want = codec::str(r, "want")?,
+                5 => message.order = Some(codec::list(r, "order", codec::message::<SqlOrder>)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11397,6 +11453,10 @@ impl Message for SqlQuery {
             map.field(out, 4);
             codec::write_str(out, &self.want);
         }
+        if let Some(order) = &self.order {
+            map.field(out, 5);
+            codec::write_list(out, order, codec::write_message);
+        }
         map.close(out);
     }
 
@@ -11406,6 +11466,7 @@ impl Message for SqlQuery {
             + 1 + 5 + self.text.len()
             + 1 + codec::list_size(&self.values, codec::cell_size)
             + 1 + 5 + self.want.len()
+            + self.order.as_ref().map_or(0, |order| 1 + codec::list_size(order, codec::message_size))
     }
 
     fn is_zero(&self) -> bool {
@@ -11413,6 +11474,7 @@ impl Message for SqlQuery {
             && self.text.is_empty()
             && self.values.is_empty()
             && self.want.is_empty()
+            && self.order.is_none()
     }
 }
 
@@ -13012,6 +13074,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "sql.Text" => SqlText::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Statement" => SqlStatement::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Order" => SqlOrder::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Query" => SqlQuery::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]

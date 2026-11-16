@@ -6028,8 +6028,41 @@
     },
     {
       "fields": {
+        "column": {
+          "str": "column"
+        },
+        "descending": {
+          "bool": true
+        }
+      },
+      "hex": "8201a6636f6c756d6e02c3",
+      "message": "sql.Order",
+      "name": "sql.Order with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Order",
+      "name": "sql.Order with no field"
+    },
+    {
+      "fields": {
         "handle": {
           "uint": "107"
+        },
+        "order": {
+          "list": [
+            {
+              "fields": {
+                "column": {
+                  "str": "column"
+                },
+                "descending": {
+                  "bool": true
+                }
+              }
+            }
+          ]
         },
         "text": {
           "str": "text"
@@ -6045,7 +6078,7 @@
           "str": "want"
         }
       },
-      "hex": "84016b02a4746578740391a676616c75657304a477616e74",
+      "hex": "85016b02a4746578740391a676616c75657304a477616e7405918201a6636f6c756d6e02c3",
       "message": "sql.Query",
       "name": "sql.Query with every field"
     },

@@ -15,6 +15,7 @@ use serde::de::{self, DeserializeOwned, DeserializeSeed, IntoDeserializer, Visit
 
 use super::included::literal_rows;
 use super::values::Value;
+use super::walk::Part;
 use crate::limits::{Limit, ROWS_BYTES};
 use crate::{Error, Memory, Reservation, Result};
 
@@ -31,7 +32,7 @@ const FIRST_HELD: u64 = 64 << 10;
 pub(crate) struct Rows {
     columns: Arc<[String]>,
     values: Vec<Value>,
-    #[expect(dead_code, reason = "held while the rows are: its drop gives the store's memory back")]
+    /// Held while the rows are: its drop gives the store's memory back.
     held: Held,
     /// The columns that hold an included query's rows.
     nested: Vec<Nested>,
@@ -62,7 +63,7 @@ impl Held {
     }
 
     /// Covers `bytes` of rows, or fails `limit` naming the store's memory.
-    fn reach(&mut self, bytes: u64) -> Result<()> {
+    pub(crate) fn reach(&mut self, bytes: u64) -> Result<()> {
         self.bytes = bytes;
         let Some(reservation) = &mut self.reservation else {
             return Ok(());
@@ -92,7 +93,7 @@ impl Held {
     }
 
     /// Keeps no more than the rows hold.
-    fn settle(&mut self) {
+    pub(crate) fn settle(&mut self) {
         if let Some(reservation) = &mut self.reservation {
             reservation.shrink(self.bytes);
         }
@@ -199,7 +200,7 @@ pub(crate) fn step(
 /// A declared type that is not UTF-8, which only a file another program wrote
 /// can hold, is `invalid`: rusqlite panics on one rather than fail, and has no
 /// other way to read it, so its panic is caught here.
-fn named_columns(statement: &Statement<'_>) -> Result<(Vec<String>, Vec<Holds>)> {
+pub(super) fn named_columns(statement: &Statement<'_>) -> Result<(Vec<String>, Vec<Holds>)> {
     let named = catch_unwind(AssertUnwindSafe(|| {
         let named = statement.columns();
         let columns = named.iter().map(|column| column.name().to_owned()).collect();
@@ -339,11 +340,67 @@ impl Rows {
         }
     }
 
+    /// The rows decoded a row at a time, `nested` of their columns read as the
+    /// rows of the queries they include: a walk's part, as its program takes
+    /// its rows.
+    pub(crate) fn decoding(self, nested: Arc<[Nested]>) -> Decoding {
+        Decoding { columns: self.columns, values: self.values.into_iter(), nested, _held: self.held }
+    }
+
     /// The one value of a row of one column.
     pub(crate) fn scalar<T: DeserializeOwned>(mut self) -> Result<T> {
         let value = self.values.pop().unwrap_or(Value::Null);
         let column = self.columns.first().cloned().unwrap_or_default();
         T::deserialize(ValueDecoder(value)).map_err(|failure| Error::invalid(format!("column {column}: {}", failure.0)))
+    }
+}
+
+/// A walk's part of the program's rows: its values as SQLite keeps them,
+/// within the store's memory.
+impl Part for Rows {
+    fn begin(columns: &Arc<[String]>, _: bool, _: usize, held: Held) -> Rows {
+        Rows { columns: Arc::clone(columns), values: Vec::new(), held, nested: Vec::new() }
+    }
+
+    fn weight(row: &[Value]) -> usize {
+        row.iter().map(Value::size).sum()
+    }
+
+    fn push(&mut self, row: Vec<Value>, weight: usize) -> Result<()> {
+        self.values.extend(row);
+        self.held.reach(self.held.bytes + weight as u64)
+    }
+
+    fn bytes(&self) -> usize {
+        usize::try_from(self.held.bytes).unwrap_or(usize::MAX)
+    }
+
+    /// Holds no more of the store's memory than its rows do: a part grew its
+    /// reservation by doubling, and waits now to be taken.
+    fn seal(&mut self) {
+        self.held.settle();
+    }
+}
+
+/// Rows decoded one at a time, each as a `T` once it is asked for.
+pub(crate) struct Decoding {
+    columns: Arc<[String]>,
+    values: std::vec::IntoIter<Value>,
+    nested: Arc<[Nested]>,
+    _held: Held,
+}
+
+impl Decoding {
+    /// The next row as a `T`, as [`Rows::decode`] reads each; none after the
+    /// last.
+    pub(crate) fn next<T: DeserializeOwned>(&mut self) -> Option<Result<T>> {
+        let width = self.columns.len();
+        let row: Vec<Value> = self.values.by_ref().take(width).collect();
+        if width == 0 || row.is_empty() {
+            return None;
+        }
+        let row = RowDecoder { columns: &self.columns, values: row, nested: &self.nested };
+        Some(T::deserialize(row).map_err(|failure| Error::invalid(failure.0)))
     }
 }
 

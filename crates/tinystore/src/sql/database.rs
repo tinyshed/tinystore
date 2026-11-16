@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use serde::de::DeserializeOwned;
 
 use super::batch::{Batch, Ran, Write};
+use super::each::Each;
 use super::engine::{Base, Databases, Opening, folder_of};
 use super::migrations::Migrations;
 use super::rows::{Answer, Held, Rows};
@@ -202,6 +203,28 @@ impl Database {
     }
 
     reads!();
+
+    /// The rows a statement gives, one at a time, each read as `all` reads
+    /// it: read a part at a time from one snapshot, so that memory holds a
+    /// part and not the rows, however many there are. The snapshot lasts
+    /// five seconds at most: a walk that takes longer fails `limit`, and is
+    /// read a page at a time with a table's `list`, or ordered by its key
+    /// with a table's `each`, which reads on past it. A write with
+    /// `returning` gives its rows as `all` does.
+    ///
+    /// ```no_run
+    /// # #[derive(serde::Deserialize)] struct Order { id: i64 }
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let db = tinystore::Store::open("data", Default::default())?.database("app").open()?;
+    /// for order in db.each::<Order>("select * from orders")? {
+    ///     let order = order?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn each<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Each<T>> {
+        Each::walk(self, statement.into(), None, Arc::from([]))
+    }
 
     /// Runs a write once it is durable. Writes from many callers share a
     /// commit, each in a savepoint of it: one that fails rolls back alone.
@@ -411,13 +434,11 @@ impl Database {
 
     /// Whether the database knows `statement` writes, so that a read of it
     /// goes to the writer without asking a reader first.
-    #[cfg(feature = "async")]
     pub(crate) fn known_to_write(&self, statement: &Sql) -> bool {
         self.base.writes(statement.text())
     }
 
     /// What names a failure of `statement`, to say it on another thread.
-    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn failed_by(&self, statement: &Sql) -> impl Fn(Error) -> Error + Clone + Send + Sync + use<> {
         let (statement, database) = (statement.describe(), self.base.describe());
         move |error| error.within(&statement).within(&database)
@@ -437,15 +458,29 @@ impl Database {
         self.base.describe()
     }
 
-    #[cfg(feature = "async")]
     pub(crate) fn now(&self) -> SystemTime {
         self.base.now()
     }
 
     /// The store the database is open in, while it is open.
-    #[cfg(feature = "async")]
     pub(crate) fn store(&self) -> Result<Store> {
         self.base.shared.store()
+    }
+
+    /// The database's file, which a walk of its rows reads.
+    pub(crate) fn file(&self) -> &crate::sqlite::File {
+        self.base.file()
+    }
+
+    /// The store's memory, which the rows a call reads hold.
+    pub(crate) fn memory(&self) -> &Arc<crate::Memory> {
+        &self.base.memory
+    }
+
+    /// Remembers that `statement` writes, so that its next read goes to the
+    /// writer at once: a walk found it does.
+    pub(crate) fn remember_write(&self, statement: &Sql) {
+        self.base.remember_write(statement.text());
     }
 }
 
@@ -508,7 +543,7 @@ fn redo_command(dir: &Path, name: &str, migrations: &Migrations) -> String {
 /// "attach database 'other.db' as other"                 → not one
 /// ```
 #[cfg(any(feature = "wire", test))]
-pub(super) fn is_query(text: &str) -> bool {
+pub(crate) fn is_query(text: &str) -> bool {
     let mut rest = text;
     loop {
         rest = rest.trim_start();

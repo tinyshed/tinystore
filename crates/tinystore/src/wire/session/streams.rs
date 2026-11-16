@@ -109,6 +109,10 @@ impl Shared {
                     answering.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
                     sql::download(&answering.sql, stream, (parts, held), &sending);
                 }
+                Ok(sql::Queried::Walk(walk)) => {
+                    answering.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                    sql::download_walk(&answering.sql, stream, walk, &sending);
+                }
                 Err(failure) => answering.answer(stream, Err(failure)),
             };
             let queued = shared.read_under(stream, reading, || {

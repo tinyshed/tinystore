@@ -27,6 +27,7 @@
 //! |--------------------------------|-------------------------------------------|----------------------------------|
 //! | a read, `db.all`, `query.list` | on the store's pool                       | stops, its statement too         |
 //! | a read whose statement writes  | read on the pool, which queues its write  | commits once its read found that |
+//! | `each`, a `Stream`             | its parts on the pool, a row as polled    | stops, its reader given back     |
 //! | a write, `db.exec`, `insert`   | queued in its first poll, led on the pool | commits                          |
 //! | a transaction, `db.tx`         | its closure, on the pool, in a line       | runs to its end                  |
 //!
@@ -63,6 +64,7 @@ use crate::polled;
 use crate::pool::Pool;
 use crate::sql::{self, Direction, Done, Migrations, Page, Paging, Parts, Rows, Sql, Tx, Upsert, Wanted, Write};
 use crate::{Durability, Error, Result};
+pub use each::Each;
 
 impl super::Store {
     /// The application's database `name`, `sql/<name>.db` in the store's
@@ -162,6 +164,18 @@ impl Database {
         T: DeserializeOwned + Send + 'static,
     {
         self.rows(statement.into(), Wanted::Scalar, Rows::scalar::<T>)
+    }
+
+    /// The rows a statement gives, one at a time, as [`sql::Database::each`]
+    /// walks them: a `Stream` whose parts are read on the store's pool from
+    /// one snapshot, each row decoded as it is polled, so that memory holds
+    /// a part and not the rows. Its walk begins at its first poll; past five
+    /// seconds of one snapshot it fails `limit`.
+    pub fn each<T>(&self, statement: impl Into<Sql>) -> Each<T>
+    where
+        T: DeserializeOwned + Send + 'static,
+    {
+        Each::new(self.clone(), Ok(statement.into()), None, Arc::from([]))
     }
 
     /// Runs a write once it is durable, sharing a commit with the writes of
@@ -610,6 +624,36 @@ impl<T: DeserializeOwned + Send + 'static> Query<T> {
         async move { page?.await }
     }
 
+    /// The rows one at a time, as [`sql::Query::each`] walks them: a `Stream`
+    /// whose parts are read on the store's pool, each row decoded as it is
+    /// polled. Ordered by columns by their names, a unique one last, it reads
+    /// on past one snapshot's five seconds.
+    ///
+    /// ```no_run
+    /// # use tinystore::sql::Direction;
+    /// # #[derive(serde::Deserialize)] struct Order { id: i64 }
+    /// # mod futures {
+    /// #     pub trait StreamExt: futures_core::Stream + Unpin + Sized {
+    /// #         async fn next(&mut self) -> Option<Self::Item> {
+    /// #             std::future::poll_fn(|cx| std::pin::Pin::new(&mut *self).poll_next(cx)).await
+    /// #         }
+    /// #     }
+    /// #     impl<S: futures_core::Stream + Unpin> StreamExt for S {}
+    /// # }
+    /// # use futures::StreamExt;
+    /// # async fn example(db: tinystore::aio::sql::Database) -> tinystore::Result<()> {
+    /// let mut orders = db.table::<Order>("orders").order_by("id", Direction::Asc).each();
+    /// while let Some(order) = orders.next().await {
+    ///     let order = order?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn each(&self) -> Each<T> {
+        let nested: Arc<[sql::Nested]> = self.parts.nested().into();
+        Each::new(self.database.clone(), self.parts.to_sql(), self.parts.walk_key(), nested)
+    }
+
     /// The query's statement read, `finish` making the answer of its rows.
     fn read<A, F>(&self, wanted: Wanted, finish: F) -> impl Future<Output = Result<A>> + Send + 'static
     where
@@ -644,6 +688,9 @@ impl<T> fmt::Debug for Table<T> {
         f.debug_struct("Table").field("query", &self.query).finish()
     }
 }
+
+#[path = "sql_each.rs"]
+mod each;
 
 #[cfg(test)]
 #[path = "sql_tests.rs"]

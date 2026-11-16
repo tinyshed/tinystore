@@ -826,8 +826,13 @@ fn a_read_connection_opens_what_its_store_holds_as_it_is_and_binds_none_of_it() 
     let audit = RecordsQuery { handle: Some(handle), ..RecordsQuery::default() };
     assert_eq!(reader.call::<RecordsCount>(method::RECORDS_COUNT, &audit).unwrap().count, 1);
     let handle = reader.call::<Handle>(method::SQL_OPEN, &database).unwrap().handle;
-    let titles =
-        SqlQuery { handle, text: "select title from notes".to_owned(), values: Vec::new(), want: "all".to_owned() };
+    let titles = SqlQuery {
+        handle,
+        text: "select title from notes".to_owned(),
+        values: Vec::new(),
+        want: "all".to_owned(),
+        order: None,
+    };
     assert_eq!(reader.call::<SqlRows>(method::SQL_QUERY, &titles).unwrap().rows.len(), 1);
 
     store.counters("hits").flush_every(std::time::Duration::from_secs(1)).open().unwrap();
@@ -930,7 +935,8 @@ fn a_read_connection_makes_no_engines_tables_in_a_databases_file() {
     }
     let text = "select count(*) from sqlite_schema where substr(name, 1, 11) = '_tinystore_' \
                 and name <> '_tinystore_migrations'";
-    let tables = SqlQuery { handle: app, text: text.to_owned(), values: Vec::new(), want: "all".to_owned() };
+    let tables =
+        SqlQuery { handle: app, text: text.to_owned(), values: Vec::new(), want: "all".to_owned(), order: None };
     assert_eq!(reader.call::<SqlRows>(method::SQL_QUERY, &tables).unwrap().rows, vec![vec![Cell::Int(0)]]);
 }
 

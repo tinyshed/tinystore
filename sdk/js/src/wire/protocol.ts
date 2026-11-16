@@ -11550,8 +11550,58 @@ export const SqlStatement = message(
 )
 
 /**
- * What a statement gives back: its rows, one row or none, or one value. A
- * write with returning runs on the writer, its rows given once it is durable.
+ * A column a statement's rows are ordered by, named as its rows name it.
+ */
+export const SqlOrder = message(
+	'sql.Order',
+	{
+		column: [1, str],
+		descending: [2, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.column !== undefined) {
+				w.field(1)
+				w.str(v.column)
+				n++
+			}
+			if (v.descending !== undefined) {
+				w.field(2)
+				w.bool(v.descending)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $column: string | undefined
+			let $descending: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$column = r.str()
+						break
+					case 2:
+						$descending = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { column: $column, descending: $descending }
+		},
+	},
+)
+
+/**
+ * What a statement gives back: its rows, one row or none, one value, or each
+ * row as the reader reads it. A write with returning runs on the writer, its
+ * rows given once it is durable. Each reads one snapshot of five seconds at
+ * most; with order, the columns its text orders its rows by, a unique one
+ * last, it reads on past that after the last row it sent, and without it
+ * fails limit there.
  */
 export const SqlQuery = message(
 	'sql.Query',
@@ -11559,8 +11609,9 @@ export const SqlQuery = message(
 		handle: [1, uint],
 		text: [2, str],
 		values: [3, list(sqlValue)],
-		/** all, one or scalar */
+		/** all, one, scalar or each */
 		want: [4, str],
+		order: [5, list(SqlOrder)],
 	},
 	{
 		write(w, v) {
@@ -11589,6 +11640,14 @@ export const SqlQuery = message(
 				w.str(v.want)
 				n++
 			}
+			if (v.order !== undefined) {
+				w.field(5)
+				w.array(v.order.length)
+				for (const item0 of v.order) {
+					SqlOrder.write(w, item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -11596,6 +11655,7 @@ export const SqlQuery = message(
 			let $text: string | undefined
 			let $values: (SqlValue | boolean)[] | undefined
 			let $want: string | undefined
+			let $order: Read<typeof SqlOrder.fields>[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -11616,12 +11676,21 @@ export const SqlQuery = message(
 					case 4:
 						$want = r.str()
 						break
+					case 5: {
+						const items0: Read<typeof SqlOrder.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SqlOrder.read(r))
+						}
+						r.leave()
+						$order = items0
+						break
+					}
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { handle: $handle, text: $text, values: $values, want: $want }
+			return { handle: $handle, text: $text, values: $values, want: $want, order: $order }
 		},
 	},
 )

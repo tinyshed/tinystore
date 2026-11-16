@@ -9482,6 +9482,47 @@ SqlStatement = Message(
 )
 
 
+def _write_sql_order(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("column")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("descending")) is not None:
+        w.uint(2)
+        w.bool(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_sql_order(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["column"] = r.str()
+            case 2:
+                read["descending"] = r.bool()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A column a statement's rows are ordered by, named as its rows name it.
+SqlOrder = Message(
+    "sql.Order",
+    {
+        "column": (1, str_),
+        "descending": (2, bool_),
+    },
+    _write_sql_order,
+    _read_sql_order,
+)
+
+
 def _write_sql_query(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -9503,6 +9544,12 @@ def _write_sql_query(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(4)
         w.str(x)
         n += 1
+    if (x := v.get("order")) is not None:
+        w.uint(5)
+        w.array(len(x))
+        for item0 in x:
+            SqlOrder.write(w, item0)
+        n += 1
     w.close_map(head, n)
 
 
@@ -9521,22 +9568,31 @@ def _read_sql_query(r: Reader) -> dict[str, Any]:
                 read["values"] = items0
             case 4:
                 read["want"] = r.str()
+            case 5:
+                items0 = [SqlOrder.read(r) for _ in range(r.array())]
+                r.leave()
+                read["order"] = items0
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# What a statement gives back: its rows, one row or none, or one value. A
-# write with returning runs on the writer, its rows given once it is durable.
+# What a statement gives back: its rows, one row or none, one value, or each
+# row as the reader reads it. A write with returning runs on the writer, its
+# rows given once it is durable. Each reads one snapshot of five seconds at
+# most; with order, the columns its text orders its rows by, a unique one
+# last, it reads on past that after the last row it sent, and without it
+# fails limit there.
 SqlQuery = Message(
     "sql.Query",
     {
         "handle": (1, uint),
         "text": (2, str_),
         "values": (3, list_(sql_value)),
-        # all, one or scalar
+        # all, one, scalar or each
         "want": (4, str_),
+        "order": (5, list_(SqlOrder)),
     },
     _write_sql_query,
     _read_sql_query,
@@ -10838,6 +10894,7 @@ messages: dict[str, Message] = {
     "sql.Open": SqlOpen,
     "sql.Text": SqlText,
     "sql.Statement": SqlStatement,
+    "sql.Order": SqlOrder,
     "sql.Query": SqlQuery,
     "sql.Rows": SqlRows,
     "sql.Column": SqlColumn,

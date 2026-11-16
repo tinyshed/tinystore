@@ -39,13 +39,24 @@ message sql.Statement {
   3 values: [cell]
 }
 
-# What a statement gives back: its rows, one row or none, or one value. A
-# write with returning runs on the writer, its rows given once it is durable.
+# A column a statement's rows are ordered by, named as its rows name it.
+message sql.Order {
+  1 column: str
+  2 descending: bool
+}
+
+# What a statement gives back: its rows, one row or none, one value, or each
+# row as the reader reads it. A write with returning runs on the writer, its
+# rows given once it is durable. Each reads one snapshot of five seconds at
+# most; with order, the columns its text orders its rows by, a unique one
+# last, it reads on past that after the last row it sent, and without it
+# fails limit there.
 message sql.Query {
   1 handle: uint
   2 text: str
   3 values: [cell]
-  4 want: str         # all, one or scalar
+  4 want: str         # all, one, scalar or each
+  5 order: [sql.Order]?
 }
 
 # Rows a statement gave, a part of them a message: the first part names the
