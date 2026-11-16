@@ -160,8 +160,8 @@ while let Some(message) = each.next().await {
 ```
 
 This block uses the `store` of the first one. A loop over a channel's
-messages, a watch of a config or a queue, a walk over every key, job, file or
-record and a tail of records are each a `Stream` of the `futures-core`
+messages, a watch of a config or a queue, a walk over every key, job, file,
+record or row and a tail of records are each a `Stream` of the `futures-core`
 crate, and so is a file that Blobs' `get` returns, piece by piece. So
 `next()` from `futures::StreamExt` or `tokio_stream::StreamExt` reads them,
 and every item is a `Result`. A stream of messages or changes blocks no
@@ -214,7 +214,7 @@ and so does the guide to your own MCP server:
 | Locks    | [Locks](../../guides/locks/README.md#async-rust)       | a lock's or a semaphore's hold              |
 | Channels | [Channels](../../guides/channels/README.md#async-rust) | a channel's messages as a stream            |
 | Jobs     | [Jobs](../../guides/jobs/README.md#async-rust)         | adds, claims, steps, schedules, a worker    |
-| SQL      | [SQL](../../guides/sql/README.md#async-rust)           | queries, writes, batches, transactions      |
+| SQL      | [SQL](../../guides/sql/README.md#async-rust)           | queries, writes, transactions, `each` rows  |
 | Blobs    | [Blobs](../../guides/blobs/README.md#async-rust)       | files, uploads, a file's bytes as a stream  |
 | Search   | [Search](../../guides/search/README.md#async-rust)     | sets, searches, `ready`, a table's index    |
 | Records  | [Records](../../guides/records/README.md#async-rust)   | appends, reads, counts, a tail as a stream  |

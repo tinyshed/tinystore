@@ -242,6 +242,66 @@ descending order.
 of its own is refused there, `invalid`, rather than read every row a page at
 a time (contract SQL-09).
 
+## Every row, one at a time
+
+`each` reads the rows a part at a time, so an export of ten million rows
+holds a few parts in memory, not ten million rows. `all` stops at 64 MiB of
+values; `each` has no such bound.
+
+```ts
+for await (const order of orders.orderBy('id').each()) {
+	await exportRow(order)
+}
+```
+
+```python
+async for order in orders.order_by("id").each():
+    await export_row(order)
+```
+
+```go
+for order, err := range orders.OrderBy("id", sqldb.Asc).Each(ctx) {
+	if err != nil {
+		return err
+	}
+	if err := exportRow(order); err != nil {
+		return err
+	}
+}
+```
+
+```rust
+for order in orders.order_by("id", Direction::Asc).each()? {
+    export_row(&order?)?;
+}
+```
+
+The rows come from one snapshot of the file, which holds back the
+write-ahead log while it lasts, so one snapshot lasts 5 seconds at most.
+How a longer walk goes depends on its order:
+
+| The walk                                                  | Past 5 seconds                                                 |
+|-----------------------------------------------------------|----------------------------------------------------------------|
+| ordered by columns by their names, a unique one last      | reads on in a new snapshot after the last row it gave          |
+| ordered by a piece of SQL, or not ordered, or raw SQL     | fails `limit`, naming `list`                                   |
+| ordered by a column many rows share at the snapshot's end | fails `limit`: reading on after a shared value would skip rows |
+
+A walk that reads on sees the rows after the last one it gave as they are
+then: a row changed or added there since the walk began comes as it is now,
+and the rows before it are not read again. That is what `list` gives a page
+at a time, and the order must end in a unique column for the same reason:
+sort by `created_at`, then `id`.
+
+Raw SQL has `each` too, from one snapshot, and fails `limit` past 5
+seconds: `db.each` in Rust, Bun and Node, Python, and `sqldb.Each` in Go.
+Inside a transaction, `each` reads the rows as `all` does, since the
+transaction holds them. A statement that writes, as one with `returning`
+does, gives its rows as `all` does too. In async Rust, `each()` is a
+`Stream`. Stop a walk by breaking out of the loop: it stops its read and
+gives its reader back (contract SQL-13). A walk left half read and still
+held keeps its snapshot, so closing the store waits for it, 5 seconds at
+most.
+
 ## Columns, groups and joins
 
 ```ts

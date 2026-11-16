@@ -280,8 +280,20 @@ each<T = Row>(...statement: Statement): AsyncGenerator<T>
 ```
 
 The rows a statement gives, one at a time as their parts arrive: an
-export that holds one part, not every row. The server reads them from
-one snapshot, at most 64 MiB.
+export that holds a part, not every row, however many there are. The
+server reads them a part at a time from one snapshot, which lasts five
+seconds at most: a walk that takes longer fails `limit`, and is read a
+page at a time with a table's `list`, or ordered by its key with a
+table's `each`, which reads on past it.
+
+### Database.[walk]
+
+```ts
+[walk]<T = Row>(piece: Sql, order: readonly Ordered[] | undefined): AsyncGenerator<T>
+```
+
+A statement's rows as the server reads them, `want: each`; ordered by
+`order`, a unique column last, the server reads on past one snapshot.
 
 ### Database.table
 
@@ -625,7 +637,12 @@ Every row the conditions match, without the order and the limit.
 each(): AsyncGenerator<T>
 ```
 
-The rows one at a time, as their parts arrive.
+The rows one at a time, as their parts arrive: for more than fits in
+memory. The server reads them from one snapshot of five seconds at
+most; ordered by columns by their names, a unique one last, as `list`
+is, it reads on past that after the last row it sent, and any other
+walk fails `limit` there. Inside a transaction it reads the rows `all`
+does.
 
 ### Query.list
 

@@ -43,7 +43,7 @@ class Recorder:
         self.last = statement
         return Done(0, 0)
 
-    def each_piece(self, statement: Sql) -> AsyncIterator[dict[str, Any]] | None:
+    def each_piece(self, statement: Sql, order: Any = None) -> AsyncIterator[dict[str, Any]] | None:
         return None
 
 

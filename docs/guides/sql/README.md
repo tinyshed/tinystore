@@ -140,6 +140,7 @@ as in blocking Rust:
 |-----------------------------------------------|------------------------------------------------------|
 | `db.all(q)?`, `db.one(q)?`, `db.scalar(q)?`   | `db.all(q).await?`, and the same for the others      |
 | a query's `all`, `count`, `list` and the rest | `query.list(50, None).await?`                        |
+| `db.each(q)?`, `query.each()?`, iterators     | `Stream`s, each item `rows.next().await`             |
 | `db.exec(q)?`, `db.batch(writes)?`            | `db.exec(q).await?`, `db.batch(writes).await?`       |
 | `table.insert(&row)?`, `query.delete()?`      | `table.insert(&row).await?`, `query.delete().await?` |
 | `db.tx(...)?`                                 | `db.tx(move ...).await?`                             |

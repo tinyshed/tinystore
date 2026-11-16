@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"tinyshed.org/tinystore/internal/core"
+	"tinyshed.org/tinystore/internal/wire"
 )
 
 // A table's queries, built from pieces into the SQL a person would write: the
@@ -367,12 +368,16 @@ func (q *Query[T]) Count(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// Each is the rows one at a time, as their parts arrive.
+// Each is the rows one at a time, as their parts arrive: for more than fits
+// in memory. The server reads them from one snapshot of five seconds at most;
+// ordered by columns by their names, a unique one last, as List is, it reads
+// on past that after the last row it sent, and any other walk fails Limit
+// there. Inside a transaction it reads the rows All does.
 func (q *Query[T]) Each(ctx context.Context) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		var columns []string
-		for values, err := range q.runner.each(ctx, render(q.parts)) {
+		for values, err := range q.runner.each(ctx, render(q.parts), walkOrder(q.parts.order)) {
 			if err != nil {
 				yield(zero, err)
 				return
@@ -1012,6 +1017,24 @@ func pageText(p parts) Piece {
 		values = append(values, *p.offset)
 	}
 	return Piece{text: text, values: values}
+}
+
+// walkOrder is the columns a walk's rows are ordered by, as its rows name
+// them, when each is a column by its name: the server reads on past one
+// snapshot by them, as List pages by them.
+func walkOrder(order []ordered) []wire.SqlOrder {
+	if len(order) == 0 {
+		return nil
+	}
+	walked := make([]wire.SqlOrder, len(order))
+	for i, each := range order {
+		if each.column == "" {
+			return nil
+		}
+		name := each.column[strings.LastIndex(each.column, ".")+1:]
+		walked[i] = wire.SqlOrder{Column: name, Descending: each.direction == Desc}
+	}
+	return walked
 }
 
 // keysetOf is the condition that starts a page after a row's order values.

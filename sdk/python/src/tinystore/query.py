@@ -28,7 +28,7 @@ from .sql import Condition, Done, Sql, checked, condition_of, grouped, ident_of,
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping, Sequence
 
-    from .sql import Answered, Runner
+    from .sql import Answered, Ordered, Runner
 
 Direction = Literal["asc", "desc"]
 
@@ -218,8 +218,15 @@ class Query[T]:
         return int(cast("int", value or 0))
 
     async def each(self) -> AsyncIterator[T]:
-        """The rows one at a time, as their parts arrive."""
-        rows = self._runner.each_piece(_render(self._parts))
+        """The rows one at a time, as their parts arrive: for more than fits in memory.
+
+        The server reads them from one snapshot of five seconds at most.
+        Ordered by columns by their names, a unique one last, as ``list`` is,
+        it reads on past that after the last row it sent, and any other walk
+        fails ``limit`` there. Inside a transaction it reads the rows ``all``
+        does.
+        """
+        rows = self._runner.each_piece(_render(self._parts), _walk_order(self._parts.order))
         if rows is None:
             for row in await self.all():
                 yield row
@@ -656,6 +663,16 @@ def _render(parts: _Parts) -> Sql:
         text += f"{' limit -1' if parts.limit is None else ''} offset cast(? as integer)"
         values.append(parts.offset)
     return Sql(text, tuple(values))
+
+
+def _walk_order(order: Sequence[_Order]) -> list[Ordered] | None:
+    """The columns a walk's rows are ordered by, as its rows name them, when each is a column by its name.
+
+    The server reads on past one snapshot by them, as ``list`` pages by them.
+    """
+    if not order or any(each.column is None for each in order):
+        return None
+    return [{"column": (each.column or "").split(".")[-1], "descending": each.direction == "desc"} for each in order]
 
 
 def _keyset(order: Sequence[_Order], after: Sequence[SqlValue]) -> Sql:

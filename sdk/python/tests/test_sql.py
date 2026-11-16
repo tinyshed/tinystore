@@ -195,6 +195,28 @@ async def test_each_reads_a_query_past_one_message_a_part_at_a_time(app: tinysto
     assert count == 3000
 
 
+# contract: SQL-13
+async def test_each_reads_rows_past_what_all_holds_as_the_server_reads_them(app: tinystore.Database) -> None:
+    await app.exec("create table big (id integer primary key, data blob not null)")
+    await app.exec(
+        "with recursive n(i) as (select 1 union all select i + 1 from n where i < 280) "
+        "insert into big (id, data) select i, zeroblob(262144) from n"
+    )
+    with pytest.raises(tinystore.LimitError):
+        await app.all("select id, data from big")
+
+    rows, size = 0, 0
+    async for row in app.table("big").order_by("id").each():
+        rows += 1
+        assert row["id"] == rows
+        size += len(row["data"])
+    assert (rows, size) == (280, 280 * 262144)
+    raw = 0
+    async for row in app.each("select data from big"):
+        raw += len(row["data"])
+    assert raw == 280 * 262144
+
+
 async def test_a_statement_gives_by_its_columns_what_it_gives_by_its_rows(app: tinystore.Database) -> None:
     await app.exec("create table samples (ts integer not null, cpu real, hits integer, host text, raw blob) strict")
     await app.batch(

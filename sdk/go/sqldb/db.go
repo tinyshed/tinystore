@@ -211,7 +211,8 @@ func resultOf(done wire.SqlDone) Result {
 type Runner interface {
 	rows(ctx context.Context, statement Piece, want string) (answered, error)
 	exec(ctx context.Context, statement Piece) (Result, error)
-	each(ctx context.Context, statement Piece) iter.Seq2[[]any, error]
+	// each walks a statement's rows; ordered by order, a unique column last, it reads on past one snapshot.
+	each(ctx context.Context, statement Piece, order []wire.SqlOrder) iter.Seq2[[]any, error]
 	describeIt() string
 }
 
@@ -297,13 +298,13 @@ func (db *DB) exec(ctx context.Context, statement Piece) (Result, error) {
 	return resultOf(done), err
 }
 
-func (db *DB) each(ctx context.Context, statement Piece) iter.Seq2[[]any, error] {
+func (db *DB) each(ctx context.Context, statement Piece, order []wire.SqlOrder) iter.Seq2[[]any, error] {
 	return func(yield func([]any, error) bool) {
 		if statement.err != nil {
 			yield(nil, statement.err)
 			return
 		}
-		stream, err := db.openQuery(ctx, statement)
+		stream, err := db.openQuery(ctx, statement, order)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -333,8 +334,10 @@ func (db *DB) each(ctx context.Context, statement Piece) iter.Seq2[[]any, error]
 	}
 }
 
-// openQuery asks for every row of a statement, on the store's connection now.
-func (db *DB) openQuery(ctx context.Context, statement Piece) (*core.Stream, error) {
+// openQuery asks for a statement's rows as the server reads them, a part at
+// a time from one snapshot, on the store's connection now; ordered by order,
+// the server reads on past the snapshot's five seconds.
+func (db *DB) openQuery(ctx context.Context, statement Piece, order []wire.SqlOrder) (*core.Stream, error) {
 	c, err := db.store.Link.Connection(ctx)
 	if err != nil {
 		return nil, err
@@ -343,8 +346,11 @@ func (db *DB) openQuery(ctx context.Context, statement Piece) (*core.Stream, err
 	if err != nil {
 		return nil, err
 	}
-	body := wire.Encode(&wire.SqlQuery{Handle: handle, Text: statement.text, Values: statement.values, Want: "all"})
-	return c.Session.Open(ctx, wire.MethodSqlQuery, body, true)
+	query := wire.SqlQuery{Handle: handle, Text: statement.text, Values: statement.values, Want: "each"}
+	if order != nil {
+		query.Order = &order
+	}
+	return c.Session.Open(ctx, wire.MethodSqlQuery, wire.Encode(&query), true)
 }
 
 // yieldingParts reads each part of a query's rows to yield: the columns
@@ -448,13 +454,17 @@ func Scalar[T any](ctx context.Context, r Runner, text string, args ...any) (T, 
 	return out, err
 }
 
-// Each is the rows a statement gives, one at a time as their parts arrive,
-// from one snapshot; inside a transaction, all of them at once.
+// Each is the rows a statement gives, one at a time as their parts arrive:
+// an export holds a part, not every row, however many there are. The server
+// reads them a part at a time from one snapshot, which lasts five seconds at
+// most: a walk that takes longer fails Limit, and is read a page at a time
+// with a table's List, or ordered by its key with a table's Each, which
+// reads on past it. Inside a transaction it reads all of them at once.
 func Each[T any](ctx context.Context, r Runner, text string, args ...any) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		var columns []string
-		for values, err := range r.each(ctx, statementOf(text, args)) {
+		for values, err := range r.each(ctx, statementOf(text, args), nil) {
 			if err != nil {
 				yield(zero, err)
 				return

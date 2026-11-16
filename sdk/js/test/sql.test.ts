@@ -239,6 +239,31 @@ for (const way of ways) {
 			expect((await app.all`select id from notes where author_id = 3`).length).toBe(3000)
 		})
 
+		// contract: SQL-13
+		test('each reads rows past what all holds, as the server reads them', async () => {
+			await app.exec('create table big (id integer primary key, data blob not null)')
+			await app.exec(`with recursive n(i) as (select 1 union all select i + 1 from n where i < 280)
+				insert into big (id, data) select i, zeroblob(262144) from n`)
+			expect(await caught(app.all`select id, data from big`)).toBeInstanceOf(LimitError)
+
+			let [rows, bytes] = [0, 0]
+			for await (const row of app
+				.table<{ id: number; data: Uint8Array }>('big')
+				.orderBy('id')
+				.each()) {
+				rows++
+				expect(row.id).toBe(rows)
+				bytes += row.data.length
+			}
+			expect([rows, bytes]).toEqual([280, 280 * 262144])
+			let raw = 0
+			for await (const row of app.each<{ data: Uint8Array }>`select data from big`) {
+				raw += row.data.length
+			}
+			expect(raw).toBe(280 * 262144)
+			await app.exec('drop table big')
+		})
+
 		// contract: WIRE-10
 		test('queries a signal aborts stop on the server, and the next one answers at once', async () => {
 			// more queries of minutes than the server has threads and the file readers

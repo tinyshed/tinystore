@@ -147,7 +147,7 @@ func (tx *Tx) exec(ctx context.Context, statement Piece) (Result, error) {
 	return resultOf(*answer.Done), nil
 }
 
-func (tx *Tx) each(ctx context.Context, statement Piece) iter.Seq2[[]any, error] {
+func (tx *Tx) each(ctx context.Context, statement Piece, _ []wire.SqlOrder) iter.Seq2[[]any, error] {
 	return func(yield func([]any, error) bool) {
 		got, err := tx.rows(ctx, statement, "all")
 		if err != nil {

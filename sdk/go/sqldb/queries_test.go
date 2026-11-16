@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"tinyshed.org/tinystore/internal/core"
+	"tinyshed.org/tinystore/internal/wire"
 )
 
 // Every query of testdata/sql/queries.json, built with this SDK's builder
@@ -31,7 +32,7 @@ func (r *recorder) exec(_ context.Context, statement Piece) (Result, error) {
 	return Result{}, statement.err
 }
 
-func (r *recorder) each(context.Context, Piece) iter.Seq2[[]any, error] {
+func (r *recorder) each(context.Context, Piece, []wire.SqlOrder) iter.Seq2[[]any, error] {
 	return func(func([]any, error) bool) {}
 }
 

@@ -22,7 +22,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast, overload
 
 from ._connection import Durability, check_durability, check_name, download
 from ._handles import Opener, Via, handle_on, via_link
@@ -569,7 +569,16 @@ class Runner(Protocol):
 
     async def exec_piece(self, statement: Sql) -> Done: ...
 
-    def each_piece(self, statement: Sql) -> AsyncIterator[dict[str, SqlValue]] | None: ...
+    def each_piece(
+        self, statement: Sql, order: list[Ordered] | None = None
+    ) -> AsyncIterator[dict[str, SqlValue]] | None: ...
+
+
+class Ordered(TypedDict):
+    """A column a walk's rows are ordered by, as the rows name it."""
+
+    column: str
+    descending: bool
 
 
 async def _all(runner: Runner, of: Any, statement: Sql) -> list[Any]:
@@ -961,7 +970,14 @@ class Database:
     @overload
     def each(self, statement: Statement, /, *values: Any) -> AsyncIterator[dict[str, Any]]: ...
     def each(self, first: Any, /, *rest: Any) -> AsyncIterator[Any]:
-        """The rows a statement gives, one at a time as their parts arrive, from one snapshot."""
+        """The rows a statement gives, one at a time as their parts arrive.
+
+        An export holds a part, not every row, however many there are. The
+        server reads them a part at a time from one snapshot, which lasts five
+        seconds at most: a walk that takes longer fails ``limit``, and is read
+        a page at a time with a table's ``list``, or ordered by its key with a
+        table's ``each``, which reads on past it.
+        """
         of, statement, values = _split(first, rest)
         piece = statement_of(statement, values)
         read = reader(of)
@@ -1082,14 +1098,22 @@ class Database:
 
         return _done_of(SqlDone.decode(await self._link.run("write", attempt)))
 
-    def each_piece(self, statement: Sql) -> AsyncIterator[dict[str, SqlValue]] | None:
-        return self._each(statement)
+    def each_piece(
+        self, statement: Sql, order: list[Ordered] | None = None
+    ) -> AsyncIterator[dict[str, SqlValue]] | None:
+        return self._each(statement, order)
 
-    async def _each(self, statement: Sql) -> AsyncIterator[dict[str, SqlValue]]:
+    async def _each(self, statement: Sql, order: list[Ordered] | None = None) -> AsyncIterator[dict[str, SqlValue]]:
+        """A statement's rows as the server reads them, a part at a time from one snapshot.
+
+        Ordered by ``order``, a unique column last, the server reads on past
+        the snapshot's five seconds after the last row it sent.
+        """
         self.refuse_around("a read")
         connection = await self._link.connection()
         handle = await self.handle(connection)
-        body = SqlQuery.encode(handle=handle, text=statement.text, values=list(statement.values), want="all")
+        values = list(statement.values)
+        body = SqlQuery.encode(handle=handle, text=statement.text, values=values, want="each", order=order)
         stream = await connection.session.open(methods["sql.query"], body, True)
         try:
             head = await stream.next()
@@ -1302,7 +1326,9 @@ class SqlTx:
     async def exec_piece(self, statement: Sql) -> Done:
         return _done_of((await self._call(statement, "exec")).get("done", {}))
 
-    def each_piece(self, statement: Sql) -> AsyncIterator[dict[str, SqlValue]] | None:
+    def each_piece(
+        self, statement: Sql, order: list[Ordered] | None = None
+    ) -> AsyncIterator[dict[str, SqlValue]] | None:
         return None
 
     async def end(self, commit: bool) -> None:

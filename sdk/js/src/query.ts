@@ -15,12 +15,14 @@ import {
 	grouped,
 	identOf,
 	joinedWith,
+	type Ordered,
 	placeholders,
 	type Row,
 	type Runner,
 	Sql,
 	type SqlArg,
 	type SqlValue,
+	walk,
 } from './sql.ts'
 
 /** How a column SQLite keeps otherwise reads in JavaScript. */
@@ -255,16 +257,21 @@ export class Query<T = Row> implements Embeddable {
 		return Number(answered.rows[0]?.[0] ?? 0)
 	}
 
-	/** The rows one at a time, as their parts arrive. */
+	/**
+	 * The rows one at a time, as their parts arrive: for more than fits in
+	 * memory. The server reads them from one snapshot of five seconds at
+	 * most; ordered by columns by their names, a unique one last, as `list`
+	 * is, it reads on past that after the last row it sent, and any other
+	 * walk fails `limit` there. Inside a transaction it reads the rows `all`
+	 * does.
+	 */
 	async *each(): AsyncGenerator<T> {
-		const runner = this.#source.runner as Runner & {
-			each?: (statement: Sql) => AsyncGenerator<Row>
-		}
-		if (runner.each === undefined) {
+		const runner = this.#source.runner
+		if (runner[walk] === undefined) {
 			yield* await this.all()
 			return
 		}
-		for await (const row of runner.each(render(this.#parts))) {
+		for await (const row of runner[walk]<Row>(render(this.#parts), walkOrder(this.#parts.order))) {
 			yield (await this.#rows(Object.keys(row), [Object.values(row)]))[0]!
 		}
 	}
@@ -888,6 +895,21 @@ function render(parts: Parts): Sql {
 		values.push(parts.offset)
 	}
 	return new Sql(text, values)
+}
+
+/**
+ * The columns a walk's rows are ordered by, as its rows name them, when each
+ * is a column by its name: the server reads on past one snapshot by them, as
+ * `list` pages by them.
+ */
+function walkOrder(order: Parts['order']): Ordered[] | undefined {
+	if (order.length === 0 || order.some(each => each.column === undefined)) {
+		return undefined
+	}
+	return order.map(each => ({
+		column: each.column!.split('.').pop()!,
+		descending: each.direction === 'desc',
+	}))
 }
 
 /**

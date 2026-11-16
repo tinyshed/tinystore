@@ -94,6 +94,48 @@ func TestAWriteReturnsOnceItIsDurableAndTheVerbsSayWhatComesBack(t *testing.T) {
 	})
 }
 
+// contract: SQL-13
+func TestEachReadsRowsPastWhatAllHoldsAsTheServerReadsThem(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		ways.Must(db.Exec(ctx, `create table big (id integer primary key, data blob not null)`))
+		ways.Must(db.Exec(ctx, `with recursive n(i) as (select 1 union all select i + 1 from n where i < 280)
+			insert into big (id, data) select i, zeroblob(262144) from n`))
+		type Big struct {
+			ID   int64
+			Data []byte
+		}
+		_, err := sqldb.All[Big](ctx, db, `select id, data from big`)
+		is(t, err, tinystore.ErrLimit)
+
+		var rows, bytes int64
+		for row, err := range sqldb.OpenTable[Big](db, "big").OrderBy("id", sqldb.Asc).Each(ctx) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows++
+			if row.ID != rows {
+				t.Fatalf("row %d after %d", row.ID, rows-1)
+			}
+			bytes += int64(len(row.Data))
+		}
+		if rows != 280 || bytes != 280*262144 {
+			t.Fatalf("each read %d rows of %d bytes", rows, bytes)
+		}
+		var raw int64
+		for row, err := range sqldb.Each[Big](ctx, db, `select id, data from big`) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw += int64(len(row.Data))
+		}
+		if raw != 280*262144 {
+			t.Fatalf("each read %d bytes", raw)
+		}
+	})
+}
+
 func TestAKeyAlreadyHeldIsAConflictNamingTheDatabaseAndTheConstraint(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

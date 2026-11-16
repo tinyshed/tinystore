@@ -717,11 +717,21 @@ function doneOf(done: {
 
 type Want = 'all' | 'one' | 'scalar'
 
+/** A column a walk's rows are ordered by, as the rows name it. */
+export interface Ordered {
+	column: string
+	descending: boolean
+}
+
+/** The database's walk of a statement's rows, which its table's `each` reads; a transaction has none. */
+export const walk: unique symbol = Symbol('walk')
+
 /** What reads and writes a database: the database itself, or a transaction of it. */
 export interface Runner {
 	readonly describe: string
 	rows(statement: Sql, want: Want): Promise<Answered>
 	exec(statement: Sql): Promise<Done>
+	[walk]?<T = Row>(statement: Sql, order: readonly Ordered[] | undefined): AsyncGenerator<T>
 }
 
 /** The reads every runner shares: all, one and scalar over its rows. */
@@ -953,19 +963,30 @@ export class Database implements Runner, Home {
 
 	/**
 	 * The rows a statement gives, one at a time as their parts arrive: an
-	 * export that holds one part, not every row. The server reads them from
-	 * one snapshot, at most 64 MiB.
+	 * export that holds a part, not every row, however many there are. The
+	 * server reads them a part at a time from one snapshot, which lasts five
+	 * seconds at most: a walk that takes longer fails `limit`, and is read a
+	 * page at a time with a table's `list`, or ordered by its key with a
+	 * table's `each`, which reads on past it.
 	 */
 	async *each<T = Row>(...statement: Statement): AsyncGenerator<T> {
+		yield* this[walk]<T>(statementOf(statement), undefined)
+	}
+
+	/**
+	 * A statement's rows as the server reads them, `want: each`; ordered by
+	 * `order`, a unique column last, the server reads on past one snapshot.
+	 */
+	async *[walk]<T = Row>(piece: Sql, order: readonly Ordered[] | undefined): AsyncGenerator<T> {
 		this.#refuseAround('a read')
-		const piece = statementOf(statement)
 		const connection = await this.#link.connection()
 		const handle = await this.handle(connection)
 		const body = SqlQuery.encode({
 			handle,
 			text: piece.text,
 			values: [...piece.values],
-			want: 'all',
+			want: 'each',
+			order: order === undefined ? undefined : [...order],
 		})
 		const stream = await connection.session.open(methods['sql.query'], body, true)
 		try {

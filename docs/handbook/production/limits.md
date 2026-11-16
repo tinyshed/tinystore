@@ -24,7 +24,9 @@ of repeating them.
 |------------------------------------|------------------------------------------------------------|
 | a transaction                      | 5 seconds                                                  |
 | rows `all` or `columns` holds      | 64 MiB of values                                           |
-| one `each` read                    | 5 seconds of one snapshot                                  |
+| one `each` read                    | 5 seconds of one snapshot, then `limit` naming `list`      |
+| an `each` ordered by a unique key  | a new snapshot every 5 seconds, after its last row         |
+| rows `each` holds                  | a few parts of about 1 MiB                                 |
 | writes in one shared commit        | 1,024, or 8 MiB                                            |
 | readers                            | one per processor, 4 to 16, idle ones close after a minute |
 | statements compiled per connection | 128                                                        |
