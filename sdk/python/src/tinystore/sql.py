@@ -636,13 +636,18 @@ async def _migration_files(given: Migrations) -> list[dict[str, str]]:
 
 
 async def open_database(
-    link: Link, workers: set[Worker], name: str, migrations: Migrations | None, durability: Durability | None
+    link: Link,
+    workers: set[Worker],
+    name: str,
+    migrations: Migrations | None,
+    durability: Durability | None,
+    backup: bool = True,
 ) -> Database:
     """Opens a database by its name, its migrations applied and checked before it returns."""
     check_name(name, "database")
     check_durability(durability, f"sql {name}")
     files = None if migrations is None else await _migration_files(migrations)
-    opener = SqlOpen.encode(name=name, migrations=files, durability=durability)
+    opener = SqlOpen.encode(name=name, migrations=files, durability=durability, backup=None if backup else False)
     db = Database(link, workers, name, opener)
     await link.run("read", db.handle)
     return db

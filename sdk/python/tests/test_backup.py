@@ -98,6 +98,34 @@ async def test_a_backup_keeps_a_file_of_the_programs_only_when_include_names_it(
     await restored(way, unnamed, left_out)
 
 
+# contract: BAK-05
+@pytest.mark.skipif(not SERVED, reason="tinystore is not built here")
+async def test_a_database_opened_with_backup_false_is_in_no_backup_which_names_it(way: Way, directory: Path) -> None:
+    store = await filled(way, directory / "store")
+    report = bytes((at * 2654435761 >> 13) & 0xFF for at in range(5 << 20))
+    try:
+        uploads = await store.database("uploads", backup=False)
+        await uploads.files("pending", ttl="15m").put("u1/report.pdf", report)
+        with pytest.raises(tinystore.InvalidError, match=r"sql/uploads\.db.*local/uploads\.db"):
+            await store.database("uploads")
+        zip_ = directory / "uploads.zip"
+        backup = await store.backup(zip_)
+        assert backup.excluded == ["uploads"]
+    finally:
+        await store.close()
+        await way.leave(directory / "store")
+    held = zip_.read_bytes()
+    assert b"local/" not in held
+    assert report[3 << 20 : (3 << 20) + 64] not in held
+
+    async def empty(back: tinystore.Store, home: Path) -> None:
+        assert not (home / "local").exists()
+        uploads = await back.database("uploads", backup=False)
+        assert await uploads.files("pending").get("u1/report.pdf") is None
+
+    await restored(way, zip_, empty)
+
+
 async def test_a_backup_that_fails_leaves_no_zip(store: tinystore.Store, directory: Path) -> None:
     zips = directory / "zips"
     zips.mkdir()

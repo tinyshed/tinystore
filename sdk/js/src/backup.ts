@@ -35,6 +35,8 @@ export interface Backup {
 	 * hold: they open with that key alone, kept apart
 	 */
 	keyLeftOut: boolean
+	/** the databases opened with `backup: false`, by name, of which it holds nothing */
+	excluded: string[]
 }
 
 const nothing = new Uint8Array()
@@ -73,6 +75,7 @@ export async function backup(link: Link, path: string, options: BackupOptions): 
 			files: Number(backed.files ?? 0),
 			bytes: Number(backed.bytes ?? 0),
 			keyLeftOut: backed.keyLeftOut === true,
+			excluded: backed.excluded ?? [],
 		}
 	} catch (err) {
 		await rm(partial, { force: true })

@@ -675,6 +675,34 @@ fn two_nodes_write_their_own_databases_and_copy_each_other_s() {
     us.close().unwrap();
 }
 
+// contract: BAK-05
+#[test]
+fn a_database_left_out_of_backups_is_each_nodes_own_and_no_copy_takes_it() {
+    let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+    let (home, address) = serving(dirs[0].path());
+    write_through_every_engine(&home, 1);
+    let uploads_at_home = home.database("uploads").backup(false).open().unwrap();
+    uploads_at_home.exec("create table pending (id text)").unwrap();
+    uploads_at_home.exec("insert into pending (id) values ('home')").unwrap();
+    let pending = uploads_at_home.files("pending").open().unwrap();
+    pending.put("u1/report.pdf", vec![7; 64 << 10]).unwrap();
+    let copy = node_with(dirs[1].path(), Node { from: vec![address], ..Node::default() });
+    caught_up(&home, &copy, &TAKEN);
+
+    let uploads_here = copy.database("uploads").backup(false).open().unwrap();
+    uploads_here.exec("create table pending (id text)").unwrap();
+    uploads_here.exec("insert into pending (id) values ('copy')").unwrap();
+    let ids = |db: &crate::sql::Database| db.all::<String>("select id from pending").unwrap();
+    assert_eq!(ids(&uploads_here), ["copy"], "the node's own, written here");
+    assert_eq!(ids(&uploads_at_home), ["home"], "and the home's its own");
+    assert!(uploads_here.files("pending").open().unwrap().get("u1/report.pdf").unwrap().is_none());
+    assert!(copy.node().unwrap().copy("local/uploads.db").is_none(), "no copy of it");
+    assert!(!copy.node().unwrap().takes("local/uploads.db"), "even asked for by name");
+    drop((pending, uploads_at_home, uploads_here));
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
 // contract: REPL-09
 #[test]
 fn a_synchronous_home_answers_a_write_once_a_copy_holds_it() {

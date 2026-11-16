@@ -32,23 +32,40 @@ pub fn meant(given: &str, names: &[&str]) -> String {
     crate::typos::meant(given, names).map_or_else(String::new, |near| format!("; did you mean {near}?"))
 }
 
-/// The application's databases by name, `sql/<name>.db`, in order.
+/// The application's databases by name, in order: `sql/<name>.db`, and
+/// those no backup takes, `local/<name>.db`.
 pub fn databases(store: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(store.join("sql")) else {
+    let mut names: Vec<String> = FOLDERS.iter().flat_map(|folder| databases_in(store, folder)).collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The folders a database's file lies in: `sql`, and `local` for one no
+/// backup takes.
+const FOLDERS: [&str; 2] = ["sql", "local"];
+
+/// The databases of one folder of the store's, `sql` or `local`, by name.
+pub fn databases_in(store: &Path, folder: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(store.join(folder)) else {
         return Vec::new();
     };
-    let mut names: Vec<String> = entries
+    entries
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().to_str()?.strip_suffix(".db").map(str::to_owned))
-        .collect();
-    names.sort();
-    names
+        .collect()
+}
+
+/// Whether backups take the database `name`: not when its file lies in
+/// `local/`, which an open of it must then say, as `backup(false)` does.
+pub fn backed_up(store: &Path, database: &str) -> bool {
+    !store.join("local").join(format!("{database}.db")).exists()
 }
 
 /// Refuses a database the store does not hold, naming the nearest it does:
 /// opening one makes it, so a typo would otherwise make an empty one.
 pub fn database_held(dir: &Path, database: &str) -> Result<(), String> {
-    if dir.join("sql").join(format!("{database}.db")).exists() {
+    if FOLDERS.iter().any(|folder| dir.join(folder).join(format!("{database}.db")).exists()) {
         return Ok(());
     }
     let known = databases(dir);
@@ -96,7 +113,12 @@ mod tests {
         std::fs::write(dir.path().join("sql/plants.db"), []).unwrap();
         assert_eq!(databases(dir.path()), ["plants"]);
         assert!(database_held(dir.path(), "plants").is_ok());
+        std::fs::create_dir_all(dir.path().join("local")).unwrap();
+        std::fs::write(dir.path().join("local/uploads.db"), []).unwrap();
+        assert_eq!(databases(dir.path()), ["plants", "uploads"], "those no backup takes too");
+        assert!(database_held(dir.path(), "uploads").is_ok());
+        assert!(backed_up(dir.path(), "plants") && !backed_up(dir.path(), "uploads"));
         let why = database_held(dir.path(), "plnts").unwrap_err();
-        assert!(why.ends_with("holds no database plnts; did you mean plants?; it holds plants"), "{why}");
+        assert!(why.ends_with("holds no database plnts; did you mean plants?; it holds plants, uploads"), "{why}");
     }
 }

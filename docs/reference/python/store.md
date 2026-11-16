@@ -354,6 +354,7 @@ async def database(
     *,
     migrations: Migrations | None = None,
     durability: Durability | None = None,
+    backup: bool = True,
 ) -> Database: ...
 ```
 
@@ -364,6 +365,14 @@ here, at the start. Without migrations the file opens as it is, an
 empty one when there is none:
 
     db = await store.database("app", migrations=Path(__file__).parent / "migrations")
+
+``backup=False`` keeps its file and the bytes of its files in
+local/&lt;name>.db rather than sql/, where no backup looks, open or not,
+and no node copies it: each node that opens it writes its own. A name
+lives in one folder: one whose file lies in the other is InvalidError,
+naming both:
+
+    uploads = await store.database("uploads", backup=False)
 
 ### Store.index
 

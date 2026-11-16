@@ -137,3 +137,33 @@ fn verify_says_a_whole_backup_is_ok_and_a_changed_one_corrupt_writing_nothing() 
     let usage = tinystore(&[&"verify"]);
     assert_eq!(usage.status.code(), Some(2), "{}", said(&usage));
 }
+
+// contract: BAK-05
+#[test]
+fn backup_in_another_process_leaves_out_a_database_its_program_opened_without_backups() {
+    let dirs = tempfile::tempdir().unwrap();
+    let (data, zip, restored) =
+        (dirs.path().join("data"), dirs.path().join("backup.zip"), dirs.path().join("restored"));
+    let held = Store::open(&data, Options::default()).unwrap();
+    held.bucket::<String>("codes").open().unwrap().set("K7Q2", &"kept".to_owned()).unwrap();
+    let uploads = held.database("uploads").backup(false).open().unwrap();
+    let report: Vec<u8> = (0..5u32 << 20).map(|at| (at.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+    uploads.files("pending").open().unwrap().put("u1/report.pdf", report.clone()).unwrap();
+
+    let backed = tinystore(&[&"backup", &data, &zip]);
+    assert!(backed.status.success(), "{}", said(&backed));
+    let bytes = std::fs::read(&zip).unwrap();
+    assert!(!bytes.windows(10).any(|name| name == b"local/uplo"), "no file of it by name");
+    let stretch = &report[3 << 20..(3 << 20) + 64];
+    assert!(!bytes.windows(64).any(|window| window == stretch), "no byte of its files");
+
+    let status = tinystore(&[&"status", &data]);
+    assert!(said(&status).contains("local/uploads"), "status names it: {}", said(&status));
+    let rows = tinystore(&[&"sql", &data, &"uploads", &"select count(*) as files from sqlite_schema"]);
+    assert!(rows.status.success(), "a command finds it where it lies: {}", said(&rows));
+    drop(uploads);
+    held.close().unwrap();
+    let restore = tinystore(&[&"restore", &zip, &restored]);
+    assert!(restore.status.success(), "{}", said(&restore));
+    assert!(!restored.join("local").exists());
+}

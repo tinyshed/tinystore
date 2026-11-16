@@ -281,6 +281,8 @@ export const BackupWritten = message(
 		bytes: [2, uint],
 		/** the store seals values with a key the backup does not hold */
 		keyLeftOut: [3, bool],
+		/** the databases opened with backup false, which it holds nothing of */
+		excluded: [4, list(str)],
 	},
 	{
 		write(w, v) {
@@ -301,12 +303,21 @@ export const BackupWritten = message(
 				w.bool(v.keyLeftOut)
 				n++
 			}
+			if (v.excluded !== undefined) {
+				w.field(4)
+				w.array(v.excluded.length)
+				for (const item0 of v.excluded) {
+					w.str(item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $files: number | undefined
 			let $bytes: number | undefined
 			let $keyLeftOut: boolean | undefined
+			let $excluded: string[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -318,12 +329,21 @@ export const BackupWritten = message(
 					case 3:
 						$keyLeftOut = r.bool()
 						break
+					case 4: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$excluded = items0
+						break
+					}
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { files: $files, bytes: $bytes, keyLeftOut: $keyLeftOut }
+			return { files: $files, bytes: $bytes, keyLeftOut: $keyLeftOut, excluded: $excluded }
 		},
 	},
 )
@@ -11306,7 +11326,8 @@ export const SqlMigration = message(
 
 /**
  * Opens a database. Migrations, when given, are applied and checked; without
- * them the file opens as it is.
+ * them the file opens as it is. One that backups leave out lies in local/
+ * rather than sql/, and a name whose file lies in the other folder is invalid.
  */
 export const SqlOpen = message(
 	'sql.Open',
@@ -11316,6 +11337,8 @@ export const SqlOpen = message(
 		migrations: [2, list(SqlMigration)],
 		/** full or os: how far its commits go before they return; the store's own when absent */
 		durability: [3, str],
+		/** false: no backup takes it, nor any node; true when absent */
+		backup: [4, bool],
 	},
 	{
 		write(w, v) {
@@ -11339,12 +11362,18 @@ export const SqlOpen = message(
 				w.str(v.durability)
 				n++
 			}
+			if (v.backup !== undefined) {
+				w.field(4)
+				w.bool(v.backup)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $name: string | undefined
 			let $migrations: Read<typeof SqlMigration.fields>[] | undefined
 			let $durability: string | undefined
+			let $backup: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -11362,12 +11391,15 @@ export const SqlOpen = message(
 					case 3:
 						$durability = r.str()
 						break
+					case 4:
+						$backup = r.bool()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name, migrations: $migrations, durability: $durability }
+			return { name: $name, migrations: $migrations, durability: $durability, backup: $backup }
 		},
 	},
 )

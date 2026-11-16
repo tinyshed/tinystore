@@ -227,7 +227,8 @@ fn metrics_held(store: &Store) -> Vec<Holding> {
 /// Each database with its file's bytes, its WAL's among them.
 fn databases_held(dir: &Path) -> Vec<Holding> {
     let files = on_disk::of(dir).into_iter();
-    let databases = files.filter_map(|file| Some((file.name.strip_prefix("sql/")?.to_owned(), file.bytes)));
+    let database = |name: &str| name.strip_prefix("sql/").or_else(|| name.strip_prefix("local/")).map(str::to_owned);
+    let databases = files.filter_map(|file| Some((database(&file.name)?, file.bytes)));
     databases.map(|(name, bytes)| Holding { name, bytes: Some(bytes), ..Holding::default() }).collect()
 }
 

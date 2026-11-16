@@ -6,13 +6,12 @@ use std::time::SystemTime;
 use serde::de::DeserializeOwned;
 
 use super::batch::{Batch, Ran, Write};
-use super::engine::{Base, Databases};
+use super::engine::{Base, Databases, Opening, folder_of};
 use super::migrations::Migrations;
 use super::rows::{Answer, Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
-use crate::engine::DATABASES;
 #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
 use crate::engine::SharedFile;
 use crate::sqlite::Drafts;
@@ -21,7 +20,8 @@ use crate::{Durability, Error, Result, Store, Transaction};
 
 impl Store {
     /// The application's database `name`, `sql/<name>.db` in the store's
-    /// directory, made the first time it opens:
+    /// directory, or `local/<name>.db` when no backup takes it, made the
+    /// first time it opens:
     ///
     /// ```no_run
     /// # fn main() -> tinystore::Result<()> {
@@ -31,7 +31,8 @@ impl Store {
     /// # }
     /// ```
     pub fn database(&self, name: &str) -> DatabaseBuilder {
-        DatabaseBuilder { store: self.clone(), name: name.to_owned(), migrations: None, durability: None, redo: false }
+        let name = name.to_owned();
+        DatabaseBuilder { store: self.clone(), name, migrations: None, durability: None, backup: true, redo: false }
     }
 }
 
@@ -43,6 +44,7 @@ pub struct DatabaseBuilder {
     name: String,
     migrations: Option<Migrations>,
     durability: Option<Durability>,
+    backup: bool,
     redo: bool,
 }
 
@@ -73,6 +75,27 @@ impl DatabaseBuilder {
         self
     }
 
+    /// Whether backups take the database. `false` keeps its file and the
+    /// bytes of its files in `local/<name>.db` and `local/<name>.blobs/`
+    /// rather than `sql/`, where no backup looks, this release's or an older
+    /// one's, open or not, and no node copies it: each node that opens it
+    /// writes its own, and what a backup leaves out nothing else keeps. A
+    /// name lives in one folder: one whose file lies in the other is
+    /// `Invalid`, naming both.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let uploads = store.database("uploads").backup(false).open()?;
+    /// let pending = uploads.files("pending").ttl(std::time::Duration::from_secs(15 * 60)).open()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn backup(mut self, backup: bool) -> Self {
+        self.backup = backup;
+        self
+    }
+
     /// Takes the database back to the copy kept from before its drafts, the
     /// migrations named `….draft.sql`, and applies them again: what was
     /// written since they were applied is gone. `tinystore migrate
@@ -86,16 +109,20 @@ impl DatabaseBuilder {
 
     pub fn open(self) -> Result<Database> {
         let describe = super::engine::described(&self.name);
-        let (durability, name) = (self.durability, &self.name);
+        let (durability, backup, name) = (self.durability, self.backup, &self.name);
+        let folder = folder_of(backup);
         let drafts = |migrations: &Migrations| Drafts {
-            copy: self.store.dir().join(DATABASES).join(format!("{name}.before-drafts")),
+            copy: self.store.dir().join(folder).join(format!("{name}.before-drafts")),
             redo: self.redo,
             command: redo_command(self.store.dir(), name, migrations),
         };
         let opened = check_name(name)
-            .and_then(|()| refuse_a_device(self.store.dir(), name))
+            .and_then(|()| refuse_a_device(self.store.dir(), folder, name))
             .and_then(|()| self.migrations.map(|migrations| Ok((drafts(&migrations), migrations.load()?))).transpose())
-            .and_then(|migrating| Databases::of(&self.store)?.open(&self.store, name, migrating, durability));
+            .and_then(|migrations| {
+                let opening = Opening { name, backup, migrations, durability };
+                Databases::of(&self.store)?.open(&self.store, opening)
+            });
         opened.map(|base| Database { base }).map_err(|error| error.within(describe))
     }
 
@@ -106,8 +133,8 @@ impl DatabaseBuilder {
     #[cfg(feature = "wire")]
     pub(crate) fn open_as_it_is(self) -> Result<Database> {
         let describe = super::engine::described(&self.name);
-        let opened =
-            check_name(&self.name).and_then(|()| Databases::of(&self.store)?.open_as_it_is(&self.store, &self.name));
+        let (store, name) = (&self.store, &self.name);
+        let opened = check_name(name).and_then(|()| Databases::of(store)?.open_as_it_is(store, name, self.backup));
         opened.map(|base| Database { base }).map_err(|error| error.within(describe))
     }
 }
@@ -439,8 +466,8 @@ fn check_name(name: &str) -> Result<()> {
 /// Windows 11, `sql/nul.db` is the device NUL and not a file. A database the
 /// store already holds under such a name opens, as the release that made it
 /// opened it.
-fn refuse_a_device(dir: &Path, name: &str) -> Result<()> {
-    if !is_device(name) || holds_file(dir, name) {
+fn refuse_a_device(dir: &Path, folder: &str, name: &str) -> Result<()> {
+    if !is_device(name) || holds_file(dir, folder, name) {
         return Ok(());
     }
     Err(Error::invalid(format!(
@@ -448,11 +475,12 @@ fn refuse_a_device(dir: &Path, name: &str) -> Result<()> {
     )))
 }
 
-/// Whether `sql/` holds the file `<name>.db`, by the folder's listing: Windows
-/// answers for a device by its name alone, and a listing never shows one.
-fn holds_file(dir: &Path, name: &str) -> bool {
+/// Whether `folder`, `sql` or `local`, holds the file `<name>.db`, by the
+/// folder's listing: Windows answers for a device by its name alone, and a
+/// listing never shows one.
+pub(super) fn holds_file(dir: &Path, folder: &str, name: &str) -> bool {
     let file = format!("{name}.db");
-    let listed = std::fs::read_dir(dir.join(DATABASES));
+    let listed = std::fs::read_dir(dir.join(folder));
     listed.is_ok_and(|entries| entries.flatten().any(|entry| entry.file_name().to_str() == Some(file.as_str())))
 }
 

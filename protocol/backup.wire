@@ -21,6 +21,7 @@ message backup.Written {
   1 files: uint
   2 bytes: uint
   3 keyLeftOut: bool  # the store seals values with a key the backup does not hold
+  4 excluded: [str]   # the databases opened with backup false, which it holds nothing of
 }
 
 admin 0x0801 backup.write(backup.Write) -> download backup.Piece until backup.Written

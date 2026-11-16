@@ -247,6 +247,12 @@ def _write_backup_written(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(3)
         w.bool(x)
         n += 1
+    if (x := v.get("excluded")) is not None:
+        w.uint(4)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
     w.close_map(head, n)
 
 
@@ -261,6 +267,10 @@ def _read_backup_written(r: Reader) -> dict[str, Any]:
                 read["bytes"] = r.uint()
             case 3:
                 read["key_left_out"] = r.bool()
+            case 4:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["excluded"] = items0
             case _:
                 r.skip()
     r.leave()
@@ -275,6 +285,8 @@ BackupWritten = Message(
         "bytes": (2, uint),
         # the store seals values with a key the backup does not hold
         "key_left_out": (3, bool_),
+        # the databases opened with backup false, which it holds nothing of
+        "excluded": (4, list_(str_)),
     },
     _write_backup_written,
     _read_backup_written,
@@ -9307,6 +9319,10 @@ def _write_sql_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(3)
         w.str(x)
         n += 1
+    if (x := v.get("backup")) is not None:
+        w.uint(4)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -9323,6 +9339,8 @@ def _read_sql_open(r: Reader) -> dict[str, Any]:
                 read["migrations"] = items0
             case 3:
                 read["durability"] = r.str()
+            case 4:
+                read["backup"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -9330,7 +9348,8 @@ def _read_sql_open(r: Reader) -> dict[str, Any]:
 
 
 # Opens a database. Migrations, when given, are applied and checked; without
-# them the file opens as it is.
+# them the file opens as it is. One that backups leave out lies in local/
+# rather than sql/, and a name whose file lies in the other folder is invalid.
 SqlOpen = Message(
     "sql.Open",
     {
@@ -9339,6 +9358,8 @@ SqlOpen = Message(
         "migrations": (2, list_(SqlMigration)),
         # full or os: how far its commits go before they return; the store's own when absent
         "durability": (3, str_),
+        # false: no backup takes it, nor any node; true when absent
+        "backup": (4, bool_),
     },
     _write_sql_open,
     _read_sql_open,

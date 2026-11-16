@@ -6,15 +6,15 @@ file's size and SHA-256. A restore puts it back into an empty directory,
 checking every byte, or leaves nothing.
 
 ```ts
-const backup = await store.backup('backups/chat-2026-10-19.zip') // { files, bytes, keyLeftOut }
+const backup = await store.backup('backups/chat-2026-10-19.zip') // { files, bytes, keyLeftOut, excluded }
 ```
 
 ```python
-backup = await store.backup("backups/chat-2026-10-19.zip")  # Backup(files, bytes, key_left_out)
+backup = await store.backup("backups/chat-2026-10-19.zip")  # Backup(files, bytes, key_left_out, excluded)
 ```
 
 ```go
-backup, err := store.Backup(ctx, "backups/chat-2026-10-19.zip") // tinystore.Backup{Files, Bytes, KeyLeftOut}
+backup, err := store.Backup(ctx, "backups/chat-2026-10-19.zip") // tinystore.Backup{Files, Bytes, KeyLeftOut, Excluded}
 ```
 
 ```rust
@@ -38,11 +38,60 @@ tinystore restore backups/chat-2026-10-19.zip ./restored
   remove it and restore again.
 - The store's encryption key and the program's own files are left out unless
   asked for, and a backup without the key says so (contract BAK-03).
+- A database opened with `backup: false` is in no backup, its file nor a
+  byte of its files, and the backup names it in `excluded` (contract
+  BAK-05). See [A database left out of backups](#a-database-left-out-of-backups).
 - A backup that fails leaves no zip and no snapshot (contract BAK-04). If
   its process dies instead, its snapshot, a copy of the store's files in a
   `.snapshot-…` folder of the store's directory, stays until the store next
   opens there, which removes it. The zip it was writing stays too, beside
   the zip's name with `.part` at its end.
+
+## A database left out of backups
+
+Some files live minutes: an upload waiting for its owner to confirm it, a
+one-time link. Open their database with `backup: false`, and no backup holds
+them:
+
+```ts
+const uploads = await store.database('uploads', { backup: false })
+const pending = uploads.files('pending', { ttl: '15m' })
+```
+
+```python
+uploads = await store.database("uploads", backup=False)
+pending = uploads.files("pending", ttl="15m")
+```
+
+```go
+uploads, err := sqldb.Open(ctx, store, "uploads", sqldb.Backup(false))
+pending, err := blobs.OpenFiles(uploads, "pending", blobs.TTL(15*time.Minute))
+```
+
+```rust
+let uploads = store.database("uploads").backup(false).open()?;
+let pending = uploads.files("pending").ttl(Duration::from_secs(15 * 60)).open()?;
+```
+
+Its file and its files' bytes lie in `local/uploads.db` and
+`local/uploads.blobs/` instead of `sql/`. Where they lie is the whole rule:
+a backup takes `sql/` and the engines' own files, so `local/` stays out
+whether the database is open or not, from this process or from `tinystore
+backup` in another, and an older release's backup leaves it out too. The
+backup's answer names it:
+
+```ts
+await store.backup('backups/nightly.zip') // { files: 8, bytes: 412_380, keyLeftOut: false, excluded: ['uploads'] }
+```
+
+A restore of that zip has no `uploads`; opening it makes it empty. Buckets
+and queues opened from such a database are left out with it, and an
+encrypted bucket in it still needs the store's key, as any other does.
+
+**It is not copied either.** On a network of nodes, such a database is each
+node's own, as its own records and metrics are: no node copies it, and each
+node that opens it writes its own. A file uploaded on one node is not on
+another, and a node that dies takes it along.
 
 ## Through the protocol
 

@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { Store } from '../src/index.ts'
+import { InvalidError, type Store } from '../src/index.ts'
 import { caught, removed, ways } from './ways.ts'
 
 const photo = new Uint8Array(3 << 20).map((_, at) => at % 251)
@@ -87,6 +87,32 @@ for (const way of ways) {
 				})
 				await restored(unnamed, async (_, home) => {
 					expect(existsSync(join(home, 'secret.key'))).toBe(false)
+				})
+			},
+		)
+
+		// contract: BAK-05
+		test.skipIf(!restores)(
+			'a database opened with backup false is in no backup, and the backup names it',
+			async () => {
+				const uploads = await store.database('uploads', { backup: false })
+				const report = new Uint8Array(5 << 20).map((_, at) => (at * 2654435761) >>> 13)
+				await uploads.files('pending', { ttl: '15m' }).put('u1/report.pdf', report)
+				const elsewhere = await caught(store.database('uploads'))
+				expect(elsewhere).toBeInstanceOf(InvalidError)
+				expect((elsewhere as Error).message).toContain('sql/uploads.db')
+				expect((elsewhere as Error).message).toContain('local/uploads.db')
+
+				const zip = join(zips, 'uploads.zip')
+				const backup = await store.backup(zip)
+				expect(backup.excluded).toEqual(['uploads'])
+				const bytes = readFileSync(zip)
+				expect(bytes.includes(Buffer.from('local/'))).toBe(false)
+				expect(bytes.includes(Buffer.from(report.subarray(3 << 20, (3 << 20) + 64)))).toBe(false)
+				await restored(zip, async (back, home) => {
+					expect(existsSync(join(home, 'local'))).toBe(false)
+					const empty = await back.database('uploads', { backup: false })
+					expect(await empty.files('pending').get('u1/report.pdf')).toBeUndefined()
 				})
 			},
 		)

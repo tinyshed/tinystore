@@ -410,7 +410,12 @@ class Store:
         return LogHandler(self.logger(stream, level=level, **options))
 
     async def database(
-        self, name: str, *, migrations: Migrations | None = None, durability: Durability | None = None
+        self,
+        name: str,
+        *,
+        migrations: Migrations | None = None,
+        durability: Durability | None = None,
+        backup: bool = True,
     ) -> Database:
         """The application's database name, sql/<name>.db, once its migrations are applied and checked.
 
@@ -419,8 +424,16 @@ class Store:
         empty one when there is none::
 
             db = await store.database("app", migrations=Path(__file__).parent / "migrations")
+
+        ``backup=False`` keeps its file and the bytes of its files in
+        local/<name>.db rather than sql/, where no backup looks, open or not,
+        and no node copies it: each node that opens it writes its own. A name
+        lives in one folder: one whose file lies in the other is InvalidError,
+        naming both::
+
+            uploads = await store.database("uploads", backup=False)
         """
-        return await open_database(self._link, self._workers, name, migrations, durability)
+        return await open_database(self._link, self._workers, name, migrations, durability, backup)
 
     @overload
     def index[T](

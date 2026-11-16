@@ -135,7 +135,7 @@ pub fn demote(dir: &Path, files: &[String]) -> Result<Vec<Demoted>> {
     let _lock = crate::store::take_lock(dir).map_err(|error| error.within(what()))?;
     let logs = dir.join(DIR);
     let names = if files.is_empty() {
-        node::files_logged_in(&logs)?.into_iter().filter(|name| !super::NODE_LOCAL.contains(&name.as_str())).collect()
+        node::files_logged_in(&logs)?.into_iter().filter(|name| !super::is_node_local(name)).collect()
     } else {
         files.to_vec()
     };

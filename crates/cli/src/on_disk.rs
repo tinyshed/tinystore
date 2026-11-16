@@ -4,7 +4,14 @@
 
 use std::path::Path;
 
-pub(crate) use tinystore::mcp::given::databases;
+use tinystore::mcp::given::databases_in;
+pub(crate) use tinystore::mcp::given::{backed_up, databases};
+
+/// Whether backups take the database a command names, which its open must
+/// say: kv.db's and jobs.db's own, when it names none, always.
+pub(crate) fn backed_up_of(store: &Path, database: Option<&str>) -> bool {
+    database.is_none_or(|database| backed_up(store, database))
+}
 
 /// One engine's file of a store.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,12 +36,13 @@ pub(crate) fn of(store: &Path) -> Vec<StoreFile> {
         add(name, file, size_of(&store.join(file)));
     }
     add("blobs", "blobs/blobs.db", tree_size(&store.join("blobs")));
-    for database in databases(store) {
-        add(
-            &format!("sql/{database}"),
-            &format!("sql/{database}.db"),
-            size_of(&store.join(format!("sql/{database}.db"))),
-        );
+    for folder in ["sql", "local"] {
+        let mut databases = databases_in(store, folder);
+        databases.sort();
+        for database in databases {
+            let file = format!("{folder}/{database}.db");
+            add(&format!("{folder}/{database}"), &file, size_of(&store.join(&file)));
+        }
     }
     for (name, file) in [("records", "records.db"), ("metrics", "metrics.db"), ("catalog", "catalog.db")] {
         add(name, file, size_of(&store.join(file)));
@@ -104,5 +112,9 @@ mod tests {
         let found: Vec<(String, u64)> = of(dir.path()).into_iter().map(|file| (file.name, file.bytes)).collect();
         assert_eq!(found, [("kv".to_owned(), 120), ("blobs".to_owned(), 5), ("sql/app".to_owned(), 11)]);
         assert_eq!(databases(dir.path()), ["app"]);
+        std::fs::create_dir_all(dir.path().join("local")).unwrap();
+        std::fs::write(dir.path().join("local/uploads.db"), [0; 3]).unwrap();
+        let found: Vec<(String, u64)> = of(dir.path()).into_iter().map(|file| (file.name, file.bytes)).collect();
+        assert_eq!(found[3], ("local/uploads".to_owned(), 3), "a database no backup takes, after those it does");
     }
 }

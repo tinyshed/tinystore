@@ -66,6 +66,7 @@ pub struct Backup {
     pub files: usize,
     pub bytes: u64,
     pub key_left_out: bool,
+    pub excluded: Vec<String>,
 }
 ```
 

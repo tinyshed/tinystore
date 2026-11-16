@@ -12,6 +12,7 @@ use crate::{Clock, Durability, Error, Memory, Result, Store};
 const HISTORY: &str = "migrations";
 
 use crate::engine::database_file as file_of;
+use crate::engine::{DATABASES, LOCAL};
 
 /// Statements known to write that a database remembers; past them it forgets
 /// them all and asks SQLite again.
@@ -32,10 +33,22 @@ pub(crate) struct Databases {
     read: Mutex<HashMap<String, Arc<Base>>>,
 }
 
-/// One application database: `sql/<name>.db`, its writer and its readers,
-/// and the buckets and queues kept in its file.
+/// What an open of a database asks: its name, whether backups take it, the
+/// migrations it must have applied and how far its commits go.
+pub(crate) struct Opening<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) backup: bool,
+    pub(crate) migrations: Option<(Drafts, Vec<Migration>)>,
+    pub(crate) durability: Option<Durability>,
+}
+
+/// One application database: `sql/<name>.db`, or `local/<name>.db` for one
+/// no backup takes, its writer and its readers, and the buckets and queues
+/// kept in its file.
 pub(crate) struct Base {
     pub(crate) name: String,
+    /// Whether backups take it: its file lies in `sql/`, and in `local/` when not.
+    pub(crate) backup: bool,
     pub(crate) shared: Arc<SharedFile>,
     clock: Arc<dyn Clock>,
     /// The store's memory, which a call's rows hold while it holds them.
@@ -79,18 +92,17 @@ impl Databases {
     /// applied and checked; one already open applies what it lacks of them.
     /// Its commits go as far as `durability` says, or the store's options
     /// where it says nothing; a file has one, so one already open refuses
-    /// another.
-    pub(crate) fn open(
-        &self,
-        store: &Store,
-        name: &str,
-        migrations: Option<(Drafts, Vec<Migration>)>,
-        durability: Option<Durability>,
-    ) -> Result<Arc<Base>> {
+    /// another. Its file lies where `backup` says, and a name whose file lies
+    /// in the other folder, open or not, is refused.
+    pub(crate) fn open(&self, store: &Store, asked: Opening<'_>) -> Result<Arc<Base>> {
+        let Opening { name, backup, migrations, durability } = asked;
         let mut open = lock(&self.open);
         if let Some(base) = open.get(name) {
             let base = Arc::clone(base);
             drop(open);
+            if base.backup != backup {
+                return Err(Error::invalid(lies_elsewhere(name, backup)));
+            }
             if let Some(asked) = durability.filter(|asked| *asked != base.durability) {
                 let opened = base.durability;
                 return Err(Error::invalid(format!("open with durability {opened}, and asked for {asked}")));
@@ -100,14 +112,15 @@ impl Databases {
             }
             return Ok(base);
         }
-        let claim = store.claim(&file_of(name))?;
+        refuse_the_other_folder(store, name, backup)?;
+        let claim = store.claim(&file_in(name, backup))?;
         let config = config(durability.or(store.durability()));
         let durability = config.durability;
         let file = store.open_file(claim.name(), config)?;
         if let Some((drafts, migrations)) = migrations {
             file.migrate_checked(HISTORY, &migrations, Some(&drafts))?;
         }
-        let base = Arc::new(Base { _claim: Some(claim), ..Base::opened(store, name, file, durability) });
+        let base = Arc::new(Base { _claim: Some(claim), backup, ..Base::opened(store, name, file, durability) });
         open.insert(name.to_owned(), Arc::clone(&base));
         Ok(base)
     }
@@ -119,17 +132,23 @@ impl Databases {
     /// program's own open after it chooses them. A file the store does not
     /// hold is `NotFound` rather than made.
     #[cfg(feature = "wire")]
-    pub(crate) fn open_as_it_is(&self, store: &Store, name: &str) -> Result<Arc<Base>> {
+    pub(crate) fn open_as_it_is(&self, store: &Store, name: &str, backup: bool) -> Result<Arc<Base>> {
+        let found = |base: &Arc<Base>| match base.backup == backup {
+            true => Ok(Arc::clone(base)),
+            false => Err(Error::invalid(lies_elsewhere(name, backup))),
+        };
         if let Some(base) = lock(&self.open).get(name) {
-            return Ok(Arc::clone(base));
+            return found(base);
         }
         let mut read = lock(&self.read);
         if let Some(base) = read.get(name) {
-            return Ok(Arc::clone(base));
+            return found(base);
         }
+        refuse_the_other_folder(store, name, backup)?;
         let config = config(store.durability());
         let durability = config.durability;
-        let base = Arc::new(Base::opened(store, name, store.open_to_read(&file_of(name), config)?, durability));
+        let file = store.open_to_read(&file_in(name, backup), config)?;
+        let base = Arc::new(Base { backup, ..Base::opened(store, name, file, durability) });
         read.insert(name.to_owned(), Arc::clone(&base));
         Ok(base)
     }
@@ -150,9 +169,10 @@ impl Engine for Databases {
         first_failure.map_or(Ok(()), Err)
     }
 
-    /// Names each database open, the buckets and queues it keeps with it.
+    /// Names each database open that backups take, the buckets and queues it
+    /// keeps with it; one in `local/` is left out, file and all.
     fn snapshot(&self) -> Result<crate::engine::Copying<'_>> {
-        let open: Vec<Arc<Base>> = lock(&self.open).values().cloned().collect();
+        let open: Vec<Arc<Base>> = lock(&self.open).values().filter(|base| base.backup).cloned().collect();
         let mut copying = crate::engine::Copying::default();
         for base in &open {
             copying.files.extend(crate::engine::to_copy(base.file(), &file_of(&base.name), "sql")?.files);
@@ -167,6 +187,7 @@ impl Base {
     fn opened(store: &Store, name: &str, file: File, durability: Durability) -> Base {
         Base {
             name: name.to_owned(),
+            backup: true,
             shared: Arc::new(SharedFile::new(file, format!("sql {name}"), store)),
             clock: store.clock(),
             memory: Arc::clone(store.memory()),
@@ -216,6 +237,45 @@ impl Base {
     pub(super) fn failed(&self, statement: &super::statement::Sql, error: Error) -> Error {
         error.within(statement.describe()).within(self.describe())
     }
+}
+
+/// The file a database's name keeps, by its path in the store's directory:
+/// `sql/<name>.db`, or `local/<name>.db` for one no backup takes.
+pub(crate) fn file_in(name: &str, backup: bool) -> String {
+    if backup { file_of(name) } else { format!("{LOCAL}/{name}.db") }
+}
+
+/// The folder a database's file lies in: `sql`, or `local` for one no backup
+/// takes.
+pub(crate) fn folder_of(backup: bool) -> &'static str {
+    if backup { DATABASES } else { LOCAL }
+}
+
+/// Refuses a database whose file lies in the other folder than the one
+/// `backup` asks: a name lives in one folder, and nothing moves it, so a
+/// program that changed its mind is told rather than given a second, empty
+/// database of the same name. The folder's listing tells, not the file's
+/// name, since Windows answers for a device by its name alone.
+fn refuse_the_other_folder(store: &Store, name: &str, backup: bool) -> Result<()> {
+    match super::database::holds_file(store.dir(), folder_of(!backup), name) {
+        true => Err(Error::invalid(lies_elsewhere(name, backup))),
+        false => Ok(()),
+    }
+}
+
+/// Why an open asked another folder than the database's own, naming both:
+///
+/// ```text
+/// local/uploads.db, left out of backups, asked where the database lies in sql/uploads.db, which backups take
+/// ```
+fn lies_elsewhere(name: &str, backup: bool) -> String {
+    let says = |backup: bool| if backup { "which backups take" } else { "left out of backups" };
+    let (asked, held) = (file_in(name, backup), file_in(name, !backup));
+    format!(
+        "{asked}, {}, asked where the database lies in {held}, {}: a name lives in one folder, and nothing moves it",
+        says(backup),
+        says(!backup)
+    )
 }
 
 /// The database `name` as an error names it: `sql app`.

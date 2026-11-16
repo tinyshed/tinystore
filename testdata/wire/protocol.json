@@ -45,6 +45,13 @@
         "bytes": {
           "uint": "207"
         },
+        "excluded": {
+          "list": [
+            {
+              "str": "excluded"
+            }
+          ]
+        },
         "files": {
           "uint": "107"
         },
@@ -52,7 +59,7 @@
           "bool": true
         }
       },
-      "hex": "83016b02cccf03c3",
+      "hex": "84016b02cccf03c30491a86578636c75646564",
       "message": "backup.Written",
       "name": "backup.Written with every field"
     },
@@ -5930,6 +5937,9 @@
     },
     {
       "fields": {
+        "backup": {
+          "bool": true
+        },
         "durability": {
           "str": "durability"
         },
@@ -5951,7 +5961,7 @@
           "str": "name"
         }
       },
-      "hex": "8301a46e616d6502918201a46e616d6502a373716c03aa6475726162696c697479",
+      "hex": "8401a46e616d6502918201a46e616d6502a373716c03aa6475726162696c69747904c3",
       "message": "sql.Open",
       "name": "sql.Open with every field"
     },

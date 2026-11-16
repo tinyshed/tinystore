@@ -76,8 +76,9 @@ fn set(asked: Asked) -> Done {
     }
     let value = value_of(given, asked.value("--as"))?;
     let (named, keyed) = (bucket.clone(), key.clone());
+    let backup = crate::on_disk::backed_up_of(&dir, database.as_deref());
     reach::write(&dir, "kv set", move |client| {
-        let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+        let database = database.as_deref().map(|database| client.database(database, backup)).transpose()?;
         let bucket = client.bucket(&named, database)?;
         client.set(bucket, &keyed, &value, ttl)
     })?;
@@ -97,8 +98,9 @@ fn delete(asked: Asked) -> Done {
         crate::sql::database_held(&dir, database)?;
     }
     let (named, keyed) = (bucket.clone(), key.clone());
+    let backup = crate::on_disk::backed_up_of(&dir, database.as_deref());
     let found = reach::write(&dir, "kv delete", move |client| {
-        let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+        let database = database.as_deref().map(|database| client.database(database, backup)).transpose()?;
         let bucket = client.bucket(&named, database)?;
         client.delete(bucket, &keyed)
     })?;

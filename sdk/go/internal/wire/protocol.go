@@ -743,6 +743,8 @@ type BackupWritten struct {
 	Bytes uint64 `wire:"2,bytes"`
 	// the store seals values with a key the backup does not hold
 	KeyLeftOut bool `wire:"3,keyLeftOut"`
+	// the databases opened with backup false, which it holds nothing of
+	Excluded []string `wire:"4,excluded"`
 }
 
 func (m BackupWritten) Write(w *Writer) {
@@ -763,6 +765,14 @@ func (m BackupWritten) Write(w *Writer) {
 		w.Bool(m.KeyLeftOut)
 		n++
 	}
+	if len(m.Excluded) > 0 {
+		w.Uint(4)
+		w.Array(len(m.Excluded))
+		for _, item0 := range m.Excluded {
+			w.Str(item0)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -777,6 +787,14 @@ func (m *BackupWritten) Read(r *Reader) {
 			m.Bytes = r.Uint()
 		case 3:
 			m.KeyLeftOut = r.Bool()
+		case 4:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Excluded = v
 		default:
 			r.Skip()
 		}
@@ -788,7 +806,8 @@ func (m *BackupWritten) Read(r *Reader) {
 func (m BackupWritten) IsZero() bool {
 	return m.Files == 0 &&
 		m.Bytes == 0 &&
-		!m.KeyLeftOut
+		!m.KeyLeftOut &&
+		len(m.Excluded) == 0
 }
 
 // BlobsOpen is the schema's blobs.Open.
@@ -12535,13 +12554,16 @@ func (m SqlMigration) IsZero() bool {
 // SqlOpen is the schema's sql.Open.
 //
 // Opens a database. Migrations, when given, are applied and checked; without
-// them the file opens as it is.
+// them the file opens as it is. One that backups leave out lies in local/
+// rather than sql/, and a name whose file lies in the other folder is invalid.
 type SqlOpen struct {
 	// [a-z0-9][a-z0-9_-]{0,63}
 	Name       string          `wire:"1,name"`
 	Migrations *[]SqlMigration `wire:"2,migrations"`
 	// full or os: how far its commits go before they return; the store's own when absent
 	Durability *string `wire:"3,durability"`
+	// false: no backup takes it, nor any node; true when absent
+	Backup *bool `wire:"4,backup"`
 }
 
 func (m SqlOpen) Write(w *Writer) {
@@ -12563,6 +12585,11 @@ func (m SqlOpen) Write(w *Writer) {
 	if m.Durability != nil {
 		w.Uint(3)
 		w.Str(*m.Durability)
+		n++
+	}
+	if m.Backup != nil {
+		w.Uint(4)
+		w.Bool(*m.Backup)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -12587,6 +12614,9 @@ func (m *SqlOpen) Read(r *Reader) {
 		case 3:
 			v := r.Str()
 			m.Durability = &v
+		case 4:
+			v := r.Bool()
+			m.Backup = &v
 		default:
 			r.Skip()
 		}
@@ -12598,7 +12628,8 @@ func (m *SqlOpen) Read(r *Reader) {
 func (m SqlOpen) IsZero() bool {
 	return m.Name == "" &&
 		m.Migrations == nil &&
-		m.Durability == nil
+		m.Durability == nil &&
+		m.Backup == nil
 }
 
 // SqlText is the schema's sql.Text.

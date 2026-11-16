@@ -33,6 +33,8 @@ type openOptions struct {
 	migrations fs.FS
 	files      map[string]string
 	durability string
+	// local keeps the file in local/, where no backup looks
+	local bool
 }
 
 type migrations struct{ fsys fs.FS }
@@ -58,6 +60,17 @@ type durability string
 func Durability(level string) Option { return durability(level) }
 
 func (d durability) open(o *openOptions) { o.durability = string(d) }
+
+type backup bool
+
+// Backup says whether backups take the database. Backup(false) keeps its
+// file and the bytes of its files in local/<name>.db rather than sql/, where
+// no backup looks, open or not, and no node copies it: each node that opens
+// it writes its own. A name lives in one folder: one whose file lies in the
+// other is ErrInvalid, naming both.
+func Backup(taken bool) Option { return backup(taken) }
+
+func (b backup) open(o *openOptions) { o.local = !bool(b) }
 
 // DB is an application's database. The verb says what comes back: all the
 // rows, one or none, one value, or what a write changed. A write with
@@ -92,6 +105,10 @@ func Open(ctx context.Context, store *tinystore.Store, name string, opts ...Opti
 	message := wire.SqlOpen{Name: name}
 	if o.durability != "" {
 		message.Durability = &o.durability
+	}
+	if o.local {
+		taken := false
+		message.Backup = &taken
 	}
 	migrated, err := migrationsOf(o)
 	if err != nil {

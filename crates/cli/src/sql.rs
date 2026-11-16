@@ -96,9 +96,9 @@ fn written_through(dir: &Path, database: &str, statement: &str, json: bool) -> D
         )));
     }
     database_held(dir, database)?;
-    let (named, text) = (database.to_owned(), statement.to_owned());
+    let (named, text, backup) = (database.to_owned(), statement.to_owned(), crate::on_disk::backed_up(dir, database));
     let (changes, last) = crate::reach::write_once(dir, "sql", move |client| {
-        let database = client.database(&named)?;
+        let database = client.database(&named, backup)?;
         client.exec(database, &text)
     })?;
     print_done(changes, last, json)
@@ -154,7 +154,8 @@ fn apply(asked: Asked) -> Done {
     let store = held(&dir)?;
     let before = applied(&store, database)?;
     let redo = asked.has("--redo-drafts");
-    let builder = store.database(database).migrations(Path::new(migrations));
+    let backup = crate::on_disk::backed_up(store.dir(), database);
+    let builder = store.database(database).backup(backup).migrations(Path::new(migrations));
     let opened = if redo { builder.redo_drafts() } else { builder }.open();
     let after = opened.map_err(asked::Refused::from).and_then(|_| applied(&store, database));
     let closed = store.close();
@@ -205,10 +206,10 @@ impl<'a> Changed<'a> {
 /// the buckets and queues it keeps; none for a database the store does not
 /// hold yet.
 fn applied(store: &Store, database: &str) -> Result<Vec<String>, asked::Refused> {
-    if !store.dir().join("sql").join(format!("{database}.db")).exists() {
+    if tinystore::mcp::given::database_held(store.dir(), database).is_err() {
         return Ok(Vec::new());
     }
-    let db = store.database(database).open()?;
+    let db = store.database(database).backup(crate::on_disk::backed_up(store.dir(), database)).open()?;
     Ok(db.all(APPLIED)?)
 }
 

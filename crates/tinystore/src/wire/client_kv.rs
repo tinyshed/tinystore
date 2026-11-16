@@ -63,10 +63,12 @@ impl<S: Read + Write> Client<S> {
     }
 
     /// The handle of the application's database `name`, opened with no
-    /// migrations: as its program left it.
+    /// migrations: as its program left it, in `sql/`, or in `local/` when
+    /// `backup` is false.
     #[cfg(feature = "sql")]
-    pub fn database(&mut self, name: &str) -> Result<u64> {
-        self.handle(method::SQL_OPEN, &wire::SqlOpen { name: name.to_owned(), ..wire::SqlOpen::default() })
+    pub fn database(&mut self, name: &str, backup: bool) -> Result<u64> {
+        let open = wire::SqlOpen { name: name.to_owned(), backup: (!backup).then_some(false), ..Default::default() };
+        self.handle(method::SQL_OPEN, &open)
     }
 
     /// Runs a statement that writes on the database: the rows it changed,

@@ -3,17 +3,20 @@ package tinystore_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/blobs"
 	"tinyshed.org/tinystore/internal/ways"
 	"tinyshed.org/tinystore/kv"
+	"tinyshed.org/tinystore/sqldb"
 )
 
 // photo is past the 2 MiB a stream takes before its client grants more.
@@ -76,6 +79,49 @@ func TestABackupIsOneZipOfEveryEngineWhichRestoreTakesBackIntoAnEmptyDirectory(t
 				t.Fatal("the photo did not come back whole")
 			}
 			_ = cat.Close()
+		})
+	})
+}
+
+// contract: BAK-05
+func TestADatabaseOpenedWithBackupFalseIsInNoBackupWhichNamesIt(t *testing.T) {
+	if ways.Binary() == "" {
+		t.Skip("tinystore is not built here")
+	}
+	report := make([]byte, 5<<20)
+	for at := range report {
+		report[at] = byte(uint32(at) * 2654435761 >> 13)
+	}
+	ways.EachWay(t, func(t *testing.T, way ways.Way) {
+		ctx := context.Background()
+		dir := t.TempDir()
+		store := filled(t, way, filepath.Join(dir, "store"))
+		uploads := ways.Must(sqldb.Open(ctx, store, "uploads", sqldb.Backup(false)))
+		pending := ways.Must(blobs.OpenFiles(uploads, "pending", blobs.TTL(15*time.Minute)))
+		ways.Must(pending.Put(ctx, "u1/report.pdf", bytes.NewReader(report)))
+		_, err := sqldb.Open(ctx, store, "uploads")
+		if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "local/uploads.db") {
+			t.Fatalf("got %v, want invalid naming both folders", err)
+		}
+		zip := filepath.Join(dir, "uploads.zip")
+		backup := ways.Must(store.Backup(ctx, zip))
+		ways.Must(0, store.Close())
+		if len(backup.Excluded) != 1 || backup.Excluded[0] != "uploads" {
+			t.Fatalf("excluded %v", backup.Excluded)
+		}
+		held := ways.Must(os.ReadFile(zip))
+		if bytes.Contains(held, []byte("local/")) || bytes.Contains(held, report[3<<20:3<<20+64]) {
+			t.Fatal("the zip holds something of uploads")
+		}
+		restored(t, way, zip, func(back *tinystore.Store, home string) {
+			if _, err := os.Stat(filepath.Join(home, "local")); err == nil {
+				t.Fatal("a restore made local/")
+			}
+			empty := ways.Must(sqldb.Open(ctx, back, "uploads", sqldb.Backup(false)))
+			_, found := ways.Must2(ways.Must(blobs.OpenFiles(empty, "pending")).Get(ctx, "u1/report.pdf"))
+			if found {
+				t.Fatal("the report came back")
+			}
 		})
 	})
 }

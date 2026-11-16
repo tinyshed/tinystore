@@ -113,8 +113,8 @@ impl Sending {
             }
             let written = backup.write_to(Pieces { sending: &sending, piece: Vec::new() });
             let last = written.map(|backup| {
-                BackupWritten { files: backup.files as u64, bytes: backup.bytes, key_left_out: backup.key_left_out }
-                    .encode()
+                let (files, bytes, key_left_out) = (backup.files as u64, backup.bytes, backup.key_left_out);
+                BackupWritten { files, bytes, key_left_out, excluded: backup.excluded }.encode()
             });
             sending.finish(last.map_err(Failure::from));
             forget(&going, &sending);

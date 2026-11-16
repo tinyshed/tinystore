@@ -215,6 +215,14 @@ type Option interface {
 
 Option is how a database opens.
 
+### Backup
+
+```go
+func Backup(taken bool) Option
+```
+
+Backup says whether backups take the database. Backup(false) keeps its file and the bytes of its files in local/\&lt;name>.db rather than sql/, where no backup looks, open or not, and no node copies it: each node that opens it writes its own. A name lives in one folder: one whose file lies in the other is ErrInvalid, naming both.
+
 ### Durability
 
 ```go

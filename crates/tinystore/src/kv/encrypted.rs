@@ -167,23 +167,27 @@ pub(crate) fn keys_sealed_in(dir: &Path) -> Result<std::collections::BTreeSet<St
     Ok(keys)
 }
 
-/// kv.db and each database's file that `dir` holds: every file a bucket
-/// may live in.
+/// kv.db and each database's file that `dir` holds, in `sql/` and in
+/// `local/`: every file a bucket may live in. A database no backup takes
+/// still seals its buckets with the store's key, which the store then needs
+/// as it needs it for any other; a backup asks its snapshot, which holds no
+/// `local/`, so its `key_left_out` speaks of what it holds alone.
 fn files_of_buckets(dir: &Path) -> Result<Vec<PathBuf>> {
-    let databases = dir.join(crate::engine::DATABASES);
     let failed = |error: io::Error| Error::io(format!("the databases of {}", dir.display()), error);
     let mut files = vec![dir.join(super::engine::FILE)];
-    match fs::read_dir(&databases) {
-        Ok(entries) => {
-            for entry in entries {
-                let path = entry.map_err(failed)?.path();
-                if path.extension().is_some_and(|extension| extension == "db") {
-                    files.push(path);
+    for folder in [crate::engine::DATABASES, crate::engine::LOCAL] {
+        match fs::read_dir(dir.join(folder)) {
+            Ok(entries) => {
+                for entry in entries {
+                    let path = entry.map_err(failed)?.path();
+                    if path.extension().is_some_and(|extension| extension == "db") {
+                        files.push(path);
+                    }
                 }
             }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(failed(error)),
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(failed(error)),
     }
     files.retain(|file| file.is_file());
     Ok(files)

@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO
 
@@ -34,6 +34,8 @@ class Backup:
     """their bytes, the zip's own fields aside"""
     key_left_out: bool
     """the store seals values with an encryption key the backup does not hold: they open with that key alone"""
+    excluded: list[str] = field(default_factory=list[str])
+    """the databases opened with backup=False, by name, of which it holds nothing"""
 
 
 async def backup(
@@ -69,7 +71,12 @@ async def backup(
         with contextlib.suppress(OSError):
             partial.unlink(missing_ok=True)
         raise
-    return Backup(written.get("files", 0), written.get("bytes", 0), written.get("key_left_out", False))
+    return Backup(
+        written.get("files", 0),
+        written.get("bytes", 0),
+        written.get("key_left_out", False),
+        list(written.get("excluded", [])),
+    )
 
 
 def _synced(file: BinaryIO) -> None:

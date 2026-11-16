@@ -33,7 +33,8 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
 /// named, rather than made.
 pub fn opened(store: &Store, database: &str) -> Result<Database, String> {
     database_held(store.dir(), database)?;
-    store.database(database).open().map_err(|error| error.to_string())
+    let backup = super::given::backed_up(store.dir(), database);
+    store.database(database).backup(backup).open().map_err(|error| error.to_string())
 }
 
 /// A query's rows as JSON, each an object of its columns, `most` at most: a

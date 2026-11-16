@@ -10,6 +10,7 @@ class Backup:
     files: int  # the files, the engines' and those it was told to take
     bytes: int  # their bytes, the zip's own fields aside
     key_left_out: bool  # the store seals values with an encryption key the backup does not hold: they open with that key alone
+    excluded: list[str] = field(default_factory=list[str])  # the databases opened with backup=False, by name, of which it holds nothing
 ```
 
 What a backup holds.

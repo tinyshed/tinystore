@@ -163,6 +163,11 @@ impl Engine for Blobs {
     /// names goes before it is linked. A database's file is the database's
     /// to name, and its files are linked once it is copied.
     fn snapshot(&self) -> Result<Copying<'_>> {
+        // a database no backup takes keeps its bytes in local/, none of them copied
+        #[cfg(feature = "sql")]
+        if crate::engine::is_local(&self.kept.file) {
+            return Ok(Copying::default());
+        }
         let mut copying = match self.kept.lent_by {
             None => to_copy(&self.file, &self.kept.file, "blobs")?,
             Some(_) => Copying::default(),
@@ -309,21 +314,23 @@ impl Blobs {
 
     /// The blobs engine kept in a database's file, which every set of files
     /// opened from the database shares: its bytes lie in the folder beside
-    /// the file, `sql/app.blobs/` beside `sql/app.db`.
+    /// the file, `sql/app.blobs/` beside `sql/app.db`, and `local/app.blobs/`
+    /// beside one no backup takes.
     #[cfg(feature = "sql")]
     pub(crate) fn in_file(shared: &Arc<crate::engine::SharedFile>) -> Result<Arc<Blobs>> {
         shared.engine(|store| {
+            let in_store = shared.file().path().strip_prefix(store.dir()).map_err(|_| {
+                Error::internal(format!("{}: a database's file outside its store's directory", shared.owner()))
+            })?;
+            let file_name = in_store.to_string_lossy().replace('\\', "/");
+            // a database of local/ is this node's own, which no copy takes, bytes and all
             #[cfg(feature = "replication")]
-            if store.node().is_some() {
+            if store.node().is_some() && !crate::engine::is_local(&file_name) {
                 return Err(Error::invalid(format!(
                     "{}: a database's files on a node, whose copies take no bytes of a database yet",
                     shared.owner()
                 )));
             }
-            let in_store = shared.file().path().strip_prefix(store.dir()).map_err(|_| {
-                Error::internal(format!("{}: a database's file outside its store's directory", shared.owner()))
-            })?;
-            let file_name = in_store.to_string_lossy().replace('\\', "/");
             let folder = format!("{}.blobs", file_name.strip_suffix(".db").unwrap_or(&file_name));
             // a copy writes nothing in the folder, which the database's own claims
             let claim = if shared.file().is_copy() { None } else { Some(store.claim(&folder)?) };

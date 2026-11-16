@@ -660,7 +660,7 @@ fn open_names_not_held(client: &mut Client) -> Vec<(&'static str, Result<Handle,
     let files = BlobsOpen { name: "avatars".to_owned(), ..BlobsOpen::default() };
     let stream = RecordsOpen { stream: "audit".to_owned(), ..RecordsOpen::default() };
     let index = SearchOpen { name: "products".to_owned(), ..SearchOpen::default() };
-    let database = SqlOpen { name: "app".to_owned(), migrations: None, durability: None };
+    let database = SqlOpen { name: "app".to_owned(), migrations: None, durability: None, backup: None };
     vec![
         ("bucket sessions", client.call::<Handle>(method::KV_BUCKET_OPEN, &bucket)),
         ("counters visits", client.call::<Handle>(method::KV_COUNTERS_OPEN, &counters)),
@@ -780,7 +780,7 @@ fn a_read_connection_opens_what_its_store_holds_as_it_is_and_binds_none_of_it() 
     let stream = RecordsOpen { stream: "audit".to_owned(), ..RecordsOpen::default() };
     let notes =
         SqlMigration { name: "0001_notes.sql".to_owned(), sql: "create table notes (title text) strict".to_owned() };
-    let database = SqlOpen { name: "app".to_owned(), migrations: Some(vec![notes]), durability: None };
+    let database = SqlOpen { name: "app".to_owned(), migrations: Some(vec![notes]), durability: None, backup: None };
     {
         let store = Store::open(dir.path(), options()).unwrap();
         let mut owner = Client::admitted(&store, Capability::Data);
@@ -907,7 +907,7 @@ fn a_read_connection_makes_no_engines_tables_in_a_databases_file() {
     let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
     let notes = "create table notes (id text primary key, title text) strict".to_owned();
     let notes = SqlMigration { name: "0001_notes.sql".to_owned(), sql: notes };
-    let database = SqlOpen { name: "app".to_owned(), migrations: Some(vec![notes]), durability: None };
+    let database = SqlOpen { name: "app".to_owned(), migrations: Some(vec![notes]), durability: None, backup: None };
     Client::admitted(&store, Capability::Data).call::<Handle>(method::SQL_OPEN, &database).unwrap();
     let mut reader = Client::admitted(&store, Capability::Read);
     let app = reader.call::<Handle>(method::SQL_OPEN, &database).unwrap().handle;

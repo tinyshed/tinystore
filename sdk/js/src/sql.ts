@@ -91,6 +91,14 @@ export interface DatabaseOptions {
 	 * with it. A database open already keeps what it was opened with.
 	 */
 	durability?: Durability
+	/**
+	 * Whether backups take the database; `false` keeps its file and the
+	 * bytes of its files in `local/` rather than `sql/`, where no backup
+	 * looks, open or not, and no node copies it: each node that opens it
+	 * writes its own. A name lives in one folder: one whose file lies in the
+	 * other is InvalidError, naming both.
+	 */
+	backup?: boolean
 }
 
 /** What a write changed: the rows, and SQLite's rowid of the row it inserted, 0 when none. */
@@ -578,7 +586,8 @@ export async function openDatabase(
 	checkDurability(options.durability, `sql ${name}`)
 	const migrations =
 		options.migrations === undefined ? undefined : await migrationFiles(options.migrations)
-	const open = SqlOpen.encode({ name, migrations, durability: options.durability })
+	const backup = options.backup === false ? false : undefined
+	const open = SqlOpen.encode({ name, migrations, durability: options.durability, backup })
 	const db = new Database(link, workers, name, open)
 	await link.run('read', connection => db.handle(connection))
 	return db

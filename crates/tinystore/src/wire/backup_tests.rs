@@ -158,6 +158,36 @@ fn a_connection_that_may_not_administer_takes_no_backup() {
     }
 }
 
+// contract: BAK-05
+#[test]
+fn a_database_opened_over_the_wire_without_backups_is_named_by_the_backup_as_left_out() {
+    use crate::wire::protocol::{Handle, SqlOpen};
+    let dirs = tempfile::tempdir().unwrap();
+    let store = filled(&dirs.path().join("data"));
+    let mut client = Client::admitted(&store, Capability::Admin);
+    let uploads = SqlOpen { name: "uploads".to_owned(), backup: Some(false), ..SqlOpen::default() };
+    client.call::<Handle>(method::SQL_OPEN, &uploads).unwrap();
+    assert!(dirs.path().join("data/local/uploads.db").is_file(), "its file in local/");
+    let elsewhere = SqlOpen { name: "uploads".to_owned(), ..SqlOpen::default() };
+    let refused = client.call::<Handle>(method::SQL_OPEN, &elsewhere).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+    assert!(refused.message.contains("sql/uploads.db") && refused.message.contains("local/uploads.db"));
+
+    let stream = client.start(method::BACKUP_WRITE, &BackupWrite::default());
+    assert_eq!(client.next_on(stream).kind, Kind::Response);
+    let backed = loop {
+        let piece = client.next_on(stream);
+        if piece.flags & frame::END != 0 {
+            break answered::<BackupWritten>(&piece).unwrap();
+        }
+        credit(&mut client, stream, piece.body.len());
+    };
+    assert_eq!(backed.excluded, ["uploads"]);
+    assert_eq!(backed.files, 3, "kv.db, blobs.db and the photo's bytes, and nothing of uploads");
+    drop(client);
+    store.close().unwrap();
+}
+
 #[test]
 fn a_backup_its_client_cancels_ends_and_lets_its_worker_go() {
     let dir = tempfile::tempdir().unwrap();

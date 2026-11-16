@@ -46,6 +46,14 @@ interface DatabaseOptions {
      * with it. A database open already keeps what it was opened with.
      */
     durability?: Durability
+    /**
+     * Whether backups take the database; `false` keeps its file and the
+     * bytes of its files in `local/` rather than `sql/`, where no backup
+     * looks, open or not, and no node copies it: each node that opens it
+     * writes its own. A name lives in one folder: one whose file lies in the
+     * other is InvalidError, naming both.
+     */
+    backup?: boolean
 }
 ```
 

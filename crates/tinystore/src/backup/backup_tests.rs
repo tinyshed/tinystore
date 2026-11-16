@@ -725,3 +725,74 @@ fn verify_refuses_a_file_whose_sha256_is_not_its_manifests_or_that_its_zip_lacks
     let error = verify(&f.zip).unwrap_err();
     assert!(error.kind() == ErrorKind::Corrupt && error.to_string().contains("sql/app.db: listed by"), "{error}");
 }
+
+/// A report of 5 MiB, far past what blobs keeps inline, so that its bytes
+/// are a file of `local/uploads.blobs/objects/`; no stretch of it repeats,
+/// so that a stretch found in a zip is the report's.
+fn report() -> Vec<u8> {
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    (0..5 << 20)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 24) as u8
+        })
+        .collect()
+}
+
+/// Checks that the zip at `path` holds nothing of the database `uploads`:
+/// no file of it by name, no line of its manifest, and no stretch of the
+/// report's bytes anywhere, whatever name they might go under.
+fn holds_nothing_of_uploads(path: &Path) {
+    let bytes = fs::read(path).unwrap();
+    let mut zip = io::Cursor::new(&bytes);
+    let entries = zip::entries(&mut zip).unwrap();
+    let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+    assert!(!names.iter().any(|name| name.contains("uploads") || name.starts_with("local")), "{names:?}");
+    let listed = entries.iter().find(|entry| entry.name == MANIFEST).unwrap();
+    let mut manifest = String::new();
+    zip::open(&mut zip, listed).unwrap().read_to_string(&mut manifest).unwrap();
+    assert!(!manifest.contains("uploads") && !manifest.contains("local"), "{manifest}");
+    let report = report();
+    for at in [0, 1 << 20, (5 << 20) - 64] {
+        let stretch = &report[at..at + 64];
+        assert!(!bytes.windows(64).any(|window| window == stretch), "the report's bytes at {at} are in the zip");
+    }
+}
+
+// contract: BAK-05
+#[test]
+fn a_database_left_out_of_backups_is_in_none_open_or_closed_nor_any_byte_of_its_files() {
+    let f = fixture();
+    let store = f.filled();
+    let uploads = store.database("uploads").backup(false).open().unwrap();
+    let pending = uploads.files("pending").ttl(Duration::from_secs(15 * 60)).open().unwrap();
+    pending.put("u1/report.pdf", report()).unwrap();
+    assert!(f.data.join("local/uploads.db").is_file() && f.data.join("local/uploads.blobs").is_dir());
+    assert!(!f.data.join("sql/uploads.db").exists(), "{:?}", tree(&f.data));
+
+    let open = store.backup().write(&f.zip).unwrap();
+    assert_eq!(open.excluded, ["uploads"], "the answer names what it left out");
+    assert_eq!(open.files, 8, "what filled() holds, and nothing more");
+    holds_nothing_of_uploads(&f.zip);
+    drop((pending, uploads));
+    store.close().unwrap();
+
+    let store = f.open(&f.data);
+    let closed_zip = f.zip.with_file_name("closed.zip");
+    let closed = store.backup().write(&closed_zip).unwrap();
+    assert_eq!((closed.excluded, closed.files), (vec!["uploads".to_owned()], 8), "with no handle open");
+    holds_nothing_of_uploads(&closed_zip);
+    let named = store.backup().include("local/uploads.db").write(f.zip.with_file_name("named.zip"));
+    assert_eq!(named.unwrap_err().kind(), ErrorKind::Invalid, "a program's include takes none of it either");
+    drop(store);
+
+    let restored = restore(&f.zip, &f.restored).unwrap();
+    assert!(restored.excluded.is_empty(), "a zip says nothing of what it lacks");
+    assert!(!f.restored.join("local").exists(), "{:?}", tree(&f.restored));
+    let store = f.open(&f.restored);
+    f.holds_everything(&store);
+    let uploads = store.database("uploads").backup(false).open().unwrap();
+    assert!(uploads.files("pending").open().unwrap().get("u1/report.pdf").unwrap().is_none(), "opened empty");
+}

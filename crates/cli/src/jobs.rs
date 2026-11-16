@@ -57,8 +57,9 @@ fn add(asked: Asked) -> Done {
         return Err(wrong("--delay or --at, not both"));
     }
     let (named, sent) = (queue.clone(), job.clone());
+    let backup = crate::on_disk::backed_up_of(&dir, database.as_deref());
     let added = reach::write_by_id(&dir, "jobs add", job.id.as_deref(), move |client| {
-        let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+        let database = database.as_deref().map(|database| client.database(database, backup)).transpose()?;
         let queue = client.queue(&named, database)?;
         client.add(queue, &sent)
     })?;
@@ -93,8 +94,9 @@ fn cancel(asked: Asked) -> Done {
         crate::sql::database_held(&dir, database)?;
     }
     let (named, keyed) = (queue.clone(), id.clone());
+    let backup = crate::on_disk::backed_up_of(&dir, database.as_deref());
     let cancelled = reach::write(&dir, "jobs cancel", move |client| {
-        let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+        let database = database.as_deref().map(|database| client.database(database, backup)).transpose()?;
         let queue = client.queue(&named, database)?;
         client.cancel(queue, &keyed)
     })?;

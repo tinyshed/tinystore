@@ -143,7 +143,14 @@ impl fmt::Debug for Node {
 
 /// The files a node keeps as its own even when it copies every other: what
 /// it logged and measured of itself.
-pub(crate) const NODE_LOCAL: [&str; 2] = ["records.db", "metrics.db"];
+const NODE_LOCAL: [&str; 2] = ["records.db", "metrics.db"];
+
+/// Whether the file `name` is a node's own, which no node copies, even one
+/// that names it among the files it takes: its own records and metrics, and
+/// every database of `local/`, which no backup takes either.
+pub(crate) fn is_node_local(name: &str) -> bool {
+    NODE_LOCAL.contains(&name) || crate::engine::is_local(name)
+}
 
 /// The directory of a store's logs, beside its engines' files.
 pub(crate) const DIR: &str = "log";

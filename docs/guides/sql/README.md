@@ -1,7 +1,8 @@
 # SQL
 
 The SQL engine gives the application SQLite databases of its own, one file
-each in `sql/` of the store's directory. Migrations are applied and checked
+each in `sql/` of the store's directory, or in `local/` for one no backup
+takes. Migrations are applied and checked
 every time a database opens, writes from many callers share a commit, and a
 query builder writes the SQL a person would for the queries that depend on a
 request.
@@ -64,6 +65,36 @@ let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Directio
 - A query you cancel, or whose timeout passes, stops and gives its connection
   back, except a query inside a transaction (contract STORE-09). See [What
   stops and what does not](cancel.md#what-stops-and-what-does-not).
+
+## A database no backup takes
+
+`backup: false` keeps a database's file, and the bytes of its files, in
+`local/` instead of `sql/`, where no backup looks and no node copies from:
+for files that live minutes, as an upload waiting to be confirmed.
+
+```ts
+const uploads = await store.database('uploads', { backup: false })
+```
+
+```python
+uploads = await store.database("uploads", backup=False)
+```
+
+```go
+uploads, err := sqldb.Open(ctx, store, "uploads", sqldb.Backup(false))
+```
+
+```rust
+let uploads = store.database("uploads").backup(false).open()?;
+```
+
+A name lives in one folder. Opening `uploads` without `backup: false` where
+`local/uploads.db` is, or with it where `sql/uploads.db` is, fails `invalid`
+naming both files; nothing moves a database between them. On a network of
+nodes it is each node's own: what one node writes there, no other node
+has. [A database left out of
+backups](../backup/README.md#a-database-left-out-of-backups) says what a
+backup does with it.
 
 ## In these guides
 

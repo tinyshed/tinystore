@@ -6,9 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{READY_WAIT, State};
-use crate::replication::NODE_LOCAL;
 use crate::replication::catalog::{Catalog, Claim, FILE as CATALOG};
 use crate::replication::copy;
+use crate::replication::is_node_local;
 use crate::replication::log::segments_in;
 use crate::replication::promote;
 use crate::sync::lock;
@@ -64,7 +64,7 @@ impl State {
     /// own nor a copy, and names no list of the files it copies to say which
     /// it will.
     pub(crate) fn is_new(&self, name: &str) -> bool {
-        if name == CATALOG || self.options.files.is_some() || NODE_LOCAL.contains(&name) {
+        if name == CATALOG || self.options.files.is_some() || is_node_local(name) {
             return false;
         }
         let dir = self.log_dir(name);
@@ -125,7 +125,7 @@ impl State {
         let address = self.address();
         for name in logged {
             let dir = self.log_dir(&name);
-            if name == CATALOG || NODE_LOCAL.contains(&name.as_str()) || copy::is_copy(&dir) || self.stopping() {
+            if name == CATALOG || is_node_local(&name) || copy::is_copy(&dir) || self.stopping() {
                 continue;
             }
             // the claim goes to the catalog's home, whose answer is the last

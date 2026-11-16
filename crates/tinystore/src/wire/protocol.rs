@@ -109,6 +109,8 @@ pub(crate) struct BackupWritten {
     pub(crate) bytes: u64,
     /// The store seals values with a key the backup does not hold.
     pub(crate) key_left_out: bool,
+    /// The databases opened with backup false, which it holds nothing of.
+    pub(crate) excluded: Vec<String>,
 }
 
 #[cfg(feature = "backup")]
@@ -123,6 +125,7 @@ impl Message for BackupWritten {
                 1 => message.files = codec::uint(r, "files")?,
                 2 => message.bytes = codec::uint(r, "bytes")?,
                 3 => message.key_left_out = codec::bool(r, "keyLeftOut")?,
+                4 => message.excluded = codec::list(r, "excluded", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -143,6 +146,10 @@ impl Message for BackupWritten {
             map.field(out, 3);
             codec::write_bool(out, &self.key_left_out);
         }
+        if !self.excluded.is_empty() {
+            map.field(out, 4);
+            codec::write_list(out, &self.excluded, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -151,12 +158,14 @@ impl Message for BackupWritten {
             + 10
             + 10
             + 2
+            + 1 + codec::list_size(&self.excluded, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
         self.files == 0
             && self.bytes == 0
             && !self.key_left_out
+            && self.excluded.is_empty()
     }
 }
 
@@ -11140,7 +11149,8 @@ impl Message for SqlMigration {
 }
 
 /// Opens a database. Migrations, when given, are applied and checked; without
-/// them the file opens as it is.
+/// them the file opens as it is. One that backups leave out lies in local/
+/// rather than sql/, and a name whose file lies in the other folder is invalid.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlOpen {
@@ -11149,6 +11159,8 @@ pub(crate) struct SqlOpen {
     pub(crate) migrations: Option<Vec<SqlMigration>>,
     /// Full or os: how far its commits go before they return; the store's own when absent.
     pub(crate) durability: Option<String>,
+    /// False: no backup takes it, nor any node; true when absent.
+    pub(crate) backup: Option<bool>,
 }
 
 #[cfg(feature = "sql")]
@@ -11163,6 +11175,7 @@ impl Message for SqlOpen {
                 1 => message.name = codec::str(r, "name")?,
                 2 => message.migrations = Some(codec::list(r, "migrations", codec::message::<SqlMigration>)?),
                 3 => message.durability = Some(codec::str(r, "durability")?),
+                4 => message.backup = Some(codec::bool(r, "backup")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11183,6 +11196,10 @@ impl Message for SqlOpen {
             map.field(out, 3);
             codec::write_str(out, durability);
         }
+        if let Some(backup) = &self.backup {
+            map.field(out, 4);
+            codec::write_bool(out, backup);
+        }
         map.close(out);
     }
 
@@ -11191,12 +11208,14 @@ impl Message for SqlOpen {
             + 1 + 5 + self.name.len()
             + self.migrations.as_ref().map_or(0, |migrations| 1 + codec::list_size(migrations, codec::message_size))
             + self.durability.as_ref().map_or(0, |durability| 1 + 5 + durability.len())
+            + self.backup.map_or(0, |_| 2)
     }
 
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.migrations.is_none()
             && self.durability.is_none()
+            && self.backup.is_none()
     }
 }
 

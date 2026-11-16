@@ -19,6 +19,9 @@ type Backup struct {
 	// KeyLeftOut says the store seals values with an encryption key the
 	// backup does not hold: they open with that key alone.
 	KeyLeftOut bool
+	// Excluded are the databases opened with sqldb.Backup(false), by name,
+	// of which it holds nothing.
+	Excluded []string
 }
 
 // BackupOption is what a backup takes beside every engine's files.
@@ -60,7 +63,9 @@ func (s *Store) Backup(ctx context.Context, path string, opts ...BackupOption) (
 		_ = os.Remove(partial)
 		return Backup{}, err
 	}
-	return Backup{Files: int(written.Files), Bytes: int64(written.Bytes), KeyLeftOut: written.KeyLeftOut}, nil
+	backup := Backup{Files: int(written.Files), Bytes: int64(written.Bytes), KeyLeftOut: written.KeyLeftOut}
+	backup.Excluded = append([]string{}, written.Excluded...)
+	return backup, nil
 }
 
 // backupTo writes the zip's pieces as they come to a file, synced once whole.

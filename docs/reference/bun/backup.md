@@ -36,6 +36,8 @@ interface Backup {
      * hold: they open with that key alone, kept apart
      */
     keyLeftOut: boolean
+    /** the databases opened with `backup: false`, by name, of which it holds nothing */
+    excluded: string[]
 }
 ```
 

@@ -9,10 +9,10 @@ use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::{DIRECT, READY_WAIT, State};
-use crate::replication::NODE_LOCAL;
 use crate::replication::catalog::FILE as CATALOG;
 use crate::replication::copy::{self, Copy};
 use crate::replication::follow::{Direct, Written};
+use crate::replication::is_node_local;
 use crate::replication::log::segments_in;
 use crate::replication::promote;
 use crate::sync::lock;
@@ -143,13 +143,17 @@ impl State {
 
     /// Whether this node takes the file `name` from another rather than
     /// writing it: every file but its own records and metrics when it copies
-    /// all, or those it names.
+    /// all, or those it names; never a database of `local/`.
     pub(crate) fn takes(&self, name: &str) -> bool {
         if self.options.from.is_empty() {
             return false;
         }
         if name == CATALOG {
             return !self.options.catalog;
+        }
+        // a database no backup takes is no copy's, even one named among the files it takes
+        if crate::engine::is_local(name) {
+            return false;
         }
         // a file whose log is this node's own, as a promoted copy's, it writes
         let dir = self.log_dir(name);
@@ -160,7 +164,7 @@ impl State {
         }
         match &self.options.files {
             Some(files) => files.iter().any(|file| file == name),
-            None => !NODE_LOCAL.contains(&name),
+            None => !is_node_local(name),
         }
     }
 

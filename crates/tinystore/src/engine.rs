@@ -207,6 +207,21 @@ pub(crate) fn database_file(name: &str) -> String {
     format!("{DATABASES}/{name}.db")
 }
 
+/// The folder of the store's directory that holds the databases opened with
+/// `backup(false)`, and the bytes of their files. Where they lie is the whole
+/// policy: a backup walks `sql/` and the engines' own files, this release's
+/// and every one released before it, so none takes what is here; and a node
+/// copies none of it, as it copies no node's own records and metrics.
+#[cfg(any(feature = "kv", feature = "sql", feature = "replication", feature = "backup", feature = "metrics"))]
+pub(crate) const LOCAL: &str = "local";
+
+/// Whether `file`, by its path in the store's directory, lies in `local/`:
+/// no backup holds it and no node copies it.
+#[cfg(any(all(feature = "sql", feature = "blobs"), feature = "replication", feature = "metrics"))]
+pub(crate) fn is_local(file: &str) -> bool {
+    file.strip_prefix(LOCAL).is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// The store's calls for the engines opened against it.
 pub trait Host {
     /// The engine of type `E` this store has open, or the one `open` makes and

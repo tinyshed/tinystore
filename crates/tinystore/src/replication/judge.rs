@@ -181,7 +181,7 @@ impl State {
         };
         let mut asks = Vec::new();
         for file in logged {
-            if super::NODE_LOCAL.contains(&file.as_str()) || file == super::catalog::FILE {
+            if super::is_node_local(&file) || file == super::catalog::FILE {
                 continue;
             }
             let (holding, at) = match self.copy(&file) {

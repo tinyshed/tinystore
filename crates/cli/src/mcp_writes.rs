@@ -211,8 +211,9 @@ fn written(dir: &Path, name: &str, given: &Arguments) -> Result<Value, Refused> 
         _ => {
             let (database, statement) = (given.needed("database")?, given.needed("statement")?);
             crate::sql::database_held(dir, &database)?;
+            let backup = crate::on_disk::backed_up(dir, &database);
             let (changes, last) = reach::write_once(dir, "mcp", move |client| {
-                let database = client.database(&database)?;
+                let database = client.database(&database, backup)?;
                 client.exec(database, &statement)
             })?;
             Ok(json!({ "changes": changes, "last_insert_rowid": last }))
@@ -226,8 +227,9 @@ fn kv(dir: &Path, name: &str, given: &Arguments) -> Result<Value, Refused> {
         crate::sql::database_held(dir, database)?;
     }
     if name == "kv_delete" {
+        let backup = crate::on_disk::backed_up_of(dir, database.as_deref());
         let deleted = reach::write(dir, "mcp", move |client| {
-            let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+            let database = database.as_deref().map(|database| client.database(database, backup)).transpose()?;
             let bucket = client.bucket(&bucket, database)?;
             client.delete(bucket, &key)
         })?;
@@ -245,8 +247,9 @@ fn kv(dir: &Path, name: &str, given: &Arguments) -> Result<Value, Refused> {
         Some(other) => return Err(wrong(format!("as {other}: text, int or json"))),
     };
     let ttl = given.span("ttl")?;
+    let backup = crate::on_disk::backed_up_of(dir, database.as_deref());
     reach::write(dir, "mcp", move |client| {
-        let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+        let database = database.as_deref().map(|database| client.database(database, backup)).transpose()?;
         let bucket = client.bucket(&bucket, database)?;
         client.set(bucket, &key, &value, ttl)
     })?;
@@ -260,8 +263,9 @@ fn jobs(dir: &Path, name: &str, given: &Arguments) -> Result<Value, Refused> {
     }
     if name == "jobs_cancel" {
         let id = given.needed("id")?;
+        let backup = crate::on_disk::backed_up_of(dir, database.as_deref());
         let cancelled = reach::write(dir, "mcp", move |client| {
-            let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+            let database = database.as_deref().map(|database| client.database(database, backup)).transpose()?;
             let queue = client.queue(&queue, database)?;
             client.cancel(queue, &id)
         })?;
@@ -269,8 +273,9 @@ fn jobs(dir: &Path, name: &str, given: &Arguments) -> Result<Value, Refused> {
     }
     let id = given.text("id");
     let job = NewJob { value: given.json("job")?.to_string(), id: id.clone(), delay: given.span("delay")?, at: None };
+    let backup = crate::on_disk::backed_up_of(dir, database.as_deref());
     let added = reach::write_by_id(dir, "mcp", id.as_deref(), move |client| {
-        let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+        let database = database.as_deref().map(|database| client.database(database, backup)).transpose()?;
         let queue = client.queue(&queue, database)?;
         client.add(queue, &job)
     })?;

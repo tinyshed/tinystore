@@ -132,7 +132,7 @@ fn open(store: &Store, handles: &Handles, asked: SqlOpen, read_only: bool) -> An
         let refused = format!("sql {}: a read connection chooses no durability: a file's is its writers'", asked.name);
         return Err(Failure::permission(refused));
     }
-    let mut builder = store.database(&asked.name);
+    let mut builder = store.database(&asked.name).backup(asked.backup.unwrap_or(true));
     if read_only {
         let handle = handles.open.keep(builder.open_as_it_is()?);
         return Ok(Handle { handle }.encode());

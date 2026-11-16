@@ -118,6 +118,31 @@ fn a_database_opens_without_migrations_as_it_is() {
     assert_eq!(scratch.scalar::<i64>("select x from t").unwrap(), 7, "both handles are one database");
 }
 
+// contract: BAK-05
+#[test]
+fn a_name_lives_in_one_folder_and_an_open_asking_the_other_is_invalid_naming_both() {
+    let mut f = fixture();
+    f.app();
+    let uploads = f.store.database("uploads").backup(false).open().unwrap();
+    uploads.exec("create table pending (id text)").unwrap();
+    let local = f.dir.path().join("local");
+    assert!(local.join("uploads.db").is_file() && !f.dir.path().join("sql/uploads.db").exists());
+    let refused = |f: &Fixture, name: &str, backup: bool| {
+        let error = f.store.database(name).backup(backup).open().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+        let said = error.to_string();
+        assert!(said.contains(&format!("sql/{name}.db")) && said.contains(&format!("local/{name}.db")), "{said}");
+    };
+    refused(&f, "app", false);
+    refused(&f, "uploads", true);
+    drop(uploads);
+    f.reopen();
+    refused(&f, "app", false);
+    refused(&f, "uploads", true);
+    let uploads = f.store.database("uploads").backup(false).open().unwrap();
+    assert_eq!(uploads.scalar::<i64>("select count(*) from pending").unwrap(), 0, "the same file, opened again");
+}
+
 #[test]
 fn a_statement_sqlite_cannot_run_as_written_is_invalid() {
     let f = fixture();

@@ -53,6 +53,10 @@ pub struct Backup {
     /// The store seals values with an encryption key the backup does not
     /// hold: they open with that key alone, kept apart.
     pub key_left_out: bool,
+    /// The databases opened with `backup(false)`, by name, of which it holds
+    /// nothing: a restore comes back without them. A restore's and a
+    /// verify's answer names none, since the zip does not.
+    pub excluded: Vec<String>,
 }
 
 /// A backup about to be made: the files of the program's it takes beside
@@ -121,6 +125,7 @@ impl BackupBuilder {
     /// elsewhere: what `out` holds of a backup that fails is no backup.
     pub fn write_to(self, out: impl Write) -> Result<Backup> {
         let taken = self.taken().map_err(|error| error.within("backup"))?;
+        let excluded = left_out(self.store.dir()).map_err(|error| error.within("backup"))?;
         let snapshot = snapshot::take(&self.store).map_err(|error| error.within("backup"))?;
         let key = self.key(&snapshot).map_err(|error| error.within("backup"))?;
         let mut zip = zip::Writer::new(out);
@@ -137,7 +142,7 @@ impl BackupBuilder {
         zip.add(MANIFEST, text.len() as u64, text.as_bytes(), |_| {})
             .map_err(|error| Error::io("backup: its manifest", error))?;
         zip.finish().map_err(|error| Error::io("backup", error))?;
-        Ok(manifest.summary())
+        Ok(Backup { excluded, ..manifest.summary() })
     }
 
     /// The files of the program's the backup takes, each checked: their names
@@ -183,6 +188,27 @@ impl BackupBuilder {
             )),
         }
     }
+}
+
+/// The databases of `local/`, by name, which no backup takes: what a backup
+/// says it left out. None when the folder is not there.
+fn left_out(dir: &Path) -> Result<Vec<String>> {
+    let folder = dir.join(crate::engine::LOCAL);
+    let failed = |error: io::Error| Error::io(folder.display().to_string(), error);
+    let entries = match fs::read_dir(&folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(failed(error)),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let name = entry.map_err(failed)?.file_name();
+        if let Some(database) = name.to_str().and_then(|name| name.strip_suffix(".db")) {
+            names.push(database.to_owned());
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 /// A file a backup takes beside the engines': its name in the zip, where it
@@ -263,8 +289,9 @@ fn check_file(name: &str) -> Result<()> {
 
 /// The names of the store's directory a program's file is none of, beside
 /// the engines' files: `LOCK`, a restore's marker, the manifest's, the
-/// databases', blobs' and the server's; each with its journals after a `-`.
-const OWN: [&str; 6] = ["LOCK", crate::store::RESTORING, MANIFEST, "sql", "blobs", "server"];
+/// databases', those no backup takes, blobs' and the server's; each with its
+/// journals after a `-`.
+const OWN: [&str; 7] = ["LOCK", crate::store::RESTORING, MANIFEST, "sql", crate::engine::LOCAL, "blobs", "server"];
 
 /// Whether `name` is a relative path whose parts are each a name: no `..`,
 /// no root, no drive, no `\`.

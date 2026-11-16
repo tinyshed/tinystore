@@ -13,6 +13,9 @@ type Backup struct {
 	// KeyLeftOut says the store seals values with an encryption key the
 	// backup does not hold: they open with that key alone.
 	KeyLeftOut bool
+	// Excluded are the databases opened with sqldb.Backup(false), by name,
+	// of which it holds nothing.
+	Excluded []string
 }
 ```
 

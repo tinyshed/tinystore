@@ -207,7 +207,7 @@ fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
     let articles =
         "create table articles (id integer primary key, title text not null, done integer not null default 0)";
     let migrations = Some(vec![SqlMigration { name: "0001_articles.sql".to_owned(), sql: articles.to_owned() }]);
-    let open = SqlOpen { name: "app".to_owned(), migrations, durability: None };
+    let open = SqlOpen { name: "app".to_owned(), migrations, durability: None, backup: None };
     let database = client.call::<Handle>(method::SQL_OPEN, &open).unwrap().handle;
     let asked = SearchOpen {
         name: "articles_search".to_owned(),

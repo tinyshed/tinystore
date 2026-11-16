@@ -19,9 +19,11 @@ use crate::{Result, Store};
 /// The prefix of the names the store writes of itself.
 pub(crate) const PREFIX: &str = "tinystore_";
 /// The application's databases a store names in its `file` label; every one
-/// after them counts into `sql/__overflow`.
+/// after them counts into `sql/__overflow`, or `local/__overflow` for one no
+/// backup takes.
 const NAMED_DATABASES: usize = 32;
 const OVERFLOW: &str = "sql/__overflow";
+const LOCAL_OVERFLOW: &str = "local/__overflow";
 
 /// What a store measures of itself, when it is opened with its own metrics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,14 +198,15 @@ impl Own {
 }
 
 impl Files {
-    /// A file's label: its own, or `sql/__overflow` for a database past the
-    /// ones the store names.
+    /// A file's label: its own, or its folder's `__overflow` for a database
+    /// past the ones the store names, in `sql/` and `local/` together.
     fn label(&mut self, file: &str) -> String {
-        if !file.starts_with("sql/") || self.named.contains(file) {
+        let local = crate::engine::is_local(file);
+        if !(file.starts_with("sql/") || local) || self.named.contains(file) {
             return file.to_owned();
         }
         if self.named.len() >= NAMED_DATABASES {
-            return OVERFLOW.to_owned();
+            return if local { LOCAL_OVERFLOW } else { OVERFLOW }.to_owned();
         }
         self.named.insert(file.to_owned());
         file.to_owned()

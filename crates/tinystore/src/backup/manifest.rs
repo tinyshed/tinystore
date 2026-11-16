@@ -87,6 +87,7 @@ impl Manifest {
             files: self.files.len(),
             bytes: self.files.iter().map(|file| file.size).sum(),
             key_left_out: self.key_left_out,
+            excluded: Vec::new(),
         }
     }
 }

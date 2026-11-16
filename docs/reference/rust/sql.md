@@ -15,7 +15,8 @@ pub fn database(&self, name: &str) -> DatabaseBuilder
 ```
 
 The application's database `name`, `sql/<name>.db` in the store's
-directory, made the first time it opens:
+directory, or `local/<name>.db` when no backup takes it, made the
+first time it opens:
 
 ```rust
 let db = store.database("app").migrations("migrations").open()?;
@@ -300,6 +301,25 @@ store's own setting is not this file's: what may be lost to a power
 loss beside what may not. Its buckets and queues commit with it. A
 database open already keeps the durability it was opened with, and
 asking for another is `Invalid`.
+
+### DatabaseBuilder.backup
+
+```rust
+pub fn backup(self, backup: bool) -> Self
+```
+
+Whether backups take the database. `false` keeps its file and the
+bytes of its files in `local/<name>.db` and `local/<name>.blobs/`
+rather than `sql/`, where no backup looks, this release's or an older
+one's, open or not, and no node copies it: each node that opens it
+writes its own, and what a backup leaves out nothing else keeps. A
+name lives in one folder: one whose file lies in the other is
+`Invalid`, naming both.
+
+```rust
+let uploads = store.database("uploads").backup(false).open()?;
+let pending = uploads.files("pending").ttl(std::time::Duration::from_secs(15 * 60)).open()?;
+```
 
 ### DatabaseBuilder.open
 
