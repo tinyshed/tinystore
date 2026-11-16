@@ -92,7 +92,7 @@ LimitError: this server takes 256 connections at most, and holds 256: try again 
 
 A client with a token names no path of the server's machine: it opens a
 directory by its name alone, and reaches only the folders `--directory`
-gave.
+gave ([Directories](../blobs/directories.md)).
 
 ## Output
 

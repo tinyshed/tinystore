@@ -129,6 +129,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Serving files](guides/blobs/serving.md)
 - [Copies and expiry](guides/blobs/copies-and-expiry.md)
 - [Integrity](guides/blobs/integrity.md)
+- [Directories](guides/blobs/directories.md)
 
 ### Search
 
