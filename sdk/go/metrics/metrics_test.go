@@ -307,6 +307,47 @@ func TestACalendarsBucketsBeginAtTheLocalMidnightOfTheirTimeZone(t *testing.T) {
 	})
 }
 
+// contract: MET-23
+func TestAnAggregateThatSkipsNaNSaysHowManyEachBucketPassedOver(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		minute := time.Now().UTC().Truncate(time.Minute).Add(-3 * time.Minute)
+		nan := math.NaN()
+		quantile := func(q string, values []float64) metrics.Series {
+			samples := make([]metrics.Sample, len(values))
+			for i, value := range values {
+				samples[i] = metrics.Sample{At: minute.Add(time.Duration(i) * 15 * time.Second), Value: value}
+			}
+			return metrics.Series{Name: "scraped_seconds", Kind: metrics.KindGauge, Labels: metrics.Labels{"quantile": q}, Samples: samples}
+		}
+		// an idle summary's quantiles: NaN in the second minute, and 0.99 never computed
+		idle := []float64{nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan}
+		half := quantile("0.5", []float64{1, 2, nan, 3, nan, nan, nan, nan, 4, nan, 4, 4})
+		ways.Must(0, metrics.Ingest(ctx, store, half, quantile("0.99", idle)))
+		query := metrics.Query{Name: "scraped_seconds", From: minute, To: minute.Add(3 * time.Minute), Op: metrics.Avg}
+		skipping := query
+		skipping.Every, skipping.By, skipping.SkipNaN = time.Minute, []string{"quantile"}, true
+		groups := ways.Must(metrics.Aggregate(ctx, store, skipping)).Groups
+		var told []string
+		for _, group := range groups {
+			for _, bucket := range group.Buckets {
+				told = append(told, fmt.Sprintf("%s %v %d %d", group.Labels["quantile"], *bucket.Value, bucket.Samples, bucket.Skipped))
+			}
+		}
+		if want := []string{"0.5 2 3 1", "0.5 4 3 1"}; !reflect.DeepEqual(told, want) {
+			t.Fatalf("got %v, want %v", told, want)
+		}
+		_, err := metrics.Aggregate(ctx, store, query)
+		is(t, err, tinystore.ErrInvalid)
+		level := metrics.Series{Name: "scraped_level", Kind: metrics.KindGauge, Samples: []metrics.Sample{{At: minute, Value: math.Inf(1)}}}
+		ways.Must(0, metrics.Ingest(ctx, store, level))
+		infinite := skipping
+		infinite.Name, infinite.Op = "scraped_level", metrics.Max
+		_, err = metrics.Aggregate(ctx, store, infinite)
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestAnAggregatesBucketsAreExactByGroupAndATimersPercentileIsItsBounds(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

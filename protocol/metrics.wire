@@ -64,6 +64,7 @@ message metrics.AggregateAsked {
   6 estimate: bool      # a timer's percentile also gives a point between its bounds
   7 calendar: str?      # day, week or month: buckets of a calendar in timeZone, in place of every
   8 timeZone: str?      # an IANA name, UTC among them, which calendar takes
+  9 skipNan: bool       # a NaN sample counts in no bucket, which says how many it passed over: skipped
 }
 
 # A bucket of an aggregate: its value, or a timer's percentile's bounds.
@@ -77,6 +78,7 @@ message metrics.Bucket {
   7 resets: uint
   8 partial: bool       # its value comes from less than its span
   9 gap: bool           # its first step began before the bucket before it
+  10 skipped: uint      # the NaN samples it passed over, with skipNan
 }
 
 # A group's buckets, or a part of them: a group longer than a body goes on

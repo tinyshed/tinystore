@@ -148,6 +148,7 @@ pub struct Query {
     by: Option<Vec<String>>,
     without: Option<Vec<String>>,
     estimate: bool,
+    skip_nan: bool,
     limit: Option<usize>,
     after: Option<String>,
 }
@@ -165,6 +166,7 @@ impl fmt::Debug for Query {
             .field("by", &self.by)
             .field("without", &self.without)
             .field("estimate", &self.estimate)
+            .field("skip_nan", &self.skip_nan)
             .field("limit", &self.limit)
             .field("after", &self.after)
             .finish()
@@ -199,6 +201,7 @@ impl Query {
             by: None,
             without: None,
             estimate: false,
+            skip_nan: false,
             limit: None,
             after: None,
         }
@@ -276,6 +279,15 @@ impl Query {
         self
     }
 
+    /// An aggregate passes a NaN sample over rather than refuse it: the
+    /// sample counts in no value, and its bucket's `skipped` says how many
+    /// it passed over. A bucket of NaN alone is left out, as one without
+    /// samples is. An infinity is still refused, since it is a value.
+    pub fn skip_nan(mut self) -> Self {
+        self.skip_nan = true;
+        self
+    }
+
     /// A read in pages: each at most this many samples, 100,000 at most, and
     /// its `next` while there is more.
     pub fn limit(mut self, samples: usize) -> Self {
@@ -316,10 +328,10 @@ impl Query {
     /// The buckets of each group of the series the query finds, each one
     /// exact value of `op`, rounded once: a group without a sample in the
     /// range is left out, and so is a bucket without one. An `op` a series'
-    /// kind has not is `invalid`, and so is a bucket over a NaN, an infinity
-    /// or a counter below zero. Without `limit` the page is the whole
-    /// answer, and past a bound it is a `limit` error, naming the bound,
-    /// never fewer buckets. With `limit` it is a page of that many buckets
+    /// kind has not is `invalid`, and so is a bucket over a NaN, unless the
+    /// query passes NaN over with `skip_nan`, an infinity or a counter below
+    /// zero. Without `limit` the page is the whole answer, and past a bound
+    /// it is a `limit` error, naming the bound, never fewer buckets. With `limit` it is a page of that many buckets
     /// with samples at most, a stretch without any costing it nothing, which
     /// ends between two whole buckets of a group and gives `next`; one
     /// bucket that alone passes a bound is still `limit`. A page reads only
@@ -404,6 +416,7 @@ impl Query {
             without: self.without.as_deref(),
             name: self.name.as_deref(),
             estimate: self.estimate,
+            skip_nan: self.skip_nan,
         };
         Shape::of(op, asking)
     }
@@ -411,9 +424,9 @@ impl Query {
     /// Refuses what only an aggregate takes, for a call that is none.
     fn plain(&self, call: &str) -> Result<()> {
         let asks = self.every.is_some() || self.calendar.is_some() || self.by.is_some() || self.without.is_some();
-        if asks || self.estimate {
+        if asks || self.estimate || self.skip_nan {
             return Err(Error::invalid(format!(
-                "`every`, `calendar`, `by`, `without` and `estimate` are an aggregate's: {call} takes none"
+                "`every`, `calendar`, `by`, `without`, `estimate` and `skip_nan` are an aggregate's: {call} takes none"
             )));
         }
         Ok(())
@@ -460,6 +473,10 @@ impl Query {
         let (from, to) = (self.from.map(unix_millis), self.to.map(unix_millis));
         let mut given = format!("{:?}~{from:?}~{to:?}~{op:?}~{:?}~{:?}", self.since, self.every, self.calendar);
         given.push_str(&format!("~{:?}~{:?}~{}", self.by, self.without, self.estimate));
+        if self.skip_nan {
+            // only when given, so that a cursor written before it was goes on
+            given.push_str("~skip_nan");
+        }
         for (label, condition) in &asked.conditions {
             given.push_str(&format!("~{label:?}={condition:?}"));
         }

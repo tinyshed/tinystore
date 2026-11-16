@@ -6292,6 +6292,8 @@ export const MetricsAggregateAsked = message(
 		calendar: [7, str],
 		/** an IANA name, UTC among them, which calendar takes */
 		timeZone: [8, str],
+		/** a NaN sample counts in no bucket, which says how many it passed over: skipped */
+		skipNan: [9, bool],
 	},
 	{
 		write(w, v) {
@@ -6343,6 +6345,11 @@ export const MetricsAggregateAsked = message(
 				w.str(v.timeZone)
 				n++
 			}
+			if (v.skipNan !== undefined) {
+				w.field(9)
+				w.bool(v.skipNan)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -6354,6 +6361,7 @@ export const MetricsAggregateAsked = message(
 			let $estimate: boolean | undefined
 			let $calendar: string | undefined
 			let $timeZone: string | undefined
+			let $skipNan: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -6392,6 +6400,9 @@ export const MetricsAggregateAsked = message(
 					case 8:
 						$timeZone = r.str()
 						break
+					case 9:
+						$skipNan = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -6406,6 +6417,7 @@ export const MetricsAggregateAsked = message(
 				estimate: $estimate,
 				calendar: $calendar,
 				timeZone: $timeZone,
+				skipNan: $skipNan,
 			}
 		},
 	},
@@ -6431,6 +6443,8 @@ export const MetricsBucket = message(
 		partial: [8, bool],
 		/** its first step began before the bucket before it */
 		gap: [9, bool],
+		/** the NaN samples it passed over, with skipNan */
+		skipped: [10, uint],
 	},
 	{
 		write(w, v) {
@@ -6481,6 +6495,11 @@ export const MetricsBucket = message(
 				w.bool(v.gap)
 				n++
 			}
+			if (v.skipped !== undefined) {
+				w.field(10)
+				w.uint(v.skipped)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -6493,6 +6512,7 @@ export const MetricsBucket = message(
 			let $resets: number | undefined
 			let $partial: boolean | undefined
 			let $gap: boolean | undefined
+			let $skipped: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -6522,6 +6542,9 @@ export const MetricsBucket = message(
 					case 9:
 						$gap = r.bool()
 						break
+					case 10:
+						$skipped = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -6537,6 +6560,7 @@ export const MetricsBucket = message(
 				resets: $resets,
 				partial: $partial,
 				gap: $gap,
+				skipped: $skipped,
 			}
 		},
 	},

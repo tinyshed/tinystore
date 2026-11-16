@@ -521,3 +521,127 @@ fn every_and_a_calendar_together_or_a_zone_no_one_has_are_refused() {
     let read = query().calendar(Calendar::Day, "UTC").read().unwrap_err();
     assert!(read.to_string().contains("`calendar`"), "{read}");
 }
+
+/// Each bucket of the one group an aggregate answered: its value, samples
+/// and the NaN it passed over.
+fn told(answer: &[Aggregate]) -> Vec<(f64, u64, u64)> {
+    assert_eq!(answer.len(), 1, "{answer:?}");
+    answer[0].buckets.iter().map(|bucket| (number(bucket), bucket.samples, bucket.skipped)).collect()
+}
+
+// contract: MET-23, MET-01
+#[test]
+fn an_aggregate_that_skips_nan_says_how_many_each_bucket_passed_over() {
+    let nan = f64::NAN;
+    let f = fixture();
+    let ten = f.now() - HOUR;
+    // a summary's quantiles scraped every 15 seconds: idle in the second minute, and 0.99 never computed
+    let quantile = |q: &str| Series::gauge("rpc_seconds").label("quantile", q);
+    let scraped = [
+        run(quantile("0.99"), ten, 15 * SECOND, [nan; 12]),
+        run(quantile("0.5"), ten, 15 * SECOND, [1.0, 2.0, nan, 3.0, nan, nan, nan, nan, 4.0, nan, 4.0, 4.0]),
+        run(quantile("0.9"), ten, 15 * SECOND, [10.0, nan, nan, 10.0, nan, nan, nan, nan, 20.0, 20.0, 20.0, 20.0]),
+    ];
+    f.metrics().ingest(&scraped).unwrap();
+    // a sample two days on each, behind which packing takes the day of the three minutes
+    f.pass(2 * DAY);
+    let later: Vec<Series> = ["0.99", "0.5", "0.9"].iter().map(|q| quantile(q).sample(f.now(), 5.0)).collect();
+    f.metrics().ingest(&later).unwrap();
+    let query = || f.metrics().query().name("rpc_seconds").from(ten).to(ten + 3 * MINUTE).skip_nan();
+    let mut answers = Vec::new();
+    for packed in [false, true] {
+        if packed {
+            assert_eq!(maintain(&f.store).unwrap().blocks, 3, "a block a quantile, decoded for its NaN");
+        }
+        let by = query().every(MINUTE).by(&["quantile"]).aggregate(Op::Avg).unwrap().groups;
+        let avg: Vec<_> =
+            by.iter().map(|group| (group.labels["quantile"].clone(), told(std::slice::from_ref(group)))).collect();
+        assert_eq!(
+            avg,
+            [("0.5".to_owned(), vec![(2.0, 3, 1), (4.0, 3, 1)]), ("0.9".to_owned(), vec![(10.0, 2, 2), (20.0, 4, 0)])],
+            "the idle minute and the quantile of NaN alone have no value, packed: {packed}"
+        );
+        let least = told(&query().every(MINUTE).aggregate(Op::Min).unwrap().groups);
+        assert_eq!(least, [(1.0, 5, 7), (4.0, 7, 5)], "a series of NaN alone takes no part, packed: {packed}");
+        let count = told(&query().aggregate(Op::Count).unwrap().groups);
+        assert_eq!(count, [(12.0, 12, 24)], "one bucket over three blocks, packed: {packed}");
+        let median = told(&query().filter("quantile", "0.5").aggregate(Op::Percentile(50.0)).unwrap().groups);
+        assert_eq!(median, [(3.0, 6, 6)], "the third of six, packed: {packed}");
+        answers.push((by, least, count, median));
+    }
+    assert_eq!(answers[0], answers[1], "packed or not, the same buckets");
+    // a program's own series counts the same
+    let held = scraped[1].query().every(MINUTE).skip_nan().aggregate(Op::Avg).unwrap();
+    assert_eq!(told(&[held]), [(2.0, 3, 1), (4.0, 3, 1)]);
+    // without skip_nan nothing changes, and the samples are as they were written
+    let refused = f.metrics().query().name("rpc_seconds").from(ten).to(ten + 3 * MINUTE).aggregate(Op::Avg);
+    let refused = refused.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid);
+    assert!(refused.to_string().contains("an aggregate over a NaN"), "{refused}");
+    let read = f.metrics().query().name("rpc_seconds").filter("quantile", "0.5").from(ten).to(ten + 3 * MINUTE);
+    let read = read.read().unwrap().series;
+    assert_eq!(crate::metrics::fixture::bits(&read[0]), crate::metrics::fixture::bits(&scraped[1]));
+}
+
+// contract: MET-23
+#[test]
+fn an_infinity_is_refused_and_only_an_aggregate_skips_nan() {
+    let f = fixture();
+    let now = f.now();
+    let level = Series::gauge("level").sample(now - 2 * MINUTE, f64::NAN).sample(now - MINUTE, f64::INFINITY);
+    f.metrics().ingest(&[level]).unwrap();
+    let infinity = f.metrics().query().name("level").since(HOUR).skip_nan().aggregate(Op::Max).unwrap_err();
+    assert_eq!(infinity.kind(), ErrorKind::Invalid);
+    assert!(infinity.to_string().contains("an aggregate over a NaN or an infinity"), "{infinity}");
+    let read = f.metrics().query().name("level").since(HOUR).skip_nan().read().unwrap_err();
+    assert!(read.to_string().contains("`skip_nan` are an aggregate's"), "{read}");
+    let to = now - MINUTE;
+    let alone = f.metrics().query().name("level").since(HOUR).to(to).skip_nan().aggregate(Op::Count).unwrap();
+    assert!(alone.groups.is_empty(), "a bucket of NaN alone has no value, never a zero: {alone:?}");
+}
+
+#[test]
+fn a_step_that_skips_nan_goes_from_the_sample_before_it_to_the_one_after() {
+    let nan = f64::NAN;
+    for (step, packed) in [(MINUTE, false), (MINUTE, true), (DAY, false), (DAY, true)] {
+        let f = fixture();
+        let first = f.now() - 6 * step;
+        let served = run(Series::counter("served"), first, step, [10.0, 20.0, nan, 35.0, nan, 50.0, 60.0]);
+        f.metrics().ingest(&[served]).unwrap();
+        if packed {
+            assert!(maintain(&f.store).unwrap().blocks > 0);
+        }
+        let query = |from: SystemTime| f.metrics().query().name("served").from(from).to(first + 6 * step).skip_nan();
+        let every = query(first).every(step).aggregate(Op::Increase).unwrap().groups;
+        let steps: Vec<_> = every[0].buckets.iter().map(|bucket| (number(bucket), bucket.gap)).collect();
+        let expected = [(0.0, false), (10.0, false), (15.0, true), (15.0, true)];
+        assert_eq!(steps, expected, "step {step:?}, packed: {packed}");
+        // from inside the first NaN's bucket and after it, the step begins at 20
+        let one = |from: SystemTime| {
+            let bucket = query(from).aggregate(Op::Increase).unwrap().groups[0].buckets[0];
+            (number(&bucket), bucket.partial)
+        };
+        assert_eq!(one(first + step * 3 / 2), (30.0, false), "step {step:?}, packed: {packed}");
+        // a block a day: the one before the range holds the NaN alone, and the 20 before it is not read
+        let unknown = step == DAY && packed;
+        let after = if unknown { (15.0, true) } else { (30.0, false) };
+        assert_eq!(one(first + step * 5 / 2), after, "step {step:?}, packed: {packed}");
+    }
+}
+
+#[test]
+fn a_step_from_a_block_that_ends_in_a_nan_begins_at_its_last_finite_sample() {
+    for packed in [false, true] {
+        let f = fixture();
+        let day = |days: u32| f.now() - DAY * (4 - days);
+        let served = Series::counter("served").sample(day(0), 10.0).sample(day(1), 20.0);
+        let served = served.sample(day(1) + 12 * HOUR, f64::NAN).sample(day(2), 35.0).sample(day(3), 50.0);
+        f.metrics().ingest(&[served.sample(day(4), 60.0)]).unwrap();
+        if packed {
+            assert_eq!(maintain(&f.store).unwrap().blocks, 4, "a day each, the second ending in its NaN");
+        }
+        let query = f.metrics().query().name("served").from(day(2) - HOUR).to(day(4)).skip_nan();
+        let bucket = query.aggregate(Op::Increase).unwrap().groups[0].buckets[0];
+        assert_eq!((number(&bucket), bucket.skipped, bucket.partial), (30.0, 0, false), "packed: {packed}");
+    }
+}

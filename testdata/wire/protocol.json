@@ -3012,6 +3012,9 @@
             }
           }
         },
+        "skipNan": {
+          "bool": true
+        },
         "timeZone": {
           "str": "timeZone"
         },
@@ -3023,7 +3026,7 @@
           ]
         }
       },
-      "hex": "88018701a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0006cd025f07a5616674657202cd05dc03a26f700491a262790591a7776974686f757406c307a863616c656e64617208a874696d655a6f6e65",
+      "hex": "89018701a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0006cd025f07a5616674657202cd05dc03a26f700491a262790591a7776974686f757406c307a863616c656e64617208a874696d655a6f6e6509c3",
       "message": "metrics.AggregateAsked",
       "name": "metrics.AggregateAsked with every field"
     },
@@ -3056,6 +3059,9 @@
         "samples": {
           "uint": "607"
         },
+        "skipped": {
+          "uint": "1007"
+        },
         "upper": {
           "float": "3ff8000000000000"
         },
@@ -3063,7 +3069,7 @@
           "float": "3ff8000000000000"
         }
       },
-      "hex": "8901cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c3",
+      "hex": "8a01cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c30acd03ef",
       "message": "metrics.Bucket",
       "name": "metrics.Bucket with every field"
     },
@@ -3100,6 +3106,9 @@
                 "samples": {
                   "uint": "607"
                 },
+                "skipped": {
+                  "uint": "1007"
+                },
                 "upper": {
                   "float": "3ff8000000000000"
                 },
@@ -3124,7 +3133,7 @@
           "str": "name"
         }
       },
-      "hex": "8401a46e616d650281a161a66c6162656c7303918901cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c304c3",
+      "hex": "8401a46e616d650281a161a66c6162656c7303918a01cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c30acd03ef04c3",
       "message": "metrics.Group",
       "name": "metrics.Group with every field"
     },
@@ -3165,6 +3174,9 @@
                         "samples": {
                           "uint": "607"
                         },
+                        "skipped": {
+                          "uint": "1007"
+                        },
                         "upper": {
                           "float": "3ff8000000000000"
                         },
@@ -3196,7 +3208,7 @@
           "str": "next"
         }
       },
-      "hex": "8201918401a46e616d650281a161a66c6162656c7303918901cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c304c302a46e657874",
+      "hex": "8201918401a46e616d650281a161a66c6162656c7303918a01cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c30acd03ef04c302a46e657874",
       "message": "metrics.Aggregates",
       "name": "metrics.Aggregates with every field"
     },

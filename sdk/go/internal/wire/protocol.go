@@ -6964,6 +6964,8 @@ type MetricsAggregateAsked struct {
 	Calendar *string `wire:"7,calendar"`
 	// an IANA name, UTC among them, which calendar takes
 	TimeZone *string `wire:"8,timeZone"`
+	// a NaN sample counts in no bucket, which says how many it passed over: skipped
+	SkipNan bool `wire:"9,skipNan"`
 }
 
 func (m MetricsAggregateAsked) Write(w *Writer) {
@@ -7015,6 +7017,11 @@ func (m MetricsAggregateAsked) Write(w *Writer) {
 		w.Str(*m.TimeZone)
 		n++
 	}
+	if m.SkipNan {
+		w.Uint(9)
+		w.Bool(m.SkipNan)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -7055,6 +7062,8 @@ func (m *MetricsAggregateAsked) Read(r *Reader) {
 		case 8:
 			v := r.Str()
 			m.TimeZone = &v
+		case 9:
+			m.SkipNan = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -7071,7 +7080,8 @@ func (m MetricsAggregateAsked) IsZero() bool {
 		m.Without == nil &&
 		!m.Estimate &&
 		m.Calendar == nil &&
-		m.TimeZone == nil
+		m.TimeZone == nil &&
+		!m.SkipNan
 }
 
 // MetricsBucket is the schema's metrics.Bucket.
@@ -7092,6 +7102,8 @@ type MetricsBucket struct {
 	Partial bool `wire:"8,partial"`
 	// its first step began before the bucket before it
 	Gap bool `wire:"9,gap"`
+	// the NaN samples it passed over, with skipNan
+	Skipped uint64 `wire:"10,skipped"`
 }
 
 func (m MetricsBucket) Write(w *Writer) {
@@ -7142,6 +7154,11 @@ func (m MetricsBucket) Write(w *Writer) {
 		w.Bool(m.Gap)
 		n++
 	}
+	if m.Skipped != 0 {
+		w.Uint(10)
+		w.Uint(m.Skipped)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -7172,6 +7189,8 @@ func (m *MetricsBucket) Read(r *Reader) {
 			m.Partial = r.Bool()
 		case 9:
 			m.Gap = r.Bool()
+		case 10:
+			m.Skipped = r.Uint()
 		default:
 			r.Skip()
 		}
@@ -7189,7 +7208,8 @@ func (m MetricsBucket) IsZero() bool {
 		m.Samples == 0 &&
 		m.Resets == 0 &&
 		!m.Partial &&
-		!m.Gap
+		!m.Gap &&
+		m.Skipped == 0
 }
 
 // MetricsGroup is the schema's metrics.Group.

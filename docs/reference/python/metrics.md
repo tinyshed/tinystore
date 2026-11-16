@@ -28,6 +28,7 @@ class AggregateQuery(SeriesQuery, total=False):
     by: Sequence[str]  # the labels a group keeps; without by and without, every series of a name is one group
     without: Sequence[str]  # the labels a group leaves out, keeping every other; [] keeps every series apart
     estimate: bool  # a timer's percentile also gives a point between its bounds, interpolated: an estimate
+    skip_nan: bool  # a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused
 ```
 
 An aggregate: a query cut into buckets of every, each one exact value of op, by groups.
@@ -69,6 +70,7 @@ class AggregateBucket:
     lower: float | None = None
     upper: float | None = None  # infinity past the last bound
     estimate: float | None = None
+    skipped: int = 0  # the NaN samples it passed over, with skip_nan
 ```
 
 A bucket of an aggregate.
@@ -84,7 +86,7 @@ to upper, and with estimate asked a point between them.
 class Aggregate:
     name: str
     labels: dict[str, str]  # the labels by kept or without left
-    buckets: list[AggregateBucket]  # a bucket without samples is left out
+    buckets: list[AggregateBucket]  # a bucket without samples is left out, and so is one of NaN alone
     more: bool = False  # a page cut the group here: the page its next reads begins with the rest of its buckets
 ```
 

@@ -300,6 +300,64 @@ for (const way of ways) {
 			expect(utc?.buckets.map(bucket => bucket.value)).toEqual([1, 1])
 		})
 
+		// contract: MET-23
+		test('an aggregate that skips NaN says how many each bucket passed over', async () => {
+			const minute = Math.floor(Date.now() / 60_000) * 60_000 - 180_000
+			const quantile = (q: string, values: number[]) => ({
+				name: 'scraped_seconds',
+				kind: 'gauge' as const,
+				labels: { quantile: q },
+				samples: values.map((value, i) => [minute + i * 15_000, value] as const),
+			})
+			// an idle summary's quantiles: NaN in the second minute, and 0.99 never computed
+			const nan = Number.NaN
+			await store.metrics.ingest([
+				quantile('0.5', [1, 2, nan, 3, nan, nan, nan, nan, 4, nan, 4, 4]),
+				quantile('0.99', new Array(12).fill(nan)),
+			])
+			const range = {
+				name: 'scraped_seconds',
+				from: new Date(minute),
+				to: new Date(minute + 180_000),
+			}
+			const { groups } = await store.metrics.aggregate({
+				...range,
+				every: '1m',
+				op: 'avg',
+				by: ['quantile'],
+				skipNaN: true,
+			})
+			expect(
+				groups.map(group => [
+					group.labels.quantile,
+					group.buckets.map(bucket => [bucket.value, bucket.samples, bucket.skipped]),
+				]),
+			).toEqual([
+				[
+					'0.5',
+					[
+						[2, 3, 1],
+						[4, 3, 1],
+					],
+				],
+			])
+			const refused = await caught(store.metrics.aggregate({ ...range, op: 'avg' }))
+			expect(refused).toBeInstanceOf(InvalidError)
+			const infinite = await caught(
+				store.metrics
+					.ingest({
+						name: 'scraped_level',
+						kind: 'gauge',
+						labels: {},
+						samples: [[minute, Infinity]],
+					})
+					.then(() =>
+						store.metrics.aggregate({ ...range, name: 'scraped_level', op: 'max', skipNaN: true }),
+					),
+			)
+			expect(infinite).toBeInstanceOf(InvalidError)
+		})
+
 		test("an aggregate's buckets are exact by group, and a timer's percentile is its bounds", async () => {
 			const at = Date.now() - 60_000
 			const route = (name: string, values: number[]) => ({

@@ -183,6 +183,34 @@ async def test_a_calendars_buckets_begin_at_the_local_midnight_of_their_time_zon
     assert [bucket.value for bucket in utc.buckets] == [1, 1]
 
 
+# contract: MET-23
+async def test_an_aggregate_that_skips_nan_says_how_many_each_bucket_passed_over(store: tinystore.Store) -> None:
+    minute = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=3)
+    nan = math.nan
+
+    def quantile(q: str, values: list[float]) -> Series:
+        samples = [(minute + timedelta(seconds=15 * i), value) for i, value in enumerate(values)]
+        return Series(name="scraped_seconds", kind="gauge", labels={"quantile": q}, samples=samples)
+
+    # an idle summary's quantiles: NaN in the second minute, and 0.99 never computed
+    await store.metrics.ingest(
+        [quantile("0.5", [1, 2, nan, 3, nan, nan, nan, nan, 4, nan, 4, 4]), quantile("0.99", [nan] * 12)]
+    )
+    end = minute + timedelta(minutes=3)
+    groups = (
+        await store.metrics.aggregate(
+            name="scraped_seconds", from_=minute, to=end, every="1m", op="avg", by=["quantile"], skip_nan=True
+        )
+    ).groups
+    told = [(group.labels["quantile"], [(b.value, b.samples, b.skipped) for b in group.buckets]) for group in groups]
+    assert told == [("0.5", [(2, 3, 1), (4, 3, 1)])]
+    with pytest.raises(tinystore.InvalidError):
+        await store.metrics.aggregate(name="scraped_seconds", from_=minute, to=end, op="avg")
+    await store.metrics.ingest(Series(name="scraped_level", kind="gauge", labels={}, samples=[(minute, math.inf)]))
+    with pytest.raises(tinystore.InvalidError):
+        await store.metrics.aggregate(name="scraped_level", from_=minute, to=end, op="max", skip_nan=True)
+
+
 # contract: MET-04
 async def test_an_aggregates_buckets_are_exact_by_group_and_a_timers_percentile_is_its_bounds(
     store: tinystore.Store,

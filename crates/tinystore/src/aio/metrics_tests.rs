@@ -75,6 +75,9 @@ async fn every_awaited_call_answers_as_its_blocking_twin_on_the_same_store() {
         every().aggregate(Op::Avg).await.unwrap().groups,
         twin().every(5 * MINUTE).aggregate(Op::Avg).unwrap().groups
     );
+    let passed = stats.query().name("odd").since(HOUR).skip_nan().aggregate(Op::Count).await.unwrap().groups;
+    assert_eq!((passed[0].buckets[0].samples, passed[0].buckets[0].skipped), (1, 1), "its NaN passed over");
+    assert_eq!(passed, blocking.query().name("odd").since(HOUR).skip_nan().aggregate(Op::Count).unwrap().groups);
     assert_eq!(query().latest().await.unwrap(), twin().latest().unwrap());
     assert_eq!(every().explain(Op::Avg).await.unwrap(), twin().every(5 * MINUTE).explain(Op::Avg).unwrap());
     assert_eq!(query().explain(None).await.unwrap(), twin().explain(None).unwrap());

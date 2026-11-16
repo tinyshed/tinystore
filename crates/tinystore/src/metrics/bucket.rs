@@ -47,6 +47,8 @@ pub(super) struct Open {
     start: i64,
     end: i64,
     pub(super) samples: u64,
+    /// The NaN samples it passed over, which `samples` does not count.
+    skipped: u64,
     resets: u64,
     least: f64,
     greatest: f64,
@@ -69,6 +71,7 @@ impl Open {
             start,
             end,
             samples: 0,
+            skipped: 0,
             resets: 0,
             least: 0.0,
             greatest: 0.0,
@@ -90,6 +93,11 @@ impl Open {
     /// Whether a counter's steps in it counted anything.
     pub(super) fn counted(&self) -> bool {
         !self.exact.is_zero()
+    }
+
+    /// A NaN sample passed over: it counts in no value.
+    pub(super) fn pass_over(&mut self) {
+        self.skipped += 1;
     }
 
     /// One sample more, a finite one.
@@ -188,6 +196,10 @@ pub(super) struct Joined {
     start: i64,
     end: i64,
     samples: u64,
+    skipped: u64,
+    /// A series' bucket with a sample joined it: one of NaN alone gives no
+    /// value, as a bucket without samples gives none.
+    taken: bool,
     resets: u64,
     least: f64,
     greatest: f64,
@@ -215,6 +227,8 @@ impl Joined {
             start: bucket.start,
             end: bucket.end,
             samples: 0,
+            skipped: 0,
+            taken: false,
             resets: 0,
             least: bucket.least,
             greatest: bucket.greatest,
@@ -229,6 +243,22 @@ impl Joined {
             longest: None,
             spread: None,
         }
+    }
+
+    /// Counts the NaN samples a series' bucket passed over, and whether it
+    /// holds nothing else, so that it takes no other part: its least and
+    /// greatest, its first and last are no sample's. The first bucket with
+    /// a sample begins the least and the greatest, as `over` would have.
+    pub(super) fn passes_over(&mut self, bucket: &Open) -> bool {
+        self.skipped += bucket.skipped;
+        if bucket.samples > 0 {
+            if !std::mem::replace(&mut self.taken, true) {
+                (self.least, self.greatest) = (bucket.least, bucket.greatest);
+            }
+            return false;
+        }
+        self.partial |= bucket.partial;
+        true
     }
 
     /// Adds a series' closed bucket as its part of the query takes it, and
@@ -317,9 +347,12 @@ impl Joined {
     }
 
     /// The bucket that begins at `at`, its value rounded once; none for a
-    /// bucket an `op` has nothing to take from: a timer's in which it
-    /// measured nothing, of `avg`, `max` or a percentile.
+    /// bucket an `op` has nothing to take from: one of NaN alone, a timer's
+    /// in which it measured nothing, of `avg`, `max` or a percentile.
     pub(super) fn answer(&mut self, at: i64, shape: &Shape) -> Result<Option<Bucket>> {
+        if !self.taken {
+            return Ok(None);
+        }
         let value = match shape.op() {
             Op::Percentile(_) => self.ranked(shape)?,
             op if self.timer => self.timed(op)?.map(Value::Exact),
@@ -329,6 +362,7 @@ impl Joined {
             at: from_unix_millis(at),
             value,
             samples: self.samples,
+            skipped: self.skipped,
             resets: self.resets,
             gap: self.gap,
             partial: self.partial,
@@ -419,6 +453,7 @@ mod tests {
         before.into_iter().for_each(|before| open.step_from(before));
         values.iter().for_each(|value| open.add(*value, op));
         let mut joined = Joined::over(&open);
+        joined.passes_over(&open);
         joined.join(open, op, Part::Own);
         let shape = Shape::of(op, crate::metrics::aggregate::Asking::default()).unwrap();
         joined.answer(0, &shape).unwrap().unwrap()
@@ -482,7 +517,9 @@ mod tests {
         for values in [[0.5, 0.25], [1.0, 2.0], [1e308, -1e308]] {
             let mut open = Open::new(0, (0, 60_000));
             values.iter().for_each(|value| open.add(*value, Op::Avg));
-            group.get_or_insert_with(|| Joined::over(&open)).join(open, Op::Avg, Part::Own);
+            let joined = group.get_or_insert_with(|| Joined::over(&open));
+            joined.passes_over(&open);
+            joined.join(open, Op::Avg, Part::Own);
         }
         let shape = Shape::of(Op::Avg, crate::metrics::aggregate::Asking::default()).unwrap();
         let answer = group.unwrap().answer(0, &shape).unwrap().unwrap();

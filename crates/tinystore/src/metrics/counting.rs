@@ -250,6 +250,13 @@ impl<'s> Joining<'s> {
         let at = bucket.at;
         let part = self.part;
         let joined = self.joined.entry(at).or_insert_with(|| Joined::over(&bucket));
+        if joined.passes_over(&bucket) {
+            if matches!(self.counts, Some(Counts::AtMost(bound)) if bound == f64::INFINITY) {
+                // a +Inf of NaN alone counted no value: the member takes no part here
+                self.infinity.insert(at, None);
+            }
+            return Ok(0);
+        }
         Ok(match self.counts {
             None => joined.join(bucket, self.shape.op(), part),
             Some(Counts::AtMost(bound)) if bound == f64::INFINITY => {
@@ -297,8 +304,12 @@ struct Fold<'a> {
     /// The store's clock, as the query read it.
     now: i64,
     open: Option<Open>,
-    /// Its last sample so far, which the next bucket's first step begins at.
+    /// Its last sample so far, which the next bucket's first step begins at;
+    /// with `skip_nan` its last but a NaN.
     carried: Option<Point>,
+    /// A NaN passed over before the range came with no sample before it, so
+    /// that where the first step begins is not known.
+    carried_nan: bool,
     /// Whether a sample of the range has come: until one does, what is
     /// carried came from before it and was not checked.
     entered: bool,
@@ -323,6 +334,7 @@ impl<'a> Fold<'a> {
             now: asked.now,
             open: None,
             carried: None,
+            carried_nan: false,
             entered: false,
             newest: None,
             closed: Vec::new(),
@@ -339,12 +351,23 @@ impl<'a> Fold<'a> {
             return Ok(());
         }
         self.follows(point.at)?;
+        let passed_over = point.value.is_nan() && self.shape.skips_nan();
         if point.at < self.window.from {
             // before the range: the first step of its first bucket begins at the newest such
-            self.carried = Some(point);
+            if passed_over {
+                // the finite sample before it may lie in what the snapshot did not take
+                self.carried_nan |= self.carried.is_none();
+            } else {
+                (self.carried, self.carried_nan) = (Some(point), false);
+            }
             return Ok(());
         }
         self.reach()?;
+        if passed_over {
+            // a step goes from the sample before it to the one after
+            self.enter(point.at).pass_over();
+            return Ok(());
+        }
         self.check(point)?;
         let op = self.op;
         self.enter(point.at).add(point.value, op);
@@ -359,7 +382,7 @@ impl<'a> Fold<'a> {
         self.newest = Some(block.times.end);
         let last = Point { at: block.times.end, value: block.summary.last };
         if last.at < self.window.from {
-            self.carried = Some(last);
+            (self.carried, self.carried_nan) = (Some(last), false);
             return Ok(());
         }
         self.reach()?;
@@ -378,7 +401,7 @@ impl<'a> Fold<'a> {
     }
 
     /// Refuses a sample no aggregate takes: none takes a value for a missing
-    /// one, nor a counter below zero for a count.
+    /// one, unless it passes NaN over, nor a counter below zero for a count.
     fn check(&self, point: Point) -> Result<()> {
         let refused = if !point.value.is_finite() {
             "an aggregate over a NaN or an infinity"
@@ -409,7 +432,7 @@ impl<'a> Fold<'a> {
             self.close();
         }
         let (shape, window, range_from, steps) = (self.shape, self.window, self.range_from, Shape::steps(self.op));
-        let (trimmed, before, now) = (self.trimmed, self.carried, self.now);
+        let (trimmed, carried_nan, before, now) = (self.trimmed, self.carried_nan, self.carried, self.now);
         self.open.get_or_insert_with(|| {
             let span = shape.span(key, range_from, window.to);
             let mut open = Open::new(key, span);
@@ -419,8 +442,8 @@ impl<'a> Fold<'a> {
                     open.step_from(before.value);
                     open.gap = shape.gap(before.at, key, span);
                 }
-                // the step into a series' oldest sample began at one retention took
-                None if steps => open.partial |= trimmed,
+                // the step into a series' oldest sample began at one retention took, or after a NaN
+                None if steps => open.partial |= trimmed || carried_nan,
                 _ => {}
             }
             open

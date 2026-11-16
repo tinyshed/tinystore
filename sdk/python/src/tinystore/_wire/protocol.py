@@ -5151,6 +5151,10 @@ def _write_metrics_aggregate_asked(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(8)
         w.str(x)
         n += 1
+    if (x := v.get("skip_nan")) is not None:
+        w.uint(9)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5179,6 +5183,8 @@ def _read_metrics_aggregate_asked(r: Reader) -> dict[str, Any]:
                 read["calendar"] = r.str()
             case 8:
                 read["time_zone"] = r.str()
+            case 9:
+                read["skip_nan"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -5203,6 +5209,8 @@ MetricsAggregateAsked = Message(
         "calendar": (7, str_),
         # an IANA name, UTC among them, which calendar takes
         "time_zone": (8, str_),
+        # a NaN sample counts in no bucket, which says how many it passed over: skipped
+        "skip_nan": (9, bool_),
     },
     _write_metrics_aggregate_asked,
     _read_metrics_aggregate_asked,
@@ -5248,6 +5256,10 @@ def _write_metrics_bucket(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(9)
         w.bool(x)
         n += 1
+    if (x := v.get("skipped")) is not None:
+        w.uint(10)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5274,6 +5286,8 @@ def _read_metrics_bucket(r: Reader) -> dict[str, Any]:
                 read["partial"] = r.bool()
             case 9:
                 read["gap"] = r.bool()
+            case 10:
+                read["skipped"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -5298,6 +5312,8 @@ MetricsBucket = Message(
         "partial": (8, bool_),
         # its first step began before the bucket before it
         "gap": (9, bool_),
+        # the NaN samples it passed over, with skipNan
+        "skipped": (10, uint),
     },
     _write_metrics_bucket,
     _read_metrics_bucket,

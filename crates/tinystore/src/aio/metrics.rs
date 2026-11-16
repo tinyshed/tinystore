@@ -356,6 +356,12 @@ impl Query {
         self.with(crate::metrics::Query::estimate)
     }
 
+    /// An aggregate passes a NaN sample over, counted in its bucket's
+    /// `skipped`, as [`crate::metrics::Query::skip_nan`] does.
+    pub fn skip_nan(self) -> Self {
+        self.with(crate::metrics::Query::skip_nan)
+    }
+
     /// The samples of each series the query finds, in its range, whole or a
     /// page of them, as [`crate::metrics::Query::read`] gives them.
     pub fn read(&self) -> impl Future<Output = Result<SeriesPage>> + Send + 'static {

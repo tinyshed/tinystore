@@ -179,6 +179,30 @@ fn an_aggregate_takes_a_calendar_with_its_time_zone_and_refuses_one_without_the_
     }
 }
 
+// contract: MET-23
+#[test]
+fn an_aggregate_that_skips_nan_says_what_each_bucket_passed_over_and_one_that_does_not_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let mut client = client(&store, 1 << 20);
+    let at = now() - 60_000;
+    let samples = [(at, 0.25), (at + 1000, f64::NAN), (at + 2000, 0.75)];
+    ingest(&mut client, vec![series("rpc_seconds", "gauge", &[("quantile", "0.5")], &samples)]);
+    let asked = MetricsAggregateAsked {
+        query: named("rpc_seconds"),
+        op: Some("avg".to_owned()),
+        skip_nan: true,
+        ..MetricsAggregateAsked::default()
+    };
+    let parts: Vec<MetricsAggregates> = downloaded(&mut client, method::METRICS_AGGREGATE, &asked);
+    let buckets: Vec<_> = parts.iter().flat_map(|part| &part.groups).flat_map(|group| &group.buckets).collect();
+    let told: Vec<_> = buckets.iter().map(|bucket| (bucket.value, bucket.samples, bucket.skipped)).collect();
+    assert_eq!(told, [(Some(0.5), 2, 1)]);
+    let stream = client.start(method::METRICS_AGGREGATE, &MetricsAggregateAsked { skip_nan: false, ..asked });
+    let refused = answered::<MetricsAggregates>(&client.next_on(stream)).unwrap_err();
+    assert_eq!(refused.code, "invalid");
+}
+
 #[test]
 fn what_a_store_holds_and_its_removal_over_the_wire() {
     let dir = tempfile::tempdir().unwrap();

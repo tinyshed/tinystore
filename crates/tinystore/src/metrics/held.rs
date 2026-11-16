@@ -43,7 +43,7 @@ impl Series {
 /// An aggregate of the series a program holds, one group, as a query of the
 /// store answers one for the same samples: `series` share a name and a kind.
 pub fn query(series: &[Series]) -> SeriesQuery<'_> {
-    SeriesQuery { series, from: None, to: None, every: None, calendar: None, estimate: false }
+    SeriesQuery { series, from: None, to: None, every: None, calendar: None, estimate: false, skip_nan: false }
 }
 
 /// An aggregate of series a program holds, its range and its buckets as a
@@ -58,6 +58,7 @@ pub struct SeriesQuery<'a> {
     every: Option<Duration>,
     calendar: Option<(Calendar, String)>,
     estimate: bool,
+    skip_nan: bool,
 }
 
 impl SeriesQuery<'_> {
@@ -95,14 +96,24 @@ impl SeriesQuery<'_> {
         self
     }
 
+    /// A NaN sample is passed over, as a store's query passes it with
+    /// [`Query::skip_nan`](super::Query::skip_nan): each bucket's `skipped`
+    /// counts them.
+    pub fn skip_nan(mut self) -> Self {
+        self.skip_nan = true;
+        self
+    }
+
     /// The group's buckets, each one exact value of `op`, rounded once, with
     /// `samples`, `resets`, `gap` and `partial` as a query gives them; a
     /// bucket without a sample is left out. An `op` the series' kind has
-    /// not is `invalid`, and so is a bucket over a NaN, an infinity or a
-    /// counter below zero, or two samples of one series at one millisecond.
+    /// not is `invalid`, and so is a bucket over a NaN, unless `skip_nan`
+    /// passes it over, an infinity or a counter below zero, or two samples
+    /// of one series at one millisecond.
     pub fn aggregate(&self, op: Op) -> Result<Aggregate> {
         let calendar = self.calendar.as_ref().map(|(unit, zone)| (*unit, zone.as_str()));
-        let asking = Asking { every: self.every, calendar, estimate: self.estimate, ..Asking::default() };
+        let (estimate, skip_nan) = (self.estimate, self.skip_nan);
+        let asking = Asking { every: self.every, calendar, estimate, skip_nan, ..Asking::default() };
         let shape = Shape::of(op, asking)?;
         let (name, kind) = self.name_and_kind()?;
         let mut members = self.series.iter().enumerate().map(member).collect::<Result<Vec<_>>>()?;

@@ -152,6 +152,8 @@ interface AggregateQuery<O extends Op = Op> extends Query {
     without?: readonly string[] | undefined
     /** a timer's percentile also gives a point between its bounds, interpolated: an estimate */
     estimate?: boolean | undefined
+    /** a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused */
+    skipNaN?: boolean | undefined
 }
 ```
 
@@ -198,7 +200,7 @@ interface Aggregate<O extends Op = Op> {
     name: string
     /** the labels by kept or without left */
     labels: Labels
-    /** a bucket without samples is left out */
+    /** a bucket without samples is left out, and so is one of NaN alone */
     buckets: Bucket<O>[]
     /** a page cut the group here: the page its next reads begins with the rest of its buckets */
     more: boolean

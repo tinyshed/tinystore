@@ -273,7 +273,8 @@ impl Reading<'_, '_> {
 
     /// The live blocks of a series the window touches, in the order of their
     /// times, and with `before` the newest that ends before it, of which only
-    /// the last sample counts. A block an aggregate's `shape` answers from
+    /// the last sample counts, or its last finite one when a NaN that ends it
+    /// is passed over. A block an aggregate's `shape` answers from
     /// its summary for the series' `op` is paid for by its directory alone;
     /// any other by its samples, and by its payload's bytes before they are
     /// copied.
@@ -298,7 +299,11 @@ impl Reading<'_, '_> {
                 parts.push(self.part(block, whole)?);
             }
         }
-        parts.splice(0..0, carried.map(|block| Part { block, whole: true }));
+        if let Some(block) = carried {
+            // a last NaN passed over: the step begins at its block's last finite sample
+            let decoded = block.summary.last.is_nan() && shape.is_some_and(|(shape, _)| shape.skips_nan());
+            parts.insert(0, self.part(block, !decoded)?);
+        }
         Ok(parts)
     }
 

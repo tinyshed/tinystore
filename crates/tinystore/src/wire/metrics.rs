@@ -47,8 +47,10 @@ const ENVELOPE: usize = 32;
 const NAME_NUMBERS: usize = 64;
 /// What a sample of a read takes of a part: its time and its value.
 const SAMPLE: usize = 16;
-/// What a bucket of an aggregate takes of a part at most.
-const BUCKET: usize = 64;
+/// What a bucket of an aggregate takes of a part at most: its map, ten
+/// bytes a number and its key, three of them a percentile's bounds, and two
+/// a flag.
+const BUCKET: usize = 80;
 /// The longest text an upload gathers: one text's 32 MiB, as the engine
 /// bounds what its series weigh. It bounds what the session holds for a
 /// client, so it is refused before a byte of the text comes.
@@ -241,6 +243,9 @@ fn aggregating(metrics: &Metrics, asked: MetricsAggregateAsked) -> Result<Query,
     }
     if asked.estimate {
         query = query.estimate();
+    }
+    if asked.skip_nan {
+        query = query.skip_nan();
     }
     Ok(query)
 }
@@ -514,6 +519,7 @@ fn bucket_of(bucket: crate::metrics::Bucket) -> MetricsBucket {
         at: unix_millis(bucket.at),
         samples: bucket.samples,
         resets: bucket.resets,
+        skipped: bucket.skipped,
         partial: bucket.partial,
         gap: bucket.gap,
         ..MetricsBucket::default()

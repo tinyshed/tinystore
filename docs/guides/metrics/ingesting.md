@@ -250,6 +250,9 @@ Each sample line becomes a series with one sample, of the kind that its
   does on a series.
 - Values are kept bit for bit, `NaN`, `+Inf`, `-Inf` and `-0` included. A
   label with an empty value is the same as no label, as in Prometheus.
+- A summary writes `NaN` for a quantile while it has nothing to measure. To
+  aggregate such series, pass `skipNaN`, as
+  [NaN from an exporter](aggregates.md#nan-from-an-exporter) shows.
 - A name with characters other than letters, digits, `_` and `:`, such as
   OpenTelemetry's dots, comes in quotes in Prometheus 3's text:
   `{"http.server.request.duration", method="GET"} 0.25`. TinyStore keeps

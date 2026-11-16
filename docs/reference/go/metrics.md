@@ -120,6 +120,8 @@ type Bucket struct {
 	// Samples is how many samples it comes from; a timer's, how many durations.
 	Samples int
 	Resets  int
+	// Skipped is the NaN samples it passed over, with SkipNaN.
+	Skipped int
 	// Partial says its value comes from less than its span: the range, the
 	// clock or retention cut it.
 	Partial bool
@@ -325,7 +327,7 @@ type Group struct {
 }
 ```
 
-Group is the buckets of a group of series: a bucket without samples is left out.
+Group is the buckets of a group of series: a bucket without samples is left out, and so is one of NaN alone.
 
 ## Histogram
 
@@ -617,6 +619,9 @@ type Query struct {
 	Without []string
 	// Estimate gives a timer's percentile a point between its bounds, interpolated.
 	Estimate bool
+	// SkipNaN passes a NaN sample over, counted in its bucket's Skipped
+	// rather than refusing the aggregate; an infinity is still refused.
+	SkipNaN bool
 }
 ```
 

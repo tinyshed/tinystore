@@ -301,6 +301,9 @@ type Query struct {
 	Without []string
 	// Estimate gives a timer's percentile a point between its bounds, interpolated.
 	Estimate bool
+	// SkipNaN passes a NaN sample over, counted in its bucket's Skipped
+	// rather than refusing the aggregate; an infinity is still refused.
+	SkipNaN bool
 }
 
 func (q Query) asked() (wire.MetricsQuery, error) {
@@ -355,7 +358,7 @@ func (q Query) asked() (wire.MetricsQuery, error) {
 
 func (q Query) aggregate() (wire.MetricsAggregateAsked, error) {
 	query, err := q.asked()
-	out := wire.MetricsAggregateAsked{Query: query, Estimate: q.Estimate}
+	out := wire.MetricsAggregateAsked{Query: query, Estimate: q.Estimate, SkipNan: q.SkipNaN}
 	if err != nil {
 		return out, err
 	}
@@ -471,8 +474,8 @@ func Read(ctx context.Context, store *tinystore.Store, q Query) (SeriesPage, err
 
 // plain refuses what only an aggregate takes, for a call that is none.
 func (q Query) plain(call string) error {
-	if q.Every != 0 || q.Calendar != "" || q.TimeZone != "" || q.Op != "" || q.By != nil || q.Without != nil || q.Estimate {
-		return core.Errorf(core.Invalid, "Every, Calendar, TimeZone, Op, By, Without and Estimate are an aggregate's: %s takes none", call)
+	if q.Every != 0 || q.Calendar != "" || q.TimeZone != "" || q.Op != "" || q.By != nil || q.Without != nil || q.Estimate || q.SkipNaN {
+		return core.Errorf(core.Invalid, "Every, Calendar, TimeZone, Op, By, Without, Estimate and SkipNaN are an aggregate's: %s takes none", call)
 	}
 	return nil
 }
@@ -535,6 +538,8 @@ type Bucket struct {
 	// Samples is how many samples it comes from; a timer's, how many durations.
 	Samples int
 	Resets  int
+	// Skipped is the NaN samples it passed over, with SkipNaN.
+	Skipped int
 	// Partial says its value comes from less than its span: the range, the
 	// clock or retention cut it.
 	Partial bool
@@ -543,7 +548,8 @@ type Bucket struct {
 	Gap bool
 }
 
-// Group is the buckets of a group of series: a bucket without samples is left out.
+// Group is the buckets of a group of series: a bucket without samples is
+// left out, and so is one of NaN alone.
 type Group struct {
 	Name string
 	// Labels is the labels By kept or Without left.
@@ -637,7 +643,8 @@ func Aggregate(ctx context.Context, store *tinystore.Store, q Query) (AggregateP
 func bucketOf(bucket wire.MetricsBucket) Bucket {
 	out := Bucket{
 		At: time.UnixMilli(bucket.At).UTC(), Value: bucket.Value, Lower: bucket.Lower, Upper: bucket.Upper,
-		Estimate: bucket.Estimate, Samples: int(bucket.Samples), Resets: int(bucket.Resets), Partial: bucket.Partial, Gap: bucket.Gap,
+		Estimate: bucket.Estimate, Samples: int(bucket.Samples), Resets: int(bucket.Resets),
+		Skipped: int(bucket.Skipped), Partial: bucket.Partial, Gap: bucket.Gap,
 	}
 	if out.Lower != nil && out.Upper == nil {
 		infinity := math.Inf(1)

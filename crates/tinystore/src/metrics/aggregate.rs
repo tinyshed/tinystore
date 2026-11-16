@@ -125,7 +125,7 @@ pub struct Aggregate {
     /// The labels `by` kept or `without` left; none when neither was given,
     /// every series of the name one group.
     pub labels: Labels,
-    /// A bucket without samples is left out.
+    /// A bucket without samples is left out, and so is one of NaN alone.
     pub buckets: Vec<Bucket>,
     /// A page of an aggregate cut the group here: the page its `next` reads
     /// begins with the rest of its buckets.
@@ -144,6 +144,10 @@ pub struct Bucket {
     pub samples: u64,
     /// A counter's resets in it; a timer's, its restarts.
     pub resets: u64,
+    /// The NaN samples it passed over, with `skip_nan`, which no value
+    /// counts: an exporter's idle summary writes NaN for a quantile it
+    /// cannot compute.
+    pub skipped: u64,
     /// Its first step began before the bucket before it: a whole bucket
     /// between had no samples, and what the series moved over it is counted
     /// here, since when it moved is not known.
@@ -210,6 +214,7 @@ pub(super) struct Asking<'a> {
     /// The name it asked for: a timer's is read as the series it writes.
     pub(super) name: Option<&'a str>,
     pub(super) estimate: bool,
+    pub(super) skip_nan: bool,
 }
 
 /// An aggregate checked: its `op`, its buckets and its groups.
@@ -222,6 +227,7 @@ pub(super) struct Shape {
     grouping: Grouping,
     name: Option<String>,
     estimate: bool,
+    skip_nan: bool,
 }
 
 impl Shape {
@@ -253,7 +259,7 @@ impl Shape {
             (None, None) => Grouping::Name,
         };
         let name = asking.name.map(str::to_owned);
-        Ok(Shape { op, rank, grid, grouping, name, estimate: asking.estimate })
+        Ok(Shape { op, rank, grid, grouping, name, estimate: asking.estimate, skip_nan: asking.skip_nan })
     }
 
     pub(super) fn op(&self) -> Op {
@@ -266,6 +272,12 @@ impl Shape {
 
     pub(super) fn estimate(&self) -> bool {
         self.estimate
+    }
+
+    /// Whether a NaN sample is passed over, counted in its bucket's
+    /// `skipped`, rather than refusing the aggregate.
+    pub(super) fn skips_nan(&self) -> bool {
+        self.skip_nan
     }
 
     /// What a series is to the query: one of the name it asked, or a part of

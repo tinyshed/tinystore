@@ -127,6 +127,53 @@ http_requests_total   100 on 1 October, nothing since, 300 at 11:59 on 11 Octobe
 What a counter grew over a gap is counted in the bucket after it, since when
 it grew is not known. A bucket without samples is left out of the answer.
 
+## NaN from an exporter
+
+A Prometheus summary writes `NaN` for a quantile while it has nothing to
+measure, for example while a service is idle. An aggregate over a NaN fails
+with an invalid error, so a panel of scraped quantiles stays empty for as long
+as the range holds one. Pass `skipNaN` to skip those samples instead:
+
+```ts
+const { groups } = await store.metrics.aggregate({ name: 'rpc_seconds', since: '1h', every: '1m', op: 'avg', by: ['quantile'], skipNaN: true })
+// [{ labels: { quantile: '0.5' }, buckets: [{ at, value: 0.21, samples: 3, skipped: 1 }, …] }, …]
+```
+
+```python
+groups = (await store.metrics.aggregate(name="rpc_seconds", since="1h", every="1m", op="avg", by=["quantile"], skip_nan=True)).groups
+```
+
+```go
+groups, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "rpc_seconds", Since: time.Hour, Every: time.Minute,
+	Op: metrics.Avg, By: []string{"quantile"}, SkipNaN: true})
+```
+
+```rust
+let groups = stats
+    .query()
+    .name("rpc_seconds")
+    .since(Duration::from_hours(1))
+    .every(Duration::from_mins(1))
+    .by(&["quantile"])
+    .skip_nan()
+    .aggregate(Op::Avg)?.groups;
+```
+
+- A NaN counts in no bucket's value or `samples`. Each bucket's `skipped`
+  says how many NaN samples it skipped, so you can see what the value was
+  computed from.
+- A bucket that holds only NaN samples has no value, so it is left out of the
+  answer, as a bucket without samples is. It never becomes a zero.
+- An infinity still fails with an invalid error, because it is a value and
+  not a missing one.
+- An `increase`, a `rate` or a `delta` steps from the last sample before the
+  NaN to the first one after it. If the samples that the store reads before
+  the range are all NaN, the step into the first bucket is not known, and
+  that bucket is `partial`.
+- The samples are stored as they came, NaN included, and a read returns them
+  bit for bit. Only the aggregate skips them.
+- Without `skipNaN`, nothing changes: a NaN fails the aggregate.
+
 ## Percentiles
 
 - `p95` of a gauge is the sample at that rank, nearest rank: a value that was
@@ -308,8 +355,8 @@ let total: ExactSum = amounts.iter().copied().collect();
 let paid = total.value(); // 1.0 for ten amounts of 0.1, where a float sum gives 0.9999999999999999
 ```
 
-- `query` takes `from`, `to`, `every`, `calendar` and `estimate`, as a store's
-  query does. Without `from` and `to`, the range runs from the first sample to
+- `query` takes `from`, `to`, `every`, `calendar`, `estimate` and `skip_nan`,
+  as a store's query does. Without `from` and `to`, the range runs from the first sample to
   the last.
 - The series that you pass are one group, which you choose. They must share a
   name and a kind. The answer's labels are the ones that every series has.
@@ -322,11 +369,11 @@ let paid = total.value(); // 1.0 for ten amounts of 0.1, where a float sum gives
 
 ## Errors
 
-| Error     | When                                                                                                                                 |
-|-----------|--------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket holding a NaN or an infinity; a counter below zero |
-| `invalid` | samples you hold: series of two names or kinds, or two samples of one series in the same millisecond                                 |
-| `limit`   | without `limit`, past 100,000 buckets or a bound of the query, which it names; with it, one bucket or one group that passes a bound  |
+| Error     | When                                                                                                                                                                             |
+|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket holding an infinity, or a NaN without [`skipNaN`](#nan-from-an-exporter); a counter below zero |
+| `invalid` | samples you hold: series of two names or kinds, or two samples of one series in the same millisecond                                                                             |
+| `limit`   | without `limit`, past 100,000 buckets or a bound of the query, which it names; with it, one bucket or one group that passes a bound                                              |
 
 ## See also
 

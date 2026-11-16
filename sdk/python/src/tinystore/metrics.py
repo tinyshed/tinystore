@@ -159,6 +159,8 @@ class AggregateQuery(SeriesQuery, total=False):
     """the labels a group leaves out, keeping every other; [] keeps every series apart"""
     estimate: bool
     """a timer's percentile also gives a point between its bounds, interpolated: an estimate"""
+    skip_nan: bool
+    """a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused"""
 
 
 @dataclass(slots=True)
@@ -207,6 +209,8 @@ class AggregateBucket:
     upper: float | None = None
     """infinity past the last bound"""
     estimate: float | None = None
+    skipped: int = 0
+    """the NaN samples it passed over, with skip_nan"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,7 +219,7 @@ class Aggregate:
     labels: dict[str, str]
     """the labels by kept or without left"""
     buckets: list[AggregateBucket]
-    """a bucket without samples is left out"""
+    """a bucket without samples is left out, and so is one of NaN alone"""
     more: bool = False
     """a page cut the group here: the page its next reads begins with the rest of its buckets"""
 
@@ -676,6 +680,7 @@ def _aggregate_of(query: Mapping[str, Any]) -> dict[str, Any]:
         "by": None if by is None else list(by),
         "without": None if without is None else list(without),
         "estimate": query.get("estimate", False),
+        "skip_nan": query.get("skip_nan", False),
     }
 
 
@@ -691,6 +696,7 @@ def _bucket_of(bucket: dict[str, Any]) -> AggregateBucket:
         lower=lower,
         upper=None if lower is None else bucket.get("upper", float("inf")),
         estimate=bucket.get("estimate"),
+        skipped=bucket.get("skipped", 0),
     )
 
 

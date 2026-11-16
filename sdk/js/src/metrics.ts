@@ -185,6 +185,8 @@ export interface AggregateQuery<O extends Op = Op> extends Query {
 	without?: readonly string[] | undefined
 	/** a timer's percentile also gives a point between its bounds, interpolated: an estimate */
 	estimate?: boolean | undefined
+	/** a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused */
+	skipNaN?: boolean | undefined
 }
 
 /** What every bucket of an aggregate says of itself. */
@@ -194,6 +196,8 @@ interface Spanned {
 	/** how many samples it comes from; a timer's, how many durations */
 	samples: number
 	resets: number
+	/** the NaN samples it passed over, with skipNaN */
+	skipped: number
 	/** its value comes from less than its span: the range, the clock or retention cut it */
 	partial: boolean
 	/** its first step began before the bucket before it: a whole bucket between had no samples */
@@ -225,7 +229,7 @@ export interface Aggregate<O extends Op = Op> {
 	name: string
 	/** the labels by kept or without left */
 	labels: Labels
-	/** a bucket without samples is left out */
+	/** a bucket without samples is left out, and so is one of NaN alone */
 	buckets: Bucket<O>[]
 	/** a page cut the group here: the page its next reads begins with the rest of its buckets */
 	more: boolean
@@ -754,6 +758,7 @@ function aggregateOf(query: AggregateQuery): Parameters<typeof MetricsAggregateA
 		by: query.by === undefined ? undefined : [...query.by],
 		without: query.without === undefined ? undefined : [...query.without],
 		estimate: query.estimate === true,
+		skipNan: query.skipNaN === true,
 	}
 }
 
@@ -771,6 +776,7 @@ function bucketOf(bucket: WireBucket): PercentileBucket {
 		at: new Date(bucket.at ?? 0),
 		samples: bucket.samples ?? 0,
 		resets: bucket.resets ?? 0,
+		skipped: bucket.skipped ?? 0,
 		partial: bucket.partial === true,
 		gap: bucket.gap === true,
 	}

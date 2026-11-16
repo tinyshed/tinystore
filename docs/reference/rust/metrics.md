@@ -54,6 +54,7 @@ pub struct Bucket {
     pub value: Value,
     pub samples: u64,
     pub resets: u64,
+    pub skipped: u64,
     pub gap: bool,
     pub partial: bool,
 }
@@ -285,6 +286,16 @@ pub fn estimate(self) -> Self
 A timer's or a histogram's percentile gives a point between its
 bounds too, as Prometheus' `histogram_quantile` interpolates one.
 
+### SeriesQuery.skip_nan
+
+```rust
+pub fn skip_nan(self) -> Self
+```
+
+A NaN sample is passed over, as a store's query passes it with
+[`Query::skip_nan`](super::Query::skip_nan): each bucket's `skipped`
+counts them.
+
 ### SeriesQuery.aggregate
 
 ```rust
@@ -294,8 +305,9 @@ pub fn aggregate(&self, op: Op) -> Result<Aggregate>
 The group's buckets, each one exact value of `op`, rounded once, with
 `samples`, `resets`, `gap` and `partial` as a query gives them; a
 bucket without a sample is left out. An `op` the series' kind has
-not is `invalid`, and so is a bucket over a NaN, an infinity or a
-counter below zero, or two samples of one series at one millisecond.
+not is `invalid`, and so is a bucket over a NaN, unless `skip_nan`
+passes it over, an infinity or a counter below zero, or two samples
+of one series at one millisecond.
 
 ## query
 
@@ -989,6 +1001,17 @@ A timer's percentile also gives a point between the bounds of the
 bucket of its spread that holds the rank, interpolated as Prometheus'
 `histogram_quantile` does: an estimate, which no measurement gave.
 
+### Query.skip_nan
+
+```rust
+pub fn skip_nan(self) -> Self
+```
+
+An aggregate passes a NaN sample over rather than refuse it: the
+sample counts in no value, and its bucket's `skipped` says how many
+it passed over. A bucket of NaN alone is left out, as one without
+samples is. An infinity is still refused, since it is a value.
+
 ### Query.limit
 
 ```rust
@@ -1029,10 +1052,10 @@ pub fn aggregate(&self, op: Op) -> Result<AggregatePage>
 The buckets of each group of the series the query finds, each one
 exact value of `op`, rounded once: a group without a sample in the
 range is left out, and so is a bucket without one. An `op` a series'
-kind has not is `invalid`, and so is a bucket over a NaN, an infinity
-or a counter below zero. Without `limit` the page is the whole
-answer, and past a bound it is a `limit` error, naming the bound,
-never fewer buckets. With `limit` it is a page of that many buckets
+kind has not is `invalid`, and so is a bucket over a NaN, unless the
+query passes NaN over with `skip_nan`, an infinity or a counter below
+zero. Without `limit` the page is the whole answer, and past a bound
+it is a `limit` error, naming the bound, never fewer buckets. With `limit` it is a page of that many buckets
 with samples at most, a stretch without any costing it nothing, which
 ends between two whole buckets of a group and gives `next`; one
 bucket that alone passes a bound is still `limit`. A page reads only
@@ -1819,6 +1842,15 @@ pub fn estimate(self) -> Self
 
 A timer's percentile also gives a point between the bounds of the
 bucket that holds the rank: an estimate, which no measurement gave.
+
+### aio::metrics::Query.skip_nan
+
+```rust
+pub fn skip_nan(self) -> Self
+```
+
+An aggregate passes a NaN sample over, counted in its bucket's
+`skipped`, as `crate::metrics::Query::skip_nan` does.
 
 ### aio::metrics::Query.read
 
