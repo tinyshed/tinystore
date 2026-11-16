@@ -217,8 +217,7 @@ struct Inner {
             feature = "blobs",
             feature = "records",
             feature = "metrics",
-            feature = "search",
-            feature = "backup"
+            feature = "search"
         )),
         expect(dead_code, reason = "only an engine of files reads it, and channels keep none")
     )]
@@ -526,8 +525,7 @@ impl Store {
             feature = "blobs",
             feature = "records",
             feature = "metrics",
-            feature = "search",
-            feature = "backup"
+            feature = "search"
         )),
         expect(dead_code, reason = "only an engine of files reads it, and channels keep none")
     )]

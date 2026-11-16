@@ -183,6 +183,7 @@ pub(crate) fn make_in(store: &Store, file: &str, tag: u8) -> Result<()> {
 
 /// Opens the engine `tag` names in a database's file `file`, which makes its
 /// tables there.
+#[cfg(any(feature = "kv", feature = "jobs"))]
 fn make_in_here(lenders: Lenders<'_>, file: &str, tag: u8) -> Result<()> {
     let Some(database) = file.strip_prefix("sql/").and_then(|name| name.strip_suffix(".db")) else {
         return Err(Error::invalid(format!("{file} is no database's file to keep an engine's tables")));
@@ -357,6 +358,7 @@ fn make_here(store: &Store, name: &str) -> Result<()> {
 /// Where a database's file lends kv and jobs their tables, by the
 /// database's name: what a write passed on of a bucket or a queue kept there
 /// opens in.
+#[cfg(any(feature = "kv", feature = "jobs"))]
 pub(crate) type Lenders<'a> = &'a dyn Fn(&str) -> Result<crate::engine::Home>;
 
 pub(crate) use crate::engine::database_file;
@@ -367,15 +369,16 @@ pub(crate) fn database_of(owner: &str) -> Option<&str> {
 }
 
 fn run_on(store: &Store, op: &[u8]) -> Result<(Vec<u8>, String)> {
-    #[cfg(feature = "sql")]
+    #[cfg(all(feature = "sql", any(feature = "kv", feature = "jobs")))]
     let lenders = |name: &str| -> Result<crate::engine::Home> {
         let database = store.database(name).open()?;
         Ok(crate::engine::Home::Shared(std::sync::Arc::clone(database.shared())))
     };
-    #[cfg(not(feature = "sql"))]
+    #[cfg(all(not(feature = "sql"), any(feature = "kv", feature = "jobs")))]
     let lenders = |name: &str| -> Result<crate::engine::Home> {
         Err(Error::invalid(format!("a write of database {name}'s file, and this node has no sql")))
     };
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     let _ = &lenders;
     let Some((&tag, body)) = op.split_first() else {
         return Err(Error::corrupt("a write passed on holds nothing"));
@@ -387,7 +390,11 @@ fn run_on(store: &Store, op: &[u8]) -> Result<(Vec<u8>, String)> {
             if at.done() {
                 make_here(store, &file)?;
             } else {
+                #[cfg(any(feature = "kv", feature = "jobs"))]
                 make_in_here(&lenders, &file, at.byte()?)?;
+                // only kv and jobs keep tables in a database's file
+                #[cfg(not(any(feature = "kv", feature = "jobs")))]
+                return Err(Error::invalid(format!("{file}: no engine of this node keeps its tables in a database")));
             }
             Ok((Vec::new(), file))
         }
