@@ -4,6 +4,10 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.9.0](v0.9.0.md)** · 16 November 2026\
+  Folders the store indexes and serves without copying, databases left out
+  of backups, `tinystore verify`, `each()` past 64 MiB, cancel and counts
+  for jobs, NaN skipped in metrics, and a search index's failing upkeep.
 - **[TinyStore 0.8.0](v0.8.0.md)** · 16 November 2026\
   Migrations written as drafts and applied again, each half's score of a
   search by words and a vector, a read token that only reads, and fifty-four
