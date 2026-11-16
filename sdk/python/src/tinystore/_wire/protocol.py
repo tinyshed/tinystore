@@ -34,6 +34,7 @@ methods: dict[str, int] = {
     "blobs.scan": 0x040F,
     "blobs.changes": 0x0410,
     "blobs.forget": 0x0411,
+    "blobs.getOrCreate": 0x0412,
     "blobs.setMaxSize": 0x0413,
     "blobs.trim": 0x0414,
     # Answers once the store has the message, not once anyone handled it; in a
@@ -570,6 +571,10 @@ def _write_blobs_write(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(10)
         w.bin(x)
         n += 1
+    if (x := v.get("fill")) is not None:
+        w.uint(11)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -606,6 +611,8 @@ def _read_blobs_write(r: Reader) -> dict[str, Any]:
                 read["create"] = r.bool()
             case 10:
                 read["bytes"] = r.bin()
+            case 11:
+                read["fill"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -632,6 +639,9 @@ BlobsWrite = Message(
         "create": (9, bool_),
         # a put's whole body; nothing for an upload
         "bytes": (10, bin_),
+        # a getOrCreate's stream on this connection: the write lands its run, only while that run's claim holds the path
+        # and only where no file is, and info is none when it did not
+        "fill": (11, uint),
     },
     _write_blobs_write,
     _read_blobs_write,
@@ -1731,6 +1741,67 @@ BlobsChanges = Message(
     },
     _write_blobs_changes,
     _read_blobs_changes,
+)
+
+
+def _write_blobs_claim(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("handle")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("folder")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("path")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    if (x := v.get("timeout")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_claim(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["handle"] = r.uint()
+            case 2:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["folder"] = items0
+            case 3:
+                read["path"] = r.str()
+            case 4:
+                read["timeout"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A getOrCreate of a path: the file there, or the run of the function that
+# makes it, handed to the client while no other run holds the path's claim.
+BlobsClaim = Message(
+    "blobs.Claim",
+    {
+        "handle": (1, uint),
+        "folder": (2, list_(str_)),
+        "path": (3, str_),
+        # how long the server renews the claim while the run goes; 10 minutes when absent
+        "timeout": (4, uint),
+    },
+    _write_blobs_claim,
+    _read_blobs_claim,
 )
 
 
@@ -10576,6 +10647,60 @@ SqlTxAnswer = Message(
 )
 
 
+def _write_blobs_filled(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("info")) is not None:
+        w.uint(1)
+        BlobsInfo.write(w, x)
+        n += 1
+    if (x := v.get("bytes")) is not None:
+        w.uint(2)
+        w.bin(x)
+        n += 1
+    if (x := v.get("failure")) is not None:
+        w.uint(3)
+        Failure.write(w, x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_filled(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["info"] = BlobsInfo.read(r)
+            case 2:
+                read["bytes"] = r.bin()
+            case 3:
+                read["failure"] = Failure.read(r)
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A getOrCreate's answer. As the server's RESPONSE·END: the file at the path,
+# its bytes when they fit one message, as a get's. As the RESPONSE alone:
+# the run is the client's, which writes its function's result with a put or
+# an upload whose fill names this stream, then sends a blobs.Filled as its
+# last DATA, with the failure when the function or the write failed, which
+# every call that waited for the run then gets. The server's DATA·END,
+# empty, follows.
+BlobsFilled = Message(
+    "blobs.Filled",
+    {
+        "info": (1, BlobsInfo),
+        "bytes": (2, bin_),
+        "failure": (3, Failure),
+    },
+    _write_blobs_filled,
+    _read_blobs_filled,
+)
+
+
 def _write_channels_batch(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -11248,6 +11373,7 @@ messages: dict[str, Message] = {
     "blobs.Since": BlobsSince,
     "blobs.Change": BlobsChange,
     "blobs.Changes": BlobsChanges,
+    "blobs.Claim": BlobsClaim,
     "channels.Publish": ChannelsPublish,
     "channels.Subscribe": ChannelsSubscribe,
     "channels.Message": ChannelsMessage,
@@ -11402,6 +11528,7 @@ messages: dict[str, Message] = {
     "sql.TxOpen": SqlTxOpen,
     "sql.TxCall": SqlTxCall,
     "sql.TxAnswer": SqlTxAnswer,
+    "blobs.Filled": BlobsFilled,
     "channels.Batch": ChannelsBatch,
     "config.Given": ConfigGiven,
     "metrics.Plan": MetricsPlan,

@@ -258,6 +258,8 @@ writes keep, match its files.
 
 ## See also
 
+- [Get or create](get-or-create.md): a missing file made once while every
+  other call of its path waits for it, the miss of a cache.
 - [Copies and expiry](copies-and-expiry.md): `ttl`, `expire`, and copies that
   share their bytes.
 - [Files in a database](../sql/buckets-and-queues.md#files-in-a-database):

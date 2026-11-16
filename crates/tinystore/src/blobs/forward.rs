@@ -242,7 +242,7 @@ fn options_in(at: &mut In<'_>) -> Result<Options> {
     let ttl = at.maybe_long()?.map(Duration::from_millis);
     let if_match = at.maybe_text()?;
     let size = at.maybe_long()?;
-    Ok(Options { content_type, meta, meta_given, ttl, if_match, size })
+    Ok(Options { content_type, meta, meta_given, ttl, if_match, size, ..Options::default() })
 }
 
 fn millis(span: Duration) -> u64 {

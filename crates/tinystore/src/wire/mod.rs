@@ -110,6 +110,9 @@ pub(crate) enum Route {
     Read,
     #[cfg(feature = "blobs")]
     Upload,
+    /// A getOrCreate, handed over as a once run is, its claim the stream's.
+    #[cfg(feature = "blobs")]
+    Fill,
     #[cfg(feature = "records")]
     Tail,
     #[cfg(feature = "records")]

@@ -366,6 +366,12 @@ const NAMES: &[(&str, Made, &str, &str)] = &[
     ("tinystore_blobs_scan_changes_total", Made::Counter, "files", "Files scans told added, changed or removed."),
     ("tinystore_files_evicted_total", Made::Counter, "files", "Files a set's ceiling removed to make room."),
     ("tinystore_files_bytes", Made::Gauge, "bytes", "The sizes of a set's files together."),
+    (
+        "tinystore_files_get_or_create_total",
+        Made::Counter,
+        "calls",
+        "getOrCreate calls, by their set and outcome: hit, run, wait or failed.",
+    ),
     ("tinystore_wire_connections", Made::Gauge, "connections", "Connections open: the pipe's, a server's clients."),
     ("tinystore_wire_requests_total", Made::Counter, "requests", "Requests by their method."),
     ("tinystore_wire_call_ms", Made::Timer, "", "A call answered in one response, by its method."),

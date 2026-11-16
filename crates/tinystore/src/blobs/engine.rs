@@ -34,6 +34,7 @@ const MIGRATIONS: &[Migration] = &[
     Migration::of(2, "0002_names.sql", include_str!("migrations/0002_names.sql")),
     Migration::of(3, "0003_directories.sql", include_str!("migrations/0003_directories.sql")),
     Migration::of(4, "0004_cache.sql", include_str!("migrations/0004_cache.sql")),
+    Migration::of(5, "0005_claims.sql", include_str!("migrations/0005_claims.sql")),
 ];
 /// A database's files, whose tables are made with blobs.db's names of its
 /// step 2: a step after it goes to both histories, the next of each, but for
@@ -42,6 +43,7 @@ const MIGRATIONS: &[Migration] = &[
 const IN_A_DATABASE: &[Migration] = &[
     Migration::of(1, "0001_in_a_database.sql", include_str!("migrations/0001_in_a_database.sql")),
     Migration::of(2, "0002_cache.sql", include_str!("migrations/0002_cache.sql")),
+    Migration::of(3, "0003_claims.sql", include_str!("migrations/0003_claims.sql")),
 ];
 /// A content id taken in a database's transaction, which a rollback gives
 /// back with every row the transaction wrote.
@@ -72,6 +74,8 @@ pub(crate) struct Blobs {
     pub(crate) uses: super::uses::Uses,
     /// What each set's ceiling evicted since the store opened.
     pub(crate) evictions: Arc<super::cache::Evictions>,
+    /// The runs of getOrCreate under way in this process, and who waits for each.
+    pub(crate) fills: super::filling::Fills,
     /// The store, for the writes a copy passes to its home.
     #[cfg(feature = "replication")]
     store: crate::store::WeakStore,
@@ -271,6 +275,7 @@ impl Opening<'_> {
             scans: super::directory::Scans::default(),
             uses: super::uses::Uses::default(),
             evictions: Arc::default(),
+            fills: super::filling::Fills::default(),
             #[cfg(feature = "replication")]
             store: store.downgrade(),
             #[cfg(feature = "async")]
@@ -296,6 +301,10 @@ impl Opening<'_> {
                 blobs.file.sweep();
                 blobs.maintain().map(drop)
             })
+        })?;
+        let weak = Arc::downgrade(&blobs);
+        store.every(&format!("{tasks}: claims"), super::filling::RENEW_EVERY, move || {
+            weak.upgrade().filter(|blobs| !blobs.file.is_copy()).map_or(Ok(()), |blobs| blobs.renew_claims())
         })?;
         Ok(blobs)
     }
@@ -432,6 +441,7 @@ impl Blobs {
         for fan in Disk::fan(settled + 1)..=last {
             self.remove_unnamed_in(fan, settled)?;
         }
+        self.forget_claims()?;
         self.settle()
     }
 

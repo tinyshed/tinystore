@@ -3,15 +3,20 @@
 // bytes go in pieces within the credit of the side that takes them, and a
 // whole read ends CorruptError before its last piece when its bytes changed.
 
+import { createReadStream } from 'node:fs'
+
+import { currentSignal } from './cancel.ts'
 import { type Connection, type Idempotence, type Link, pieceOf } from './connection.ts'
-import { ClosedError, InvalidError, OutcomeUnknownError } from './errors.ts'
+import { ClosedError, InvalidError, OutcomeUnknownError, TinystoreError } from './errors.ts'
 import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import { ConnectionLostError, type Stream, watch } from './session.ts'
 import { type Duration, dateOf, ms, unixMs } from './time.ts'
 import {
 	BlobsAt,
+	BlobsClaim,
 	BlobsDelete,
 	BlobsExpire,
+	BlobsFilled,
 	BlobsFolder,
 	BlobsFound,
 	BlobsGot,
@@ -104,6 +109,31 @@ export type Body =
 	| Blob
 	| ReadableStream<Uint8Array>
 	| AsyncIterable<Uint8Array>
+
+/**
+ * What a getOrCreate's function gives: the file's bytes as data, or the
+ * path of a file of this machine, streamed as it is written; its type and
+ * meta win over the call's.
+ */
+export interface Fill {
+	data?: Body | undefined
+	path?: string | undefined
+	contentType?: string | undefined
+	meta?: Record<string, string> | undefined
+}
+
+export interface GetOrCreateOptions {
+	/** the file's type when the function gives none */
+	contentType?: string | undefined
+	/** the file's meta when the function gives none */
+	meta?: Record<string, string> | undefined
+	/** the file's own term, from its write */
+	ttl?: Duration | undefined
+	/** how long the claim of the path is renewed while the function runs: 10 minutes when absent */
+	timeout?: Duration | undefined
+	/** stops this call's wait; a run it waits for goes on */
+	signal?: AbortSignal | undefined
+}
 
 export interface FileListOptions {
 	/** text within the folder: 'photos/1' finds photos/10.jpg too */
@@ -411,6 +441,154 @@ export class Files {
 		})
 		const stream = await connection.session.open(methods['blobs.upload'], write, false)
 		return new Upload(stream, pieceOf(connection), options?.signal)
+	}
+
+	/**
+	 * The file at the path, or, on a miss, the one fn's Fill makes. While
+	 * one call runs fn, every other getOrCreate of the path, in this process
+	 * or another, waits for it and gets the file it wrote. The call claims
+	 * the path and the store renews the claim while fn runs, up to
+	 * `timeout`; fn's file lands only while the claim still holds the path
+	 * and no file is there. A put of the path meanwhile wins, and the calls
+	 * get the put's file; a delete ends the claim, fn's file is dropped and
+	 * one of the calls runs fn again, so fn may run more than once, as it
+	 * may after a lost connection. A throw of fn is this call's own error
+	 * and the ConflictError of every call that waited for it, with its
+	 * message, or the store's own error as it is; the next call runs fn
+	 * again.
+	 *
+	 *     const page = await pages.getOrCreate(`${hash}.pdf`, async () => ({ data: await convert(doc), contentType: 'application/pdf' }))
+	 */
+	async getOrCreate(
+		path: string,
+		fn: () => Fill | Promise<Fill>,
+		options?: GetOrCreateOptions,
+	): Promise<StoredFile> {
+		this.#outside('a getOrCreate')
+		for (;;) {
+			const asked = await this.#claim(path, options)
+			if (asked instanceof StoredFile) {
+				return asked
+			}
+			const made = await this.#fill(path, asked, fn, options)
+			if (made !== undefined) {
+				return made
+			}
+		}
+	}
+
+	/** Asks for the path: the file there, or the run the server handed to this client. */
+	#claim(path: string, options: GetOrCreateOptions | undefined): Promise<StoredFile | Handed> {
+		const signal = options?.signal ?? currentSignal()
+		return this.#link.run(
+			'read',
+			async connection => {
+				const handle = await this.#handle(connection)
+				const timeout = options?.timeout === undefined ? undefined : ms(options.timeout)
+				const claim = BlobsClaim.encode({ handle, folder: this.#folder, path, timeout })
+				const stream = await connection.session.open(methods['blobs.getOrCreate'], claim, false)
+				const unwatch = watch(signal, stream)
+				try {
+					const first = await stream.next()
+					if (!first.end) {
+						return { stream, connection, handle }
+					}
+					return this.#stored(path, first.body)
+				} catch (err) {
+					stream.cancel()
+					throw err
+				} finally {
+					unwatch()
+				}
+			},
+			signal,
+		)
+	}
+
+	/**
+	 * Runs fn for a run handed over, lands its file on the run's connection,
+	 * and ends the run: the file it made, or undefined to ask again, when the
+	 * write was dropped or the connection lost.
+	 */
+	async #fill(
+		path: string,
+		run: Handed,
+		fn: () => Fill | Promise<Fill>,
+		options: GetOrCreateOptions | undefined,
+	): Promise<StoredFile | undefined> {
+		let fill: Fill
+		try {
+			fill = await fn()
+		} catch (err) {
+			await ended(run.stream, failureOf(err)).catch(() => {})
+			throw err
+		}
+		let written: FileInfo | undefined
+		try {
+			written = await this.#land(path, run, fill, options)
+		} catch (err) {
+			if (!(await ended(run.stream, failureOf(err)).then(() => true, lost))) {
+				return undefined
+			}
+			throw err
+		}
+		if (!(await ended(run.stream, undefined).then(() => true, lost))) {
+			return undefined
+		}
+		return written === undefined ? undefined : this.get(path)
+	}
+
+	/** Writes a Fill as the run handed on `run.stream` lands it: only while its claim holds the path. */
+	async #land(
+		path: string,
+		run: Handed,
+		fill: Fill,
+		options: GetOrCreateOptions | undefined,
+	): Promise<FileInfo | undefined> {
+		if ((fill.data === undefined) === (fill.path === undefined)) {
+			throw new InvalidError(
+				`files ${this.name}: a getOrCreate's Fill gives data or a path, one of them`,
+			)
+		}
+		const source = fill.path === undefined ? sourceOf(fill.data as Body) : fileSource(fill.path)
+		const fields = {
+			...this.#fields(path, {
+				contentType: fill.contentType ?? options?.contentType,
+				meta: fill.meta ?? options?.meta,
+				ttl: options?.ttl,
+			}),
+			contentType: fill.contentType ?? options?.contentType ?? source.contentType,
+			size: source.size,
+			create: true,
+			fill: run.stream.id,
+			handle: run.handle,
+		}
+		const piece = pieceOf(run.connection)
+		const whole = await source.whole(piece)
+		if (whole !== undefined) {
+			const write = BlobsWrite.encode({ ...fields, bytes: whole })
+			return writtenOf(await run.connection.session.call(methods['blobs.put'], write))
+		}
+		const stream = await run.connection.session.open(
+			methods['blobs.upload'],
+			BlobsWrite.encode(fields),
+			false,
+		)
+		return uploaded(stream, source, piece, undefined)
+	}
+
+	/** The file a getOrCreate's stream ended with, as `get` makes it of its answer. */
+	#stored(path: string, body: Uint8Array): StoredFile {
+		const found = BlobsFilled.decode(body)
+		if (found.info === undefined) {
+			throw new InvalidError(`files ${this.name}: a getOrCreate that ended without its file`)
+		}
+		const info = infoOf(found.info)
+		const bytes = found.bytes ?? nothing
+		const whole = bytes.length === info.size ? bytes : undefined
+		return new StoredFile(info, whole, (offset, length) =>
+			this.#read(path, info.etag, offset, length),
+		)
 	}
 
 	#handle(connection: Connection): Promise<number> {
@@ -952,6 +1130,47 @@ function lostAs(err: unknown, ending: boolean): unknown {
 	return new ClosedError(
 		`the connection was lost during the upload, which left nothing: ${err.message}`,
 	)
+}
+
+/** A run of a getOrCreate the server handed to this client, until its last DATA. */
+interface Handed {
+	stream: Stream
+	connection: Connection
+	handle: number
+}
+
+/** Ends a run handed over with its last DATA, a failure or none, and waits for the server's end. */
+async function ended(
+	stream: Stream,
+	failure: { code: string; message: string } | undefined,
+): Promise<void> {
+	await stream.send(BlobsFilled.encode({ failure }), true)
+	await stream.next()
+}
+
+/** What a run's failure tells the calls that waited for it: a store's error its code, any other conflict. */
+function failureOf(err: unknown): { code: string; message: string } {
+	const message = err instanceof Error ? err.message : String(err)
+	return { code: err instanceof TinystoreError ? err.code : 'conflict', message }
+}
+
+/** Whether a run's end failed as its connection was lost, which asks again; any other failure is thrown. */
+function lost(err: unknown): false {
+	if (err instanceof ConnectionLostError) {
+		return false
+	}
+	throw err
+}
+
+/** A file of this machine as a body, read as it is written. */
+function fileSource(path: string): Source {
+	return {
+		size: undefined,
+		contentType: undefined,
+		replayable: false,
+		chunks: () => createReadStream(path) as AsyncIterable<Uint8Array>,
+		whole: async () => undefined,
+	}
 }
 
 function writtenOf(body: Uint8Array): FileInfo | undefined {

@@ -13,6 +13,8 @@ fails CorruptError before its last piece when its bytes changed::
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import inspect
 import io
 import json
 import re
@@ -26,8 +28,10 @@ from ._session import ConnectionLostError, Stream
 from ._time import Duration, date_of, moment, ms, unix_ms
 from ._wire.protocol import (
     BlobsAt,
+    BlobsClaim,
     BlobsDelete,
     BlobsExpire,
+    BlobsFilled,
     BlobsFolder,
     BlobsFound,
     BlobsGot,
@@ -47,10 +51,11 @@ from ._wire.protocol import (
     BlobsWritten,
     methods,
 )
-from .errors import ClosedError, InvalidError, OutcomeUnknownError
+from .errors import ClosedError, InvalidError, OutcomeUnknownError, TinystoreError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+    import os
+    from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
     from types import TracebackType
 
     from ._connection import Connection, Idempotence, Link
@@ -82,6 +87,27 @@ class FileInfo:
     expires: datetime | None
     """None for a file that does not expire"""
     meta: dict[str, str] = field(default_factory=dict[str, str])
+
+
+@dataclass(frozen=True, slots=True)
+class Fill:
+    """What a get_or_create's function gives: the file's bytes, or a file of this machine to read them from.
+
+    Its content_type and meta take the place of the call's::
+
+        Fill(pdf, content_type="application/pdf")
+        Fill(path="/tmp/7f3a.pdf")  # streamed, never whole in memory
+    """
+
+    data: Body | None = None
+    """bytes, text as UTF-8, a file object opened for bytes, or an async iterator of bytes"""
+    path: str | os.PathLike[str] | None = field(default=None, kw_only=True)
+    content_type: str | None = field(default=None, kw_only=True)
+    meta: Mapping[str, str] | None = field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if (self.data is None) == (self.path is None):
+            raise InvalidError("a Fill takes its bytes or a file's path, one of the two")
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,7 +305,10 @@ class Files:
         them.
         """
         answer = await self._call("blobs.get", lambda h: BlobsAt.encode(handle=h, folder=list(self._folder), path=path))
-        got = BlobsGot.decode(answer)
+        return self._stored(path, BlobsGot.decode(answer))
+
+    def _stored(self, path: str, got: dict[str, Any]) -> StoredFile | None:
+        """The file a get's answer carries, or a getOrCreate's, which numbers its info and bytes the same."""
         found = got.get("info")
         if found is None:
             return None
@@ -288,6 +317,129 @@ class Files:
         if whole is not None and len(whole) != info.size:
             whole = None
         return StoredFile(info, whole, lambda offset, length: self._read(path, info.etag, offset, length))
+
+    async def get_or_create(
+        self,
+        path: str,
+        fn: Callable[[], Fill | Awaitable[Fill]],
+        *,
+        content_type: str | None = None,
+        meta: dict[str, str] | None = None,
+        ttl: Duration | None = None,
+        timeout: Duration | None = None,
+    ) -> StoredFile:
+        """The file at the path, or, on a miss, the one fn makes, written once while every other call waits.
+
+        While one call runs fn, every other get_or_create of the path, in
+        this process or another, waits for it and gets the file it wrote.
+        The store claims the path for the run and renews the claim while fn
+        runs, up to timeout, 10 minutes unless given; what fn gives lands
+        only while the claim still holds the path and no file is there. A
+        put of the path meanwhile wins, and the calls get the put's file; a
+        delete ends the claim, what fn gave is dropped, and one of the calls
+        runs it again, so fn may run more than once. An exception of fn is
+        raised here, and every call that waited for that run gets an
+        ConflictError with its text, or the store's own error as it is;
+        the next call runs fn again::
+
+            page = await pages.get_or_create(f"{hash}.pdf", lambda: Fill(convert(doc), content_type="application/pdf"))
+        """
+        self._outside("a getOrCreate")
+        claim_for = None if timeout is None else ms(timeout, f"files {self.name}: a getOrCreate's timeout")
+        while True:
+            claimed = await self._claim(path, claim_for)
+            if isinstance(claimed, StoredFile):
+                return claimed
+            stream, connection = claimed
+            try:
+                landed = await self._run(stream, connection, path, fn, (content_type, meta, ttl))
+            except ConnectionLostError:
+                # the claim went with the connection: the run is asked for again on the next
+                continue
+            if landed:
+                found = await self.get(path)
+                if found is not None:
+                    return found
+
+    async def _claim(self, path: str, timeout: int | None) -> StoredFile | tuple[Stream, Connection]:
+        """The file at the path, or the run the core handed over and the connection it holds its claim on."""
+
+        async def attempt(connection: Connection) -> StoredFile | tuple[Stream, Connection]:
+            handle = await self._handle(connection)
+            claim = BlobsClaim.encode(handle=handle, folder=list(self._folder), path=path, timeout=timeout)
+            stream = await connection.session.open(methods["blobs.getOrCreate"], claim, False)
+            try:
+                first = await stream.next()
+                if not first.end:
+                    return stream, connection
+                found = self._stored(path, BlobsFilled.decode(first.body))
+                if found is None:
+                    raise InvalidError(f"files {self.name}: {path!r}: a getOrCreate ended without its file")
+                return found
+            except BaseException:
+                stream.cancel()
+                raise
+
+        return await self._link.run("read", attempt)
+
+    async def _run(
+        self,
+        stream: Stream,
+        connection: Connection,
+        path: str,
+        fn: Callable[[], Fill | Awaitable[Fill]],
+        given: tuple[str | None, dict[str, str] | None, Duration | None],
+    ) -> bool:
+        """Runs fn for the run handed over, writes what it gave on the run's connection, and ends the run.
+
+        It says whether the write landed; one the claim no longer held lands nothing.
+        """
+        content_type, meta, ttl = given
+        try:
+            made = fn()
+            fill = await made if inspect.isawaitable(made) else made
+            if not isinstance(fill, Fill):  # pyright: ignore[reportUnnecessaryIsInstance]
+                raise InvalidError(f"files {self.name}: {path!r}: a getOrCreate's function gives a Fill")
+            fields = self._fields(
+                path,
+                fill.content_type or content_type,
+                dict(fill.meta) if fill.meta is not None else meta,
+                ttl,
+                None,
+                None,
+            )
+            written = await self._fill(connection, stream.id, fields, fill)
+        except ConnectionLostError:
+            raise
+        except asyncio.CancelledError:
+            stream.cancel()
+            raise
+        except BaseException as err:
+            # fn's own error is the one to raise; the calls that waited get its text
+            with contextlib.suppress(Exception):
+                await _end_run(stream, _failure_of(err))
+            raise
+        await _end_run(stream, None)
+        return written is not None
+
+    async def _fill(self, connection: Connection, run: int, fields: dict[str, Any], fill: Fill) -> FileInfo | None:
+        """Writes a Fill on the connection that holds the run's claim, naming the run it lands."""
+        file = None if fill.path is None else await asyncio.to_thread(open, fill.path, "rb")
+        try:
+            source = _source_of(cast("Body", file if file is not None else fill.data))
+            fields = {**fields, "size": source.size, "fill": run}
+            handle = await self._handle(connection)
+            piece = piece_of(connection)
+            whole = await source.whole(piece)
+            if whole is not None:
+                write = BlobsWrite.encode(fields, handle=handle, bytes=whole)
+                return _written_of(await connection.session.call(methods["blobs.put"], write))
+            write = BlobsWrite.encode(fields, handle=handle)
+            upload = await connection.session.open(methods["blobs.upload"], write, False)
+            return await _uploaded(upload, source, piece)
+        finally:
+            if file is not None:
+                file.close()
 
     async def head(self, path: str) -> FileInfo | None:
         """What the file carries and none of its bytes; None when the path holds none."""
@@ -491,6 +643,19 @@ class Files:
             return await _uploaded(stream, source, piece)
 
         return await self._link.run("write", attempt)
+
+
+def _failure_of(err: BaseException) -> dict[str, str]:
+    """What the calls that waited for a run get of its failure: a store's error as it is, any other conflict."""
+    code = err.code if isinstance(err, TinystoreError) else "conflict"
+    return {"code": code, "message": str(err)}
+
+
+async def _end_run(stream: Stream, failure: dict[str, str] | None) -> None:
+    """Sends the run's last DATA, with its failure when it failed, and waits for the core's end of it."""
+    ended = BlobsFilled.encode() if failure is None else BlobsFilled.encode(failure=failure)
+    await stream.send(ended, True)
+    await stream.next()
 
 
 class _Source:

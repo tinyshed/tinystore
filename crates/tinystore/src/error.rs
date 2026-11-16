@@ -40,7 +40,7 @@ pub enum ErrorKind {
 
 impl ErrorKind {
     /// Every kind, each of which a link between nodes spells by its name.
-    #[cfg(feature = "replication")]
+    #[cfg(any(feature = "replication", all(feature = "wire", feature = "blobs")))]
     pub(crate) const ALL: [ErrorKind; 17] = [
         ErrorKind::Invalid,
         ErrorKind::NotFound,
@@ -62,7 +62,7 @@ impl ErrorKind {
     ];
 
     /// The kind `name` spells, as [`ErrorKind::as_str`] writes it.
-    #[cfg(feature = "replication")]
+    #[cfg(any(feature = "replication", all(feature = "wire", feature = "blobs")))]
     pub(crate) fn named(name: &str) -> Option<ErrorKind> {
         Self::ALL.into_iter().find(|kind| kind.as_str() == name)
     }

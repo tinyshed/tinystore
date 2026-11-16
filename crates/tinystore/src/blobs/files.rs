@@ -223,14 +223,19 @@ impl Files {
     /// ceiling it moves the file up the eviction's order.
     pub fn get(&self, path: &str) -> Result<Option<StoredFile>> {
         let whole = self.whole(path)?;
+        self.get_whole(&whole)
+    }
+
+    /// The file at a whole path, as [`Files::get`] finds it, its read a use.
+    pub(crate) fn get_whole(&self, whole: &str) -> Result<Option<StoredFile>> {
         let opened = (|| {
-            let Some((mut file, seen)) = StoredFile::open(self, &whole)? else { return Ok(None) };
-            if let Some(until) = self.used(&whole, &seen)? {
+            let Some((mut file, seen)) = StoredFile::open(self, whole)? else { return Ok(None) };
+            if let Some(until) = self.used(whole, &seen)? {
                 file.renewed(Blobs::time(until));
             }
             Ok(Some(file))
         })();
-        opened.map_err(|error| self.fail(&whole, error))
+        opened.map_err(|error| self.fail(whole, error))
     }
 
     /// What the file at the path carries, none of its bytes. A use, as a
@@ -320,6 +325,10 @@ impl Files {
 
     pub(crate) fn describe(&self) -> String {
         format!("files {}", self.name)
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 
     pub(crate) fn expiry(&self, ttl: Option<Duration>, now: i64) -> Option<i64> {
@@ -471,7 +480,7 @@ impl Files {
         let blobs = Arc::clone(&self.blobs);
         let files = self.clone();
         let (from, to, options) = (from.to_owned(), to.to_owned(), options.clone());
-        let condition = Condition { if_match: options.if_match.clone(), when_there: WhenThere::Conflict };
+        let condition = Condition { if_match: options.if_match.clone(), when_there: WhenThere::Conflict, fill: None };
         Box::new(move |tx| {
             let mut change = Change::new(tx, &blobs);
             let before = change.total(files.set)?.size;
@@ -593,14 +602,25 @@ pub(crate) struct Options {
     pub(crate) if_match: Option<String>,
     /// How long the body is, as a `Content-Length` says it.
     pub(crate) size: Option<u64>,
+    /// How long a getOrCreate's claim is renewed while its function runs.
+    pub(crate) timeout: Option<Duration>,
+    /// The run of a getOrCreate a write lands, by its owner.
+    pub(crate) fill: Option<i64>,
 }
 
 impl Options {
+    /// A write's condition: `when_there` with its ETag, or for a run of a
+    /// getOrCreate its claim and an empty path.
+    pub(super) fn condition(&self, when_there: WhenThere) -> Condition {
+        let when_there = if self.fill.is_some() { WhenThere::Skip } else { when_there };
+        Condition { if_match: self.if_match.clone(), when_there, fill: self.fill }
+    }
+
     fn content_type(&self) -> String {
         self.content_type.clone().unwrap_or_else(|| OCTETS.to_owned())
     }
 
-    fn check(&self) -> Result<()> {
+    pub(super) fn check(&self) -> Result<()> {
         if self.content_type.as_ref().is_some_and(|content_type| content_type.len() > MAX_TYPE) {
             return Err(Error::invalid(format!("a content type over {MAX_TYPE} bytes")));
         }
@@ -671,14 +691,89 @@ impl<'f> FileCall<'f> {
         self
     }
 
+    /// How long a `get_or_create`'s claim of the path is renewed while its
+    /// function runs: 10 minutes unless said. A function still running then
+    /// loses the claim within 30 s, and another call may run its own.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.options.timeout = Some(timeout);
+        self
+    }
+
+    /// The file at the path, or, on a miss, the one `work` makes, written
+    /// with the call's type and meta unless what it gives says its own.
+    ///
+    /// ```no_run
+    /// # fn convert(doc: &str) -> tinystore::Result<Vec<u8>> { Ok(doc.as_bytes().to_vec()) }
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// # let (hash, doc) = ("7f3a", "lecture");
+    /// let pages = store.files("pages").open()?;
+    /// let page = pages.key(&format!("{hash}.pdf")).content_type("application/pdf").get_or_create(|| convert(doc))?;
+    /// assert_eq!(page.info().content_type, "application/pdf");
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// While one call runs `work`, every other `get_or_create` of the path,
+    /// in this process or through its server, waits for it and gets the file
+    /// it wrote (BLOB-21). The call claims the path for 30 s and the store
+    /// renews the claim while `work` runs, up to its [`timeout`](Self::timeout);
+    /// what `work` gives lands only while the claim still holds the path and
+    /// no file is there (BLOB-22). A put of the path meanwhile wins, and the
+    /// calls get the put's file; a delete ends the claim, what `work` gave is
+    /// dropped, and one of the calls runs it again, so `work` may run more
+    /// than once. A failure of `work` is the answer of every call that waited
+    /// for it, an error of the store's as it is and any other `unavailable`
+    /// with its text, and the next call runs it again.
+    ///
+    /// Inside a database's transaction, or on a node's copy of blobs.db, it
+    /// is `Invalid`; so is a call of the path inside its own `work`.
+    pub fn get_or_create<T, E>(
+        self,
+        work: impl FnMut() -> std::result::Result<T, E>,
+    ) -> std::result::Result<StoredFile, E>
+    where
+        T: Into<super::Fill>,
+        E: From<Error> + fmt::Display + 'static,
+    {
+        let whole = self.to_get_or_create()?;
+        super::filling::get_or_create(self.files, &whole, &self.options, work)
+    }
+
+    /// The whole path a getOrCreate claims, its options checked, or why it
+    /// may not run here: inside a transaction its function would hold the
+    /// writer, and a copy's claims are its home's.
+    pub(crate) fn to_get_or_create(&self) -> Result<String> {
+        let whole = self.checked()?;
+        #[cfg(feature = "sql")]
+        if self.tx.is_some() {
+            let refused = Error::invalid("a getOrCreate inside a transaction, whose function would hold its writer");
+            return Err(self.files.fail(&whole, refused));
+        }
+        #[cfg(feature = "replication")]
+        if self.files.is_copy() {
+            let refused = Error::invalid("a getOrCreate on a node's copy of blobs.db: call it at the file's home");
+            return Err(self.files.fail(&whole, refused));
+        }
+        Ok(whole)
+    }
+
+    /// The write lands the run of a getOrCreate `owner` names: only while its
+    /// claim holds the path, and only where no file is.
+    #[cfg(feature = "wire")]
+    pub(crate) fn filling(mut self, owner: i64) -> Self {
+        self.options.fill = Some(owner);
+        self
+    }
+
     pub fn put(self, bytes: impl AsRef<[u8]>) -> Result<FileInfo> {
-        let condition = Condition { if_match: self.options.if_match.clone(), when_there: WhenThere::Replace };
+        let condition = self.options.condition(WhenThere::Replace);
         self.write_all(bytes.as_ref(), condition)?.ok_or_else(|| Error::internal("a put that wrote nothing"))
     }
 
     /// Writes only when the path holds no file; says whether it did.
     pub fn create(self, bytes: impl AsRef<[u8]>) -> Result<bool> {
-        let condition = Condition { if_match: self.options.if_match.clone(), when_there: WhenThere::Skip };
+        let condition = self.options.condition(WhenThere::Skip);
         self.write_all(bytes.as_ref(), condition).map(|info| info.is_some())
     }
 
@@ -806,7 +901,7 @@ impl<'f> FileCall<'f> {
     #[cfg(any(feature = "wire", feature = "replication", feature = "async"))]
     pub(crate) fn written(self, bytes: &[u8], create: bool) -> Result<Option<FileInfo>> {
         let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
-        let condition = Condition { if_match: self.options.if_match.clone(), when_there };
+        let condition = self.options.condition(when_there);
         self.write_all(bytes, condition)
     }
 

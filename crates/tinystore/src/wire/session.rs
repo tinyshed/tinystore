@@ -41,6 +41,8 @@ use crate::{Result, Store};
 
 mod cancel;
 mod credit;
+#[cfg(feature = "blobs")]
+mod fill;
 mod intake;
 mod lending;
 mod routing;

@@ -155,8 +155,7 @@ impl Upload {
 
     /// Publishes the file, or with `create` only where no file is; says what
     /// it wrote, nothing when a create found a file. The wire's last DATA,
-    /// and an awaited commit on the store's pool.
-    #[cfg(any(feature = "wire", feature = "async"))]
+    /// an awaited commit on the store's pool, and a getOrCreate's result.
     pub(crate) fn publish(mut self, create: bool) -> Result<Option<FileInfo>> {
         let condition = self.condition(create);
         self.finish(condition)
@@ -220,8 +219,7 @@ impl Upload {
     }
 
     fn condition(&self, create: bool) -> Condition {
-        let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
-        Condition { if_match: self.options.if_match.clone(), when_there }
+        self.options.condition(if create { WhenThere::Skip } else { WhenThere::Replace })
     }
 
     /// Ends the upload and leaves nothing; dropping it does the same.

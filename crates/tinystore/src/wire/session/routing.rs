@@ -105,6 +105,8 @@ impl Shared {
             Route::Read => self.read(input, stream, body),
             #[cfg(feature = "blobs")]
             Route::Upload => self.upload(input, stream, &body),
+            #[cfg(feature = "blobs")]
+            Route::Fill => self.fill(stream, body, max_body),
             #[cfg(feature = "records")]
             Route::Tail => self.tail(input, stream, &body),
             #[cfg(feature = "records")]

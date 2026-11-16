@@ -18,6 +18,24 @@ class FileInfo:
 
 What a file carries: what serving it needs.
 
+## Fill
+
+```python
+@dataclass(frozen=True, slots=True)
+class Fill:
+    data: Body | None = None  # bytes, text as UTF-8, a file object opened for bytes, or an async iterator of bytes
+    path: str | os.PathLike[str] | None = field(default=None, kw_only=True)
+    content_type: str | None = field(default=None, kw_only=True)
+    meta: Mapping[str, str] | None = field(default=None, kw_only=True)
+```
+
+What a get_or_create's function gives: the file's bytes, or a file of this machine to read them from.
+
+Its content_type and meta take the place of the call's:
+
+    Fill(pdf, content_type="application/pdf")
+    Fill(path="/tmp/7f3a.pdf")  # streamed, never whole in memory
+
 ## FilePage
 
 ```python
@@ -131,6 +149,36 @@ What the file carries, and its bytes; None when the path holds none.
 A file up to about a megabyte comes with them, and a larger one's are
 read when they are read, on its ETag, as S3's GET with If-Match reads
 them.
+
+### Files.get_or_create
+
+```python
+async def get_or_create(
+    path: str,
+    fn: Callable[[], Fill | Awaitable[Fill]],
+    *,
+    content_type: str | None = None,
+    meta: dict[str, str] | None = None,
+    ttl: Duration | None = None,
+    timeout: Duration | None = None,
+) -> StoredFile: ...
+```
+
+The file at the path, or, on a miss, the one fn makes, written once while every other call waits.
+
+While one call runs fn, every other get_or_create of the path, in
+this process or another, waits for it and gets the file it wrote.
+The store claims the path for the run and renews the claim while fn
+runs, up to timeout, 10 minutes unless given; what fn gives lands
+only while the claim still holds the path and no file is there. A
+put of the path meanwhile wins, and the calls get the put's file; a
+delete ends the claim, what fn gave is dropped, and one of the calls
+runs it again, so fn may run more than once. An exception of fn is
+raised here, and every call that waited for that run gets an
+ConflictError with its text, or the store's own error as it is;
+the next call runs fn again:
+
+    page = await pages.get_or_create(f"{hash}.pdf", lambda: Fill(convert(doc), content_type="application/pdf"))
 
 ### Files.head
 

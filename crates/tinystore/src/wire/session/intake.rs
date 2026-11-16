@@ -203,6 +203,10 @@ impl Shared {
         if frame.flags & frame::END == 0 {
             return;
         }
+        #[cfg(feature = "blobs")]
+        if let Some(handed) = self.blobs.take_handed(frame.stream) {
+            return self.filled(frame.stream, handed, frame.body);
+        }
         let handed = {
             let mut runs = self.lock_runs();
             match runs.remove(&frame.stream) {

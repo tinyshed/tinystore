@@ -130,6 +130,14 @@ func TTL(d time.Duration) ttl
 
 TTL is how long a file lives from its write: every file's, or one write's own.
 
+## Timeout
+
+```go
+func Timeout(d time.Duration) timeout
+```
+
+Timeout is how long a GetOrCreate's claim of its path is renewed while its function runs: 10 minutes unless said. A function still running then loses the claim within 30 s, and another call may run its own.
+
 ## WhenFull
 
 ```go
@@ -414,6 +422,21 @@ func (f *Files) Get(ctx context.Context, path string) (*StoredFile, bool, error)
 
 Get is the file at path, and whether there is one: what it carries, and its bytes, an io.ReadSeekCloser and an io.ReaderAt. A file up to about a megabyte comes with them, and a larger one's are read when they are read, on its ETag, as S3's GET with If-Match reads them. Close it once read.
 
+### Files.GetOrCreate
+
+```go
+func (f *Files) GetOrCreate(ctx context.Context, path string, fn func(ctx context.Context) (Fill, error), opts ...WriteOption) (*StoredFile, error)
+```
+
+GetOrCreate is the file at path, or, on a miss, the one fn makes, written with the call's ContentType, Meta and TTL unless the Fill says its own.
+
+	page, err := pages.GetOrCreate(ctx, hash+".pdf", func(ctx context.Context) (blobs.Fill, error) {
+		pdf, err := convert(ctx, doc)
+		return blobs.Fill{Data: pdf, ContentType: "application/pdf"}, err
+	})
+
+While one call runs fn, every other GetOrCreate of the path, in this process or another of the store's clients, waits for it and gets the file it wrote. The call claims the path for 30 s and the store renews the claim while fn runs, up to its Timeout; what fn gives lands only while the claim still holds the path and no file is there. A Put of the path meanwhile wins, and the calls get the put's file; a Delete ends the claim, what fn gave is dropped, and one of the calls runs it again, so fn may run more than once. An error of fn is the caller's own and the answer of every call that waited for it, a store error of its kind and any other Conflict with its text; the next call runs fn again. A connection lost while fn runs loses the claim, and the call asks again on the next connection.
+
 ### Files.Head
 
 ```go
@@ -502,6 +525,22 @@ func (f *Files) Usage(ctx context.Context) (Usage, error)
 ```
 
 Usage is the files in the folder and their bytes, as it is now: it counts, it does not limit.
+
+## Fill
+
+```go
+type Fill struct {
+	Data []byte
+	// Reader is read to its end as it is written, a piece at a time.
+	Reader io.Reader
+	// Path is a file of this machine, opened and read as it is written.
+	Path        string
+	ContentType string
+	Meta        map[string]string
+}
+```
+
+Fill is what a GetOrCreate's function gives: the file's bytes, whole, as a reader, or in a file of this machine, one of the three, and the type and the meta it is written with in place of the call's.
 
 ## Full
 

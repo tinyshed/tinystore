@@ -20,7 +20,7 @@ impl Shared {
             return;
         }
         #[cfg(feature = "blobs")]
-        if self.blobs.cancel(stream) {
+        if self.blobs.cancel(stream) || self.cancel_fill(stream) {
             return;
         }
         #[cfg(feature = "records")]

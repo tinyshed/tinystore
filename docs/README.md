@@ -130,6 +130,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Copies and expiry](guides/blobs/copies-and-expiry.md)
 - [Integrity](guides/blobs/integrity.md)
 - [Caching](guides/blobs/caching.md)
+- [Get or create](guides/blobs/get-or-create.md)
 - [Directories](guides/blobs/directories.md)
 
 ### Search

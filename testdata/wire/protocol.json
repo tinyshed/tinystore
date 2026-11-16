@@ -178,6 +178,9 @@
         "create": {
           "bool": true
         },
+        "fill": {
+          "uint": "1107"
+        },
         "folder": {
           "list": [
             {
@@ -208,7 +211,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8a016b0291a6666f6c64657203a47061746804ab636f6e74656e74547970650581a161a46d65746106cd05dc07a769664d6174636808cd032709c30ac40201ff",
+      "hex": "8b016b0291a6666f6c64657203a47061746804ab636f6e74656e74547970650581a161a46d65746106cd05dc07a769664d6174636808cd032709c30ac40201ff0bcd0453",
       "message": "blobs.Write",
       "name": "blobs.Write with every field"
     },
@@ -890,6 +893,97 @@
       "hex": "80",
       "message": "blobs.Changes",
       "name": "blobs.Changes with no field"
+    },
+    {
+      "fields": {
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "path": {
+          "str": "path"
+        },
+        "timeout": {
+          "uint": "1500"
+        }
+      },
+      "hex": "84016b0291a6666f6c64657203a47061746804cd05dc",
+      "message": "blobs.Claim",
+      "name": "blobs.Claim with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Claim",
+      "name": "blobs.Claim with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "bin": "01ff"
+        },
+        "failure": {
+          "fields": {
+            "code": {
+              "str": "code"
+            },
+            "message": {
+              "str": "message"
+            },
+            "what": {
+              "names": {
+                "a": {
+                  "str": "what"
+                }
+              }
+            }
+          }
+        },
+        "info": {
+          "fields": {
+            "contentType": {
+              "str": "contentType"
+            },
+            "etag": {
+              "str": "etag"
+            },
+            "expires": {
+              "int": "1790000000000"
+            },
+            "lastModified": {
+              "int": "1790000000000"
+            },
+            "meta": {
+              "names": {
+                "a": {
+                  "str": "meta"
+                }
+              }
+            },
+            "path": {
+              "str": "path"
+            },
+            "size": {
+              "uint": "207"
+            }
+          }
+        }
+      },
+      "hex": "83018701a47061746802cccf03a46574616704ab636f6e74656e745479706505cf000001a0c4506c0006cf000001a0c4506c000781a161a46d65746102c40201ff038301a4636f646502a76d6573736167650381a161a477686174",
+      "message": "blobs.Filled",
+      "name": "blobs.Filled with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Filled",
+      "name": "blobs.Filled with no field"
     },
     {
       "fields": {
@@ -6683,6 +6777,7 @@
     "blobs.expire": 1033,
     "blobs.forget": 1041,
     "blobs.get": 1028,
+    "blobs.getOrCreate": 1042,
     "blobs.head": 1029,
     "blobs.list": 1034,
     "blobs.open": 1025,

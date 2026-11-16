@@ -40,6 +40,7 @@ export const methods = {
 	'blobs.scan': 0x040f,
 	'blobs.changes': 0x0410,
 	'blobs.forget': 0x0411,
+	'blobs.getOrCreate': 0x0412,
 	'blobs.setMaxSize': 0x0413,
 	'blobs.trim': 0x0414,
 	/**
@@ -658,6 +659,8 @@ export const BlobsWrite = message(
 		create: [9, bool],
 		/** a put's whole body; nothing for an upload */
 		bytes: [10, bin],
+		/** a getOrCreate's stream on this connection: the write lands its run, only while that run's claim holds the path and only where no file is, and info is none when it did not */
+		fill: [11, uint],
 	},
 	{
 		write(w, v) {
@@ -716,6 +719,11 @@ export const BlobsWrite = message(
 				w.bin(v.bytes)
 				n++
 			}
+			if (v.fill !== undefined) {
+				w.field(11)
+				w.uint(v.fill)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -729,6 +737,7 @@ export const BlobsWrite = message(
 			let $size: number | undefined
 			let $create: boolean | undefined
 			let $bytes: Uint8Array | undefined
+			let $fill: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -767,6 +776,9 @@ export const BlobsWrite = message(
 					case 10:
 						$bytes = r.bytes()
 						break
+					case 11:
+						$fill = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -783,6 +795,7 @@ export const BlobsWrite = message(
 				size: $size,
 				create: $create,
 				bytes: $bytes,
+				fill: $fill,
 			}
 		},
 	},
@@ -2098,6 +2111,83 @@ export const BlobsChanges = message(
 			}
 			r.leave()
 			return { items: $items, next: $next }
+		},
+	},
+)
+
+/**
+ * A getOrCreate of a path: the file there, or the run of the function that
+ * makes it, handed to the client while no other run holds the path's claim.
+ */
+export const BlobsClaim = message(
+	'blobs.Claim',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+		path: [3, str],
+		/** how long the server renews the claim while the run goes; 10 minutes when absent */
+		timeout: [4, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(3)
+				w.str(v.path)
+				n++
+			}
+			if (v.timeout !== undefined) {
+				w.field(4)
+				w.uint(v.timeout)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			let $path: string | undefined
+			let $timeout: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					case 3:
+						$path = r.str()
+						break
+					case 4:
+						$timeout = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, folder: $folder, path: $path, timeout: $timeout }
 		},
 	},
 )
@@ -12893,6 +12983,68 @@ export const SqlTxAnswer = message(
 			}
 			r.leave()
 			return { rows: $rows, done: $done, failure: $failure, body: $body }
+		},
+	},
+)
+
+/**
+ * A getOrCreate's answer. As the server's RESPONSE·END: the file at the path,
+ * its bytes when they fit one message, as a get's. As the RESPONSE alone:
+ * the run is the client's, which writes its function's result with a put or
+ * an upload whose fill names this stream, then sends a blobs.Filled as its
+ * last DATA, with the failure when the function or the write failed, which
+ * every call that waited for the run then gets. The server's DATA·END,
+ * empty, follows.
+ */
+export const BlobsFilled = message(
+	'blobs.Filled',
+	{
+		info: [1, BlobsInfo],
+		bytes: [2, bin],
+		failure: [3, Failure],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.info !== undefined) {
+				w.field(1)
+				BlobsInfo.write(w, v.info)
+				n++
+			}
+			if (v.bytes !== undefined) {
+				w.field(2)
+				w.bin(v.bytes)
+				n++
+			}
+			if (v.failure !== undefined) {
+				w.field(3)
+				Failure.write(w, v.failure)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $info: Read<typeof BlobsInfo.fields> | undefined
+			let $bytes: Uint8Array | undefined
+			let $failure: Read<typeof Failure.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$info = BlobsInfo.read(r)
+						break
+					case 2:
+						$bytes = r.bytes()
+						break
+					case 3:
+						$failure = Failure.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { info: $info, bytes: $bytes, failure: $failure }
 		},
 	},
 )

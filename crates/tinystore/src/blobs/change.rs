@@ -6,6 +6,7 @@
 use rusqlite::{OptionalExtension, Params, params};
 
 use super::engine::{Blobs, rows_of};
+use super::filling::{END_CLAIM, END_CLAIMS_UNDER, TAKE_CLAIM};
 use super::info::{FileInfo, matches, meta_of};
 use super::paths::Folder;
 use crate::sqlite::{Tx, sql_error};
@@ -94,6 +95,9 @@ pub(crate) struct Condition {
     /// The ETag of the file the write may replace, and that file only.
     pub(crate) if_match: Option<String>,
     pub(crate) when_there: WhenThere,
+    /// The run of a getOrCreate the write lands, by its owner: it writes only
+    /// while that run's claim holds the path (BLOB-22).
+    pub(crate) fill: Option<i64>,
 }
 
 /// Refuses a write that names an ETag the path's live file does not have.
@@ -180,10 +184,16 @@ impl<'t, 'c> Change<'t, 'c> {
     /// holds, and takes a name from the content it named; says whether it
     /// wrote.
     pub(crate) fn write(&mut self, set: i64, path: &str, version: &Version, condition: &Condition) -> Result<bool> {
+        if let Some(owner) = condition.fill
+            && !self.fence(set, path, owner)?
+        {
+            return Ok(false);
+        }
         let existing = self.current(set, path)?;
         if !condition.holds(existing.as_ref(), self.now)? {
             return Ok(false);
         }
+        self.end_claim(set, path)?;
         let revision = self.blobs.next_revision(self.tx)?;
         self.name(&version.content)?;
         let content = &version.content;
@@ -233,6 +243,7 @@ impl<'t, 'c> Change<'t, 'c> {
     /// Deletes a path's row, whatever it holds, and takes a name from its
     /// content; says whether there was one.
     pub(crate) fn remove(&mut self, set: i64, path: &str) -> Result<bool> {
+        self.end_claim(set, path)?;
         let content: Option<i64> = self
             .tx
             .prepare_cached(DELETE_FILE)
@@ -294,5 +305,42 @@ impl<'t, 'c> Change<'t, 'c> {
 
     pub(crate) fn next_revision(&self) -> Result<i64> {
         self.blobs.next_revision(self.tx)
+    }
+
+    /// Takes the claim of `owner` on the path, still leased, in the
+    /// transaction that writes its run's file; says whether it held it. A
+    /// run that lost its claim writes nothing, even onto an empty path.
+    fn fence(&self, set: i64, path: &str, owner: i64) -> Result<bool> {
+        let taken = self
+            .tx
+            .prepare_cached(TAKE_CLAIM)
+            .and_then(|mut take| take.execute(params![set, path, owner, self.now]))
+            .map_err(|error| sql_error("blobs: a run's claim", error))?;
+        Ok(taken == 1)
+    }
+
+    /// Ends the claim on a path a write or a delete reaches: the run that
+    /// held it lands nothing, and the calls that waited for it look again.
+    /// A rollback after leaves them looking at a claim no run here holds,
+    /// which they take over.
+    fn end_claim(&self, set: i64, path: &str) -> Result<()> {
+        let ended = rows_of(self.tx, (END_CLAIM, "blobs: end a claim"), params![set, path], |row| row.get(0))?;
+        self.end_runs(ended);
+        Ok(())
+    }
+
+    /// Ends the claims on the paths a clear of `[from, to)` reaches, as a
+    /// delete of each does.
+    pub(crate) fn end_claims_under(&self, set: i64, from: &str, to: &str) -> Result<()> {
+        let query = (END_CLAIMS_UNDER, "blobs: end the claims under a folder");
+        let ended = rows_of(self.tx, query, params![set, from, to], |row| row.get(0))?;
+        self.end_runs(ended);
+        Ok(())
+    }
+
+    fn end_runs(&self, owners: Vec<i64>) {
+        for owner in owners {
+            self.blobs.fills.end(owner, None);
+        }
     }
 }

@@ -47,6 +47,7 @@ message blobs.Write {
   8 size: uint?         # the body's length: one longer or shorter is refused
   9 create: bool        # writes only where no file is
   10 bytes: bin         # a put's whole body; nothing for an upload
+  11 fill: uint?        # a getOrCreate's stream on this connection: the write lands its run, only while that run's claim holds the path and only where no file is, and info is none when it did not
 }
 
 # What a write wrote: none when a create found a file there.
@@ -207,6 +208,28 @@ message blobs.Changes {
   2 next: str
 }
 
+# A getOrCreate of a path: the file there, or the run of the function that
+# makes it, handed to the client while no other run holds the path's claim.
+message blobs.Claim {
+  1 handle: uint
+  2 folder: [str]
+  3 path: str
+  4 timeout: duration?  # how long the server renews the claim while the run goes; 10 minutes when absent
+}
+
+# A getOrCreate's answer. As the server's RESPONSE·END: the file at the path,
+# its bytes when they fit one message, as a get's. As the RESPONSE alone:
+# the run is the client's, which writes its function's result with a put or
+# an upload whose fill names this stream, then sends a blobs.Filled as its
+# last DATA, with the failure when the function or the write failed, which
+# every call that waited for the run then gets. The server's DATA·END,
+# empty, follows.
+message blobs.Filled {
+  1 info: blobs.Info?
+  2 bytes: bin
+  3 failure: Failure?
+}
+
 read  0x0401 blobs.open(blobs.Open)             -> Handle
 write 0x0402 blobs.put(blobs.Write)             -> blobs.Written
 write 0x0403 blobs.upload(blobs.Write)          -> exchange blobs.Written for blobs.Piece
@@ -224,5 +247,6 @@ read  0x040e blobs.directory(blobs.Directory)   -> Handle
 write 0x040f blobs.scan(blobs.Folder)           -> blobs.Scanned
 read  0x0410 blobs.changes(blobs.Since)         -> blobs.Changes
 write 0x0411 blobs.forget(blobs.Folder)         -> Empty
+write 0x0412 blobs.getOrCreate(blobs.Claim)     -> handover blobs.Filled
 write 0x0413 blobs.setMaxSize(blobs.SetMaxSize) -> Empty
 write 0x0414 blobs.trim(blobs.Trim)             -> blobs.Trimmed

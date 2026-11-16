@@ -438,6 +438,8 @@ pub(crate) struct BlobsWrite {
     pub(crate) create: bool,
     /// A put's whole body; nothing for an upload.
     pub(crate) bytes: Vec<u8>,
+    /// A getOrCreate's stream on this connection: the write lands its run, only while that run's claim holds the path and only where no file is, and info is none when it did not.
+    pub(crate) fill: Option<u64>,
 }
 
 #[cfg(feature = "blobs")]
@@ -459,6 +461,7 @@ impl Message for BlobsWrite {
                 8 => message.size = Some(codec::uint(r, "size")?),
                 9 => message.create = codec::bool(r, "create")?,
                 10 => message.bytes = codec::bin(r, "bytes")?,
+                11 => message.fill = Some(codec::uint(r, "fill")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -507,6 +510,10 @@ impl Message for BlobsWrite {
             map.field(out, 10);
             codec::write_bin(out, &self.bytes);
         }
+        if let Some(fill) = &self.fill {
+            map.field(out, 11);
+            codec::write_uint(out, fill);
+        }
         map.close(out);
     }
 
@@ -522,6 +529,7 @@ impl Message for BlobsWrite {
             + self.size.map_or(0, |_| 10)
             + 2
             + 1 + 5 + self.bytes.len()
+            + self.fill.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -535,6 +543,7 @@ impl Message for BlobsWrite {
             && self.size.is_none()
             && !self.create
             && self.bytes.is_empty()
+            && self.fill.is_none()
     }
 }
 
@@ -1810,6 +1819,138 @@ impl Message for BlobsChanges {
     fn is_zero(&self) -> bool {
         self.items.is_empty()
             && self.next.is_empty()
+    }
+}
+
+/// A getOrCreate of a path: the file there, or the run of the function that
+/// makes it, handed to the client while no other run holds the path's claim.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsClaim {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+    pub(crate) path: String,
+    /// How long the server renews the claim while the run goes; 10 minutes when absent. Milliseconds.
+    pub(crate) timeout: Option<u64>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsClaim {
+    const NAME: &'static str = "blobs.Claim";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                3 => message.path = codec::str(r, "path")?,
+                4 => message.timeout = Some(codec::uint(r, "timeout")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        if !self.path.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.path);
+        }
+        if let Some(timeout) = &self.timeout {
+            map.field(out, 4);
+            codec::write_uint(out, timeout);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+            + 1 + 5 + self.path.len()
+            + self.timeout.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+            && self.path.is_empty()
+            && self.timeout.is_none()
+    }
+}
+
+/// A getOrCreate's answer. As the server's RESPONSE·END: the file at the path,
+/// its bytes when they fit one message, as a get's. As the RESPONSE alone:
+/// the run is the client's, which writes its function's result with a put or
+/// an upload whose fill names this stream, then sends a blobs.Filled as its
+/// last DATA, with the failure when the function or the write failed, which
+/// every call that waited for the run then gets. The server's DATA·END,
+/// empty, follows.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsFilled {
+    pub(crate) info: Option<BlobsInfo>,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) failure: Option<Failure>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsFilled {
+    const NAME: &'static str = "blobs.Filled";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.info = Some(BlobsInfo::read(r)?),
+                2 => message.bytes = codec::bin(r, "bytes")?,
+                3 => message.failure = Some(Failure::read(r)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(info) = &self.info {
+            map.field(out, 1);
+            codec::write_message(out, info);
+        }
+        if !self.bytes.is_empty() {
+            map.field(out, 2);
+            codec::write_bin(out, &self.bytes);
+        }
+        if let Some(failure) = &self.failure {
+            map.field(out, 3);
+            codec::write_message(out, failure);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.info.as_ref().map_or(0, |info| 1 + info.size())
+            + 1 + 5 + self.bytes.len()
+            + self.failure.as_ref().map_or(0, |failure| 1 + failure.size())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.info.is_none()
+            && self.bytes.is_empty()
+            && self.failure.is_none()
     }
 }
 
@@ -12625,6 +12766,8 @@ pub(crate) mod method {
     #[cfg(feature = "blobs")]
     pub(crate) const BLOBS_FORGET: u16 = 0x0411;
     #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_GET_OR_CREATE: u16 = 0x0412;
+    #[cfg(feature = "blobs")]
     pub(crate) const BLOBS_SET_MAX_SIZE: u16 = 0x0413;
     #[cfg(feature = "blobs")]
     pub(crate) const BLOBS_TRIM: u16 = 0x0414;
@@ -12891,6 +13034,8 @@ pub(crate) mod method {
             #[cfg(feature = "blobs")]
             BLOBS_FORGET => Some(Access::Write),
             #[cfg(feature = "blobs")]
+            BLOBS_GET_OR_CREATE => Some(Access::Write),
+            #[cfg(feature = "blobs")]
             BLOBS_SET_MAX_SIZE => Some(Access::Write),
             #[cfg(feature = "blobs")]
             BLOBS_TRIM => Some(Access::Write),
@@ -13133,6 +13278,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("blobs.changes", 0x0410, "call"),
     #[cfg(feature = "blobs")]
     ("blobs.forget", 0x0411, "call"),
+    #[cfg(feature = "blobs")]
+    ("blobs.getOrCreate", 0x0412, "handover"),
     #[cfg(feature = "blobs")]
     ("blobs.setMaxSize", 0x0413, "call"),
     #[cfg(feature = "blobs")]
@@ -13395,6 +13542,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "blobs.Change" => BlobsChange::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]
         "blobs.Changes" => BlobsChanges::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Claim" => BlobsClaim::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Filled" => BlobsFilled::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "channels")]
         "channels.Publish" => ChannelsPublish::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "channels")]

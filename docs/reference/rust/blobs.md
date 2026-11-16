@@ -395,6 +395,49 @@ pub fn size(self, bytes: u64) -> Self
 How long the body is; one longer or shorter is refused and leaves
 nothing.
 
+### FileCall.timeout
+
+```rust
+pub fn timeout(self, timeout: Duration) -> Self
+```
+
+How long a `get_or_create`'s claim of the path is renewed while its
+function runs: 10 minutes unless said. A function still running then
+loses the claim within 30 s, and another call may run its own.
+
+### FileCall.get_or_create
+
+```rust
+pub fn get_or_create<T, E>(self, work: impl FnMut() -> Result<T, E>) -> Result<StoredFile, E>
+where
+    T: Into<Fill>,
+    E: From<Error> + Display + 'static,
+```
+
+The file at the path, or, on a miss, the one `work` makes, written
+with the call's type and meta unless what it gives says its own.
+
+```rust
+let pages = store.files("pages").open()?;
+let page = pages.key(&format!("{hash}.pdf")).content_type("application/pdf").get_or_create(|| convert(doc))?;
+assert_eq!(page.info().content_type, "application/pdf");
+```
+
+While one call runs `work`, every other `get_or_create` of the path,
+in this process or through its server, waits for it and gets the file
+it wrote (BLOB-21). The call claims the path for 30 s and the store
+renews the claim while `work` runs, up to its [`timeout`](Self::timeout);
+what `work` gives lands only while the claim still holds the path and
+no file is there (BLOB-22). A put of the path meanwhile wins, and the
+calls get the put's file; a delete ends the claim, what `work` gave is
+dropped, and one of the calls runs it again, so `work` may run more
+than once. A failure of `work` is the answer of every call that waited
+for it, an error of the store's as it is and any other `unavailable`
+with its text, and the next call runs it again.
+
+Inside a database's transaction, or on a node's copy of blobs.db, it
+is `Invalid`; so is a call of the path inside its own `work`.
+
 ### FileCall.put
 
 ```rust
@@ -676,6 +719,65 @@ ceiling.
 ```rust
 pub fn open(self) -> Result<Files>
 ```
+
+## Fill
+
+```rust
+pub struct Fill { /* private fields */ }
+```
+
+What a `get_or_create`'s function gives: the file's bytes, whole, as a
+reader or in a file of this machine, and the type and the meta it is
+written with when the call gave none.
+
+```rust
+use tinystore::blobs::Fill;
+
+let pages = store.files("pages").open()?;
+let page = pages.key("7f3a.pdf").get_or_create(|| {
+    let pdf = std::fs::File::open("/tmp/7f3a.pdf").map_err(|error| tinystore::Error::io("the page", error))?;
+    Ok::<_, tinystore::Error>(Fill::reader(pdf).content_type("application/pdf")) // streamed, never whole in memory
+})?;
+```
+
+### Fill.bytes
+
+```rust
+pub fn bytes(bytes: impl Into<Vec<u8>>) -> Fill
+```
+
+### Fill.reader
+
+```rust
+pub fn reader(reader: impl Read + Send + 'static) -> Fill
+```
+
+Bytes read to their end as they are written, a piece at a time.
+
+### Fill.file
+
+```rust
+pub fn file(path: impl Into<PathBuf>) -> Fill
+```
+
+The bytes of a file of this machine, read as they are written.
+
+### Fill.content_type
+
+```rust
+pub fn content_type(self, content_type: impl Into<String>) -> Self
+```
+
+The file's type, in place of the call's.
+
+### Fill.meta
+
+```rust
+pub fn meta(self, name: impl Into<String>, value: impl Into<String>) -> Self
+```
+
+A string of the program's the file carries; any given here take the
+place of the call's.
 
 ## FileInfo
 
@@ -1410,6 +1512,46 @@ pub fn size(self, bytes: u64) -> Self
 
 How long the body is; one longer or shorter is refused and leaves
 nothing.
+
+### aio::blobs::FileCall.timeout
+
+```rust
+pub fn timeout(self, timeout: Duration) -> Self
+```
+
+How long a `get_or_create`'s claim of the path is renewed while its
+function runs: 10 minutes unless said.
+
+### aio::blobs::FileCall.get_or_create
+
+```rust
+pub fn get_or_create<T, E, W, F>(
+    self,
+    work: W,
+) -> impl Future<Output = Result<StoredFile, E>> + Send + use<T, E, W, F>
+where
+    T: Into<Fill> + Send,
+    E: From<Error> + Display + Send + 'static,
+    W: FnMut() -> F + Send,
+    F: Future<Output = Result<T, E>> + Send,
+```
+
+The file at the path, or, on a miss, the one the future `work` gives
+makes, as `crate::blobs::FileCall::get_or_create` makes it: the
+calls of the path wait for one another's runs, the blocking ones
+among them, and a call waits on no thread.
+
+```rust
+let pages = store.files("pages").open()?;
+let page = pages.key("7f3a.pdf").content_type("application/pdf").get_or_create(|| convert("lecture")).await?;
+let pdf = page.read_all().await?;
+```
+
+The claim and the write of what `work` gave run on the store's pool,
+a reader's bytes and a file's read there. Dropped while it waits for
+another run, the call leaves and that run goes on; dropped while
+`work` runs, the claim is let go and nothing is written, and the next
+call runs its own.
 
 ### aio::blobs::FileCall.put
 

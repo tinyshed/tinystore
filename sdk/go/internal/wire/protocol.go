@@ -7,26 +7,27 @@ import "math"
 
 // The methods, by their numbers on the wire.
 const (
-	MethodBackupWrite     = 0x0801
-	MethodBlobsOpen       = 0x0401
-	MethodBlobsPut        = 0x0402
-	MethodBlobsUpload     = 0x0403
-	MethodBlobsGet        = 0x0404
-	MethodBlobsHead       = 0x0405
-	MethodBlobsDelete     = 0x0406
-	MethodBlobsCopy       = 0x0407
-	MethodBlobsRename     = 0x0408
-	MethodBlobsExpire     = 0x0409
-	MethodBlobsList       = 0x040a
-	MethodBlobsUsage      = 0x040b
-	MethodBlobsClear      = 0x040c
-	MethodBlobsRead       = 0x040d
-	MethodBlobsDirectory  = 0x040e
-	MethodBlobsScan       = 0x040f
-	MethodBlobsChanges    = 0x0410
-	MethodBlobsForget     = 0x0411
-	MethodBlobsSetMaxSize = 0x0413
-	MethodBlobsTrim       = 0x0414
+	MethodBackupWrite      = 0x0801
+	MethodBlobsOpen        = 0x0401
+	MethodBlobsPut         = 0x0402
+	MethodBlobsUpload      = 0x0403
+	MethodBlobsGet         = 0x0404
+	MethodBlobsHead        = 0x0405
+	MethodBlobsDelete      = 0x0406
+	MethodBlobsCopy        = 0x0407
+	MethodBlobsRename      = 0x0408
+	MethodBlobsExpire      = 0x0409
+	MethodBlobsList        = 0x040a
+	MethodBlobsUsage       = 0x040b
+	MethodBlobsClear       = 0x040c
+	MethodBlobsRead        = 0x040d
+	MethodBlobsDirectory   = 0x040e
+	MethodBlobsScan        = 0x040f
+	MethodBlobsChanges     = 0x0410
+	MethodBlobsForget      = 0x0411
+	MethodBlobsGetOrCreate = 0x0412
+	MethodBlobsSetMaxSize  = 0x0413
+	MethodBlobsTrim        = 0x0414
 	// Answers once the store has the message, not once anyone handled it; in a
 	// database's transaction, it is handed over once the transaction commits.
 	MethodChannelsPublish = 0x0a01
@@ -170,6 +171,7 @@ var methodNames = []struct {
 	{"blobs.scan", MethodBlobsScan},
 	{"blobs.changes", MethodBlobsChanges},
 	{"blobs.forget", MethodBlobsForget},
+	{"blobs.getOrCreate", MethodBlobsGetOrCreate},
 	{"blobs.setMaxSize", MethodBlobsSetMaxSize},
 	{"blobs.trim", MethodBlobsTrim},
 	{"channels.publish", MethodChannelsPublish},
@@ -341,6 +343,10 @@ func NewMessage(name string) Message {
 		return &BlobsChange{}
 	case "blobs.Changes":
 		return &BlobsChanges{}
+	case "blobs.Claim":
+		return &BlobsClaim{}
+	case "blobs.Filled":
+		return &BlobsFilled{}
 	case "channels.Publish":
 		return &ChannelsPublish{}
 	case "channels.Subscribe":
@@ -1134,6 +1140,8 @@ type BlobsWrite struct {
 	Create bool `wire:"9,create"`
 	// a put's whole body; nothing for an upload
 	Bytes []byte `wire:"10,bytes"`
+	// a getOrCreate's stream on this connection: the write lands its run, only while that run's claim holds the path and only where no file is, and info is none when it did not
+	Fill *uint64 `wire:"11,fill"`
 }
 
 func (m BlobsWrite) Write(w *Writer) {
@@ -1196,6 +1204,11 @@ func (m BlobsWrite) Write(w *Writer) {
 		w.Bin(m.Bytes)
 		n++
 	}
+	if m.Fill != nil {
+		w.Uint(11)
+		w.Uint(*m.Fill)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -1242,6 +1255,9 @@ func (m *BlobsWrite) Read(r *Reader) {
 			m.Create = r.Bool()
 		case 10:
 			m.Bytes = r.Bin()
+		case 11:
+			v := r.Uint()
+			m.Fill = &v
 		default:
 			r.Skip()
 		}
@@ -1260,7 +1276,8 @@ func (m BlobsWrite) IsZero() bool {
 		m.IfMatch == nil &&
 		m.Size == nil &&
 		!m.Create &&
-		len(m.Bytes) == 0
+		len(m.Bytes) == 0 &&
+		m.Fill == nil
 }
 
 // BlobsWritten is the schema's blobs.Written.
@@ -2573,6 +2590,147 @@ func (m *BlobsChanges) Read(r *Reader) {
 func (m BlobsChanges) IsZero() bool {
 	return len(m.Items) == 0 &&
 		m.Next == ""
+}
+
+// BlobsClaim is the schema's blobs.Claim.
+//
+// A getOrCreate of a path: the file there, or the run of the function that
+// makes it, handed to the client while no other run holds the path's claim.
+type BlobsClaim struct {
+	Handle uint64   `wire:"1,handle"`
+	Folder []string `wire:"2,folder"`
+	Path   string   `wire:"3,path"`
+	// how long the server renews the claim while the run goes; 10 minutes when absent
+	Timeout *uint64 `wire:"4,timeout"`
+}
+
+func (m BlobsClaim) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Handle != 0 {
+		w.Uint(1)
+		w.Uint(m.Handle)
+		n++
+	}
+	if len(m.Folder) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Folder))
+		for _, item0 := range m.Folder {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Path != "" {
+		w.Uint(3)
+		w.Str(m.Path)
+		n++
+	}
+	if m.Timeout != nil {
+		w.Uint(4)
+		w.Uint(*m.Timeout)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsClaim) Read(r *Reader) {
+	*m = BlobsClaim{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Handle = r.Uint()
+		case 2:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Folder = v
+		case 3:
+			m.Path = r.Str()
+		case 4:
+			v := r.Uint()
+			m.Timeout = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsClaim writes as no field at all.
+func (m BlobsClaim) IsZero() bool {
+	return m.Handle == 0 &&
+		len(m.Folder) == 0 &&
+		m.Path == "" &&
+		m.Timeout == nil
+}
+
+// BlobsFilled is the schema's blobs.Filled.
+//
+// A getOrCreate's answer. As the server's RESPONSE·END: the file at the path,
+// its bytes when they fit one message, as a get's. As the RESPONSE alone:
+// the run is the client's, which writes its function's result with a put or
+// an upload whose fill names this stream, then sends a blobs.Filled as its
+// last DATA, with the failure when the function or the write failed, which
+// every call that waited for the run then gets. The server's DATA·END,
+// empty, follows.
+type BlobsFilled struct {
+	Info    *BlobsInfo `wire:"1,info"`
+	Bytes   []byte     `wire:"2,bytes"`
+	Failure *Failure   `wire:"3,failure"`
+}
+
+func (m BlobsFilled) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Info != nil {
+		w.Uint(1)
+		m.Info.Write(w)
+		n++
+	}
+	if len(m.Bytes) > 0 {
+		w.Uint(2)
+		w.Bin(m.Bytes)
+		n++
+	}
+	if m.Failure != nil {
+		w.Uint(3)
+		m.Failure.Write(w)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsFilled) Read(r *Reader) {
+	*m = BlobsFilled{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			var v BlobsInfo
+			v.Read(r)
+			m.Info = &v
+		case 2:
+			m.Bytes = r.Bin()
+		case 3:
+			var v Failure
+			v.Read(r)
+			m.Failure = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsFilled writes as no field at all.
+func (m BlobsFilled) IsZero() bool {
+	return m.Info == nil &&
+		len(m.Bytes) == 0 &&
+		m.Failure == nil
 }
 
 // ChannelsPublish is the schema's channels.Publish.

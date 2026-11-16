@@ -67,6 +67,7 @@ use crate::sync::lock;
 use crate::{Error, Key, Result};
 
 mod cache;
+mod filling;
 mod list;
 mod read;
 mod upload;
@@ -302,6 +303,48 @@ impl FileCall<'_> {
     pub fn size(mut self, bytes: u64) -> Self {
         self.call = self.call.size(bytes);
         self
+    }
+
+    /// How long a `get_or_create`'s claim of the path is renewed while its
+    /// function runs: 10 minutes unless said.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.call = self.call.timeout(timeout);
+        self
+    }
+
+    /// The file at the path, or, on a miss, the one the future `work` gives
+    /// makes, as [`crate::blobs::FileCall::get_or_create`] makes it: the
+    /// calls of the path wait for one another's runs, the blocking ones
+    /// among them, and a call waits on no thread.
+    ///
+    /// ```no_run
+    /// # async fn convert(doc: &str) -> tinystore::Result<Vec<u8>> { Ok(doc.as_bytes().to_vec()) }
+    /// # async fn example(store: tinystore::aio::Store) -> tinystore::Result<()> {
+    /// let pages = store.files("pages").open()?;
+    /// let page = pages.key("7f3a.pdf").content_type("application/pdf").get_or_create(|| convert("lecture")).await?;
+    /// let pdf = page.read_all().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The claim and the write of what `work` gave run on the store's pool,
+    /// a reader's bytes and a file's read there. Dropped while it waits for
+    /// another run, the call leaves and that run goes on; dropped while
+    /// `work` runs, the claim is let go and nothing is written, and the next
+    /// call runs its own.
+    pub fn get_or_create<T, E, W, F>(
+        self,
+        work: W,
+    ) -> impl Future<Output = std::result::Result<StoredFile, E>> + Send + use<T, E, W, F>
+    where
+        T: Into<crate::blobs::Fill> + Send,
+        E: From<Error> + fmt::Display + Send + 'static,
+        W: FnMut() -> F + Send,
+        F: Future<Output = std::result::Result<T, E>> + Send,
+    {
+        let whole = self.call.to_get_or_create();
+        let owned = self.owned();
+        async move { filling::get_or_create(owned, whole?, work).await }
     }
 
     /// Writes the file and replaces whatever the path held, at the moment its

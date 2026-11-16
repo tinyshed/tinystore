@@ -6,6 +6,13 @@
 //! written in order as they come, the credit of each given back once it is
 //! written, and its last DATA publishes the file.
 //!
+//! A getOrCreate is handed over as a once run is: the file there ends its
+//! stream, or the run is the client's, which writes its function's result
+//! with a put or an upload naming the stream in `fill`, then ends the
+//! stream with its last DATA. The claim is the connection's while the stream
+//! is open: the store renews it, and a CANCEL or the connection's end lets it
+//! go at once.
+//!
 //! A directory's handle takes the reads of a set of files, its bytes from
 //! the disk, and its own calls: a scan, its changes and a forget. A
 //! connection that came with a token names no path of the server's machine:
@@ -14,18 +21,21 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use super::codec::{self, Map, Message};
 use super::protocol::{
-    BlobsAt, BlobsChange, BlobsChanges, BlobsDelete, BlobsDirectory, BlobsExpire, BlobsFolder, BlobsFound, BlobsGot,
-    BlobsHead, BlobsInfo, BlobsList, BlobsMove, BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsScanned,
-    BlobsSetMaxSize, BlobsSince, BlobsTrim, BlobsTrimmed, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle,
-    method,
+    BlobsAt, BlobsChange, BlobsChanges, BlobsClaim, BlobsDelete, BlobsDirectory, BlobsExpire, BlobsFilled, BlobsFolder,
+    BlobsFound, BlobsGot, BlobsHead, BlobsInfo, BlobsList, BlobsMove, BlobsOpen, BlobsPage, BlobsPiece, BlobsRead,
+    BlobsScanned, BlobsSetMaxSize, BlobsSince, BlobsTrim, BlobsTrimmed, BlobsUsage, BlobsWrite, BlobsWritten, Empty,
+    Failure, Handle, method,
 };
 use super::{Lent, Link, Route};
-use crate::blobs::{Change, Directory, FileCall, FileInfo, Files, StoredFile, Upload, WhenFull};
+use crate::blobs::{
+    Change, Directory, FileCall, FileInfo, Files, Filling, Hand, Outcome, StoredFile, TIMEOUT, Upload, WhenFull,
+};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, unix_millis};
 
@@ -35,6 +45,7 @@ pub(crate) fn route(called: u16) -> Route {
     match called {
         method::BLOBS_READ => Route::Read,
         method::BLOBS_UPLOAD => Route::Upload,
+        method::BLOBS_GET_OR_CREATE => Route::Fill,
         _ => Route::Worker,
     }
 }
@@ -45,6 +56,11 @@ pub(crate) struct Handles {
     open: super::ByHandle<Held>,
     reads: Arc<Mutex<HashMap<u32, Arc<Getting>>>>,
     uploads: Arc<Mutex<HashMap<u32, Arc<Uploading>>>>,
+    /// The clients' getOrCreates, by stream, from the REQUEST to the last frame.
+    fills: Mutex<HashMap<u32, ClientFill>>,
+    /// Numbers each getOrCreate's asking, so that a wait that ends after its
+    /// stream was cancelled, and its number named again, finds another there.
+    asked: AtomicU64,
     /// The connection came with a token, and names no path (BLOB-15).
     token: bool,
     /// The folders the server was given, by their directory's name.
@@ -137,7 +153,183 @@ impl Handles {
         for uploading in uploads {
             uploading.cancel();
         }
+        // a run handed over lets its claim go as it drops, outside the lock
+        let fills: Vec<_> = lock(&self.fills).drain().collect();
+        drop(fills);
     }
+
+    /// Starts asking for a getOrCreate's path on `stream`, and numbers it.
+    pub(crate) fn ask_fill(&self, stream: u32) -> u64 {
+        let asked = self.asked.fetch_add(1, Ordering::Relaxed);
+        lock(&self.fills).insert(stream, ClientFill::Asking(asked));
+        asked
+    }
+
+    /// Settles the asking `asked` on `stream` as it came out, unless the
+    /// stream asks no more. An answer is sent under the lock, so that a
+    /// CANCEL finds the stream still asking or after its frames: `send`
+    /// takes the answer and whether it ends the stream.
+    pub(crate) fn settle_fill(
+        &self,
+        (stream, asked): (u32, u64),
+        came: Asked,
+        send: impl FnOnce(Result<Vec<u8>, Failure>, bool),
+    ) {
+        let mut fills = lock(&self.fills);
+        if !matches!(fills.get(&stream), Some(ClientFill::Asking(asking)) if *asking == asked) {
+            drop(fills);
+            return drop(came);
+        }
+        match came {
+            Asked::Answered(answer) => {
+                fills.remove(&stream);
+                send(answer, true);
+            }
+            Asked::Handed(handed) => {
+                fills.insert(stream, ClientFill::Handed(handed));
+                send(Ok(BlobsFilled::default().encode()), false);
+            }
+            Asked::Waiting => {}
+        }
+    }
+
+    /// The run handed over on `stream`, taken out for its last DATA; none for
+    /// a stream that is no getOrCreate's, or one still asking.
+    pub(crate) fn take_handed(&self, stream: u32) -> Option<Box<Handed>> {
+        let mut fills = lock(&self.fills);
+        match fills.remove(&stream)? {
+            ClientFill::Handed(handed) => Some(handed),
+            asking => {
+                fills.insert(stream, asking);
+                None
+            }
+        }
+    }
+
+    /// The getOrCreate on `stream` the client cancelled, taken out.
+    pub(crate) fn cancel_fill(&self, stream: u32) -> Option<ClientFill> {
+        lock(&self.fills).remove(&stream)
+    }
+
+    /// The owner of the run handed over on `stream`, which a write of
+    /// `files`' path `whole` lands.
+    fn fill_owner(&self, stream: u64, files: &Files, whole: &str) -> Result<i64, Failure> {
+        let fills = lock(&self.fills);
+        let handed = u32::try_from(stream).ok().and_then(|stream| match fills.get(&stream) {
+            Some(ClientFill::Handed(handed)) => Some(handed),
+            _ => None,
+        });
+        match handed {
+            Some(handed) if handed.filling.is_of(files, whole) => Ok(handed.filling.owner()),
+            Some(_) => Err(Failure::invalid(format!("fill {stream}: the run of another path"))),
+            None => Err(Failure::invalid(format!("fill {stream}: no getOrCreate's run this connection was handed"))),
+        }
+    }
+}
+
+/// Where a client's getOrCreate stands.
+pub(crate) enum ClientFill {
+    /// Asking for its path, or waiting for the run that holds it.
+    Asking(u64),
+    /// Handed to the client, until its last DATA, a CANCEL or the session's end.
+    Handed(Box<Handed>),
+}
+
+/// A run handed to a client: its claim, and the files and the path its
+/// outcome and its failure are said of.
+pub(crate) struct Handed {
+    filling: Filling,
+    files: Files,
+    whole: String,
+}
+
+/// What a getOrCreate's asking came to.
+pub(crate) enum Asked {
+    /// The file there, or a failure: the stream's end.
+    Answered(Result<Vec<u8>, Failure>),
+    Handed(Box<Handed>),
+    /// A run of the store's holds the path; the stream asks again as it ends.
+    Waiting,
+}
+
+/// What a getOrCreate waiting for a run is told as it ends: the failure that
+/// run ended with, or none to ask again.
+pub(crate) type Again = Box<dyn FnOnce(Option<Failure>) + Send>;
+
+/// Asks for a getOrCreate's path: the file there, or the run claimed for the
+/// client, or a wait for the run that holds it, `again` told as it ends.
+/// `waited` says it waited before, which a file found counts.
+pub(crate) fn get_or_create(handles: &Handles, body: &[u8], (waited, max_body): (bool, usize), again: Again) -> Asked {
+    match asked_fill(handles, body, (waited, max_body), again) {
+        Ok(asked) => asked,
+        Err(failure) => Asked::Answered(Err(failure)),
+    }
+}
+
+fn asked_fill(
+    handles: &Handles,
+    body: &[u8],
+    (waited, max_body): (bool, usize),
+    again: Again,
+) -> Result<Asked, Failure> {
+    let asked = BlobsClaim::decode(body)?;
+    let files = handles.at(asked.handle, &asked.folder)?;
+    let whole = files.key(&asked.path).to_get_or_create()?;
+    let timeout = asked.timeout.map_or(TIMEOUT, Duration::from_millis);
+    let counted = files.clone();
+    let waiter = Box::new(move |failure: Option<Arc<crate::Error>>| {
+        if failure.is_some() {
+            Outcome::Failed.count(&counted);
+        }
+        again(failure.map(|failure| Failure::from(failure.duplicate())));
+    });
+    let mut waiter: Option<crate::blobs::Waiter> = Some(waiter);
+    loop {
+        if let Some(file) = files.get(&asked.path)? {
+            (if waited { Outcome::Wait } else { Outcome::Hit }).count(&files);
+            return Ok(Asked::Answered(filled(file, max_body)));
+        }
+        let told = waiter.take().ok_or_else(|| Failure::internal("a getOrCreate asked twice for one wait"))?;
+        match files.hand(&whole, timeout, None, told).map_err(|error| files.fail(&whole, error))? {
+            Hand::There => waiter = Some(Box::new(|_| {})),
+            Hand::Waiting => return Ok(Asked::Waiting),
+            Hand::Yours(filling) => return Ok(Asked::Handed(Box::new(Handed { filling, files, whole }))),
+        }
+    }
+}
+
+/// A getOrCreate's answer of the file it found: a get's answer, since
+/// `blobs.Filled` numbers its info and bytes as `blobs.Got` does and leaves
+/// its failure out, as the test beside it checks.
+fn filled(mut file: StoredFile, max_body: usize) -> Result<Vec<u8>, Failure> {
+    let info = info_of(file.info().clone());
+    // as a get's: a larger file waits for its read
+    if info.size > (max_body / 2) as u64 {
+        return Ok(BlobsGot { info: Some(info), bytes: Vec::new() }.encode());
+    }
+    got_whole(info, &mut file)
+}
+
+/// Ends a run handed over at the client's last DATA: its write landed, or
+/// was dropped, or the failure it names is every waiting call's answer.
+pub(crate) fn run_ended(handed: Box<Handed>, body: &[u8]) -> Answered {
+    let ended = BlobsFilled::decode(body)?;
+    match ended.failure {
+        Some(failure) => {
+            Outcome::Failed.count(&handed.files);
+            let error = handed.files.fail(&handed.whole, error_of(failure));
+            handed.filling.fail(error);
+        }
+        None => Outcome::Run.count(&handed.files),
+    }
+    Ok(BlobsFilled::default().encode())
+}
+
+/// The error a client's failure names, its kind by its code: a code the
+/// core does not know is `conflict`, as any failure of a function is.
+fn error_of(failure: Failure) -> Error {
+    let kind = ErrorKind::named(&failure.code).unwrap_or(ErrorKind::Conflict);
+    Error::new(kind, failure.message)
 }
 
 /// Answers a call of one message: everything but a read and an upload. A
@@ -179,6 +371,9 @@ pub(crate) fn call_in(handles: &Handles, tx: &crate::Transaction<'_>, called: u1
     match called {
         method::BLOBS_PUT => {
             let mut asked = BlobsWrite::decode(body)?;
+            if asked.fill.is_some() {
+                return Err(Failure::invalid("a getOrCreate's write inside a transaction: write it outside"));
+            }
             let files = handles.at(asked.handle, &asked.folder)?;
             let bytes = std::mem::take(&mut asked.bytes);
             let call = options(files.in_tx(tx).key(&asked.path), &asked);
@@ -384,8 +579,16 @@ fn forget(handles: &Handles, asked: &BlobsFolder) -> Answered {
 fn put(handles: &Handles, mut asked: BlobsWrite) -> Answered {
     let files = handles.at(asked.handle, &asked.folder)?;
     let bytes = std::mem::take(&mut asked.bytes);
-    let info = options(files.key(&asked.path), &asked).written(&bytes, asked.create)?;
+    let info = filling(handles, &files, &asked)?.written(&bytes, asked.create)?;
     Ok(BlobsWritten { info: info.map(info_of) }.encode())
+}
+
+/// A write's call, which lands the run of the getOrCreate its `fill` names.
+fn filling<'f>(handles: &Handles, files: &'f Files, asked: &BlobsWrite) -> Result<FileCall<'f>, Failure> {
+    let call = options(files.key(&asked.path), asked);
+    let Some(stream) = asked.fill else { return Ok(call) };
+    let whole = files.whole(&asked.path)?;
+    Ok(call.filling(handles.fill_owner(stream, files, &whole)?))
 }
 
 fn get(handles: &Handles, asked: &BlobsAt, max_body: usize) -> Answered {
@@ -788,7 +991,7 @@ impl Getting {
 pub(crate) fn upload(handles: &Handles, stream: u32, body: &[u8], link: &Link) -> Result<(), Failure> {
     let asked = BlobsWrite::decode(body)?;
     let files = handles.at(asked.handle, &asked.folder)?;
-    let upload = options(files.key(&asked.path), &asked).upload()?;
+    let upload = filling(handles, &files, &asked)?.upload()?;
     let state =
         UploadState { upload: Some(upload), pieces: VecDeque::new(), busy: false, cancelled: false, ended: false };
     let uploading = Arc::new(Uploading {
@@ -914,3 +1117,7 @@ impl Uploading {
 #[cfg(test)]
 #[path = "blobs_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "blobs_fill_tests.rs"]
+mod fill_tests;

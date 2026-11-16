@@ -20,6 +20,7 @@ mod directory;
 mod disk;
 mod engine;
 mod files;
+mod filling;
 #[cfg(test)]
 pub(crate) mod fixture;
 #[cfg(feature = "replication")]
@@ -42,6 +43,9 @@ pub(crate) use engine::{FILE_IN_STORE, is_object, objects_after, objects_missing
 // What the command line lists of a store's names, and what each holds.
 #[cfg(feature = "client")]
 pub(crate) use engine::{ceilings, held, miscounted, sets};
+// What the tests of the wire look at: the runs of getOrCreate under way.
+#[cfg(all(test, feature = "wire"))]
+pub(crate) use engine::Blobs;
 // What a connection that only reads opens: a set of files the store holds.
 #[cfg(feature = "wire")]
 pub(crate) use directory::directory_as_it_is;
@@ -53,6 +57,11 @@ pub(crate) use engine::set_in_file_as_it_is;
 pub use files::{FileCall, Files, FilesBuilder};
 #[cfg(feature = "async")]
 pub(crate) use files::{Freed, Options as CallOptions};
+pub use filling::Fill;
+#[cfg(feature = "async")]
+pub(crate) use filling::failure_of;
+#[cfg(any(feature = "wire", feature = "async"))]
+pub(crate) use filling::{Filling, Hand, Outcome, TIMEOUT, Waiter};
 pub use info::{FileInfo, Page, Usage};
 pub use list::{All, List, PAGE_FILES};
 pub use maintain::{Maintenance, maintain};

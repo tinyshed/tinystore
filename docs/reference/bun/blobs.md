@@ -107,6 +107,38 @@ type Body = string | Uint8Array | ArrayBuffer | Blob | ReadableStream<Uint8Array
 
 What a write takes: text, bytes, a Blob or a file, or a stream of bytes.
 
+## Fill
+
+```ts
+interface Fill {
+    data?: Body | undefined
+    path?: string | undefined
+    contentType?: string | undefined
+    meta?: Record<string, string> | undefined
+}
+```
+
+What a getOrCreate's function gives: the file's bytes as data, or the
+path of a file of this machine, streamed as it is written; its type and
+meta win over the call's.
+
+## GetOrCreateOptions
+
+```ts
+interface GetOrCreateOptions {
+    /** the file's type when the function gives none */
+    contentType?: string | undefined
+    /** the file's meta when the function gives none */
+    meta?: Record<string, string> | undefined
+    /** the file's own term, from its write */
+    ttl?: Duration | undefined
+    /** how long the claim of the path is renewed while the function runs: 10 minutes when absent */
+    timeout?: Duration | undefined
+    /** stops this call's wait; a run it waits for goes on */
+    signal?: AbortSignal | undefined
+}
+```
+
 ## FileListOptions
 
 ```ts
@@ -296,6 +328,27 @@ upload(path: string, options?: FileOptions): Promise<Upload>
 Begins a file written a piece at a time, which appears at `commit` and
 never before: `await using upload = await files.upload(path)`, and
 leaving the block without commit aborts it.
+
+### Files.getOrCreate
+
+```ts
+getOrCreate(path: string, fn: () => Fill | Promise<Fill>, options?: GetOrCreateOptions): Promise<StoredFile>
+```
+
+The file at the path, or, on a miss, the one fn's Fill makes. While
+one call runs fn, every other getOrCreate of the path, in this process
+or another, waits for it and gets the file it wrote. The call claims
+the path and the store renews the claim while fn runs, up to
+`timeout`; fn's file lands only while the claim still holds the path
+and no file is there. A put of the path meanwhile wins, and the calls
+get the put's file; a delete ends the claim, fn's file is dropped and
+one of the calls runs fn again, so fn may run more than once, as it
+may after a lost connection. A throw of fn is this call's own error
+and the ConflictError of every call that waited for it, with its
+message, or the store's own error as it is; the next call runs fn
+again.
+
+    const page = await pages.getOrCreate(`${hash}.pdf`, async () => ({ data: await convert(doc), contentType: 'application/pdf' }))
 
 ## Upload
 

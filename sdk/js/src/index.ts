@@ -9,6 +9,8 @@ export type {
 	Files,
 	FilesOptions,
 	FilesUsage,
+	Fill,
+	GetOrCreateOptions,
 	Size,
 	StoredFile,
 	Trim,

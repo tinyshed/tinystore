@@ -133,6 +133,7 @@ impl Files {
         let bound = i64::try_from(CLEAR_AT_ONCE).unwrap_or(i64::MAX);
         let clearing = move |tx: &Tx<'_>| {
             let mut change = Change::new(tx, &blobs);
+            change.end_claims_under(set, &from, &to)?;
             let count: i64 = tx
                 .prepare_cached(COUNT_UNDER)
                 .and_then(|mut statement| statement.query_row(params![set, from, to, bound + 1], |row| row.get(0)))

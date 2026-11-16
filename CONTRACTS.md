@@ -167,6 +167,8 @@ These contracts are what does not.
 - **BLOB-18** A write past `max_size` MUST remove the lowest rank first, the rank a file's last use, a day later for a file read since its write, and never the file it writes.
 - **BLOB-19** A write MUST commit only leaving its set at most `max(max_size, its size before)`, or fail `limit` with nothing it evicted removed.
 - **BLOB-20** `max_size` and `when_full` MUST be the set's, kept in its file: an open with another MUST fail `conflict`, and only `set_max_size` MUST change them.
+- **BLOB-21** Concurrent `getOrCreate`s of one path, in the store's process and through its server, MUST run the function once while its claim holds, and each MUST get the file that run wrote or the error it failed with.
+- **BLOB-22** A `getOrCreate`'s result MUST land only while its claim holds the path, and only on an empty path: a `put` of the path meanwhile wins, a `delete` ends the claim, and a run whose claim ran out writes nothing.
 - **BLOB-23** With `when_full` refuse, a write that grows its set past `max_size` MUST fail `limit` and remove nothing.
 - **BLOB-24** `trim` MUST leave its set at most `to` in the eviction's order and keep its ceiling, and MUST be refused on a set whose ceiling refuses.
 
