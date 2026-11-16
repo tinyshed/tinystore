@@ -18,7 +18,7 @@ import pytest
 import tinystore
 from tinystore._connection import start_failure
 from tinystore._session import PROTOCOL
-from ways import BINARY, CORE, SERVED, WAYS
+from ways import BINARY, CORE, SERVED, TOKEN, WAYS, until
 
 LOCAL = [way for way in WAYS if way.name != "a remote server over TCP" and way.ready]
 """The ways a store opens from its directory: every one but a remote server's."""
@@ -283,3 +283,33 @@ async def test_a_store_closed_while_it_dials_returns_at_once_and_its_waiting_cal
     with pytest.raises(tinystore.ClosedError, match="the store is closed"):
         await waiting
     await holder.close()
+
+
+# contract: WIRE-12
+@pytest.mark.skipif(not SERVED, reason="tinystore is not built here")
+async def test_a_connect_past_a_servers_bound_on_its_connections_fails_limit_naming_the_bound(directory: Path) -> None:
+    assert BINARY is not None
+    (directory / "tokens").write_text(f"admin {TOKEN}\n")
+    serve = directory / "store" / "server" / "SERVE"
+    listen = ["--listen", "tcp://127.0.0.1:0", "--tokens", str(directory / "tokens"), "--max-connections", "1"]
+    server = subprocess.Popen(
+        [BINARY, "serve", str(directory / "store"), *listen], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+    def endpoints() -> list[str]:
+        # the server may still be writing SERVE: Windows refuses a read meanwhile
+        try:
+            return json.loads(serve.read_text())["endpoints"]
+        except (OSError, ValueError, KeyError):
+            return []
+
+    try:
+        await until(lambda: len(endpoints()) >= 2)
+        endpoint = endpoints()[1]
+        async with await tinystore.connect(endpoint, token=TOKEN) as first:
+            await first.bucket("notes", str).set("a", "the one connection")
+            with pytest.raises(tinystore.LimitError, match="1 connections at most"):
+                await tinystore.connect(endpoint, token=TOKEN)
+    finally:
+        server.kill()
+        await asyncio.to_thread(server.wait)

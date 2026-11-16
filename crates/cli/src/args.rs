@@ -7,6 +7,7 @@
 //! tinystore serve <dir> --max-series 1000000                                               a store of many series
 //! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key                   its key kept apart
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
+//! tinystore serve <dir> --listen tls://0.0.0.0:7443 … --max-connections 256                 at most 256 at once
 //! tinystore serve <dir> --node-listen 0.0.0.0:7444 [--node-config node.toml]               a node other nodes copy
 //! tinystore serve <dir> --from eu:7444 --from us:7444 [--node-config node.toml]            a node that copies
 //! ```
@@ -86,6 +87,9 @@ pub(crate) struct Remote {
     pub(crate) tokens: PathBuf,
     /// The certificate chain and key a `tls://` address answers with, PEM.
     pub(crate) tls: Option<(PathBuf, PathBuf)>,
+    /// The connections the address takes at once, a next one refused
+    /// `limit`; as many as come when `None`.
+    pub(crate) max_connections: Option<usize>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -112,9 +116,17 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         None if given.cert.is_some() || given.key.is_some() || given.tokens.is_some() => {
             return Err("--tls-cert, --tls-key and --tokens are --listen's".to_owned());
         }
+        None if given.max_connections.is_some() => {
+            return Err(
+                "--max-connections bounds --listen's connections, and this machine's are not counted".to_owned()
+            );
+        }
         None => None,
         Some(_) if transport == Transport::Stdio => return Err("--listen or --stdio, not both".to_owned()),
-        Some(address) => Some(remote(address, given.tokens, given.cert, given.key)?),
+        Some(address) => {
+            let remote = remote(address, given.tokens, given.cert, given.key)?;
+            Some(Remote { max_connections: given.max_connections, ..remote })
+        }
     };
     let memory = given.memory.or(remote.as_ref().map(|_| REMOTE_MEMORY));
     let idle = match (given.idle, &transport) {
@@ -180,6 +192,7 @@ struct Given {
     self_metrics: bool,
     no_system_metrics: bool,
     max_series: Option<u64>,
+    max_connections: Option<usize>,
     node: Node,
     node_config: Option<PathBuf>,
 }
@@ -216,6 +229,12 @@ impl Given {
                     let count = value("--max-series")?;
                     let most = count.parse::<u64>().ok().filter(|most| *most > 0);
                     given.max_series = Some(most.ok_or_else(|| format!("--max-series {count}: a count above 0"))?);
+                }
+                "--max-connections" => {
+                    let count = value("--max-connections")?;
+                    let most = count.parse::<usize>().ok().filter(|most| *most > 0);
+                    let most = most.ok_or_else(|| format!("--max-connections {count}: a count above 0"))?;
+                    given.max_connections = Some(most);
                 }
                 "--node-listen" => given.node.listen = Some(value("--node-listen")?),
                 "--from" => given.node.from.push(value("--from")?),
@@ -275,7 +294,7 @@ fn remote(
         (false, None, None) => None,
         (false, ..) => return Err("--tls-cert and --tls-key are a tls:// address's".to_owned()),
     };
-    Ok(Remote { address, tokens, tls })
+    Ok(Remote { address, tokens, tls, max_connections: None })
 }
 
 /// A size as `--memory` takes it: bytes, or a number and KiB, MiB or GiB.
@@ -406,6 +425,13 @@ mod tests {
     fn the_series_a_store_holds_are_the_stores_own_unless_said() {
         assert_eq!(serve(&args("d")).unwrap().max_series, None);
         assert_eq!(serve(&args("d --max-series 1000000")).unwrap().max_series, Some(1_000_000));
+        let listen = "d --listen tcp://0.0.0.0:7443 --tokens t";
+        let bound =
+            |more: &str| serve(&args(&format!("{listen} {more}"))).map(|serve| serve.remote.unwrap().max_connections);
+        assert_eq!(bound(""), Ok(None), "no bound unless given");
+        assert_eq!(bound("--max-connections 256"), Ok(Some(256)));
+        assert!(bound("--max-connections 0").unwrap_err().contains("a count above 0"));
+        assert!(serve(&args("d --max-connections 2")).unwrap_err().contains("--listen's"));
         assert_eq!(serve(&args("d --max-series 0")).unwrap_err(), "--max-series 0: a count above 0");
         assert_eq!(serve(&args("d --max-series many")).unwrap_err(), "--max-series many: a count above 0");
     }

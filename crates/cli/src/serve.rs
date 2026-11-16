@@ -8,6 +8,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Write as _};
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -245,7 +246,8 @@ async fn listen(store: &Store, listening: Listening, remote: Option<remote::Read
             return std::future::pending::<io::Result<()>>().await;
         };
         let connect = Connect { stop: Some(stop), admit: Some(ready.admit), ..Connect::default() };
-        accept_remote(tcp, ready.tls, store, &connect, &closed, &clients).await
+        let door = Door { tls: ready.tls, most: ready.max_connections, held: Arc::default() };
+        accept_remote(tcp, door, store, &connect, &closed, &clients).await
     };
     let why = tokio::select! {
         accepted = accepted => return accepted,
@@ -263,11 +265,49 @@ async fn listen(store: &Store, listening: Listening, remote: Option<remote::Read
     Ok(())
 }
 
+/// How the remote listener takes a connection: over TLS when the address
+/// said so, and while fewer than `most` of its own are held, `held` of them.
+struct Door {
+    tls: Option<TlsAcceptor>,
+    most: Option<usize>,
+    held: Arc<AtomicUsize>,
+}
+
+impl Door {
+    /// The connection's options, and what holds its place among the bound's
+    /// until it ends: none for a connection past the bound, which is told so
+    /// at its HELLO and counts against no other. Only the accept loop adds
+    /// to `held`, so no two connections take its last place.
+    fn enter(&self, connect: Connect) -> (Connect, Option<Held>) {
+        match self.most {
+            Some(most) if self.held.load(Ordering::Acquire) >= most => {
+                let why = format!("this server takes {most} connections at most, and holds {most}: try again later");
+                tracing::debug!(target: "tinystore", most, "a remote client turned away at the server's bound");
+                (Connect { turned_away: Some(why), ..connect }, None)
+            }
+            _ => {
+                self.held.fetch_add(1, Ordering::AcqRel);
+                (connect, Some(Held(Arc::clone(&self.held))))
+            }
+        }
+    }
+}
+
+/// A remote connection's place among `--max-connections`', given back as it ends.
+struct Held(Arc<AtomicUsize>);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Takes remote clients, each over TLS when the address said so, admitted
-/// by its token once its HELLO comes.
+/// by its token once its HELLO comes, and turned away `limit` past the
+/// door's bound; the local endpoint's clients count against none.
 async fn accept_remote(
     listener: TcpListener,
-    tls: Option<TlsAcceptor>,
+    door: Door,
     store: &Store,
     connect: &Connect,
     closed: &watch::Receiver<bool>,
@@ -286,8 +326,8 @@ async fn accept_remote(
         };
         let _ = stream.set_nodelay(true);
         let visit = served(clients);
-        let (store, connect, closed) = (store.clone(), visit.connect(connect), closed.clone());
-        let tls = tls.clone();
+        let (connect, held) = door.enter(visit.connect(connect));
+        let (store, closed, tls) = (store.clone(), closed.clone(), door.tls.clone());
         tokio::spawn(async move {
             match tls {
                 None => {
@@ -303,7 +343,7 @@ async fn accept_remote(
                     Err(_) => tracing::debug!(target: "tinystore", "a TLS handshake took too long"),
                 },
             }
-            drop(visit);
+            drop((held, visit));
         });
     }
 }

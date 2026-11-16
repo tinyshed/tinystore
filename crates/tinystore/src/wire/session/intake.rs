@@ -112,6 +112,9 @@ impl Shared {
                 None => return self.go_away(input, "unauthenticated", "no token this server knows"),
             },
         };
+        if let Some(why) = &self.connect.turned_away {
+            return self.go_away(input, "limit", why);
+        }
         input.capability = Some(capability);
         self.read_only.store(capability == Capability::Read, Ordering::Relaxed);
         let client_most = hello.max_body.unwrap_or(MAX_BODY);

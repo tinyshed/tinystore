@@ -198,8 +198,9 @@ fn a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_me
 }
 
 /// A server on a directory's local endpoint and on `listen`, with an admin
-/// token and a data token, and what `SERVE` says of it.
-fn remote(dir: &Path, listen: &str, tls: &[&Path]) -> (Child, serde_json::Value) {
+/// token and a data token and the flags `more` names, and what `SERVE` says
+/// of it.
+fn remote(dir: &Path, listen: &str, tls: &[&Path], more: &[&str]) -> (Child, serde_json::Value) {
     let tokens = dir.join("tokens");
     std::fs::write(&tokens, format!("# who may connect\nadmin {ADMIN}\ndata  {DATA}\n")).unwrap();
     let mut command = Command::new(BINARY);
@@ -207,6 +208,7 @@ fn remote(dir: &Path, listen: &str, tls: &[&Path]) -> (Child, serde_json::Value)
     if let [cert, key] = tls {
         command.arg("--tls-cert").arg(cert).arg("--tls-key").arg(key);
     }
+    command.args(more);
     let server = command.stderr(Stdio::null()).spawn().unwrap();
     let serve = published(&dir.join("store").join("server").join("SERVE"));
     (server, serve)
@@ -216,7 +218,7 @@ fn remote(dir: &Path, listen: &str, tls: &[&Path]) -> (Child, serde_json::Value)
 #[test]
 fn a_remote_client_is_admitted_by_its_token_and_may_do_what_its_line_says() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut server, serve) = remote(dir.path(), "tcp://127.0.0.1:0", &[]);
+    let (mut server, serve) = remote(dir.path(), "tcp://127.0.0.1:0", &[], &[]);
     let endpoint = serve["endpoints"][1].as_str().unwrap();
     let address = endpoint.strip_prefix("tcp://").unwrap();
 
@@ -242,6 +244,50 @@ fn a_remote_client_is_admitted_by_its_token_and_may_do_what_its_line_says() {
     assert_eq!(wait(&mut server), 0);
 }
 
+// contract: WIRE-12
+#[test]
+fn a_remote_connection_past_the_bound_is_turned_away_limit_and_a_local_one_is_not_counted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, serve) = remote(dir.path(), "tcp://127.0.0.1:0", &[], &["--max-connections", "2"]);
+    let address = serve["endpoints"][1].as_str().unwrap().strip_prefix("tcp://").unwrap().to_owned();
+    let welcomed = |stream: &mut std::net::TcpStream| {
+        stream.write_all(&hello_with(DATA)).unwrap();
+        read_frame(stream)
+    };
+    let mut first = std::net::TcpStream::connect(&address).unwrap();
+    assert_eq!(welcomed(&mut first).0, WELCOME);
+    let mut second = std::net::TcpStream::connect(&address).unwrap();
+    assert_eq!(welcomed(&mut second).0, WELCOME);
+
+    let mut third = std::net::TcpStream::connect(&address).unwrap();
+    let (kind, _, _, body) = welcomed(&mut third);
+    assert!(kind == GOAWAY && holds(&body, "limit"), "past the bound: {}", String::from_utf8_lossy(&body));
+    assert!(holds(&body, "2 connections at most"), "names the bound: {}", String::from_utf8_lossy(&body));
+    let mut stranger = std::net::TcpStream::connect(&address).unwrap();
+    stranger.write_all(&hello(None)).unwrap();
+    let (kind, _, _, body) = read_frame(&mut stranger);
+    assert!(kind == GOAWAY && holds(&body, "unauthenticated"), "a token is checked first");
+
+    let mut local = connect(serve["endpoints"][0].as_str().unwrap());
+    local.write_all(&hello(Some(b"0123456789abcdef"))).unwrap();
+    assert_eq!(read_frame(&mut local).0, WELCOME, "this machine's clients are not counted");
+
+    drop(first);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut again = std::net::TcpStream::connect(&address).unwrap();
+        if welcomed(&mut again).0 == WELCOME {
+            break;
+        }
+        assert!(Instant::now() < deadline, "a place given back is taken again");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    drop(second);
+    local.write_all(&frame(REQUEST, END, SERVER_STOP, 1, &[0x80])).unwrap();
+    assert_eq!(read_frame(&mut local).0, RESPONSE);
+    assert_eq!(wait(&mut server), 0);
+}
+
 #[test]
 fn a_tls_server_answers_over_its_certificate() {
     let dir = tempfile::tempdir().unwrap();
@@ -249,7 +295,7 @@ fn a_tls_server_answers_over_its_certificate() {
     let (cert, key) = (dir.path().join("cert.pem"), dir.path().join("key.pem"));
     std::fs::write(&cert, certified.cert.pem()).unwrap();
     std::fs::write(&key, certified.signing_key.serialize_pem()).unwrap();
-    let (mut server, serve) = remote(dir.path(), "tls://127.0.0.1:0", &[&cert, &key]);
+    let (mut server, serve) = remote(dir.path(), "tls://127.0.0.1:0", &[&cert, &key], &[]);
     let endpoint = serve["endpoints"][1].as_str().unwrap();
     assert!(endpoint.starts_with("tls://127.0.0.1:"), "{endpoint}");
 
@@ -273,7 +319,7 @@ fn a_tls_server_answers_over_its_certificate() {
 #[test]
 fn a_connection_that_says_no_hello_ends_with_the_handshakes_time() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut server, serve) = remote(dir.path(), "tcp://127.0.0.1:0", &[]);
+    let (mut server, serve) = remote(dir.path(), "tcp://127.0.0.1:0", &[], &[]);
     let address = serve["endpoints"][1].as_str().unwrap().strip_prefix("tcp://").unwrap().to_owned();
     let mut silent = std::net::TcpStream::connect(&address).unwrap();
     let began = Instant::now();

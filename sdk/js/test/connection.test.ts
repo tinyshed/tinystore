@@ -3,14 +3,16 @@
 // address given where a directory belongs.
 
 import { expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import { Link, olderRelease, olderServer, replacedSidecar, sidecar } from '../src/connection.ts'
-import { InvalidError, open } from '../src/index.ts'
+import { connect, InvalidError, LimitError, open } from '../src/index.ts'
 import { bunRuntime } from '../src/runtime/bun.ts'
+import { caught, removed, until } from './ways.ts'
 
 test('a server of an older release than its SDK is told apart, and only one', () => {
 	const cases: [server: string, own: string, older: boolean][] = [
@@ -85,6 +87,50 @@ test('a sidecar of an older release is stopped, and every client moves to the on
 		}
 	}
 }, 30_000)
+
+const binary = process.env.TINYSTORE_BIN
+// contract: WIRE-12
+test.skipIf(binary === undefined || binary === 'unused')(
+	"a connect past a server's bound on its connections fails limit, naming the bound",
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'tinystore-bound-'))
+		const token = '4dGQ6tR2kq0SxVZpLWn8E1yHf7cJmB3aUoN9Tz5Ki0E'
+		writeFileSync(join(dir, 'tokens'), `admin ${token}\n`)
+		const args = [
+			'serve',
+			join(dir, 'store'),
+			'--listen',
+			'tcp://127.0.0.1:0',
+			'--tokens',
+			join(dir, 'tokens'),
+		]
+		const server = spawn(binary!, [...args, '--max-connections', '1'], { stdio: 'ignore' })
+		const exited = new Promise(done => server.once('exit', done))
+		try {
+			let endpoints: string[] = []
+			await until(() => {
+				try {
+					endpoints =
+						JSON.parse(readFileSync(join(dir, 'store', 'server', 'SERVE'), 'utf8')).endpoints ?? []
+				} catch {
+					return false
+				}
+				return endpoints.length >= 2
+			})
+			const first = await connect(endpoints[1]!, { token })
+			await first.bucket<string>('notes').set('a', 'the one connection')
+			const refused = await caught(connect(endpoints[1]!, { token }))
+			expect(refused).toBeInstanceOf(LimitError)
+			expect((refused as LimitError).message).toContain('1 connections at most')
+			await first.close()
+		} finally {
+			server.kill()
+			await exited
+			await removed(dir)
+		}
+	},
+	30_000,
+)
 
 test('open refuses an address, and says to connect or to open the directory', async () => {
 	const remote = await open('tcp://db.internal:7070').catch(e => e)

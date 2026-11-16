@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -307,5 +308,50 @@ func TestAStoreClosedWhileItDialsReturnsAtOnceAndItsWaitingCallFailsClosed(t *te
 		}
 	case <-time.After(time.Second):
 		t.Fatal("the waiting call did not return once the store closed")
+	}
+}
+
+// contract: WIRE-12
+func TestAConnectPastAServersBoundOnItsConnectionsFailsLimitNamingTheBound(t *testing.T) {
+	binary := ways.Binary()
+	if binary == "" {
+		t.Skip("tinystore is not built here")
+	}
+	dir := t.TempDir()
+	tokens := filepath.Join(dir, "tokens")
+	if err := os.WriteFile(tokens, []byte("admin "+ways.Token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	served := filepath.Join(dir, "store")
+	cmd := exec.Command(binary, "serve", served, "--listen", "tcp://127.0.0.1:0", "--tokens", tokens,
+		"--max-connections", "1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	var published struct {
+		Endpoints []string `json:"endpoints"`
+	}
+	// the server may still be writing SERVE: Windows refuses a read meanwhile
+	ways.Until(t, func() bool {
+		text, err := os.ReadFile(filepath.Join(served, "server", "SERVE"))
+		return err == nil && json.Unmarshal(text, &published) == nil && len(published.Endpoints) >= 2
+	})
+	ctx := context.Background()
+	first, err := tinystore.Connect(ctx, published.Endpoints[1], ways.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	notes := ways.Must(kv.OpenBucket[string](first, "notes"))
+	if err := notes.Set(ctx, "a", "the one connection"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = tinystore.Connect(ctx, published.Endpoints[1], ways.Token)
+	if !errors.Is(err, tinystore.ErrLimit) || !strings.Contains(err.Error(), "1 connections at most") {
+		t.Fatalf("got %v, want a limit naming the bound", err)
 	}
 }

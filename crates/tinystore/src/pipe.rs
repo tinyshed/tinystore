@@ -78,6 +78,10 @@ pub struct Connect {
     pub admit: Option<Admit>,
     /// Told who came, once the connection is welcomed.
     pub greeted: Option<Greeted>,
+    /// Why a server that takes no more connections turns this one away: its
+    /// HELLO, once read and its token admitted, is answered `GOAWAY` `limit`
+    /// with these words where the WELCOME belongs.
+    pub turned_away: Option<String>,
 }
 
 impl fmt::Debug for Connect {
@@ -89,6 +93,7 @@ impl fmt::Debug for Connect {
             .field("clock", &self.clock)
             .field("admit", &self.admit.is_some())
             .field("greeted", &self.greeted.is_some())
+            .field("turned_away", &self.turned_away)
             .finish()
     }
 }

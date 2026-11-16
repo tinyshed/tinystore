@@ -820,6 +820,11 @@
           "value": "<span>"
         },
         {
+          "means": "remote clients at once, the next refused; unbounded by default",
+          "name": "--max-connections",
+          "value": "<count>"
+        },
+        {
           "means": "how far a commit goes before it returns; each engine's own",
           "name": "--durability",
           "value": "full|os"

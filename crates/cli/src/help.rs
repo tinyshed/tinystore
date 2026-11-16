@@ -300,6 +300,12 @@ pub(crate) const SERVE: Command = Command {
         under("node", "--node-config", "<file.toml>", "the rest of what the node is"),
         under("limits", "--memory", "<size>", "what the engines may hold at once, as 512MiB; 1GiB with --listen"),
         under("limits", "--idle", "<span>", "stop once no client has been connected this long; never by default"),
+        under(
+            "limits",
+            "--max-connections",
+            "<count>",
+            "remote clients at once, the next refused; unbounded by default",
+        ),
         under("store", "--durability", "full|os", "how far a commit goes before it returns; each engine's own"),
         under("store", "--keep-free", "<size>", "the disk the store keeps free; 1GiB by default"),
         under("store", "--encryption-key-file", "<file>", "the store's key, kept apart from its data"),

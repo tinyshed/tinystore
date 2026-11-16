@@ -24,6 +24,7 @@ pub(crate) struct Ready {
     pub(crate) address: Address,
     pub(crate) admit: Admit,
     pub(crate) tls: Option<TlsAcceptor>,
+    pub(crate) max_connections: Option<usize>,
 }
 
 impl Ready {
@@ -31,7 +32,7 @@ impl Ready {
     pub(crate) fn of(remote: Remote) -> Result<Ready, String> {
         let admit = Tokens::read(&remote.tokens)?.admit();
         let tls = remote.tls.as_ref().map(|(cert, key)| acceptor(cert, key)).transpose()?;
-        Ok(Ready { address: remote.address, admit, tls })
+        Ok(Ready { address: remote.address, admit, tls, max_connections: remote.max_connections })
     }
 }
 

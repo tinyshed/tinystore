@@ -38,12 +38,13 @@ tinystore token new read >> tokens.txt
 tinystore serve ./data --listen tls://0.0.0.0:7443 --tls-cert cert.pem --tls-key key.pem --tokens tokens.txt
 ```
 
-| Flag                           | Does                                  |
-|--------------------------------|---------------------------------------|
-| `--listen tls://<host>:<port>` | serve other machines over TLS         |
-| `--tls-cert <pem>`             | the certificate chain it answers with |
-| `--tls-key <pem>`              | its private key                       |
-| `--tokens <file>`              | who may connect: a token a line       |
+| Flag                           | Does                                                             |
+|--------------------------------|------------------------------------------------------------------|
+| `--listen tls://<host>:<port>` | serve other machines over TLS                                    |
+| `--tls-cert <pem>`             | the certificate chain it answers with                            |
+| `--tls-key <pem>`              | its private key                                                  |
+| `--tokens <file>`              | who may connect: a token a line                                  |
+| `--max-connections <count>`    | the remote clients it serves at once; as many as come by default |
 
 `token new` prints a capability and a random token:
 
@@ -61,6 +62,19 @@ read fx-o4leY8IHwDw-A-Yr-QwtChi8vDIoF94CANd9XSlk
 file. `--listen tcp://` sends tokens in the clear, for a private network its
 operator trusts. The same server still serves this machine's programs through
 its local socket.
+
+`--max-connections 256` serves 256 remote connections at once. The next one
+is read up to its `HELLO`, its token checked, and answered `GOAWAY` with
+`limit` instead of a `WELCOME` (contract WIRE-12). Its client fails `limit`,
+naming the bound; an SDK whose connection was lost tries again later, as it
+does after any `GOAWAY`. A connection that leaves gives its place back.
+This machine's programs, on the local socket, are not counted. Without the
+flag there is no bound, as before, so that a server that took a client
+yesterday takes it today.
+
+```text
+LimitError: this server takes 256 connections at most, and holds 256: try again later
+```
 
 ## The store
 
