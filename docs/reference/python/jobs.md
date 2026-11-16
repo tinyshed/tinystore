@@ -261,7 +261,7 @@ Changes the id's job when it is not running, its old value's steps dropped, and 
 ### Queue.cancel
 
 ```python
-async def cancel(job: Job[T] | str) -> bool: ...
+async def cancel(id: Job[T] | str) -> bool: ...
 ```
 
 Takes a job, whatever its state, and says whether it was there.
@@ -448,7 +448,7 @@ Changes the id's job when it is not running, its old value's steps dropped, with
 ### StoreTxQueue.cancel
 
 ```python
-async def cancel(job: Job[T] | str) -> None: ...
+async def cancel(id: Job[T] | str) -> None: ...
 ```
 
 Takes the job under id, or a job a list gave, whatever its state, with the commit.
