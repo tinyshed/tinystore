@@ -19,6 +19,7 @@ import {
 	type SelfMetrics,
 	sidecar,
 } from './connection.ts'
+import { type Directory, type DirectoryOptions, openDirectory } from './directory.ts'
 import { ClosedError, InvalidError } from './errors.ts'
 import { Instruments } from './instruments.ts'
 import {
@@ -489,6 +490,17 @@ export class Store implements AsyncDisposable {
 	 */
 	files(name: string, options?: FilesOptions): Files {
 		return openFiles(this.#link, name, options)
+	}
+
+	/**
+	 * A folder of the store's machine under a name, which the store lists and
+	 * reads and never writes; over a token, the server's own by its name:
+	 *
+	 *     const movies = store.directory('movies', { path: 'D:/Movies' })
+	 *     const photos = store.directory('photos', { path: '/mnt/photos', every: '15m', ignore: ['*.part', '.*'] })
+	 */
+	directory(name: string, options?: DirectoryOptions): Directory {
+		return openDirectory(this.#link, name, options)
 	}
 
 	/**

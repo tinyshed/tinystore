@@ -357,48 +357,8 @@ export class Files {
 		offset?: number,
 		length?: number,
 	): ReadableStream<Uint8Array> {
-		let stream: Stream | undefined
-		const open = () =>
-			this.#link.run('read', async connection => {
-				const read = BlobsRead.encode({
-					handle: await this.#handle(connection),
-					folder: this.#folder,
-					path,
-					ifMatch,
-					offset,
-					length,
-				})
-				const opened = await connection.session.open(methods['blobs.read'], read, true)
-				return { opened, first: await opened.next() }
-			})
-		return new ReadableStream<Uint8Array>({
-			async pull(controller) {
-				try {
-					if (stream === undefined) {
-						// the RESPONSE's piece is no DATA, so it takes none of the credit
-						const { opened, first } = await open()
-						stream = opened
-						enqueue(controller, first.body)
-						if (first.end) {
-							controller.close()
-						}
-						return
-					}
-					const event = await stream.next()
-					if (event.end) {
-						controller.close()
-						return
-					}
-					stream.consumed(event.body.length)
-					enqueue(controller, event.body)
-				} catch (err) {
-					controller.error(err)
-				}
-			},
-			cancel() {
-				stream?.cancel()
-			},
-		})
+		const at = { folder: this.#folder, path, ifMatch, offset, length }
+		return readStream(this.#link, connection => this.#handle(connection), at)
 	}
 
 	async #move(
@@ -594,9 +554,15 @@ export class FileBytes {
 			// a copy, which a Buffer's slice under Node is not
 			return new Uint8Array(this.#held)
 		}
-		const whole = new Uint8Array(this.size)
+		let whole = new Uint8Array(this.size)
 		let at = 0
 		for await (const piece of this.stream() as AsyncIterable<Uint8Array>) {
+			// a growing directory's file reads past the size its get gave
+			if (at + piece.length > whole.length) {
+				const grown = new Uint8Array(Math.max(at + piece.length, whole.length * 2))
+				grown.set(whole.subarray(0, at))
+				whole = grown
+			}
 			whole.set(piece, at)
 			at += piece.length
 		}
@@ -664,6 +630,61 @@ export class StoredFile extends FileBytes implements FileInfo {
 		}
 		return new FileBytes(to - from, () => this.#read(from, to - from))
 	}
+}
+
+/** Where a read of a file's bytes stands, and the ETag it holds to; none holds to no version. */
+export interface ReadAt {
+	folder: string[]
+	path: string
+	ifMatch: string | undefined
+	offset?: number | undefined
+	length?: number | undefined
+}
+
+/**
+ * A file's bytes as S3's GET reads them with a range and If-Match, on the
+ * handle `handle` opens on a connection; nothing is asked before the first read.
+ */
+export function readStream(
+	link: Link,
+	handle: (connection: Connection) => Promise<number>,
+	at: ReadAt,
+): ReadableStream<Uint8Array> {
+	let stream: Stream | undefined
+	const open = () =>
+		link.run('read', async connection => {
+			const read = BlobsRead.encode({ ...at, handle: await handle(connection) })
+			const opened = await connection.session.open(methods['blobs.read'], read, true)
+			return { opened, first: await opened.next() }
+		})
+	return new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				if (stream === undefined) {
+					// the RESPONSE's piece is no DATA, so it takes none of the credit
+					const { opened, first } = await open()
+					stream = opened
+					enqueue(controller, first.body)
+					if (first.end) {
+						controller.close()
+					}
+					return
+				}
+				const event = await stream.next()
+				if (event.end) {
+					controller.close()
+					return
+				}
+				stream.consumed(event.body.length)
+				enqueue(controller, event.body)
+			} catch (err) {
+				controller.error(err)
+			}
+		},
+		cancel() {
+			stream?.cancel()
+		},
+	})
 }
 
 /** A place in bytes as Blob.slice reads one: negative from the end, and within the size. */
@@ -859,7 +880,7 @@ function writtenOf(body: Uint8Array): FileInfo | undefined {
 	return written.info === undefined ? undefined : infoOf(written.info)
 }
 
-function infoOf(info: ReturnType<typeof BlobsInfo.decode>): FileInfo {
+export function infoOf(info: ReturnType<typeof BlobsInfo.decode>): FileInfo {
 	return {
 		path: info.path ?? '',
 		size: info.size ?? 0,
@@ -872,7 +893,7 @@ function infoOf(info: ReturnType<typeof BlobsInfo.decode>): FileInfo {
 }
 
 /** A folder's segment as text, an integer its decimal spelling; the server refuses one that is not a segment. */
-function segmentOf(segment: string | number | bigint): string {
+export function segmentOf(segment: string | number | bigint): string {
 	if (typeof segment === 'number' && !Number.isSafeInteger(segment)) {
 		throw new InvalidError(`the folder segment ${segment}: a segment is text or an integer`)
 	}

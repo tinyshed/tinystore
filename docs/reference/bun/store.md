@@ -410,6 +410,18 @@ A named set of files by path, written whole and replaced whole:
     const avatars = store.files('avatars')
     const reports = store.files('reports', { ttl: '24h', maxFileSize: '2GiB' })
 
+### Store.directory
+
+```ts
+directory(name: string, options?: DirectoryOptions): Directory
+```
+
+A folder of the store's machine under a name, which the store lists and
+reads and never writes; over a token, the server's own by its name:
+
+    const movies = store.directory('movies', { path: 'D:/Movies' })
+    const photos = store.directory('photos', { path: '/mnt/photos', every: '15m', ignore: ['*.part', '.*'] })
+
 ### Store.database
 
 ```ts

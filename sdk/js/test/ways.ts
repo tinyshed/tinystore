@@ -5,7 +5,7 @@
 // sdk` built.
 
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
@@ -27,6 +27,8 @@ export interface Way {
 	leave(dir: string): Promise<void>
 	/** The store's own directory inside the test's: the test's, but a remote server's. */
 	home(dir: string): string
+	/** Whether it came with a token, which names no path: a directory `movies` is the server's `<dir>/movies`. */
+	token?: boolean
 }
 
 const remotes = new Map<string, ChildProcess>()
@@ -59,6 +61,8 @@ export const ways: Way[] = [
 		ready: served,
 		open: async dir => {
 			writeFileSync(join(dir, 'tokens'), `admin ${token}\n`)
+			// a token names no path: the server is given the folder a directory's tests use
+			mkdirSync(join(dir, 'movies'), { recursive: true })
 			const args = [
 				'serve',
 				join(dir, 'store'),
@@ -66,6 +70,8 @@ export const ways: Way[] = [
 				'tcp://127.0.0.1:0',
 				'--tokens',
 				join(dir, 'tokens'),
+				'--directory',
+				`movies=${join(dir, 'movies')}`,
 			]
 			remotes.set(dir, spawn(binary!, args, { stdio: 'ignore' }))
 			const serve = join(dir, 'store', 'server', 'SERVE')
@@ -88,6 +94,7 @@ export const ways: Way[] = [
 		},
 		leave: dir => stopRemote(dir),
 		home: dir => join(dir, 'store'),
+		token: true,
 	},
 ]
 
