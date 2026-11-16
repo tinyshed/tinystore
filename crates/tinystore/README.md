@@ -5,7 +5,7 @@ jobs, files, search, logs and metrics in one directory, with one lifecycle,
 one memory budget and one backup. SQLite is underneath, and a Rust program
 compiles all of it in: the program is the store.
 
-> **Version 0.3.** Until `1.0`, a minor release may still change the API,
+> **Version 0.8.** Until `1.0`, a minor release may still change the API,
 > and its notes say what changed.
 
 ```sh
@@ -54,7 +54,7 @@ A program that only reads its settings, with `config::load`, asks for
 the flags above nor a C compiler:
 
 ```toml
-tinystore = { version = "0.6", default-features = false, features = ["config-load"] }
+tinystore = { version = "0.8", default-features = false, features = ["config-load"] }
 ```
 
 - [Your first store](https://tinyshed.org/tinystore/docs/handbook/start/first-store): a first program, step by step

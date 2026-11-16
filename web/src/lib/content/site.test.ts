@@ -41,17 +41,30 @@ describe('the docs as a site', () => {
 			/tinyshed-tinystore==(\d+\.\d+)/g,
 			/ghcr\.io\/tinyshed\/tinystore:(\d+\.\d+)/g,
 			/served by tinystore (\d+\.\d+)/g, // what tinystore status prints
-			/\*\*Version (\d+\.\d+)\*\*/g,
+			/\*\*Version (\d+\.\d+)\.?\*\*/g,
+			/status-(\d+\.\d+)-/g, // the README's badge
+		]
+		// what npm, PyPI, crates.io and GitHub show, which no page of the site is
+		const readmes = [
+			'README.md',
+			'sdk/js/README.md',
+			'sdk/python/README.md',
+			'crates/tinystore/README.md',
+			'crates/cli/README.md',
 		]
 		const old: string[] = []
 		// a release's page and a benchmark name the version they were, or measured
 		const current = (file: string) =>
 			!file.startsWith('docs/releases/') && file !== 'docs/handbook/production/benchmarks.md'
-		for (const page of site.pages.filter(page => current(page.file))) {
-			const text = readFileSync(join(checkout(), page.file), 'utf8')
+		const files = [
+			...site.pages.filter(page => current(page.file)).map(page => page.file),
+			...readmes,
+		]
+		for (const file of new Set(files)) {
+			const text = readFileSync(join(checkout(), file), 'utf8')
 			for (const pin of pins) {
 				for (const [found, version] of text.matchAll(pin)) {
-					if (version !== newest) old.push(`${page.file}: ${found}`)
+					if (version !== newest) old.push(`${file}: ${found}`)
 				}
 			}
 		}
