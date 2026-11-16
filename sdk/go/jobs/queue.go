@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"time"
 
@@ -59,6 +60,20 @@ type Job[T any] struct {
 	Repeat string
 	// LastRun is when the last run a handler finished started and ended; nil before one.
 	LastRun *LastRun
+	// row is where a job without an ID lies, which CancelJob names it by.
+	row string
+}
+
+// Counts is how many jobs a queue holds in each state, from one snapshot; a
+// done job has left it.
+type Counts struct {
+	// Scheduled jobs are due later.
+	Scheduled int
+	// Waiting jobs are due, and no handler runs them yet.
+	Waiting int
+	Running int
+	// Failed jobs are kept for the queue's Keep.
+	Failed int
 }
 
 // LastRun is when a run started and ended.
@@ -315,6 +330,51 @@ func (q *Queue[T]) Cancel(ctx context.Context, id string) (bool, error) {
 	return cancel(ctx, &q.source, id)
 }
 
+// CancelJob takes a job a list gave, whatever its state, and says whether it
+// was there: by its ID, or for one without, by the row it was listed from. A
+// job retried, run again for its repeat or cancelled since is in no row, and
+// its cancel takes nothing, never another job. Go has no overloading, so a
+// job and an id each have their call.
+//
+//	for job, err := range emails.All(ctx, jobs.Scheduled) {
+//		if err == nil && job.Value.To == bounced {
+//			_, err = emails.CancelJob(ctx, job)
+//		}
+//	}
+func (q *Queue[T]) CancelJob(ctx context.Context, job Job[T]) (bool, error) {
+	if job.ID != "" {
+		return q.Cancel(ctx, job.ID)
+	}
+	if job.row == "" {
+		return false, core.Errorf(core.Invalid, "%s: a job without an id names no row: cancel the job a list gave", q.describe)
+	}
+	if q.tx != nil || q.err != nil {
+		if q.err != nil {
+			return false, q.err
+		}
+		return true, q.tx.KeepJob(core.JobOp{Opener: q.opener, Method: wire.MethodJobsCancel, Row: job.row})
+	}
+	return changedOf(q.call(ctx, wire.MethodJobsCancel, func(handle uint64) []byte {
+		return wire.Encode(&wire.JobsId{Handle: handle, Row: &job.row})
+	}, core.Writing))
+}
+
+// Counts is how many jobs the queue holds in each state, from one snapshot;
+// it reads no value.
+func (q *Queue[T]) Counts(ctx context.Context) (Counts, error) {
+	answer, err := q.call(ctx, wire.MethodJobsCounts, func(handle uint64) []byte {
+		return wire.Encode(&wire.Handle{Handle: handle})
+	}, core.Reading)
+	if err != nil {
+		return Counts{}, err
+	}
+	var counts wire.JobsCounts
+	if err := decode(answer, &counts); err != nil {
+		return Counts{}, err
+	}
+	return Counts{int(counts.Scheduled), int(counts.Waiting), int(counts.Running), int(counts.Failed)}, nil
+}
+
 func cancel(ctx context.Context, s *source, id string) (bool, error) {
 	return changedOf(s.call(ctx, wire.MethodJobsCancel, func(handle uint64) []byte {
 		return wire.Encode(&wire.JobsId{Handle: handle, Id: id})
@@ -346,10 +406,15 @@ func jobOf[T any](s *source, found wire.JobsJob) (Job[T], error) {
 	job := Job[T]{
 		ID: text(found.Id), State: State(found.State), At: core.MomentOf(found.At), Attempt: int(found.Attempt),
 		Ahead: int(found.Ahead), Error: text(found.Error), Group: text(found.Group), Repeat: text(found.Repeat),
+		row: text(found.Row),
 	}
 	if found.Value != nil && *found.Value != "" {
 		if err := json.Unmarshal([]byte(*found.Value), &job.Value); err != nil {
-			return job, core.Wrap(core.Corrupt, err, "%s: id %q: a value that does not read", s.describe, job.ID)
+			named := fmt.Sprintf("id %q", job.ID)
+			if job.ID == "" {
+				named = "a job without an id"
+			}
+			return job, core.Wrap(core.Corrupt, err, "%s: %s: a value that does not read", s.describe, named)
 		}
 	}
 	if found.Progress != nil {
@@ -375,18 +440,8 @@ func text(s *string) string {
 // List is a page of the queue's jobs: with no prefix every job, those with
 // ids by id, then those without as they run, then those without that failed.
 func (q *Queue[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error) {
-	var o listOptions
-	for _, opt := range opts {
-		opt.list(&o)
-	}
-	answer, err := q.call(ctx, wire.MethodJobsList, func(handle uint64) []byte {
-		return wire.Encode(&wire.JobsList{Handle: handle, Prefix: o.prefix, State: o.state, After: o.after, Limit: o.limit})
-	}, core.Reading)
+	page, err := q.page(ctx, opts, false)
 	if err != nil {
-		return Page[T]{}, err
-	}
-	var page wire.JobsPage
-	if err := decode(answer, &page); err != nil {
 		return Page[T]{}, err
 	}
 	out := Page[T]{Next: text(page.Next)}
@@ -400,27 +455,63 @@ func (q *Queue[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error
 	return out, nil
 }
 
-// All is every job the options name, a page at a time, holding nothing between pages.
+// page is a page of the queue's jobs as the store sent it; a walk's has a
+// job whose value no longer reads as its failure in its place.
+func (q *Queue[T]) page(ctx context.Context, opts []ListOption, walk bool) (wire.JobsPage, error) {
+	var o listOptions
+	for _, opt := range opts {
+		opt.list(&o)
+	}
+	answer, err := q.call(ctx, wire.MethodJobsList, func(handle uint64) []byte {
+		list := wire.JobsList{Handle: handle, Prefix: o.prefix, State: o.state, After: o.after, Limit: o.limit, Walk: walk}
+		return wire.Encode(&list)
+	}, core.Reading)
+	if err != nil {
+		return wire.JobsPage{}, err
+	}
+	var page wire.JobsPage
+	return page, decode(answer, &page)
+}
+
+// All is every job the options name, a page at a time, holding nothing
+// between pages. A job whose value no longer reads is a Corrupt error in its
+// place, naming it, and the walk goes on past it.
 func (q *Queue[T]) All(ctx context.Context, opts ...ListOption) iter.Seq2[Job[T], error] {
 	return func(yield func(Job[T], error) bool) {
 		next := ""
 		for {
-			page, err := q.List(ctx, append(opts, After(next))...)
+			page, err := q.page(ctx, append(opts, After(next)), true)
 			if err != nil {
 				yield(Job[T]{}, err)
 				return
 			}
-			for _, job := range page.Jobs {
-				if !yield(job, nil) {
+			for _, found := range page.Jobs {
+				if !yield(q.walked(found)) {
 					return
 				}
 			}
-			if page.Next == "" {
+			if page.Next == nil || *page.Next == "" {
 				return
 			}
-			next = page.Next
+			next = *page.Next
 		}
 	}
+}
+
+// walked is a job of a walk's page, or why its value no longer reads.
+func (q *Queue[T]) walked(found wire.JobsJob) (Job[T], error) {
+	if failure := found.Failure; failure != nil {
+		var what map[string]string
+		if failure.What != nil {
+			what = *failure.What
+		}
+		return Job[T]{}, core.Failed(failure.Code, failure.Message, what)
+	}
+	job, err := jobOf[T](&q.source, found)
+	if err != nil {
+		return Job[T]{}, err
+	}
+	return job, nil
 }
 
 // Watch is the job under id as it is, then again each time it changes; it

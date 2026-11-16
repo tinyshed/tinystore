@@ -4,9 +4,10 @@
 //!
 //! ```text
 //! name         the queue's
-//! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open, 5 schedule
+//! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open, 5 schedule, 6 cancel by row
 //! add, set and update: what was asked, then the job's JSON
 //! cancel:      the id
+//! by row:      the row of a job without an id, as a page's cursor writes it
 //! ```
 
 use serde::Serialize;
@@ -16,6 +17,8 @@ use std::sync::Arc;
 use super::call::Asked;
 use super::engine::Jobs;
 use super::queue::{Change, Queue};
+use super::read::Row;
+use super::read::named::Which;
 use super::repeat::Asked as RepeatAsked;
 use super::state::Kind;
 use crate::replication::{In, Out};
@@ -58,10 +61,15 @@ pub(crate) fn pass_on_write<V: Serialize>(
     answered(store, out)
 }
 
-/// Passes a cancel of the job `id` to the home, and says whether there was one.
-pub(crate) fn pass_on_cancel(store: &Store, queue: (&str, Option<&str>), id: &str) -> Result<bool> {
-    let mut out = head(queue, 3);
-    out.text(id);
+/// Passes a cancel of the job `which` names to the home, and says whether
+/// there was one.
+pub(crate) fn pass_on_cancel(store: &Store, queue: (&str, Option<&str>), which: &Which) -> Result<bool> {
+    let (call, named) = match which {
+        Which::Id(id) => (3, id.clone()),
+        Which::Row(row) => (6, row.to_string()),
+    };
+    let mut out = head(queue, call);
+    out.text(&named);
     answered(store, out)
 }
 
@@ -116,6 +124,10 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
             queue.write_asked(change, asked, &value)?
         }
         3 => queue.cancel(at.text()?)?,
+        6 => {
+            let row = Row::parse(&at.text()?).map_err(|_| corrupt("a job's row"))?;
+            queue.cancel_in(&Which::Row(row), None)?
+        }
         4 => true,
         5 => {
             let repeat = RepeatAsked::read(at.byte()?, &mut at)?;

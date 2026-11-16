@@ -56,6 +56,7 @@ methods: dict[str, int] = {
     "jobs.keep": 0x020B,
     "jobs.watch": 0x020C,
     "jobs.tx": 0x020D,
+    "jobs.counts": 0x020E,
     "kv.bucket.open": 0x0101,
     "kv.get": 0x0102,
     "kv.has": 0x0103,
@@ -2589,6 +2590,10 @@ def _write_jobs_id(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(2)
         w.str(x)
         n += 1
+    if (x := v.get("row")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -2601,18 +2606,22 @@ def _read_jobs_id(r: Reader) -> dict[str, Any]:
                 read["handle"] = r.uint()
             case 2:
                 read["id"] = r.str()
+            case 3:
+                read["row"] = r.str()
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# The job under an id.
+# The job under an id; or, for a cancel, a job without one by the row a page
+# gave, its id left out.
 JobsId = Message(
     "jobs.Id",
     {
         "handle": (1, uint),
         "id": (2, str_),
+        "row": (3, str_),
     },
     _write_jobs_id,
     _read_jobs_id,
@@ -2709,6 +2718,14 @@ def _write_jobs_job(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(13)
         w.int(x)
         n += 1
+    if (x := v.get("row")) is not None:
+        w.uint(14)
+        w.str(x)
+        n += 1
+    if (x := v.get("failure")) is not None:
+        w.uint(15)
+        Failure.write(w, x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -2743,6 +2760,10 @@ def _read_jobs_job(r: Reader) -> dict[str, Any]:
                 read["started_at"] = r.int()
             case 13:
                 read["ended_at"] = r.int()
+            case 14:
+                read["row"] = r.str()
+            case 15:
+                read["failure"] = Failure.read(r)
             case _:
                 r.skip()
     r.leave()
@@ -2771,6 +2792,10 @@ JobsJob = Message(
         # the last run a handler finished
         "started_at": (12, int_),
         "ended_at": (13, int_),
+        # where a job without an id lies, which a cancel names it by
+        "row": (14, str_),
+        # a walk's: why the job's value no longer reads, the job left out
+        "failure": (15, Failure),
     },
     _write_jobs_job,
     _read_jobs_job,
@@ -2800,6 +2825,10 @@ def _write_jobs_list(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(5)
         w.uint(x)
         n += 1
+    if (x := v.get("walk")) is not None:
+        w.uint(6)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -2818,6 +2847,8 @@ def _read_jobs_list(r: Reader) -> dict[str, Any]:
                 read["after"] = r.str()
             case 5:
                 read["limit"] = r.uint()
+            case 6:
+                read["walk"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -2839,6 +2870,8 @@ JobsList = Message(
         "after": (4, str_),
         # 100 when absent, 1000 at most
         "limit": (5, uint),
+        # a job whose value no longer reads comes as its failure in its place, not the page's
+        "walk": (6, bool_),
     },
     _write_jobs_list,
     _read_jobs_list,
@@ -2886,6 +2919,65 @@ JobsPage = Message(
     },
     _write_jobs_page,
     _read_jobs_page,
+)
+
+
+def _write_jobs_counts(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("scheduled")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("waiting")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    if (x := v.get("running")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("failed")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_jobs_counts(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["scheduled"] = r.uint()
+            case 2:
+                read["waiting"] = r.uint()
+            case 3:
+                read["running"] = r.uint()
+            case 4:
+                read["failed"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# How many jobs a queue holds in each state, from one snapshot; a done job
+# has left it.
+JobsCounts = Message(
+    "jobs.Counts",
+    {
+        # due later
+        "scheduled": (1, uint),
+        # due, and no handler runs it yet
+        "waiting": (2, uint),
+        "running": (3, uint),
+        # kept for the queue's keep
+        "failed": (4, uint),
+    },
+    _write_jobs_counts,
+    _read_jobs_counts,
 )
 
 
@@ -3227,7 +3319,7 @@ def _read_jobs_op(r: Reader) -> dict[str, Any]:
 
 
 # One write of a transaction: an add, a set or an update with its call, or a
-# cancel with its id.
+# cancel with its id or its row.
 JobsOp = Message(
     "jobs.Op",
     {
@@ -10607,6 +10699,7 @@ messages: dict[str, Message] = {
     "jobs.Job": JobsJob,
     "jobs.List": JobsList,
     "jobs.Page": JobsPage,
+    "jobs.Counts": JobsCounts,
     "jobs.Work": JobsWork,
     "jobs.Held": JobsHeld,
     "jobs.Answer": JobsAnswer,

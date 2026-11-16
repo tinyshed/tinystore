@@ -270,6 +270,69 @@ async def test_a_page_with_no_prefix_lists_the_jobs_without_ids_after_those_with
     assert [job.id async for job in notifications.all(state="waiting")] == ["two", None]
 
 
+# contract: JOB-15
+async def test_cancel_takes_a_listed_job_without_an_id_by_its_row_and_no_other(store: tinystore.Store) -> None:
+    emails = store.queue("emails-unnamed", dict[str, str])
+    for to in ("typo@example.com", "ada@example.com", "grace@example.com"):
+        await emails.add({"to": to}, delay="1h")
+    listed = [job async for job in emails.all(state="scheduled")]
+    typo = next(job for job in listed if job.value["to"] == "typo@example.com")
+    assert typo.id is None
+    assert await emails.cancel(typo)
+    assert not await emails.cancel(typo), "cancelled already"
+
+    ada = next(job for job in listed if job.value["to"] == "ada@example.com")
+
+    async def cancelling(tx: tinystore.Tx) -> None:
+        await tx.with_(emails).cancel(ada)
+
+    await store.tx(cancelling)
+    assert [job.value["to"] async for job in emails.all()] == ["grace@example.com"]
+
+
+# contract: JOB-16
+async def test_counts_say_how_many_jobs_are_in_each_state(store: tinystore.Store) -> None:
+    counted = store.queue("counted", int)
+    assert await counted.counts() == tinystore.JobCounts(scheduled=0, waiting=0, running=0, failed=0)
+    await counted.add(1, delay="1h")
+    await counted.add(2)
+    await counted.add(3)
+    seen: list[tinystore.JobCounts] = []
+
+    async def count(n: int, run: tinystore.Run) -> None:
+        if n == 2:
+            seen.append(await counted.counts())
+
+    await counted.run_due(count)
+    assert seen == [tinystore.JobCounts(scheduled=1, waiting=1, running=1, failed=0)]
+    assert await counted.counts() == tinystore.JobCounts(scheduled=1, waiting=0, running=0, failed=0)
+
+
+# contract: JOB-12
+async def test_a_walk_meets_a_job_whose_value_no_longer_reads_as_its_error_and_goes_on(store: tinystore.Store) -> None:
+    loose = store.queue("walked")
+    await loose.add({"user_id": 1, "text": "first"}, delay="1h")
+    await loose.add({"user_id": "not a number"}, delay="1h")
+    await loose.add({"user_id": 3, "text": "last"}, delay="1h")
+    checked = store.queue("walked", Reminder)
+    with pytest.raises(tinystore.CorruptError):
+        await checked.list()
+
+    walk = checked.all()
+    texts: list[str] = []
+    errors: list[tinystore.CorruptError] = []
+    while True:
+        try:
+            async for reminder in walk:
+                texts.append(reminder.value.text)
+            break
+        except tinystore.CorruptError as err:
+            errors.append(err)
+    assert texts == ["first", "last"]
+    assert len(errors) == 1
+    assert "without an id" in str(errors[0])
+
+
 async def test_a_value_that_no_longer_reads_as_its_type_fails_its_job_not_its_queue(store: tinystore.Store) -> None:
     loose = store.queue("checked")
     await loose.add({"user_id": "not a number"}, id="bad")

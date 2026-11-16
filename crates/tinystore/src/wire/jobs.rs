@@ -17,8 +17,8 @@ use serde_json::value::RawValue;
 
 use super::codec::Message;
 use super::protocol::{
-    Empty, Failure, Handle, JobsAnswer, JobsCall, JobsChanged, JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp,
-    JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork, method,
+    Empty, Failure, Handle, JobsAnswer, JobsCall, JobsChanged, JobsCounts, JobsHeld, JobsId, JobsJob, JobsKept,
+    JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork, method,
 };
 use super::{Lent, Route};
 #[cfg(feature = "sql")]
@@ -26,8 +26,8 @@ use crate::TxHandle;
 use crate::clock::from_unix_millis;
 use crate::engine::Home;
 use crate::jobs::{
-    Answers, Change, Concurrency, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder, Remote,
-    RemoteWork, Report, Seen, State, Subscription, keep_encoded, kept, read_value, start_remote,
+    Answers, Change, Concurrency, Counts, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder,
+    Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded, kept, read_value, start_remote,
 };
 use crate::limits::{ANSWER_BYTES, Limit, PROGRESS_BYTES};
 use crate::{Error, ErrorKind, Store, Transaction, unix_millis};
@@ -104,11 +104,16 @@ pub(crate) fn call(
         }
         method::JOBS_SCHEDULE_OPEN => handles.open(open_schedule(store, JobsScheduleOpen::decode(body)?)?, true),
         method::JOBS_GET => {
-            let id = JobsId::decode(body)?;
+            let id = by_id(JobsId::decode(body)?, "a get")?;
             let job = handles.opened(id.handle)?.queue.get(&id.id)?;
             within(job.map_or_else(JobsJob::default, job_of).encode(), max_body)
         }
         method::JOBS_LIST => list(handles, JobsList::decode(body)?, max_body),
+        method::JOBS_COUNTS => {
+            let counts = handles.opened(Handle::decode(body)?.handle)?.queue.counts()?;
+            let Counts { scheduled, waiting, running, failed } = counts;
+            Ok(JobsCounts { scheduled, waiting, running, failed }.encode())
+        }
         method::JOBS_TX => tx(store, handles, &JobsTx::decode(body)?),
         method::JOBS_STEP => step(handles, JobsStep::decode(body)?, max_body),
         method::JOBS_KEEP => keep(handles, JobsStep::decode(body)?),
@@ -121,9 +126,9 @@ pub(crate) fn call(
 /// the writes in flight share one.
 pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
     if called == method::JOBS_CANCEL {
-        let asked = JobsId::decode(body).and_then(|id| Ok((handles.opened(id.handle)?.queue, id.id)));
+        let asked = JobsId::decode(body).and_then(|id| Ok((handles.opened(id.handle)?.queue, which_of(&id)?)));
         return match asked {
-            Ok((queue, id)) => queue.cancel_then(&id, move |found| {
+            Ok((queue, which)) => queue.cancel_then(which, move |found| {
                 done(found.map(|changed| JobsChanged { changed }.encode()).map_err(Failure::from));
             }),
             Err(failure) => done(Err(failure)),
@@ -169,11 +174,11 @@ pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body
         }
         method::JOBS_CANCEL => {
             let id = JobsId::decode(body)?;
-            let changed = handles.opened(id.handle)?.queue.cancel_in(&id.id, Some(tx))?;
+            let changed = handles.opened(id.handle)?.queue.cancel_in(&which_of(&id)?, Some(tx))?;
             Ok(JobsChanged { changed }.encode())
         }
         method::JOBS_GET => {
-            let id = JobsId::decode(body)?;
+            let id = by_id(JobsId::decode(body)?, "a get")?;
             let job = handles.opened(id.handle)?.queue.in_tx(tx).get(&id.id)?;
             within(job.map_or_else(JobsJob::default, job_of).encode(), max_body)
         }
@@ -214,10 +219,30 @@ fn write_op(handles: &Handles, tx: &Transaction<'_>, op: &JobsOp) -> Result<bool
         (method::JOBS_UPDATE, Some(call), _) => {
             on_job(handles, call.clone(), Some(tx), |job, value| job.update(&value))
         }
-        (method::JOBS_CANCEL, _, Some(id)) => Ok(handles.opened(id.handle)?.queue.cancel_in(&id.id, Some(tx))?),
+        (method::JOBS_CANCEL, _, Some(id)) => {
+            Ok(handles.opened(id.handle)?.queue.cancel_in(&which_of(id)?, Some(tx))?)
+        }
         _ => Err(Failure::invalid(format!(
             "method {called:#06x} is not a write of a transaction, or lacks what it takes"
         ))),
+    }
+}
+
+/// The job a cancel names: by its id, or, for a job without one, by the row
+/// a page gave.
+fn which_of(asked: &JobsId) -> Result<Which, Failure> {
+    match (&asked.row, asked.id.is_empty()) {
+        (None, _) => Ok(Which::Id(asked.id.clone())),
+        (Some(row), true) => Ok(Which::Row(Row::parse(row)?)),
+        (Some(_), false) => Err(Failure::invalid("a cancel names a job by its id or by its row, not both")),
+    }
+}
+
+/// A call that takes a job by its id alone: a row names a job to a cancel.
+fn by_id(asked: JobsId, call: &str) -> Result<JobsId, Failure> {
+    match asked.row {
+        None => Ok(asked),
+        Some(_) => Err(Failure::invalid(format!("{call} takes a job by its id; a row names one to a cancel alone"))),
     }
 }
 
@@ -330,7 +355,8 @@ fn on_job<T>(
 }
 
 /// A page of jobs within the body agreed: a page past it is read again with
-/// half its jobs.
+/// half its jobs. A walk's page has a job whose value no longer reads as its
+/// failure in its place; any other fails on it.
 fn list(handles: &Handles, list: JobsList, max_body: usize) -> Answered {
     let queue = handles.opened(list.handle)?.queue;
     let mut filter = Filter::prefix(list.prefix.unwrap_or_default());
@@ -342,9 +368,14 @@ fn list(handles: &Handles, list: JobsList, max_body: usize) -> Answered {
     }
     let mut limit = list.limit.map_or(100, |limit| usize::try_from(limit).unwrap_or(usize::MAX));
     loop {
-        let page = queue.list(&filter.clone().limit(limit))?;
+        let page = queue.read_page(&filter.clone().limit(limit))?;
         let shown = page.jobs.len();
-        let encoded = JobsPage { jobs: page.jobs.into_iter().map(job_of).collect(), next: page.next }.encode();
+        let jobs = page.jobs.into_iter().map(|job| match job {
+            Ok(job) => Ok(job_of(job)),
+            Err(error) if list.walk => Ok(JobsJob { failure: Some(Failure::from(error)), ..JobsJob::default() }),
+            Err(error) => Err(error),
+        });
+        let encoded = JobsPage { jobs: jobs.collect::<crate::Result<_>>()?, next: page.next }.encode();
         if encoded.len() <= max_body || shown <= 1 {
             return within(encoded, max_body);
         }
@@ -390,6 +421,8 @@ fn job_of(job: Job<Raw>) -> JobsJob {
         repeat: job.repeat,
         started_at: job.last_run.map(|run| unix_millis(run.started_at)),
         ended_at: job.last_run.map(|run| unix_millis(run.ended_at)),
+        row: job.row.map(|row| row.to_string()),
+        failure: None,
     }
 }
 
@@ -974,7 +1007,7 @@ struct WatchState {
 /// Starts the watch a `jobs.watch` asks for. It reads nothing until
 /// [`Watching::begin`], once the stream's `RESPONSE` went out.
 pub(crate) fn watch(handles: &Handles, number: u32, body: &[u8], link: Link) -> Result<Arc<Watching>, Failure> {
-    let asked = JobsId::decode(body)?;
+    let asked = by_id(JobsId::decode(body)?, "a watch")?;
     let queue = handles.opened(asked.handle)?.queue;
     let watching = Arc::new_cyclic(|me: &Weak<Watching>| {
         let waking = me.clone();

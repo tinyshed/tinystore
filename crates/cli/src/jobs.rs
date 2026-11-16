@@ -1,11 +1,12 @@
 //! `tinystore jobs`: a store's queues from a shell. `add` and `cancel` write
 //! through the server that holds the directory, or a sidecar they start;
-//! `list` reads a queue beside whoever holds it. No worker runs here: a job
-//! added runs in the program whose worker takes its queue.
+//! `list` and `counts` read a queue beside whoever holds it. No worker runs
+//! here: a job added runs in the program whose worker takes its queue.
 //!
 //! ```text
 //! tinystore jobs ./data add emails '{"to": "ada@example.com"}' --id welcome-42 --delay 1m
 //! tinystore jobs ./data list emails --state failed
+//! tinystore jobs ./data counts emails
 //! tinystore jobs ./data cancel emails welcome-42
 //! ```
 
@@ -14,15 +15,16 @@ use std::process::ExitCode;
 use serde_json::json;
 use tinystore::Store;
 use tinystore::client::NewJob;
-use tinystore::mcp::jobs::{Listing, listed, state_word};
+use tinystore::mcp::jobs::{Listing, counted, listed, state_word};
 
 use crate::asked::{self, Asked, Done, Verb, failed, wrong};
 use crate::window::{self};
 use crate::{help, reach};
 
-const VERBS: [Verb; 3] = [
+const VERBS: [Verb; 4] = [
     Verb { word: "add", command: &help::JOBS_ADD, run: add },
     Verb { word: "list", command: &help::JOBS_LIST, run: list },
+    Verb { word: "counts", command: &help::JOBS_COUNTS, run: counts },
     Verb { word: "cancel", command: &help::JOBS_CANCEL, run: cancel },
 ];
 
@@ -70,7 +72,10 @@ fn add(asked: Asked) -> Done {
         (Some(id), false) => outln!("queue {queue} holds a job {id} already; nothing added"),
         (None, _) => {
             outln!("added a job to queue {queue}{due}")?;
-            asked::say("jobs add", "a job without --id cannot be cancelled: nothing names it");
+            asked::say(
+                "jobs add",
+                "a job without --id has no name here: a program cancels it by the job its list gave",
+            );
             Ok(())
         }
     }
@@ -94,6 +99,26 @@ fn cancel(asked: Asked) -> Done {
         client.cancel(queue, &keyed)
     })?;
     if cancelled { outln!("cancelled {id} in queue {queue}") } else { outln!("queue {queue} holds no job {id}") }
+}
+
+/// How many jobs a queue holds in each state, read beside whoever holds the
+/// directory.
+fn counts(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("jobs", "counts", true)?;
+    let [queue] = &rest[..] else {
+        return Err(wrong("counts takes a queue: counts emails"));
+    };
+    asked::existing(&dir)?;
+    let store = Store::open_beside(&dir).map_err(failed)?;
+    let counts = counted(&store, queue, asked.value("--database")).map_err(failed)?;
+    let tinystore::jobs::Counts { scheduled, waiting, running, failed } = counts;
+    if asked.has("--json") {
+        return outln!(
+            "{}",
+            json!({ "scheduled": scheduled, "waiting": waiting, "running": running, "failed": failed })
+        );
+    }
+    outln!("queue {queue}: {scheduled} scheduled, {waiting} waiting, {running} running, {failed} failed")
 }
 
 fn list(asked: Asked) -> Done {

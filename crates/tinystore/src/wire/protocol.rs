@@ -3031,12 +3031,14 @@ impl Message for JobsCall {
     }
 }
 
-/// The job under an id.
+/// The job under an id; or, for a cancel, a job without one by the row a page
+/// gave, its id left out.
 #[cfg(feature = "jobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct JobsId {
     pub(crate) handle: u64,
     pub(crate) id: String,
+    pub(crate) row: Option<String>,
 }
 
 #[cfg(feature = "jobs")]
@@ -3050,6 +3052,7 @@ impl Message for JobsId {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.handle = codec::uint(r, "handle")?,
                 2 => message.id = codec::str(r, "id")?,
+                3 => message.row = Some(codec::str(r, "row")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -3066,6 +3069,10 @@ impl Message for JobsId {
             map.field(out, 2);
             codec::write_str(out, &self.id);
         }
+        if let Some(row) = &self.row {
+            map.field(out, 3);
+            codec::write_str(out, row);
+        }
         map.close(out);
     }
 
@@ -3073,11 +3080,13 @@ impl Message for JobsId {
         3
             + 10
             + 1 + 5 + self.id.len()
+            + self.row.as_ref().map_or(0, |row| 1 + 5 + row.len())
     }
 
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.id.is_empty()
+            && self.row.is_none()
     }
 }
 
@@ -3147,6 +3156,10 @@ pub(crate) struct JobsJob {
     pub(crate) started_at: Option<i64>,
     /// Unix milliseconds.
     pub(crate) ended_at: Option<i64>,
+    /// Where a job without an id lies, which a cancel names it by.
+    pub(crate) row: Option<String>,
+    /// A walk's: why the job's value no longer reads, the job left out.
+    pub(crate) failure: Option<Failure>,
 }
 
 #[cfg(feature = "jobs")]
@@ -3171,6 +3184,8 @@ impl Message for JobsJob {
                 11 => message.repeat = Some(codec::str(r, "repeat")?),
                 12 => message.started_at = Some(codec::int(r, "startedAt")?),
                 13 => message.ended_at = Some(codec::int(r, "endedAt")?),
+                14 => message.row = Some(codec::str(r, "row")?),
+                15 => message.failure = Some(Failure::read(r)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -3231,6 +3246,14 @@ impl Message for JobsJob {
             map.field(out, 13);
             codec::write_int(out, ended_at);
         }
+        if let Some(row) = &self.row {
+            map.field(out, 14);
+            codec::write_str(out, row);
+        }
+        if let Some(failure) = &self.failure {
+            map.field(out, 15);
+            codec::write_message(out, failure);
+        }
         map.close(out);
     }
 
@@ -3249,6 +3272,8 @@ impl Message for JobsJob {
             + self.repeat.as_ref().map_or(0, |repeat| 1 + 5 + repeat.len())
             + self.started_at.map_or(0, |_| 10)
             + self.ended_at.map_or(0, |_| 10)
+            + self.row.as_ref().map_or(0, |row| 1 + 5 + row.len())
+            + self.failure.as_ref().map_or(0, |failure| 1 + failure.size())
     }
 
     fn is_zero(&self) -> bool {
@@ -3265,6 +3290,8 @@ impl Message for JobsJob {
             && self.repeat.is_none()
             && self.started_at.is_none()
             && self.ended_at.is_none()
+            && self.row.is_none()
+            && self.failure.is_none()
     }
 }
 
@@ -3283,6 +3310,8 @@ pub(crate) struct JobsList {
     pub(crate) after: Option<String>,
     /// 100 when absent, 1000 at most.
     pub(crate) limit: Option<u64>,
+    /// A job whose value no longer reads comes as its failure in its place, not the page's.
+    pub(crate) walk: bool,
 }
 
 #[cfg(feature = "jobs")]
@@ -3299,6 +3328,7 @@ impl Message for JobsList {
                 3 => message.state = Some(codec::str(r, "state")?),
                 4 => message.after = Some(codec::str(r, "after")?),
                 5 => message.limit = Some(codec::uint(r, "limit")?),
+                6 => message.walk = codec::bool(r, "walk")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -3327,6 +3357,10 @@ impl Message for JobsList {
             map.field(out, 5);
             codec::write_uint(out, limit);
         }
+        if self.walk {
+            map.field(out, 6);
+            codec::write_bool(out, &self.walk);
+        }
         map.close(out);
     }
 
@@ -3337,6 +3371,7 @@ impl Message for JobsList {
             + self.state.as_ref().map_or(0, |state| 1 + 5 + state.len())
             + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
             + self.limit.map_or(0, |_| 10)
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -3345,6 +3380,7 @@ impl Message for JobsList {
             && self.state.is_none()
             && self.after.is_none()
             && self.limit.is_none()
+            && !self.walk
     }
 }
 
@@ -3394,6 +3430,76 @@ impl Message for JobsPage {
     fn is_zero(&self) -> bool {
         self.jobs.is_empty()
             && self.next.is_none()
+    }
+}
+
+/// How many jobs a queue holds in each state, from one snapshot; a done job
+/// has left it.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsCounts {
+    /// Due later.
+    pub(crate) scheduled: u64,
+    /// Due, and no handler runs it yet.
+    pub(crate) waiting: u64,
+    pub(crate) running: u64,
+    /// Kept for the queue's keep.
+    pub(crate) failed: u64,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsCounts {
+    const NAME: &'static str = "jobs.Counts";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.scheduled = codec::uint(r, "scheduled")?,
+                2 => message.waiting = codec::uint(r, "waiting")?,
+                3 => message.running = codec::uint(r, "running")?,
+                4 => message.failed = codec::uint(r, "failed")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.scheduled != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.scheduled);
+        }
+        if self.waiting != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.waiting);
+        }
+        if self.running != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.running);
+        }
+        if self.failed != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.failed);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.scheduled == 0
+            && self.waiting == 0
+            && self.running == 0
+            && self.failed == 0
     }
 }
 
@@ -3756,7 +3862,7 @@ impl Message for JobsKept {
 }
 
 /// One write of a transaction: an add, a set or an update with its call, or a
-/// cancel with its id.
+/// cancel with its id or its row.
 #[cfg(feature = "jobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct JobsOp {
@@ -11909,6 +12015,8 @@ pub(crate) mod method {
     pub(crate) const JOBS_WATCH: u16 = 0x020c;
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_TX: u16 = 0x020d;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_COUNTS: u16 = 0x020e;
     #[cfg(feature = "kv")]
     pub(crate) const KV_BUCKET_OPEN: u16 = 0x0101;
     #[cfg(feature = "kv")]
@@ -12154,6 +12262,8 @@ pub(crate) mod method {
             JOBS_WATCH => Some(Access::Read),
             #[cfg(feature = "jobs")]
             JOBS_TX => Some(Access::Write),
+            #[cfg(feature = "jobs")]
+            JOBS_COUNTS => Some(Access::Read),
             #[cfg(feature = "kv")]
             KV_BUCKET_OPEN => Some(Access::Read),
             #[cfg(feature = "kv")]
@@ -12383,6 +12493,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("jobs.watch", 0x020c, "download"),
     #[cfg(feature = "jobs")]
     ("jobs.tx", 0x020d, "call"),
+    #[cfg(feature = "jobs")]
+    ("jobs.counts", 0x020e, "call"),
     #[cfg(feature = "kv")]
     ("kv.bucket.open", 0x0101, "call"),
     #[cfg(feature = "kv")]
@@ -12636,6 +12748,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "jobs.List" => JobsList::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
         "jobs.Page" => JobsPage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "jobs")]
+        "jobs.Counts" => JobsCounts::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
         "jobs.Work" => JobsWork::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]

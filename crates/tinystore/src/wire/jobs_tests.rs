@@ -5,8 +5,8 @@ use crate::pipe::{Connect, Pipe};
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, JobsAnswer, JobsCall, JobsChanged, JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp,
-    JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork, method,
+    Empty, Handle, Hello, JobsAnswer, JobsCall, JobsChanged, JobsCounts, JobsHeld, JobsId, JobsJob, JobsKept, JobsList,
+    JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork, method,
 };
 use crate::{Options, Store};
 
@@ -24,7 +24,7 @@ fn add(client: &mut Client, call: &JobsCall) -> bool {
 }
 
 fn get(client: &mut Client, handle: u64, id: &str) -> JobsJob {
-    client.call(method::JOBS_GET, &JobsId { handle, id: id.to_owned() }).unwrap()
+    client.call(method::JOBS_GET, &JobsId { handle, id: id.to_owned(), row: None }).unwrap()
 }
 
 /// Starts a worker on a queue, its stream open both ways once the `RESPONSE`
@@ -62,7 +62,7 @@ fn end(client: &mut Client, stream: u32) -> Frame {
 
 /// Watches a job, the stream open once the `RESPONSE` came.
 fn watch(client: &mut Client, handle: u64, id: &str) -> u32 {
-    let stream = client.start(method::JOBS_WATCH, &JobsId { handle, id: id.to_owned() });
+    let stream = client.start(method::JOBS_WATCH, &JobsId { handle, id: id.to_owned(), row: None });
     let started = client.next_on(stream);
     assert_eq!((started.kind, started.flags), (Kind::Response, 0), "the watch stays open");
     stream
@@ -97,10 +97,91 @@ fn a_client_adds_finds_and_cancels_jobs_by_their_ids() {
         .unwrap();
     assert_eq!(page.jobs.iter().map(|job| job.id.as_deref()).collect::<Vec<_>>(), [Some("welcome:42")]);
 
-    let id = JobsId { handle, id: "welcome:42".to_owned() };
+    let id = JobsId { handle, id: "welcome:42".to_owned(), row: None };
     assert!(client.call::<JobsChanged>(method::JOBS_CANCEL, &id).unwrap().changed);
     assert!(!get(&mut client, handle, "welcome:42").found);
     assert!(!client.call::<JobsChanged>(method::JOBS_UPDATE, &grace).unwrap().changed, "no job to change");
+}
+
+fn page(client: &mut Client, list: &JobsList) -> JobsPage {
+    client.call(method::JOBS_LIST, list).unwrap()
+}
+
+fn cancel(client: &mut Client, id: &JobsId) -> bool {
+    client.call::<JobsChanged>(method::JOBS_CANCEL, id).unwrap().changed
+}
+
+// contract: JOB-15
+#[test]
+fn a_client_cancels_a_job_without_an_id_by_the_row_its_page_gave() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "emails");
+    for value in ["1", "2"] {
+        let call = JobsCall { handle, value: value.to_owned(), delay: Some(60_000), ..JobsCall::default() };
+        assert!(add(&mut client, &call));
+    }
+    add(&mut client, &job(handle, "welcome", "3"));
+    let listed = page(&mut client, &JobsList { handle, ..JobsList::default() });
+    let rows: Vec<_> = listed.jobs.iter().map(|job| (job.id.as_deref(), job.row.is_some())).collect();
+    assert_eq!(rows, [(Some("welcome"), false), (None, true), (None, true)], "a row names a job without an id");
+
+    let first = JobsId { handle, row: listed.jobs[1].row.clone(), ..JobsId::default() };
+    assert!(cancel(&mut client, &first));
+    assert!(!cancel(&mut client, &first), "cancelled already");
+    let left = page(&mut client, &JobsList { handle, ..JobsList::default() });
+    assert_eq!(left.jobs.iter().map(|job| job.value.as_deref()).collect::<Vec<_>>(), [Some("3"), Some("2")]);
+
+    let both = JobsId { id: "welcome".to_owned(), ..first.clone() };
+    let refused = client.call::<JobsChanged>(method::JOBS_CANCEL, &both).unwrap_err();
+    assert_eq!(refused.code, "invalid", "an id or a row, not both: {}", refused.message);
+    let unknown = JobsId { row: Some("chat:42".to_owned()), ..first.clone() };
+    assert_eq!(client.call::<JobsChanged>(method::JOBS_CANCEL, &unknown).unwrap_err().code, "invalid");
+    let get = client.call::<JobsJob>(method::JOBS_GET, &first).unwrap_err();
+    assert_eq!(get.code, "invalid", "a row names a job to a cancel alone: {}", get.message);
+
+    let second = JobsId { handle, row: left.jobs[1].row.clone(), ..JobsId::default() };
+    let op = JobsOp { method: u64::from(method::JOBS_CANCEL), id: Some(second), ..JobsOp::default() };
+    let done: JobsTxResults = client.call(method::JOBS_TX, &JobsTx { writes: vec![op] }).unwrap();
+    assert!(done.outcomes[0].changed, "a transaction cancels by a row too");
+}
+
+// contract: JOB-16
+#[test]
+fn a_client_counts_the_jobs_of_a_queue_in_each_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "emails");
+    add(&mut client, &JobsCall { delay: Some(60_000), ..job(handle, "later", "1") });
+    add(&mut client, &job(handle, "now", "2"));
+    let counts: JobsCounts = client.call(method::JOBS_COUNTS, &Handle { handle }).unwrap();
+    assert_eq!(counts, JobsCounts { scheduled: 1, waiting: 1, running: 0, failed: 0 });
+    let stream = work(&mut client, handle, Some(1));
+    held(&mut client, stream);
+    let counts: JobsCounts = client.call(method::JOBS_COUNTS, &Handle { handle }).unwrap();
+    assert_eq!((counts.waiting, counts.running), (0, 1), "the job the client holds runs");
+}
+
+// contract: JOB-12
+#[test]
+fn a_walks_page_has_a_job_whose_value_no_longer_reads_as_its_failure_in_its_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "emails");
+    for id in ["a", "b", "c"] {
+        add(&mut client, &JobsCall { delay: Some(60_000), ..job(handle, id, "{}") });
+    }
+    let file = rusqlite::Connection::open(dir.path().join("jobs.db")).unwrap();
+    file.execute("update _tinystore_jobs set value = x'ff' where key = 'b'", []).unwrap();
+
+    let failed = client.call::<JobsPage>(method::JOBS_LIST, &JobsList { handle, ..JobsList::default() }).unwrap_err();
+    assert_eq!(failed.code, "corrupt", "a page fails on it: {}", failed.message);
+    let walked = page(&mut client, &JobsList { handle, walk: true, ..JobsList::default() });
+    let ids: Vec<_> = walked.jobs.iter().map(|job| job.id.as_deref()).collect();
+    assert_eq!(ids, [Some("a"), None, Some("c")]);
+    let failure = walked.jobs[1].failure.as_ref().expect("its failure in its place");
+    assert_eq!(failure.code, "corrupt");
+    assert!(failure.message.contains(r#"id "b""#), "it names the job: {}", failure.message);
 }
 
 #[test]
@@ -250,7 +331,7 @@ fn a_cancel_of_a_job_the_client_holds_tells_its_handler_and_settles_nothing() {
     let stream = work(&mut client, handle, Some(1));
     let first = held(&mut client, stream);
 
-    let id = JobsId { handle, id: "e1".to_owned() };
+    let id = JobsId { handle, id: "e1".to_owned(), row: None };
     assert!(client.call::<JobsChanged>(method::JOBS_CANCEL, &id).unwrap().changed);
     let notice = held(&mut client, stream);
     assert_eq!((notice.run, notice.cancelled), (first.run, true));
@@ -426,7 +507,7 @@ fn a_watch_ends_cancelled_with_its_job_and_at_once_with_no_job() {
     let watched = watch(&mut client, handle, "v1");
     assert_eq!(seen(&mut client, watched).state, "scheduled");
 
-    let id = JobsId { handle, id: "v1".to_owned() };
+    let id = JobsId { handle, id: "v1".to_owned(), row: None };
     assert!(client.call::<JobsChanged>(method::JOBS_CANCEL, &id).unwrap().changed);
     assert_eq!(seen(&mut client, watched).state, "cancelled");
     assert_eq!(client.next_on(watched).flags, frame::END);
@@ -509,7 +590,7 @@ fn a_transaction_of_jobs_writes_all_of_its_jobs_or_none() {
     writes.push(JobsOp {
         method: u64::from(method::JOBS_CANCEL),
         call: None,
-        id: Some(JobsId { handle: pushes, id: "bob".to_owned() }),
+        id: Some(JobsId { handle: pushes, id: "bob".to_owned(), row: None }),
     });
     let done: JobsTxResults = client.call(method::JOBS_TX, &JobsTx { writes }).unwrap();
     let changed: Vec<bool> = done.outcomes.iter().map(|outcome| outcome.changed).collect();

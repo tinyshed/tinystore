@@ -640,6 +640,7 @@ its name; every other call carries it.
 | `0x020b` | jobs.keep          | write | `jobs.Step`         | `Empty`                                |
 | `0x020c` | jobs.watch         | read  | `jobs.Id`           | download `jobs.Job` until `Empty`      |
 | `0x020d` | jobs.tx            | write | `jobs.Tx`           | `jobs.TxResults`                       |
+| `0x020e` | jobs.counts        | read  | `Handle`            | `jobs.Counts`                          |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/jobs.wire`. A `jobs.work` stream hands the

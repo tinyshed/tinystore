@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 
 use super::call::{Asked, JobCall};
 use super::queue::Queue;
-use super::read::{self, Job};
+use super::read::{self, Job, JobRef};
 use crate::transaction::sealed::Sealed;
 use crate::{Result, Transaction, TxHandle};
 
@@ -53,10 +53,14 @@ where
         self.queue.update_asked(Asked::with_id(id.as_ref()), value, Some(self.tx))
     }
 
-    /// Takes the job under `id`, as [`Queue::cancel`] does; a running job's
-    /// handler is told to stop once the transaction commits.
-    pub fn cancel(&self, id: impl AsRef<str>) -> Result<bool> {
-        self.queue.cancel_in(id.as_ref(), Some(self.tx))
+    /// Takes the job under an id, or a job a page gave, as [`Queue::cancel`]
+    /// does; a running job's handler is told to stop once the transaction
+    /// commits.
+    pub fn cancel(&self, job: impl JobRef) -> Result<bool> {
+        match job.which() {
+            Some(which) => self.queue.cancel_in(&which, Some(self.tx)),
+            None => Ok(false),
+        }
     }
 
     /// The job under `id` as the transaction sees it, its own writes among it.

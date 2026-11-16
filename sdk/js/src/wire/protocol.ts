@@ -68,6 +68,7 @@ export const methods = {
 	'jobs.keep': 0x020b,
 	'jobs.watch': 0x020c,
 	'jobs.tx': 0x020d,
+	'jobs.counts': 0x020e,
 	'kv.bucket.open': 0x0101,
 	'kv.get': 0x0102,
 	'kv.has': 0x0103,
@@ -3213,13 +3214,15 @@ export const JobsCall = message(
 )
 
 /**
- * The job under an id.
+ * The job under an id; or, for a cancel, a job without one by the row a page
+ * gave, its id left out.
  */
 export const JobsId = message(
 	'jobs.Id',
 	{
 		handle: [1, uint],
 		id: [2, str],
+		row: [3, str],
 	},
 	{
 		write(w, v) {
@@ -3235,11 +3238,17 @@ export const JobsId = message(
 				w.str(v.id)
 				n++
 			}
+			if (v.row !== undefined) {
+				w.field(3)
+				w.str(v.row)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $handle: number | undefined
 			let $id: string | undefined
+			let $row: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -3248,12 +3257,15 @@ export const JobsId = message(
 					case 2:
 						$id = r.str()
 						break
+					case 3:
+						$row = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { handle: $handle, id: $id }
+			return { handle: $handle, id: $id, row: $row }
 		},
 	},
 )
@@ -3319,6 +3331,10 @@ export const JobsJob = message(
 		/** the last run a handler finished */
 		startedAt: [12, int],
 		endedAt: [13, int],
+		/** where a job without an id lies, which a cancel names it by */
+		row: [14, str],
+		/** a walk's: why the job's value no longer reads, the job left out */
+		failure: [15, Failure],
 	},
 	{
 		write(w, v) {
@@ -3389,6 +3405,16 @@ export const JobsJob = message(
 				w.int(v.endedAt)
 				n++
 			}
+			if (v.row !== undefined) {
+				w.field(14)
+				w.str(v.row)
+				n++
+			}
+			if (v.failure !== undefined) {
+				w.field(15)
+				Failure.write(w, v.failure)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -3405,6 +3431,8 @@ export const JobsJob = message(
 			let $repeat: string | undefined
 			let $startedAt: number | undefined
 			let $endedAt: number | undefined
+			let $row: string | undefined
+			let $failure: Read<typeof Failure.fields> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -3446,6 +3474,12 @@ export const JobsJob = message(
 					case 13:
 						$endedAt = r.int()
 						break
+					case 14:
+						$row = r.str()
+						break
+					case 15:
+						$failure = Failure.read(r)
+						break
 					default:
 						r.skip()
 				}
@@ -3465,6 +3499,8 @@ export const JobsJob = message(
 				repeat: $repeat,
 				startedAt: $startedAt,
 				endedAt: $endedAt,
+				row: $row,
+				failure: $failure,
 			}
 		},
 	},
@@ -3487,6 +3523,8 @@ export const JobsList = message(
 		after: [4, str],
 		/** 100 when absent, 1000 at most */
 		limit: [5, uint],
+		/** a job whose value no longer reads comes as its failure in its place, not the page's */
+		walk: [6, bool],
 	},
 	{
 		write(w, v) {
@@ -3517,6 +3555,11 @@ export const JobsList = message(
 				w.uint(v.limit)
 				n++
 			}
+			if (v.walk !== undefined) {
+				w.field(6)
+				w.bool(v.walk)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -3525,6 +3568,7 @@ export const JobsList = message(
 			let $state: string | undefined
 			let $after: string | undefined
 			let $limit: number | undefined
+			let $walk: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -3542,12 +3586,22 @@ export const JobsList = message(
 					case 5:
 						$limit = r.uint()
 						break
+					case 6:
+						$walk = r.bool()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { handle: $handle, prefix: $prefix, state: $state, after: $after, limit: $limit }
+			return {
+				handle: $handle,
+				prefix: $prefix,
+				state: $state,
+				after: $after,
+				limit: $limit,
+				walk: $walk,
+			}
 		},
 	},
 )
@@ -3600,6 +3654,76 @@ export const JobsPage = message(
 			}
 			r.leave()
 			return { jobs: $jobs, next: $next }
+		},
+	},
+)
+
+/**
+ * How many jobs a queue holds in each state, from one snapshot; a done job
+ * has left it.
+ */
+export const JobsCounts = message(
+	'jobs.Counts',
+	{
+		/** due later */
+		scheduled: [1, uint],
+		/** due, and no handler runs it yet */
+		waiting: [2, uint],
+		running: [3, uint],
+		/** kept for the queue's keep */
+		failed: [4, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.scheduled !== undefined) {
+				w.field(1)
+				w.uint(v.scheduled)
+				n++
+			}
+			if (v.waiting !== undefined) {
+				w.field(2)
+				w.uint(v.waiting)
+				n++
+			}
+			if (v.running !== undefined) {
+				w.field(3)
+				w.uint(v.running)
+				n++
+			}
+			if (v.failed !== undefined) {
+				w.field(4)
+				w.uint(v.failed)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $scheduled: number | undefined
+			let $waiting: number | undefined
+			let $running: number | undefined
+			let $failed: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$scheduled = r.uint()
+						break
+					case 2:
+						$waiting = r.uint()
+						break
+					case 3:
+						$running = r.uint()
+						break
+					case 4:
+						$failed = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { scheduled: $scheduled, waiting: $waiting, running: $running, failed: $failed }
 		},
 	},
 )
@@ -3972,7 +4096,7 @@ export const JobsKept = message(
 
 /**
  * One write of a transaction: an add, a set or an update with its call, or a
- * cancel with its id.
+ * cancel with its id or its row.
  */
 export const JobsOp = message(
 	'jobs.Op',

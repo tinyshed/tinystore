@@ -3,11 +3,11 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::de::DeserializeOwned;
 
 use super::claim::Lease;
-use super::rows::due_of;
+use super::rows::{PARKED_BY, PARKED_FROM, due_of};
 use super::state::QueueState;
 use super::values;
 use crate::clock::from_unix_millis;
@@ -60,6 +60,110 @@ pub struct Job<V> {
     /// A repeating job's repeat, as it keeps it.
     pub repeat: Option<String>,
     pub last_run: Option<LastRun>,
+    /// Where a job without an id lies, which a cancel of it names.
+    pub(crate) row: Option<Row>,
+}
+
+/// Where a job without an id lies in its queue's file: its queue's rows by
+/// its time and number, or the failed ones by when it failed and its number.
+/// A number is taken once a file and never again, so a row names that job or
+/// none: one retried or run again for its repeat has moved to another row,
+/// and a parked one is found at the time it is due.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Row {
+    Queued { next: i64, number: i64 },
+    Failed { failed: i64, number: i64 },
+}
+
+impl Row {
+    /// A row from its text, which is a page's cursor after that row.
+    #[cfg(any(feature = "wire", feature = "replication"))]
+    pub(crate) fn parse(text: &str) -> Result<Row> {
+        match Cursor::parse(text) {
+            Ok(Cursor::Queued(next, number)) => Ok(Row::Queued { next, number }),
+            Ok(Cursor::Failed(failed, number)) => Ok(Row::Failed { failed, number }),
+            _ => Err(Error::invalid(format!("a job's row of {text:?}, which no page gave"))),
+        }
+    }
+
+    /// The job as an error names it: by its number and its time, unix
+    /// milliseconds, which say where it lies in the queue.
+    pub(crate) fn describe(self) -> String {
+        match self {
+            Row::Queued { next, number } => format!("job {number} without an id, due at unix ms {}", due_of(next)),
+            Row::Failed { failed, number } => format!("job {number} without an id, failed at unix ms {failed}"),
+        }
+    }
+}
+
+impl std::fmt::Display for Row {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cursor = match *self {
+            Row::Queued { next, number } => Cursor::Queued(next, number),
+            Row::Failed { failed, number } => Cursor::Failed(failed, number),
+        };
+        cursor.fmt(f)
+    }
+}
+
+/// The job a cancel takes: its id, `"welcome-42"`, or a job a page gave,
+/// `&job`, taken by its id, or by the row it was listed from when it has none.
+pub trait JobRef: named::Named {}
+
+impl<T: named::Named> JobRef for T {}
+
+pub(crate) mod named {
+    use super::{Job, Row};
+
+    /// How a cancel finds the job it takes.
+    #[derive(Clone, Debug)]
+    pub enum Which {
+        Id(String),
+        Row(Row),
+    }
+
+    pub trait Named {
+        /// None for a job that carries neither an id nor a row.
+        fn which(&self) -> Option<Which>;
+    }
+
+    impl<T: AsRef<str>> Named for T {
+        fn which(&self) -> Option<Which> {
+            Some(Which::Id(self.as_ref().to_owned()))
+        }
+    }
+
+    impl<V> Named for &Job<V> {
+        fn which(&self) -> Option<Which> {
+            match (&self.id, self.row) {
+                (Some(id), _) => Some(Which::Id(id.clone())),
+                (None, row) => row.map(Which::Row),
+            }
+        }
+    }
+
+    impl Which {
+        /// The job as an error names it.
+        pub(crate) fn describe(&self) -> String {
+            match self {
+                Which::Id(id) => format!("id {id:?}"),
+                Which::Row(row) => row.describe(),
+            }
+        }
+    }
+}
+
+/// How many jobs a queue holds in each state, from one snapshot. A job done
+/// is not counted: it left the queue.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Counts {
+    /// Due later.
+    pub scheduled: u64,
+    /// Due, and no handler runs it yet.
+    pub waiting: u64,
+    pub running: u64,
+    /// Failed for good, kept for the queue's `keep`.
+    pub failed: u64,
 }
 
 /// When the last run a handler finished began and ended.
@@ -222,6 +326,41 @@ const PAGE_FAILED: &str = concat!(
     " where f.queue = ?1 and (?5 = 0 or f.key is null) and (f.failed, f.id) < (?7, ?8)
     order by f.failed desc, f.id desc limit cast(?6 as integer)"
 );
+
+/// The rows a queue holds, which its triggers keep, so that a count walks
+/// the rows due later alone and not the due ones, which may be millions.
+const COUNT_ROWS: &str = "select waiting from _tinystore_jobs_queues where id = ?1";
+/// The rows due after ?2: those below the parked bound ?3, and a parked one
+/// due later still, past ?4, which only a clock set back makes.
+const COUNT_LATER: &str = "select (select count(*) from _tinystore_jobs where queue = ?1 and next > ?2 and next < ?3)
+    + (select count(*) from _tinystore_jobs where queue = ?1 and next > ?4)";
+/// The jobs live leases hold, which run once memory says their handler began.
+const LIVE_LEASES: &str = "select id from _tinystore_jobs_leases where queue = ?1 and until > ?2";
+const COUNT_FAILED: &str = "select count(*) from _tinystore_jobs_failed where queue = ?1";
+
+/// How many jobs the queue holds in each state at `now`, as a page would
+/// list them: a job a lease holds runs once its handler has it, and until
+/// then waits.
+pub(crate) fn counts(c: &Connection, queue: &QueueState, now: i64) -> Result<Counts> {
+    let count = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> Result<u64> {
+        let counted: i64 = c
+            .prepare_cached(sql)
+            .and_then(|mut select| select.query_row(params, |row| row.get(0)))
+            .map_err(|error| sql_error("a count of jobs", error))?;
+        Ok(u64::try_from(counted).unwrap_or(0))
+    };
+    let rows = count(COUNT_ROWS, &[&queue.id])?;
+    let later = count(COUNT_LATER, &[&queue.id, &now, &PARKED_FROM, &now.saturating_add(PARKED_BY)])?;
+    let leased: Vec<i64> =
+        query_cached(c, (LIVE_LEASES, "the jobs that run"), params![queue.id, now], |row| row.get(0))?;
+    let running =
+        leased.into_iter().filter_map(|id| queue.held(id)).filter(|lease| lease.started() && !lease.settled()).count()
+            as u64;
+    let failed = count(COUNT_FAILED, &[&queue.id])?;
+    let scheduled = later.min(rows);
+    let running = running.min(rows - scheduled);
+    Ok(Counts { scheduled, waiting: rows - scheduled - running, running, failed })
+}
 
 /// Reads the job under `key` from one snapshot: in the queue's rows, failed,
 /// or done while the queue's dedupe keeps its id.
@@ -427,13 +566,21 @@ fn cursor_of(filter: &Filter, found: &Found) -> Cursor {
     }
 }
 
-/// A job as its error names it: by its id, or, for one without, by its number
-/// and its time, unix milliseconds, which say where it lies in the queue.
+/// A job as its error names it: by its id, or, for one without, by its row.
 fn named(found: &Found) -> String {
-    match (&found.key, found.table) {
+    match (&found.key, row_of(found)) {
         (Some(key), _) => format!("id {key:?}"),
-        (None, Table::Failed) => format!("job {} without an id, failed at unix ms {}", found.id, found.time),
-        (None, _) => format!("job {} without an id, due at unix ms {}", found.id, due_of(found.time)),
+        (None, Some(row)) => row.describe(),
+        (None, None) => format!("job {} without an id", found.id),
+    }
+}
+
+/// Where a job lies; one kept done is in no row a cancel takes.
+fn row_of(found: &Found) -> Option<Row> {
+    match found.table {
+        Table::Jobs => Some(Row::Queued { next: found.time, number: found.id }),
+        Table::Failed => Some(Row::Failed { failed: found.time, number: found.id }),
+        Table::Done => None,
     }
 }
 
@@ -447,7 +594,7 @@ fn all(c: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Vec<F
     query_cached(c, (sql, "a page of jobs"), params, found)
 }
 
-fn found(row: &Row<'_>) -> rusqlite::Result<Found> {
+fn found(row: &rusqlite::Row<'_>) -> rusqlite::Result<Found> {
     let table = match row.get::<_, i64>(6)? {
         1 => Table::Failed,
         2 => Table::Done,
@@ -519,6 +666,7 @@ fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found
         group: found.group.clone(),
         repeat: found.repeat.clone(),
         last_run,
+        row: if found.key.is_none() { row_of(found) } else { None },
     })
 }
 

@@ -1181,8 +1181,8 @@ class TxQueue[T]:
     async def update(self, id: str, value: T, **options: Any) -> bool:
         return await self._queue.update(id, value, **options)
 
-    async def cancel(self, id: str) -> bool:
-        return await self._queue.cancel(id)
+    async def cancel(self, job: Job[T] | str) -> bool:
+        return await self._queue.cancel(job)
 
     async def get(self, id: str) -> Job[T] | None:
         """The job under id as the transaction sees it, its own writes among it."""

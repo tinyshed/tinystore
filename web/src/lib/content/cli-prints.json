@@ -19,6 +19,10 @@
     "example": "tinystore jobs ./data list emails welcome-",
     "prints": "welcome-40  scheduled  9 Nov 18:54:24.921  attempt 0\nwelcome-41  scheduled  9 Nov 19:54:24.936  attempt 0"
   },
+  "jobs counts": {
+    "example": "tinystore jobs ./data counts emails",
+    "prints": "queue emails: 2 scheduled, 0 waiting, 0 running, 0 failed"
+  },
   "files list": {
     "example": "tinystore files ./data list avatars",
     "prints": "users/42/avatar.png        8 B  9 Nov 17:54:24.977  image/png\nusers/43/avatar.png        8 B  9 Nov 17:54:24.995  image/png"

@@ -9,7 +9,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { CancelledError, InvalidError, type StandardSchemaV1, type Store } from '../src/index.ts'
+import {
+	CancelledError,
+	CorruptError,
+	InvalidError,
+	type StandardSchemaV1,
+	type Store,
+} from '../src/index.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
 interface Reminder {
@@ -291,6 +297,70 @@ for (const way of ways) {
 			const waiting: (string | undefined)[] = []
 			for await (const job of notifications.all({ state: 'waiting' })) waiting.push(job.id)
 			expect({ every, waiting }).toEqual({ every: [2, 1], waiting: ['two', undefined] })
+		})
+
+		// contract: JOB-15
+		test('cancel takes a listed job without an id by its row and no other, in a transaction too', async () => {
+			const emails = store.queue<{ to: string }>('emails-unnamed')
+			for (const to of ['typo@example.com', 'ada@example.com', 'grace@example.com']) {
+				await emails.add({ to }, { delay: '1h' })
+			}
+			const listed = []
+			for await (const job of emails.all({ state: 'scheduled' })) listed.push(job)
+			const typo = listed.find(job => job.value.to === 'typo@example.com')
+			expect(typo?.id).toBeUndefined()
+			expect(await emails.cancel(typo!)).toBe(true)
+			expect(await emails.cancel(typo!)).toBe(false)
+			expect(await caught(emails.cancel({ ...typo! }))).toBeInstanceOf(InvalidError)
+
+			const ada = listed.find(job => job.value.to === 'ada@example.com')!
+			await store.tx(async tx => {
+				await tx.with(emails).cancel(ada)
+			})
+			const left: string[] = []
+			for await (const job of emails.all()) left.push(job.value.to)
+			expect(left).toEqual(['grace@example.com'])
+		})
+
+		// contract: JOB-16
+		test('counts say how many jobs are in each state', async () => {
+			const counted = store.queue<number>('counted')
+			expect(await counted.counts()).toEqual({ scheduled: 0, waiting: 0, running: 0, failed: 0 })
+			await counted.add(1, { delay: '1h' })
+			await counted.add(2)
+			await counted.add(3)
+			let seen: unknown
+			await counted.runDue(async n => {
+				if (n === 2) seen = await counted.counts()
+			})
+			expect(seen).toEqual({ scheduled: 1, waiting: 1, running: 1, failed: 0 })
+			expect(await counted.counts()).toEqual({ scheduled: 1, waiting: 0, running: 0, failed: 0 })
+		})
+
+		// contract: JOB-12
+		test('a walk meets a job whose value no longer meets the schema as its error, and goes on', async () => {
+			const loose = store.queue('walked')
+			await loose.add({ userId: 1, text: 'first' }, { delay: '1h' })
+			await loose.add({ userId: 'not a number' }, { delay: '1h' })
+			await loose.add({ userId: 3, text: 'last' }, { delay: '1h' })
+			const checked = store.queue('walked', { schema: reminderSchema })
+			expect(await caught(checked.list())).toBeInstanceOf(CorruptError)
+
+			const walk = checked.all()
+			const texts: string[] = []
+			const errors: unknown[] = []
+			for (;;) {
+				try {
+					for await (const reminder of walk) texts.push(reminder.value.text)
+					break
+				} catch (err) {
+					errors.push(err)
+				}
+			}
+			expect(texts).toEqual(['first', 'last'])
+			expect(errors).toHaveLength(1)
+			expect(errors[0]).toBeInstanceOf(CorruptError)
+			expect((errors[0] as Error).message).toContain('without an id')
 		})
 
 		test("a group rate starts each group's count a span, and a group past it holds back no other", async () => {

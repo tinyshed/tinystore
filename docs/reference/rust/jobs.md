@@ -303,12 +303,25 @@ kept for the old one dropped with it, and says whether it did; see
 ### Queue.cancel
 
 ```rust
-pub fn cancel(&self, id: impl AsRef<str>) -> Result<bool>
+pub fn cancel(&self, job: impl JobRef) -> Result<bool>
 ```
 
-Takes the job under `id`, whatever its state, and says whether there
-was one. A running one's handler is told to stop: `run.stopped()` turns
-true, and what it returns settles nothing. A repeating job stops.
+Takes a job, whatever its state, and says whether it was there: the
+job under an id, `"welcome-42"`, or a job a page gave, `&job`, by its
+id or, for one without, by the row it was listed from. A job retried,
+run again for its repeat or cancelled since it was listed is in no
+row, and a cancel of it takes nothing, never another job.
+A running one's handler is told to stop: `run.stopped()` turns true,
+and what it returns settles nothing. A repeating job stops.
+
+### Queue.counts
+
+```rust
+pub fn counts(&self) -> Result<Counts>
+```
+
+How many jobs the queue holds in each state, from one snapshot; it
+reads no value.
 
 ### Queue.get
 
@@ -552,6 +565,20 @@ where
 
 Runs what is due; see `Queue::run_due`.
 
+## Counts
+
+```rust
+pub struct Counts {
+    pub scheduled: u64,
+    pub waiting: u64,
+    pub running: u64,
+    pub failed: u64,
+}
+```
+
+How many jobs a queue holds in each state, from one snapshot. A job done
+is not counted: it left the queue.
+
 ## Filter
 
 ```rust
@@ -614,6 +641,15 @@ pub struct Job<V> {
 ```
 
 A job as its queue holds it.
+
+## JobRef
+
+```rust
+pub trait JobRef
+```
+
+The job a cancel takes: its id, `"welcome-42"`, or a job a page gave,
+`&job`, taken by its id, or by the row it was listed from when it has none.
 
 ## LastRun
 
@@ -938,11 +974,12 @@ pub fn update(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
 ### TxQueue.cancel
 
 ```rust
-pub fn cancel(&self, id: impl AsRef<str>) -> Result<bool>
+pub fn cancel(&self, job: impl JobRef) -> Result<bool>
 ```
 
-Takes the job under `id`, as `Queue::cancel` does; a running job's
-handler is told to stop once the transaction commits.
+Takes the job under an id, or a job a page gave, as `Queue::cancel`
+does; a running job's handler is told to stop once the transaction
+commits.
 
 ### TxQueue.get
 
@@ -1206,12 +1243,22 @@ kept for the old one dropped with it, and says whether it did; see
 ### aio::jobs::Queue.cancel
 
 ```rust
-pub fn cancel(&self, id: impl AsRef<str>) -> impl Future<Output = Result<bool>> + Send + 'static
+pub fn cancel(&self, job: impl JobRef) -> impl Future<Output = Result<bool>> + Send + 'static
 ```
 
-Takes the job under `id`, whatever its state, and says whether there
-was one. A running one's handler is told to stop: `run.stopped()` turns
+Takes a job, whatever its state, and says whether it was there: the
+job under an id, or a job a page gave, as `jobs::Queue::cancel`
+does. A running one's handler is told to stop: `run.stopped()` turns
 true, and what it returns settles nothing. A repeating job stops.
+
+### aio::jobs::Queue.counts
+
+```rust
+pub fn counts(&self) -> impl Future<Output = Result<Counts>> + Send + 'static
+```
+
+How many jobs the queue holds in each state, from one snapshot, read on
+the store's pool; see `jobs::Queue::counts`.
 
 ### aio::jobs::Queue.get
 

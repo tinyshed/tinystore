@@ -157,6 +157,28 @@
       "takes": "[dir] list <queue> [prefix]"
     },
     {
+      "does": "how many jobs a queue holds in each state",
+      "examples": [
+        "tinystore jobs ./data counts emails"
+      ],
+      "flags": [
+        {
+          "means": "a queue the program opened from this database, kept in sql/<db>.db",
+          "name": "--database",
+          "value": "<db>"
+        },
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory, every state from one snapshot:            scheduled is due later, waiting is due and not running yet, running is in a handler's hands, and failed            waits for the queue's keep. A job done has left the queue and is not counted.",
+      "name": "jobs counts",
+      "takes": "[dir] counts <queue>"
+    },
+    {
       "does": "a set's files, their size, time and type",
       "examples": [
         "tinystore files ./data list avatars",

@@ -53,6 +53,28 @@ async fn each_call_answers_as_the_blocking_call_does_on_the_same_store() {
     f.store.close().await.unwrap();
 }
 
+// contract: JOB-15, JOB-16
+#[tokio::test]
+async fn a_listed_job_without_an_id_is_cancelled_and_counted_as_blocking() {
+    let f = fixture();
+    let later = f.store.queue::<Draft>("later").open().unwrap();
+    let blocking = later.blocking();
+    later.delay(HOUR).add(&draft(1)).await.unwrap();
+    later.delay(HOUR).add(&draft(2)).await.unwrap();
+    later.add(&draft(3)).await.unwrap();
+    let counts = later.counts().await.unwrap();
+    assert_eq!(counts, blocking.counts().unwrap());
+    assert_eq!((counts.scheduled, counts.waiting, counts.running, counts.failed), (2, 1, 0, 0));
+
+    let page = later.list(&Filter::default()).await.unwrap();
+    let first = page.jobs.iter().find(|job| job.value == draft(1)).unwrap();
+    assert!(later.cancel(first).await.unwrap());
+    assert!(!later.cancel(first).await.unwrap(), "cancelled already");
+    let left: Vec<Draft> = blocking.all(Filter::default()).map(|job| job.unwrap().value).collect();
+    assert_eq!(left, [draft(3), draft(2)], "the job due at the same time stays");
+    f.store.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_call_refused_before_its_write_answers_as_the_blocking_one() {
     let f = fixture();

@@ -46,6 +46,8 @@ type JobOp struct {
 	Method uint16
 	Call   *wire.JobsCall
 	ID     string
+	// Row names a job without an ID to a cancel, as a page gave it.
+	Row string
 }
 
 // Lent is a write of another engine that a database's batch carries: a
@@ -366,6 +368,9 @@ func commitJobs(ctx context.Context, link *Link, ops []JobOp) error {
 				write.Call = &call
 			} else {
 				write.Id = &wire.JobsId{Handle: handle, Id: op.ID}
+				if op.Row != "" {
+					write.Id.Row = &op.Row
+				}
 			}
 			message.Writes = append(message.Writes, write)
 		}

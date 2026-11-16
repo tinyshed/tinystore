@@ -1483,9 +1483,12 @@
         },
         "id": {
           "str": "id"
+        },
+        "row": {
+          "str": "row"
         }
       },
-      "hex": "82016b02a26964",
+      "hex": "83016b02a2696403a3726f77",
       "message": "jobs.Id",
       "name": "jobs.Id with every field"
     },
@@ -1528,6 +1531,23 @@
         "error": {
           "str": "error"
         },
+        "failure": {
+          "fields": {
+            "code": {
+              "str": "code"
+            },
+            "message": {
+              "str": "message"
+            },
+            "what": {
+              "names": {
+                "a": {
+                  "str": "what"
+                }
+              }
+            }
+          }
+        },
         "found": {
           "bool": true
         },
@@ -1543,6 +1563,9 @@
         "repeat": {
           "str": "repeat"
         },
+        "row": {
+          "str": "row"
+        },
         "startedAt": {
           "int": "1790000000000"
         },
@@ -1553,7 +1576,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8d01c302a2696403a77b2261223a317d04a5737461746505cf000001a0c4506c0006cd025f07cd02c308a77b2261223a317d09a56572726f720aa567726f75700ba67265706561740ccf000001a0c4506c000dcf000001a0c4506c00",
+      "hex": "8f01c302a2696403a77b2261223a317d04a5737461746505cf000001a0c4506c0006cd025f07cd02c308a77b2261223a317d09a56572726f720aa567726f75700ba67265706561740ccf000001a0c4506c000dcf000001a0c4506c000ea3726f770f8301a4636f646502a76d6573736167650381a161a477686174",
       "message": "jobs.Job",
       "name": "jobs.Job with every field"
     },
@@ -1579,9 +1602,12 @@
         },
         "state": {
           "str": "state"
+        },
+        "walk": {
+          "bool": true
         }
       },
-      "hex": "85016b02a670726566697803a5737461746504a5616674657205cd01fb",
+      "hex": "86016b02a670726566697803a5737461746504a5616674657205cd01fb06c3",
       "message": "jobs.List",
       "name": "jobs.List with every field"
     },
@@ -1612,6 +1638,23 @@
                 "error": {
                   "str": "error"
                 },
+                "failure": {
+                  "fields": {
+                    "code": {
+                      "str": "code"
+                    },
+                    "message": {
+                      "str": "message"
+                    },
+                    "what": {
+                      "names": {
+                        "a": {
+                          "str": "what"
+                        }
+                      }
+                    }
+                  }
+                },
                 "found": {
                   "bool": true
                 },
@@ -1626,6 +1669,9 @@
                 },
                 "repeat": {
                   "str": "repeat"
+                },
+                "row": {
+                  "str": "row"
                 },
                 "startedAt": {
                   "int": "1790000000000"
@@ -1644,7 +1690,7 @@
           "str": "next"
         }
       },
-      "hex": "8201918d01c302a2696403a77b2261223a317d04a5737461746505cf000001a0c4506c0006cd025f07cd02c308a77b2261223a317d09a56572726f720aa567726f75700ba67265706561740ccf000001a0c4506c000dcf000001a0c4506c0002a46e657874",
+      "hex": "8201918f01c302a2696403a77b2261223a317d04a5737461746505cf000001a0c4506c0006cd025f07cd02c308a77b2261223a317d09a56572726f720aa567726f75700ba67265706561740ccf000001a0c4506c000dcf000001a0c4506c000ea3726f770f8301a4636f646502a76d6573736167650381a161a47768617402a46e657874",
       "message": "jobs.Page",
       "name": "jobs.Page with every field"
     },
@@ -1653,6 +1699,31 @@
       "hex": "80",
       "message": "jobs.Page",
       "name": "jobs.Page with no field"
+    },
+    {
+      "fields": {
+        "failed": {
+          "uint": "407"
+        },
+        "running": {
+          "uint": "307"
+        },
+        "scheduled": {
+          "uint": "107"
+        },
+        "waiting": {
+          "uint": "207"
+        }
+      },
+      "hex": "84016b02cccf03cd013304cd0197",
+      "message": "jobs.Counts",
+      "name": "jobs.Counts with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Counts",
+      "name": "jobs.Counts with no field"
     },
     {
       "fields": {
@@ -1822,6 +1893,9 @@
             },
             "id": {
               "str": "id"
+            },
+            "row": {
+              "str": "row"
             }
           }
         },
@@ -1829,7 +1903,7 @@
           "uint": "107"
         }
       },
-      "hex": "83016b0289016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650382016b02a26964",
+      "hex": "83016b0289016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650383016b02a2696403a3726f77",
       "message": "jobs.Op",
       "name": "jobs.Op with every field"
     },
@@ -1883,6 +1957,9 @@
                     },
                     "id": {
                       "str": "id"
+                    },
+                    "row": {
+                      "str": "row"
                     }
                   }
                 },
@@ -1894,7 +1971,7 @@
           ]
         }
       },
-      "hex": "81019183016b0289016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650382016b02a26964",
+      "hex": "81019183016b0289016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650383016b02a2696403a3726f77",
       "message": "jobs.Tx",
       "name": "jobs.Tx with every field"
     },
@@ -6303,6 +6380,7 @@
     "config.update": 1795,
     "jobs.add": 515,
     "jobs.cancel": 518,
+    "jobs.counts": 526,
     "jobs.get": 519,
     "jobs.keep": 523,
     "jobs.list": 520,

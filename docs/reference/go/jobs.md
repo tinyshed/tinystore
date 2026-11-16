@@ -181,6 +181,22 @@ type Concurrency struct {
 
 Concurrency is how many jobs of a queue run at once: Total across every worker of the store, Group in each group, so that one customer's backlog holds back no other. Given to Work, Total is how many handlers that worker runs.
 
+## Counts
+
+```go
+type Counts struct {
+	// Scheduled jobs are due later.
+	Scheduled int
+	// Waiting jobs are due, and no handler runs them yet.
+	Waiting int
+	Running int
+	// Failed jobs are kept for the queue's Keep.
+	Failed int
+}
+```
+
+Counts is how many jobs a queue holds in each state, from one snapshot; a done job has left it.
+
 ## Job
 
 ```go
@@ -204,6 +220,7 @@ type Job[T any] struct {
 	Repeat string
 	// LastRun is when the last run a handler finished started and ended; nil before one.
 	LastRun *LastRun
+	// contains filtered or unexported fields
 }
 ```
 
@@ -284,7 +301,7 @@ Adding is a job's add for a batch of the database the queue was opened from: db.
 func (q *Queue[T]) All(ctx context.Context, opts ...ListOption) iter.Seq2[Job[T], error]
 ```
 
-All is every job the options name, a page at a time, holding nothing between pages.
+All is every job the options name, a page at a time, holding nothing between pages. A job whose value no longer reads is a Corrupt error in its place, naming it, and the walk goes on past it.
 
 ### Queue.Cancel
 
@@ -293,6 +310,28 @@ func (q *Queue[T]) Cancel(ctx context.Context, id string) (bool, error)
 ```
 
 Cancel takes the job under id, whatever its state, and says whether there was one: a running one's ctx ends, and what its handler returns then settles nothing; a repeating one stops.
+
+### Queue.CancelJob
+
+```go
+func (q *Queue[T]) CancelJob(ctx context.Context, job Job[T]) (bool, error)
+```
+
+CancelJob takes a job a list gave, whatever its state, and says whether it was there: by its ID, or for one without, by the row it was listed from. A job retried, run again for its repeat or cancelled since is in no row, and its cancel takes nothing, never another job. Go has no overloading, so a job and an id each have their call.
+
+	for job, err := range emails.All(ctx, jobs.Scheduled) {
+		if err == nil && job.Value.To == bounced {
+			_, err = emails.CancelJob(ctx, job)
+		}
+	}
+
+### Queue.Counts
+
+```go
+func (q *Queue[T]) Counts(ctx context.Context) (Counts, error)
+```
+
+Counts is how many jobs the queue holds in each state, from one snapshot; it reads no value.
 
 ### Queue.Get
 

@@ -72,7 +72,7 @@ let worker = emails.work(|email: Email, run| -> Result<(), AppError> {
 
 | Page                                      | Covers                                             |
 |-------------------------------------------|----------------------------------------------------|
-| [Ids](ids.md)                             | `id`: add once, `set`, `update`, `cancel`, `get`   |
+| [Ids](ids.md)                             | `id`, `cancel`, `get`, pages and `counts`          |
 | [Schedules and cron](schedules.md)        | `every`, `cron` with a time zone, `store.schedule` |
 | [Concurrency and rate](concurrency.md)    | limits in all and per group, starts per second     |
 | [Watching a job](watching.md)             | `get`, `watch`, `ahead`, progress                  |

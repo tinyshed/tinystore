@@ -7,7 +7,7 @@
 
 import { FailureLog, messageOf } from './background.ts'
 import type { Connection, Idempotence, Link } from './connection.ts'
-import { CancelledError, CorruptError, InvalidError, UnavailableError } from './errors.ts'
+import { CancelledError, CorruptError, errorOf, InvalidError, UnavailableError } from './errors.ts'
 import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import { type Rate, rateOf } from './limits.ts'
 import { sayOwn } from './logger.ts'
@@ -16,9 +16,11 @@ import { ConnectionLostError, type Stream } from './session.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import type { Read, Written } from './wire/codec.ts'
 import {
+	Handle,
 	JobsAnswer,
 	JobsCall,
 	JobsChanged,
+	JobsCounts,
 	JobsHeld,
 	JobsId,
 	JobsJob,
@@ -122,6 +124,40 @@ export interface ListOptions {
 	after?: string | undefined
 	/** jobs a page holds at most: 100, 1000 at most */
 	limit?: number | undefined
+}
+
+/** How many jobs a queue holds in each state, from one snapshot; a done job has left it. */
+export interface JobCounts {
+	/** due later */
+	scheduled: number
+	/** due, and no handler runs it yet */
+	waiting: number
+	running: number
+	/** kept for the queue's keep */
+	failed: number
+}
+
+/**
+ * Where a job without an id lies, which a cancel names it by: kept on the job
+ * a page gave, out of sight, and not on a copy of it.
+ */
+const ROW = Symbol('tinystore.job.row')
+
+/** What a cancel sends of a job: its id, or for one without, its row. */
+function namedBy(job: Job<unknown> | string, describe: string): { id?: string; row?: string } {
+	if (typeof job === 'string') {
+		return { id: job }
+	}
+	if (job.id !== undefined) {
+		return { id: job.id }
+	}
+	const row = (job as { [ROW]?: string })[ROW]
+	if (row === undefined) {
+		throw new InvalidError(
+			`${describe}: a job without an id names no row: cancel the job a list gave, not a copy`,
+		)
+	}
+	return { row }
 }
 
 /** A page of a queue's jobs, and where the next starts when there is one. */
@@ -465,14 +501,103 @@ async function getJob<T>(source: Source<T>, id: string): Promise<Job<T> | undefi
 	return found.found === true ? jobOf(source, found) : undefined
 }
 
-async function cancelJob<T>(source: Source<T>, id: string): Promise<boolean> {
+async function cancelJob<T>(source: Source<T>, job: Job<T> | string): Promise<boolean> {
+	const named = namedBy(job as Job<unknown> | string, source.describe)
 	const body = await callOf(
 		source,
 		methods['jobs.cancel'],
-		handle => JobsId.encode({ handle, id }),
+		handle => JobsId.encode({ handle, ...named }),
 		'write',
 	)
 	return JobsChanged.decode(body).changed === true
+}
+
+/**
+ * A page of the queue's jobs. A walk's page has a job whose value no longer
+ * reads as its error in its place; any other page fails on it.
+ */
+async function pageOf<T>(
+	source: Source<T>,
+	options: ListOptions,
+	walk: boolean,
+): Promise<{ jobs: (Job<T> | Error)[]; next: string | undefined }> {
+	const body = await callOf(
+		source,
+		methods['jobs.list'],
+		handle => JobsList.encode({ handle, ...options, walk }),
+		'read',
+	)
+	const page = JobsPage.decode(body)
+	const jobs: (Job<T> | Error)[] = []
+	for (const found of page.jobs ?? []) {
+		if (found.failure !== undefined) {
+			const { code, message, what } = found.failure
+			jobs.push(errorOf(code ?? 'internal', message ?? '', what ?? {}))
+			continue
+		}
+		const job = jobOf(source, found)
+		jobs.push(walk ? await job.catch((err: Error) => err) : await job)
+	}
+	return { jobs, next: page.next }
+}
+
+/**
+ * Every job a filter names, a page at a time. A job whose value no longer
+ * reads is its error in its place: `next()` rejects with it, and the call
+ * after goes on past it, as a `for await` that catches it and iterates the
+ * same walk again does.
+ */
+class Walk<T> implements AsyncGenerator<Job<T>, void, unknown> {
+	readonly #source: Source<T>
+	readonly #options: Omit<ListOptions, 'after'>
+	#jobs: (Job<T> | Error)[] = []
+	#after: string | undefined
+	#ended = false
+
+	constructor(source: Source<T>, options: Omit<ListOptions, 'after'>) {
+		this.#source = source
+		this.#options = options
+	}
+
+	async next(): Promise<IteratorResult<Job<T>, void>> {
+		while (this.#jobs.length === 0 && !this.#ended) {
+			const page = await pageOf(this.#source, { ...this.#options, after: this.#after }, true)
+			this.#jobs = page.jobs
+			this.#after = page.next
+			this.#ended = page.next === undefined
+		}
+		const job = this.#jobs.shift()
+		if (job === undefined) {
+			return { done: true, value: undefined }
+		}
+		if (job instanceof Error) {
+			throw job
+		}
+		return { done: false, value: job }
+	}
+
+	async return(): Promise<IteratorResult<Job<T>, void>> {
+		this.#end()
+		return { done: true, value: undefined }
+	}
+
+	async throw(err: unknown): Promise<IteratorResult<Job<T>, void>> {
+		this.#end()
+		throw err
+	}
+
+	[Symbol.asyncIterator](): this {
+		return this
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		this.#end()
+	}
+
+	#end(): void {
+		this.#jobs = []
+		this.#ended = true
+	}
 }
 
 /** A job as the server sent it, its value read as the queue reads one. */
@@ -481,11 +606,10 @@ async function jobOf<T>(source: Source<T>, found: Read<typeof JobsJob.fields>): 
 	try {
 		value = await source.values.decode(found.value ?? 'null')
 	} catch (err) {
-		throw new CorruptError(
-			`${source.describe}: id ${JSON.stringify(found.id ?? '')}: ${messageOf(err)}`,
-		)
+		const named = found.id === undefined ? 'a job without an id' : `id ${JSON.stringify(found.id)}`
+		throw new CorruptError(`${source.describe}: ${named}: ${messageOf(err)}`)
 	}
-	return {
+	const job: Job<T> = {
 		id: found.id,
 		value,
 		state: (found.state ?? 'waiting') as JobState,
@@ -504,6 +628,10 @@ async function jobOf<T>(source: Source<T>, found: Read<typeof JobsJob.fields>): 
 						endedAt: new Date(found.endedAt ?? found.startedAt),
 					},
 	}
+	if (found.row !== undefined) {
+		Object.defineProperty(job, ROW, { value: found.row })
+	}
+	return job
 }
 
 /**
@@ -650,12 +778,34 @@ export class Queue<T> {
 	}
 
 	/**
-	 * Takes the job under id, whatever its state, and says whether there was
-	 * one. A running one's handler sees its signal abort, and what it returns
+	 * Takes a job, whatever its state, and says whether it was there: the job
+	 * under an id, or a job a list gave, by its id or, for one without, by the
+	 * row it was listed from. A job retried, run again for its repeat or
+	 * cancelled since is in no row, and its cancel takes nothing, never another
+	 * job. A running one's handler sees its signal abort, and what it returns
 	 * then settles nothing; a repeating one stops.
+	 *
+	 *     for await (const job of emails.all({ state: 'scheduled' })) if (job.value.to === bounced) await emails.cancel(job)
 	 */
-	cancel(id: string): Promise<boolean> {
-		return cancelJob(this.#source, id)
+	cancel(job: Job<T> | string): Promise<boolean> {
+		return cancelJob(this.#source, job)
+	}
+
+	/** How many jobs the queue holds in each state, from one snapshot; it reads no value. */
+	async counts(): Promise<JobCounts> {
+		const body = await callOf(
+			this.#source,
+			methods['jobs.counts'],
+			handle => Handle.encode({ handle }),
+			'read',
+		)
+		const { scheduled, waiting, running, failed } = JobsCounts.decode(body)
+		return {
+			scheduled: scheduled ?? 0,
+			waiting: waiting ?? 0,
+			running: running ?? 0,
+			failed: failed ?? 0,
+		}
 	}
 
 	/**
@@ -685,31 +835,17 @@ export class Queue<T> {
 	 * then those without as they run, then those without that failed.
 	 */
 	async list(options: ListOptions = {}): Promise<JobPage<T>> {
-		const body = await callOf(
-			this.#source,
-			methods['jobs.list'],
-			handle => JobsList.encode({ handle, ...options }),
-			'read',
-		)
-		const page = JobsPage.decode(body)
-		const jobs: Job<T>[] = []
-		for (const found of page.jobs ?? []) {
-			jobs.push(await jobOf(this.#source, found))
-		}
-		return { jobs, next: page.next }
+		const page = await pageOf(this.#source, options, false)
+		return { jobs: page.jobs as Job<T>[], next: page.next }
 	}
 
-	/** Every job the options name, a page at a time, holding nothing between pages. */
-	async *all(options: Omit<ListOptions, 'after'> = {}): AsyncGenerator<Job<T>> {
-		let after: string | undefined
-		for (;;) {
-			const page = await this.list({ ...options, after })
-			yield* page.jobs
-			if (page.next === undefined) {
-				return
-			}
-			after = page.next
-		}
+	/**
+	 * Every job the options name, a page at a time, holding nothing between
+	 * pages. A job whose value no longer reads is a CorruptError in its place,
+	 * naming it, and iterating the same walk again goes on past it.
+	 */
+	all(options: Omit<ListOptions, 'after'> = {}): AsyncGenerator<Job<T>> {
+		return new Walk(this.#source, options)
 	}
 
 	/**
@@ -780,8 +916,8 @@ export class TxQueue<T> {
 		return this.#queue.update(id, value, options)
 	}
 
-	cancel(id: string): Promise<boolean> {
-		return this.#queue.cancel(id)
+	cancel(job: Job<T> | string): Promise<boolean> {
+		return this.#queue.cancel(job)
 	}
 
 	/** The job under id as the transaction sees it, its own writes among it. */
@@ -836,12 +972,12 @@ export function addingIn(
 	}
 }
 
-/** A write the store's transaction keeps for its commit: its method, and its call or the id it cancels. */
+/** A write the store's transaction keeps for its commit: its method, and its call or the job it cancels. */
 export interface JobOp {
 	source: Source<unknown>
 	method: number
 	call?: Omit<Written<typeof JobsCall.fields>, 'handle'>
-	id?: string
+	id?: { id?: string; row?: string }
 }
 
 /**
@@ -880,8 +1016,9 @@ export class StoreTxQueue<T> {
 		this.#write('jobs.update', { ...jobFields(options), id }, value)
 	}
 
-	/** Takes the job under id, whatever its state, with the commit. */
-	async cancel(id: string): Promise<void> {
+	/** Takes the job under id, or a job a list gave, whatever its state, with the commit. */
+	async cancel(job: Job<T> | string): Promise<void> {
+		const id = namedBy(job as Job<unknown> | string, this.#source.describe)
 		this.#keep({ source: this.#source as Source<unknown>, method: methods['jobs.cancel'], id })
 	}
 
@@ -904,7 +1041,7 @@ export async function commitJobs(link: Link, ops: readonly JobOp[]): Promise<voi
 			writes.push({
 				method: op.method,
 				call: op.call === undefined ? undefined : { ...op.call, handle },
-				id: op.id === undefined ? undefined : { handle, id: op.id },
+				id: op.id === undefined ? undefined : { handle, ...op.id },
 			})
 		}
 		await connection.session.call(methods['jobs.tx'], JobsTx.encode({ writes }))

@@ -71,6 +71,7 @@ export type {
 	Concurrency,
 	Handler,
 	Job,
+	JobCounts,
 	JobOptions,
 	JobPage,
 	JobState,

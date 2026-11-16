@@ -1,5 +1,6 @@
 //! The tool `jobs_list`, and a queue's jobs as `tinystore jobs list` reads
-//! them too, each as the JSON both answer with.
+//! them too, each as the JSON both answer with, and how many are in each
+//! state, as `tinystore jobs counts` reads them.
 
 use std::sync::Arc;
 
@@ -9,7 +10,7 @@ use super::given::none_kept;
 use super::store::{Arguments, MOST, Opener, count, opened, schema, text, with_database};
 use super::tool::Tool;
 use crate::Store;
-use crate::jobs::{Filter, Job, Page, State};
+use crate::jobs::{Counts, Filter, Job, Page, Queue, State};
 
 pub(super) fn tools(open: &Opener) -> Vec<Tool> {
     let open = Arc::clone(open);
@@ -52,15 +53,7 @@ pub struct Listing<'a> {
 /// A page of the queue's jobs, `limit` of them at most, after the page that
 /// ended at `after`.
 pub fn listed(store: &Store, listing: &Listing, limit: usize, after: Option<&str>) -> Result<Page<Value>, String> {
-    let opened = match listing.database {
-        #[cfg(feature = "sql")]
-        Some(database) => super::sql::opened(store, database)?.queue(listing.queue),
-        #[cfg(not(feature = "sql"))]
-        Some(database) => return Err(format!("database {database}: this program was built without sql's databases")),
-        None if !store.dir().join("jobs.db").exists() => return Err(none_kept(store.dir(), "jobs.db", "queue")),
-        None => store.queue::<Value>(listing.queue),
-    };
-    let opened = opened.open().map_err(|error| error.to_string())?;
+    let opened = queue(store, listing.queue, listing.database)?;
     let mut filter = Filter::prefix(listing.prefix.unwrap_or_default()).limit(limit);
     if let Some(after) = after {
         filter = filter.after(after);
@@ -76,6 +69,25 @@ pub fn listed(store: &Store, listing: &Listing, limit: usize, after: Option<&str
         });
     }
     opened.list(&filter).map_err(|error| error.to_string())
+}
+
+/// How many jobs the queue holds in each state, from one snapshot.
+pub fn counted(store: &Store, queue_name: &str, database: Option<&str>) -> Result<Counts, String> {
+    queue(store, queue_name, database)?.counts().map_err(|error| error.to_string())
+}
+
+/// The queue `name`, kept in the database a program opened it from, or in
+/// jobs.db.
+fn queue(store: &Store, name: &str, database: Option<&str>) -> Result<Queue<Value>, String> {
+    let opened = match database {
+        #[cfg(feature = "sql")]
+        Some(database) => super::sql::opened(store, database)?.queue(name),
+        #[cfg(not(feature = "sql"))]
+        Some(database) => return Err(format!("database {database}: this program was built without sql's databases")),
+        None if !store.dir().join("jobs.db").exists() => return Err(none_kept(store.dir(), "jobs.db", "queue")),
+        None => store.queue::<Value>(name),
+    };
+    opened.open().map_err(|error| error.to_string())
 }
 
 /// A job as JSON: its time whole and UTC.

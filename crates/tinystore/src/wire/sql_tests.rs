@@ -548,7 +548,7 @@ fn a_bucket_and_a_queue_opened_from_a_database_write_inside_its_transactions() {
         KvCall { handle: sessions, key: "t-1".to_owned(), value: Some(Row::Bin(b"ann".to_vec())), ..KvCall::default() };
     let add = JobsCall { handle: emails, id: Some("n1".to_owned()), value: "{}".to_owned(), ..JobsCall::default() };
     let session = KvCall { handle: sessions, key: "t-1".to_owned(), ..KvCall::default() };
-    let job = JobsId { handle: emails, id: "n1".to_owned() };
+    let job = JobsId { handle: emails, id: "n1".to_owned(), row: None };
 
     for commit in [false, true] {
         let stream = begin(&mut client, database);
@@ -628,7 +628,7 @@ fn a_batch_carries_a_queues_add_which_commits_with_its_rows() {
     };
     let batch = |statements| SqlBatch { handle: database, statements };
     let found = |client: &mut Client, id: &str| {
-        let job = JobsId { handle: indexing, id: id.to_owned() };
+        let job = JobsId { handle: indexing, id: id.to_owned(), row: None };
         client.call::<JobsJob>(method::JOBS_GET, &job).unwrap().found
     };
 
@@ -646,7 +646,7 @@ fn a_batch_carries_a_queues_add_which_commits_with_its_rows() {
     assert!(elsewhere.message.contains("kept in jobs.db, outside this batch of sql app"), "{}", elsewhere.message);
     let cancel = SqlText {
         method: Some(u64::from(method::JOBS_CANCEL)),
-        body: Some(JobsId { handle: indexing, id: "n1".to_owned() }.encode()),
+        body: Some(JobsId { handle: indexing, id: "n1".to_owned(), row: None }.encode()),
         ..SqlText::default()
     };
     let cancelled = client.call::<SqlBatched>(method::SQL_BATCH, &batch(vec![insert("n4"), cancel]));

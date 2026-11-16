@@ -52,7 +52,7 @@ pub use call::JobCall;
 pub use maintain::{Maintenance, maintain};
 pub use policy::Concurrency;
 pub use queue::{All, Claimed, Queue, QueueBuilder, Workers};
-pub use read::{Filter, Job, LastRun, PAGE_JOBS, Page, State};
+pub use read::{Counts, Filter, Job, JobRef, LastRun, PAGE_JOBS, Page, State};
 pub use run::{Outcome, Run, When};
 pub use schedule::{Schedule, ScheduleBuilder};
 pub use tx::TxQueue;
@@ -70,7 +70,7 @@ pub(crate) use {
 };
 
 #[cfg(feature = "wire")]
-pub(crate) use {steps::keep_encoded, watch::Hears};
+pub(crate) use {read::Row, read::named::Which, steps::keep_encoded, watch::Hears};
 
 // What the async API alone takes: a claim, a settlement and a step's keep
 // that answer through a completion.

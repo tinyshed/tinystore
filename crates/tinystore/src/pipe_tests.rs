@@ -810,7 +810,7 @@ fn a_read_connection_opens_what_its_store_holds_as_it_is_and_binds_none_of_it() 
     let mut reader = Client::admitted(&store, Capability::Read);
     let asked = JobsQueueOpen { attempts: Some(5), ..queue };
     let emails = reader.call::<Handle>(method::JOBS_QUEUE_OPEN, &asked).unwrap().handle;
-    let e1 = JobsId { handle: emails, id: "e1".to_owned() };
+    let e1 = JobsId { handle: emails, id: "e1".to_owned(), row: None };
     assert!(reader.call::<JobsJob>(method::JOBS_GET, &e1).unwrap().found, "the job the program set");
     let handle = reader.call::<Handle>(method::KV_BUCKET_OPEN, &bucket).unwrap().handle;
     let entry: KvEntry =
@@ -834,7 +834,7 @@ fn a_read_connection_opens_what_its_store_holds_as_it_is_and_binds_none_of_it() 
     store.queue::<i64>("emails").attempts(3).open().unwrap();
     store.database("app").durability(crate::Durability::Os).open().unwrap();
     let again = reader.call::<Handle>(method::JOBS_QUEUE_OPEN, &asked).unwrap().handle;
-    let e1 = JobsId { handle: again, id: "e1".to_owned() };
+    let e1 = JobsId { handle: again, id: "e1".to_owned(), row: None };
     assert!(reader.call::<JobsJob>(method::JOBS_GET, &e1).unwrap().found, "the queue as the program opened it");
     assert_eq!(reader.call::<SqlRows>(method::SQL_QUERY, &titles).unwrap().rows.len(), 1, "beside the program's");
 }
@@ -957,7 +957,7 @@ fn a_read_connection_gives_back_no_lease_a_process_that_died_held() {
     let mut reader = Client::admitted(&store, Capability::Read);
     let open = JobsQueueOpen { name: "emails".to_owned(), ..JobsQueueOpen::default() };
     let handle = reader.call::<Handle>(method::JOBS_QUEUE_OPEN, &open).unwrap().handle;
-    let e1 = JobsId { handle, id: "e1".to_owned() };
+    let e1 = JobsId { handle, id: "e1".to_owned(), row: None };
     assert_eq!(reader.call::<JobsJob>(method::JOBS_GET, &e1).unwrap().attempt, 0, "the lease as it was left");
     store.queue::<i64>("emails").open().unwrap();
     assert_eq!(reader.call::<JobsJob>(method::JOBS_GET, &e1).unwrap().attempt, 1, "given back by the program's open");

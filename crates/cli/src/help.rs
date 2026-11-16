@@ -158,6 +158,15 @@ pub(crate) const JOBS_LIST: Command = Command {
            line {\"next\": …} when there are more.",
 };
 
+pub(crate) const JOBS_COUNTS: Command = Command {
+    name: "jobs counts",
+    takes: "[dir] counts <queue>",
+    does: "how many jobs a queue holds in each state",
+    flags: &[flag("--database", "<db>", "a queue the program opened from this database, kept in sql/<db>.db"), JSON],
+    examples: &["tinystore jobs ./data counts emails"],
+    more: "It reads beside the program or server that holds the directory, every state from one snapshot:            scheduled is due later, waiting is due and not running yet, running is in a handler's hands, and failed            waits for the queue's keep. A job done has left the queue and is not counted.",
+};
+
 pub(crate) const JOBS_CANCEL: Command = Command {
     name: "jobs cancel",
     takes: "<dir> cancel <queue> <id>",
@@ -646,6 +655,7 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &KV_GET,
             &KV_LIST,
             &JOBS_LIST,
+            &JOBS_COUNTS,
             &FILES_LIST,
             &FILES_GET,
             &CONFIG_EXPLAIN,

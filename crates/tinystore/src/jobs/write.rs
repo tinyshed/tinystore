@@ -11,7 +11,8 @@
 
 use rusqlite::Connection;
 
-use super::rows::{self, Change, NewJob, Row};
+use super::read::Row;
+use super::rows::{self, Change, NewJob};
 use super::state::QueueState;
 use super::values::Kept;
 use crate::Result;
@@ -92,7 +93,7 @@ pub(crate) fn set(c: &Connection, queue: &QueueState, call: &Prepared) -> Result
 /// When the run a set asks of a running job is: its time when it named one;
 /// the repeat's next time when the job repeats; now otherwise, as soon as the
 /// run under way ends, since that run may have read what changed.
-fn again(call: &Prepared, there: &Row) -> Option<i64> {
+fn again(call: &Prepared, there: &rows::Row) -> Option<i64> {
     match (call.timed, call.repeat.is_some() || there.repeat.is_some()) {
         (true, _) => Some(call.at),
         (false, true) => None,
@@ -132,10 +133,30 @@ pub(crate) enum Cancelled {
 /// job.
 pub(crate) fn cancel(c: &Connection, queue: &QueueState, key: &str) -> Result<Cancelled> {
     if let Some(taken) = rows::cancel(c, queue.id, key)? {
-        if let (Some(group), true, Some(_)) = (&taken.group, taken.placed, queue.policy.concurrency.group) {
-            rows::unpark_one(c, queue.id, group)?;
-        }
-        return Ok(Cancelled::Job(taken.id));
+        return took(c, queue, &taken);
     }
     Ok(if rows::drop_failed(c, queue.id, key)?.is_some() { Cancelled::Failed } else { Cancelled::Nothing })
+}
+
+/// Takes the job without an id that lies in `row`, as `cancel` takes one by
+/// its id; a job no longer there is nothing, never another (JOB-15).
+pub(crate) fn cancel_row(c: &Connection, queue: &QueueState, row: Row) -> Result<Cancelled> {
+    match row {
+        Row::Queued { next, number } => match rows::cancel_row(c, queue.id, rows::due_of(next), number)? {
+            Some(taken) => took(c, queue, &taken),
+            None => Ok(Cancelled::Nothing),
+        },
+        Row::Failed { failed, number } => {
+            Ok(if rows::drop_failed_row(c, queue.id, failed, number)? { Cancelled::Failed } else { Cancelled::Nothing })
+        }
+    }
+}
+
+/// A job a cancel took from the queue's rows: one of a group that held or
+/// was due to take its group's place gives it to the group's first parked job.
+fn took(c: &Connection, queue: &QueueState, taken: &rows::Taken) -> Result<Cancelled> {
+    if let (Some(group), true, Some(_)) = (&taken.group, taken.placed, queue.policy.concurrency.group) {
+        rows::unpark_one(c, queue.id, group)?;
+    }
+    Ok(Cancelled::Job(taken.id))
 }

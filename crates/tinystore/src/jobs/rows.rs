@@ -89,6 +89,13 @@ const DROP_FAILED: &str = "delete from _tinystore_jobs_failed where queue = ?1 a
 const CANCEL_JOB: &str = "delete from _tinystore_jobs where (queue, next, id) in (
         select k.queue, k.next, k.id from _tinystore_jobs_keys k where k.queue = ?1 and k.key = ?2)
     returning id, spill, next, grp";
+/// A job without an id by its number, due at ?2 or parked from it, ?3.
+const CANCEL_ROW: &str = "delete from _tinystore_jobs
+    where queue = ?1 and next in (?2, ?3) and id = ?4 and key is null
+    returning id, spill, next, grp";
+const DROP_FAILED_ROW: &str = "delete from _tinystore_jobs_failed
+    where queue = ?1 and id = ?2 and failed = ?3 and key is null
+    returning spill";
 const DROP_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1";
 const DROP_STEPS: &str = "delete from _tinystore_jobs_steps where job = ?1";
 const FIRST_PARKED: &str = concat!(
@@ -330,12 +337,25 @@ pub(crate) struct Taken {
 /// Deletes the job under a key, waiting or running, with its lease, its
 /// spilled value and its key.
 pub(crate) fn cancel(c: &Connection, queue: i64, key: &str) -> Result<Option<Taken>> {
+    let Some(taken) = take(c, CANCEL_JOB, params![queue, key])? else {
+        return Ok(None);
+    };
+    execute(c, DROP_KEY, params![queue, key], "a cancel: the job's id")?;
+    Ok(Some(taken))
+}
+
+/// Deletes the job without an id numbered `number` that is due at `due`,
+/// waiting, parked or running, with its lease and its spilled value.
+pub(crate) fn cancel_row(c: &Connection, queue: i64, due: i64, number: i64) -> Result<Option<Taken>> {
+    take(c, CANCEL_ROW, params![queue, due, due.saturating_add(PARKED_BY), number])
+}
+
+/// Deletes the job row `delete` finds, then its lease and its spilled value.
+fn take(c: &Connection, delete: &str, params: impl Params) -> Result<Option<Taken>> {
     let taken: Option<(i64, Option<i64>, i64, Option<String>)> = c
-        .prepare_cached(CANCEL_JOB)
+        .prepare_cached(delete)
         .and_then(|mut delete| {
-            delete
-                .query_row(params![queue, key], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
-                .optional()
+            delete.query_row(params, |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).optional()
         })
         .map_err(|error| sql_error("a cancel", error))?;
     let Some((id, spilled, next, group)) = taken else {
@@ -343,8 +363,21 @@ pub(crate) fn cancel(c: &Connection, queue: i64, key: &str) -> Result<Option<Tak
     };
     execute(c, DROP_LEASE, [id], "a cancel: the job's lease")?;
     drop_spill(c, spilled)?;
-    execute(c, DROP_KEY, params![queue, key], "a cancel: the job's id")?;
     Ok(Some(Taken { id, group, placed: next < PARKED_FROM }))
+}
+
+/// Deletes the failed job without an id numbered `number` that failed at
+/// `failed`, and its spilled value; says whether there was one.
+pub(crate) fn drop_failed_row(c: &Connection, queue: i64, failed: i64, number: i64) -> Result<bool> {
+    let dropped: Option<Option<i64>> = c
+        .prepare_cached(DROP_FAILED_ROW)
+        .and_then(|mut delete| delete.query_row(params![queue, number, failed], |row| row.get(0)).optional())
+        .map_err(|error| sql_error("a failed job", error))?;
+    let Some(spilled) = dropped else {
+        return Ok(false);
+    };
+    drop_spill(c, spilled)?;
+    Ok(true)
 }
 
 /// Gives the first parked job of a group back its time, once the group has

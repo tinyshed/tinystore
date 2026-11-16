@@ -377,6 +377,102 @@ func TestAGroupRateStartsEachGroupsCountASpanAndHoldsBackNoOther(t *testing.T) {
 	})
 }
 
+// listed is every job a walk meets, or the test's end at the first error.
+func listed[T any](t *testing.T, q *jobs.Queue[T], opts ...jobs.ListOption) []jobs.Job[T] {
+	t.Helper()
+	var all []jobs.Job[T]
+	for job, err := range q.All(context.Background(), opts...) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, job)
+	}
+	return all
+}
+
+// contract: JOB-15
+func TestCancelJobTakesAListedJobWithoutAnIDByItsRowAndNoOther(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		emails := ways.Must(jobs.OpenQueue[map[string]string](store, "emails-unnamed"))
+		for _, to := range []string{"typo@example.com", "ada@example.com", "grace@example.com"} {
+			ways.Must(emails.Add(ctx, map[string]string{"to": to}, jobs.Delay(time.Hour)))
+		}
+		scheduled := listed(t, emails, jobs.Scheduled)
+		if len(scheduled) != 3 || scheduled[0].ID != "" {
+			t.Fatalf("listed %+v", scheduled)
+		}
+		if !ways.Must(emails.CancelJob(ctx, scheduled[0])) || ways.Must(emails.CancelJob(ctx, scheduled[0])) {
+			t.Fatal("a listed job is cancelled once")
+		}
+		if _, err := emails.CancelJob(ctx, jobs.Job[map[string]string]{}); !errors.Is(err, tinystore.ErrInvalid) {
+			t.Fatalf("a job no list gave names no row: %v", err)
+		}
+		ways.Must(0, store.Tx(ctx, func(tx *tinystore.Tx) error {
+			_, err := emails.In(tx).CancelJob(ctx, scheduled[1])
+			return err
+		}))
+		left := listed(t, emails)
+		if len(left) != 1 || left[0].Value["to"] != "grace@example.com" {
+			t.Fatalf("left %+v", left)
+		}
+	})
+}
+
+// contract: JOB-16
+func TestCountsSayHowManyJobsAreInEachState(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		counted := ways.Must(jobs.OpenQueue[int](store, "counted"))
+		if counts := ways.Must(counted.Counts(ctx)); counts != (jobs.Counts{}) {
+			t.Fatalf("an empty queue counts %+v", counts)
+		}
+		ways.Must(counted.Add(ctx, 1, jobs.Delay(time.Hour)))
+		ways.Must(counted.Add(ctx, 2))
+		ways.Must(counted.Add(ctx, 3))
+		var seen jobs.Counts
+		ways.Must(0, counted.RunDue(ctx, func(ctx context.Context, n int, run *jobs.Run) error {
+			var err error
+			if n == 2 {
+				seen, err = counted.Counts(ctx)
+			}
+			return err
+		}))
+		if seen != (jobs.Counts{Scheduled: 1, Waiting: 1, Running: 1}) {
+			t.Fatalf("while one ran %+v", seen)
+		}
+		if counts := ways.Must(counted.Counts(ctx)); counts != (jobs.Counts{Scheduled: 1}) {
+			t.Fatalf("after %+v", counts)
+		}
+	})
+}
+
+// contract: JOB-12
+func TestAWalkMeetsAJobWhoseValueNoLongerReadsAsItsErrorAndGoesOn(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		loose := ways.Must(jobs.OpenQueue[map[string]any](store, "walked"))
+		ways.Must(loose.Add(ctx, map[string]any{"userId": 1, "text": "first"}, jobs.Delay(time.Hour)))
+		ways.Must(loose.Add(ctx, map[string]any{"userId": "not a number"}, jobs.Delay(time.Hour)))
+		ways.Must(loose.Add(ctx, map[string]any{"userId": 3, "text": "last"}, jobs.Delay(time.Hour)))
+		checked := ways.Must(jobs.OpenQueue[Reminder](store, "walked"))
+		if _, err := checked.List(ctx); !errors.Is(err, tinystore.ErrCorrupt) {
+			t.Fatalf("a page fails on it: %v", err)
+		}
+		var texts, failed []string
+		for job, err := range checked.All(ctx) {
+			if err != nil {
+				failed = append(failed, err.Error())
+				continue
+			}
+			texts = append(texts, job.Value.Text)
+		}
+		if strings.Join(texts, ",") != "first,last" || len(failed) != 1 || !strings.Contains(failed[0], "without an id") {
+			t.Fatalf("walked %v, failed %v", texts, failed)
+		}
+	})
+}
+
 func TestAValueThatNoLongerReadsFailsItsJobNotItsQueue(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

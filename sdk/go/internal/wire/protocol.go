@@ -47,6 +47,7 @@ const (
 	MethodJobsKeep         = 0x020b
 	MethodJobsWatch        = 0x020c
 	MethodJobsTx           = 0x020d
+	MethodJobsCounts       = 0x020e
 	MethodKvBucketOpen     = 0x0101
 	MethodKvGet            = 0x0102
 	MethodKvHas            = 0x0103
@@ -178,6 +179,7 @@ var methodNames = []struct {
 	{"jobs.keep", MethodJobsKeep},
 	{"jobs.watch", MethodJobsWatch},
 	{"jobs.tx", MethodJobsTx},
+	{"jobs.counts", MethodJobsCounts},
 	{"kv.bucket.open", MethodKvBucketOpen},
 	{"kv.get", MethodKvGet},
 	{"kv.has", MethodKvHas},
@@ -369,6 +371,8 @@ func NewMessage(name string) Message {
 		return &JobsList{}
 	case "jobs.Page":
 		return &JobsPage{}
+	case "jobs.Counts":
+		return &JobsCounts{}
 	case "jobs.Work":
 		return &JobsWork{}
 	case "jobs.Held":
@@ -3893,10 +3897,12 @@ func (m JobsCall) IsZero() bool {
 
 // JobsId is the schema's jobs.Id.
 //
-// The job under an id.
+// The job under an id; or, for a cancel, a job without one by the row a page
+// gave, its id left out.
 type JobsId struct {
-	Handle uint64 `wire:"1,handle"`
-	Id     string `wire:"2,id"`
+	Handle uint64  `wire:"1,handle"`
+	Id     string  `wire:"2,id"`
+	Row    *string `wire:"3,row"`
 }
 
 func (m JobsId) Write(w *Writer) {
@@ -3912,6 +3918,11 @@ func (m JobsId) Write(w *Writer) {
 		w.Str(m.Id)
 		n++
 	}
+	if m.Row != nil {
+		w.Uint(3)
+		w.Str(*m.Row)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -3924,6 +3935,9 @@ func (m *JobsId) Read(r *Reader) {
 			m.Handle = r.Uint()
 		case 2:
 			m.Id = r.Str()
+		case 3:
+			v := r.Str()
+			m.Row = &v
 		default:
 			r.Skip()
 		}
@@ -3934,7 +3948,8 @@ func (m *JobsId) Read(r *Reader) {
 // IsZero says whether JobsId writes as no field at all.
 func (m JobsId) IsZero() bool {
 	return m.Handle == 0 &&
-		m.Id == ""
+		m.Id == "" &&
+		m.Row == nil
 }
 
 // JobsChanged is the schema's jobs.Changed.
@@ -3997,6 +4012,10 @@ type JobsJob struct {
 	// the last run a handler finished
 	StartedAt *int64 `wire:"12,startedAt"`
 	EndedAt   *int64 `wire:"13,endedAt"`
+	// where a job without an id lies, which a cancel names it by
+	Row *string `wire:"14,row"`
+	// a walk's: why the job's value no longer reads, the job left out
+	Failure *Failure `wire:"15,failure"`
 }
 
 func (m JobsJob) Write(w *Writer) {
@@ -4067,6 +4086,16 @@ func (m JobsJob) Write(w *Writer) {
 		w.Int(*m.EndedAt)
 		n++
 	}
+	if m.Row != nil {
+		w.Uint(14)
+		w.Str(*m.Row)
+		n++
+	}
+	if m.Failure != nil {
+		w.Uint(15)
+		m.Failure.Write(w)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -4110,6 +4139,13 @@ func (m *JobsJob) Read(r *Reader) {
 		case 13:
 			v := r.Int()
 			m.EndedAt = &v
+		case 14:
+			v := r.Str()
+			m.Row = &v
+		case 15:
+			var v Failure
+			v.Read(r)
+			m.Failure = &v
 		default:
 			r.Skip()
 		}
@@ -4131,7 +4167,9 @@ func (m JobsJob) IsZero() bool {
 		m.Group == nil &&
 		m.Repeat == nil &&
 		m.StartedAt == nil &&
-		m.EndedAt == nil
+		m.EndedAt == nil &&
+		m.Row == nil &&
+		m.Failure == nil
 }
 
 // JobsList is the schema's jobs.List.
@@ -4149,6 +4187,8 @@ type JobsList struct {
 	After *string `wire:"4,after"`
 	// 100 when absent, 1000 at most
 	Limit *uint64 `wire:"5,limit"`
+	// a job whose value no longer reads comes as its failure in its place, not the page's
+	Walk bool `wire:"6,walk"`
 }
 
 func (m JobsList) Write(w *Writer) {
@@ -4179,6 +4219,11 @@ func (m JobsList) Write(w *Writer) {
 		w.Uint(*m.Limit)
 		n++
 	}
+	if m.Walk {
+		w.Uint(6)
+		w.Bool(m.Walk)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -4201,6 +4246,8 @@ func (m *JobsList) Read(r *Reader) {
 		case 5:
 			v := r.Uint()
 			m.Limit = &v
+		case 6:
+			m.Walk = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -4214,7 +4261,8 @@ func (m JobsList) IsZero() bool {
 		m.Prefix == nil &&
 		m.State == nil &&
 		m.After == nil &&
-		m.Limit == nil
+		m.Limit == nil &&
+		!m.Walk
 }
 
 // JobsPage is the schema's jobs.Page.
@@ -4270,6 +4318,74 @@ func (m *JobsPage) Read(r *Reader) {
 func (m JobsPage) IsZero() bool {
 	return len(m.Jobs) == 0 &&
 		m.Next == nil
+}
+
+// JobsCounts is the schema's jobs.Counts.
+//
+// How many jobs a queue holds in each state, from one snapshot; a done job
+// has left it.
+type JobsCounts struct {
+	// due later
+	Scheduled uint64 `wire:"1,scheduled"`
+	// due, and no handler runs it yet
+	Waiting uint64 `wire:"2,waiting"`
+	Running uint64 `wire:"3,running"`
+	// kept for the queue's keep
+	Failed uint64 `wire:"4,failed"`
+}
+
+func (m JobsCounts) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Scheduled != 0 {
+		w.Uint(1)
+		w.Uint(m.Scheduled)
+		n++
+	}
+	if m.Waiting != 0 {
+		w.Uint(2)
+		w.Uint(m.Waiting)
+		n++
+	}
+	if m.Running != 0 {
+		w.Uint(3)
+		w.Uint(m.Running)
+		n++
+	}
+	if m.Failed != 0 {
+		w.Uint(4)
+		w.Uint(m.Failed)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *JobsCounts) Read(r *Reader) {
+	*m = JobsCounts{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Scheduled = r.Uint()
+		case 2:
+			m.Waiting = r.Uint()
+		case 3:
+			m.Running = r.Uint()
+		case 4:
+			m.Failed = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether JobsCounts writes as no field at all.
+func (m JobsCounts) IsZero() bool {
+	return m.Scheduled == 0 &&
+		m.Waiting == 0 &&
+		m.Running == 0 &&
+		m.Failed == 0
 }
 
 // JobsWork is the schema's jobs.Work.
@@ -4633,7 +4749,7 @@ func (m JobsKept) IsZero() bool {
 // JobsOp is the schema's jobs.Op.
 //
 // One write of a transaction: an add, a set or an update with its call, or a
-// cancel with its id.
+// cancel with its id or its row.
 type JobsOp struct {
 	// jobs.add, jobs.set, jobs.update or jobs.cancel
 	Method uint64    `wire:"1,method"`

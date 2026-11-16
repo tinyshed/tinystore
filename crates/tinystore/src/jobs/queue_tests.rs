@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::fixture::{DAY, HOUR, MINUTE, SECOND, fixture};
-use super::{Filter, Queue, State};
+use super::{Concurrency, Filter, Queue, State};
 use crate::{ErrorKind, Result};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -242,6 +242,132 @@ fn cancel_says_whether_there_was_a_job_and_tells_a_running_handler_to_stop() {
     later.run_due(|_: Note, _run| -> Result<(), &str> { Err("down") }).unwrap();
     assert!(later.cancel("m3").unwrap(), "a failed job is cancelled too");
     assert!(later.get("m3").unwrap().is_none());
+}
+
+/// The texts of the queue's jobs, as a walk of every job meets them.
+fn texts_of(queue: &Queue<Note>) -> Vec<String> {
+    queue.all(Filter::default()).map(|job| job.unwrap().value.text).collect()
+}
+
+/// The job a walk of `filter` meets whose text is `text`.
+fn listed(queue: &Queue<Note>, filter: Filter, text: &str) -> super::Job<Note> {
+    queue.all(filter).map(Result::unwrap).find(|job| job.value.text == text).unwrap()
+}
+
+// contract: JOB-15
+#[test]
+fn cancel_takes_a_listed_job_without_an_id_by_its_row_and_no_other() {
+    let f = fixture();
+    let emails = f.store.queue::<Note>("emails").attempts(1).open().unwrap();
+    for text in ["typo", "same time", "sent"] {
+        emails.delay(HOUR).add(&note(text)).unwrap();
+    }
+    let typo = listed(&emails, Filter::default().state(State::Scheduled), "typo");
+    assert_eq!(typo.id, None);
+    assert!(emails.cancel(&typo).unwrap());
+    assert!(!emails.cancel(&typo).unwrap(), "cancelled already");
+    assert_eq!(texts_of(&emails), ["same time", "sent"], "a job due at the same time stays");
+
+    emails.add(&note("bounced")).unwrap();
+    emails.run_due(|_: Note, _run| -> Result<(), &str> { Err("no such mailbox") }).unwrap();
+    let bounced = listed(&emails, Filter::default().state(State::Failed), "bounced");
+    assert!(emails.cancel(&bounced).unwrap(), "a failed job by the row it failed into");
+    assert_eq!(texts_of(&emails), ["same time", "sent"]);
+
+    emails.id("welcome").delay(HOUR).add(&note("welcome")).unwrap();
+    let welcome = listed(&emails, Filter::default(), "welcome");
+    assert!(emails.cancel(&welcome).unwrap(), "a job with an id by its id");
+    assert!(emails.get("welcome").unwrap().is_none());
+}
+
+// contract: JOB-15
+#[test]
+fn a_listed_job_that_moved_since_is_in_no_row_and_its_cancel_takes_nothing() {
+    let f = fixture();
+    let emails = f.store.queue::<Note>("emails").attempts(3).open().unwrap();
+    emails.add(&note("flaky")).unwrap();
+    let flaky = listed(&emails, Filter::default(), "flaky");
+    emails.run_due(|_: Note, _run| -> Result<(), &str> { Err("timeout") }).unwrap();
+    assert!(!emails.cancel(&flaky).unwrap(), "retried into another row");
+    assert_eq!(texts_of(&emails), ["flaky"], "and still there");
+
+    let retried = listed(&emails, Filter::default(), "flaky");
+    assert_eq!(retried.attempt, 1);
+    assert!(emails.cancel(&retried).unwrap(), "the row its retry lies in");
+    assert!(texts_of(&emails).is_empty());
+}
+
+// contract: JOB-15
+#[test]
+fn a_cancel_by_row_stops_a_running_job_and_takes_a_parked_one() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").concurrency(Concurrency::total(2).group(1)).open().unwrap();
+    pushes.group("ada").add(&note("first")).unwrap();
+    pushes.group("ada").add(&note("second")).unwrap();
+    let (stopped, parked) = (Mutex::new(false), Mutex::new(None));
+    pushes
+        .run_due(|note: Note, run| -> Result<()> {
+            if note.text == "first" {
+                let second = listed(&pushes, Filter::default().state(State::Waiting), "second");
+                *parked.lock().unwrap() = Some(pushes.cancel(&second)?);
+                let first = listed(&pushes, Filter::default().state(State::Running), "first");
+                assert!(pushes.cancel(&first)?);
+                *stopped.lock().unwrap() = run.stopped();
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(*parked.lock().unwrap(), Some(true), "parked while its group runs, found at its time");
+    assert!(*stopped.lock().unwrap(), "the running one's handler is told to stop");
+    assert!(texts_of(&pushes).is_empty());
+}
+
+// contract: JOB-15
+#[test]
+fn a_transaction_cancels_a_listed_job_once_it_commits() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").open().unwrap();
+    pushes.delay(HOUR).add(&note("kept")).unwrap();
+    let kept = listed(&pushes, Filter::default(), "kept");
+    let rolled_back = f.store.tx(|tx| -> Result<()> {
+        assert!(tx.with(&pushes).cancel(&kept)?);
+        Err(crate::Error::invalid("rolled back"))
+    });
+    assert!(rolled_back.is_err());
+    assert_eq!(texts_of(&pushes), ["kept"], "a cancel that did not commit took nothing");
+    assert!(f.store.tx(|tx| tx.with(&pushes).cancel(&kept)).unwrap());
+    assert!(texts_of(&pushes).is_empty());
+}
+
+// contract: JOB-16
+#[test]
+fn counts_say_how_many_jobs_are_in_each_state() {
+    let f = fixture();
+    let emails = f.store.queue::<Note>("emails").attempts(1).open().unwrap();
+    assert_eq!(emails.counts().unwrap(), super::Counts::default());
+    emails.add(&note("bounced")).unwrap();
+    emails.run_due(|_: Note, _run| -> Result<(), &str> { Err("no such mailbox") }).unwrap();
+    for text in ["running", "waiting"] {
+        emails.add(&note(text)).unwrap();
+    }
+    emails.id("later").delay(HOUR).add(&note("later")).unwrap();
+    emails.delay(DAY).add(&note("tomorrow")).unwrap();
+    let counted = Mutex::new(None);
+    emails
+        .concurrency(1)
+        .run_due(|note: Note, _run| -> Result<()> {
+            if note.text == "running" {
+                *counted.lock().unwrap() = Some(emails.counts()?);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let counts = counted.into_inner().unwrap().unwrap();
+    assert_eq!(counts, super::Counts { scheduled: 2, waiting: 1, running: 1, failed: 1 });
+    let counts = emails.counts().unwrap();
+    assert_eq!(counts, super::Counts { scheduled: 2, waiting: 0, running: 0, failed: 1 }, "a done job left");
+    f.clock.advance(HOUR);
+    assert_eq!(emails.counts().unwrap(), super::Counts { scheduled: 1, waiting: 1, running: 0, failed: 1 });
 }
 
 #[test]

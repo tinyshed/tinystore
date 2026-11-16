@@ -55,6 +55,19 @@ class Job[T]:
 
 A job as its queue holds it.
 
+## JobCounts
+
+```python
+@dataclass(frozen=True, slots=True)
+class JobCounts:
+    scheduled: int  # due later
+    waiting: int  # due, and no handler runs it yet
+    running: int
+    failed: int  # kept for the queue's keep
+```
+
+How many jobs a queue holds in each state, from one snapshot; a done job has left it.
+
 ## JobPage
 
 ```python
@@ -248,13 +261,28 @@ Changes the id's job when it is not running, its old value's steps dropped, and 
 ### Queue.cancel
 
 ```python
-async def cancel(id: str) -> bool: ...
+async def cancel(job: Job[T] | str) -> bool: ...
 ```
 
-Takes the job under id, whatever its state, and says whether there was one.
+Takes a job, whatever its state, and says whether it was there.
 
-A running one's handler task is cancelled, and what it returns then
-settles nothing; a repeating one stops.
+It takes the job under an id, or a job a list gave: by its id, or for
+one without, by the row it was listed from. A job retried, run again
+for its repeat or cancelled since is in no row, and its cancel takes
+nothing, never another job. A running one's handler task is cancelled,
+and what it returns then settles nothing; a repeating one stops:
+
+    async for job in emails.all(state="scheduled"):
+        if job.value.to == bounced:
+            await emails.cancel(job)
+
+### Queue.counts
+
+```python
+async def counts() -> JobCounts: ...
+```
+
+How many jobs the queue holds in each state, from one snapshot; it reads no value.
 
 ### Queue.get
 
@@ -295,7 +323,7 @@ then those without as they run, then those without that failed.
 ### Queue.all
 
 ```python
-async def all(
+def all(
     *,
     prefix: str | None = None,
     state: Literal['scheduled', 'waiting', 'running', 'failed'] | None = None,
@@ -304,6 +332,9 @@ async def all(
 ```
 
 Every job the options name, a page at a time, holding nothing between pages.
+
+A job whose value no longer reads is a CorruptError in its place,
+naming it, and iterating the same walk again goes on past it.
 
 ### Queue.work
 
@@ -417,10 +448,10 @@ Changes the id's job when it is not running, its old value's steps dropped, with
 ### StoreTxQueue.cancel
 
 ```python
-async def cancel(id: str) -> None: ...
+async def cancel(job: Job[T] | str) -> None: ...
 ```
 
-Takes the job under id, whatever its state, with the commit.
+Takes the job under id, or a job a list gave, whatever its state, with the commit.
 
 ## Schedule
 

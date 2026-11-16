@@ -11,7 +11,8 @@ use super::call::{Asked, JobCall};
 use super::claim::{self, Claiming, Lease};
 use super::engine::Jobs;
 use super::policy::{Concurrency, Policy};
-use super::read::{self, Filter, Job, Page};
+use super::read::named::Which;
+use super::read::{self, Counts, Filter, Job, JobRef, Page};
 use super::run::{Outcome, Run};
 use super::state::{Kind, QueueState};
 use super::work::{self, Worker};
@@ -243,36 +244,50 @@ where
         self.update_asked(Asked::with_id(id.as_ref()), value, None)
     }
 
-    /// Takes the job under `id`, whatever its state, and says whether there
-    /// was one. A running one's handler is told to stop: `run.stopped()` turns
-    /// true, and what it returns settles nothing. A repeating job stops.
-    pub fn cancel(&self, id: impl AsRef<str>) -> Result<bool> {
-        self.cancel_in(id.as_ref(), None)
+    /// Takes a job, whatever its state, and says whether it was there: the
+    /// job under an id, `"welcome-42"`, or a job a page gave, `&job`, by its
+    /// id or, for one without, by the row it was listed from. A job retried,
+    /// run again for its repeat or cancelled since it was listed is in no
+    /// row, and a cancel of it takes nothing, never another job.
+    /// A running one's handler is told to stop: `run.stopped()` turns true,
+    /// and what it returns settles nothing. A repeating job stops.
+    pub fn cancel(&self, job: impl JobRef) -> Result<bool> {
+        match job.which() {
+            Some(which) => self.cancel_in(&which, None),
+            None => Ok(false),
+        }
+    }
+
+    /// How many jobs the queue holds in each state, from one snapshot; it
+    /// reads no value.
+    pub fn counts(&self) -> Result<Counts> {
+        let now = self.jobs.now();
+        self.jobs.file().read(|c| read::counts(c, &self.state, now)).map_err(|error| self.fail(None, error))
     }
 
     /// A cancel, in `tx` when there is one. Its watchers learn it was a cancel
     /// inside its write, before the commit, so that a watch that reads the job
     /// gone never takes it for done; a cancel that does not commit takes that
-    /// back.
-    pub(crate) fn cancel_in(&self, id: &str, tx: Option<&Transaction<'_>>) -> Result<bool> {
+    /// back. A job without an id has no watchers.
+    pub(crate) fn cancel_in(&self, which: &Which, tx: Option<&Transaction<'_>>) -> Result<bool> {
         #[cfg(feature = "replication")]
         if tx.is_none() && self.jobs.file().is_copy() {
-            let store = self.jobs.store().map_err(|error| self.fail(Some(id), error))?;
-            return super::forward::pass_on_cancel(&store, self.passed_as(), id)
-                .map_err(|error| self.fail(Some(id), error));
+            let store = self.jobs.store().map_err(|error| self.fail_on(which, error))?;
+            return super::forward::pass_on_cancel(&store, self.passed_as(), which)
+                .map_err(|error| self.fail_on(which, error));
         }
-        let work = self.cancel_work(id);
+        let work = self.cancel_work(which);
         let written = match tx {
             None => self.jobs.file().write(0, work),
             Some(tx) => self.run_in(tx, work),
         };
         let cancelled = written.map_err(|error| {
-            self.state.watchers.cancelled(id, false);
-            self.fail(Some(id), error)
+            untold(&self.state, which);
+            self.fail_on(which, error)
         })?;
         let found = !matches!(cancelled, Cancelled::Nothing);
-        let (jobs, state, key) = (Arc::clone(&self.jobs), Arc::clone(&self.state), id.to_owned());
-        let settle = move |committed: bool| cancel_settled(&jobs, &state, &key, cancelled, committed);
+        let (jobs, state, which) = (Arc::clone(&self.jobs), Arc::clone(&self.state), which.clone());
+        let settle = move |committed: bool| cancel_settled(&jobs, &state, &which, cancelled, committed);
         match tx {
             None => settle(true),
             Some(tx) => tx.after(settle),
@@ -283,36 +298,38 @@ where
     /// `cancel` without waiting: the write is queued, and `done` is called
     /// with whether there was a job on the thread that commits it.
     #[cfg(any(feature = "wire", feature = "async"))]
-    pub(crate) fn cancel_then(&self, id: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
+    pub(crate) fn cancel_then(&self, which: Which, done: impl FnOnce(Result<bool>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.jobs.file().is_copy() {
             let queue = self.clone();
-            let id = id.to_owned();
-            std::thread::spawn(move || done(queue.cancel_in(&id, None)));
+            std::thread::spawn(move || done(queue.cancel_in(&which, None)));
             return;
         }
-        let (work, named) = (self.cancel_work(id), self.named(Some(id)));
-        let (jobs, state, key) = (Arc::clone(&self.jobs), Arc::clone(&self.state), id.to_owned());
+        let (work, named) = (self.cancel_work(&which), self.named_on(&which));
+        let (jobs, state) = (Arc::clone(&self.jobs), Arc::clone(&self.state));
         self.jobs.file().submit(0, work, move |written| match written {
             Ok(cancelled) => {
-                cancel_settled(&jobs, &state, &key, cancelled, true);
+                cancel_settled(&jobs, &state, &which, cancelled, true);
                 done(Ok(!matches!(cancelled, Cancelled::Nothing)));
             }
             Err(error) => {
-                state.watchers.cancelled(&key, false);
+                untold(&state, &which);
                 done(Err(error.within(named)));
             }
         });
     }
 
-    /// The write that cancels the job under `id`, which tells the queue's
+    /// The write that cancels the job `which` names, which tells the queue's
     /// watchers inside it.
-    fn cancel_work(&self, id: &str) -> impl FnOnce(&SqlTx<'_>) -> Result<Cancelled> + Send + 'static {
-        let (queue, key) = (Arc::clone(&self.state), id.to_owned());
-        move |c: &SqlTx<'_>| {
-            let cancelled = write::cancel(c, &queue, &key)?;
-            queue.watchers.cancelled(&key, !matches!(cancelled, Cancelled::Nothing));
-            Ok(cancelled)
+    fn cancel_work(&self, which: &Which) -> impl FnOnce(&SqlTx<'_>) -> Result<Cancelled> + Send + 'static {
+        let (queue, which) = (Arc::clone(&self.state), which.clone());
+        move |c: &SqlTx<'_>| match &which {
+            Which::Id(key) => {
+                let cancelled = write::cancel(c, &queue, key)?;
+                queue.watchers.cancelled(key, !matches!(cancelled, Cancelled::Nothing));
+                Ok(cancelled)
+            }
+            Which::Row(row) => write::cancel_row(c, &queue, *row),
         }
     }
 
@@ -598,6 +615,15 @@ where
             None => self.state.describe(),
         }
     }
+
+    /// Names the queue and the job a cancel failed on.
+    pub(crate) fn fail_on(&self, which: &Which, error: Error) -> Error {
+        error.within(self.named_on(which))
+    }
+
+    fn named_on(&self, which: &Which) -> String {
+        format!("{}: {}", self.state.describe(), which.describe())
+    }
 }
 
 /// What a job's call writes.
@@ -706,9 +732,9 @@ fn took(jobs: &Jobs, state: &QueueState, claimed: claim::Claimed, now: i64) -> T
 /// What follows a cancel's write: a cancel that did not commit takes back what
 /// it told the job's watchers, and one that did stops the job's handler, when
 /// it runs here, and tells the watchers of the change.
-fn cancel_settled(jobs: &Jobs, state: &QueueState, key: &str, cancelled: Cancelled, committed: bool) {
+fn cancel_settled(jobs: &Jobs, state: &QueueState, which: &Which, cancelled: Cancelled, committed: bool) {
     if !committed {
-        state.watchers.cancelled(key, false);
+        untold(state, which);
         return;
     }
     if let Cancelled::Job(job) = cancelled {
@@ -720,6 +746,13 @@ fn cancel_settled(jobs: &Jobs, state: &QueueState, key: &str, cancelled: Cancell
     }
     if !matches!(cancelled, Cancelled::Nothing) {
         state.watchers.changed();
+    }
+}
+
+/// Takes back what a cancel that did not happen told the watchers of its job.
+fn untold(state: &QueueState, which: &Which) {
+    if let Which::Id(key) = which {
+        state.watchers.cancelled(key, false);
     }
 }
 

@@ -33,9 +33,11 @@ from ._session import ConnectionLostError, Stream
 from ._time import Duration, moment, ms, unix_ms
 from ._values import from_json, to_json
 from ._wire.protocol import (
+    Handle,
     JobsAnswer,
     JobsCall,
     JobsChanged,
+    JobsCounts,
     JobsHeld,
     JobsId,
     JobsJob,
@@ -49,7 +51,7 @@ from ._wire.protocol import (
     JobsWork,
     methods,
 )
-from .errors import CorruptError, InvalidError, UnavailableError
+from .errors import CorruptError, InvalidError, TinystoreError, UnavailableError, error_of
 from .limits import rate_of
 
 if TYPE_CHECKING:
@@ -114,6 +116,21 @@ class Job[T]:
     repeat: str | None
     """a repeating job's repeat as it keeps it: '@every 30s +6178ms', '10 3 * * * Europe/Berlin'"""
     last_run: LastRun | None
+    _row: str | None = field(default=None, repr=False, compare=False)
+    """where a job without an id lies, which a cancel names it by"""
+
+
+@dataclass(frozen=True, slots=True)
+class JobCounts:
+    """How many jobs a queue holds in each state, from one snapshot; a done job has left it."""
+
+    scheduled: int
+    """due later"""
+    waiting: int
+    """due, and no handler runs it yet"""
+    running: int
+    failed: int
+    """kept for the queue's keep"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,7 +359,8 @@ def _job_of[T](source: Source[T], found: dict[str, Any]) -> Job[T]:
     try:
         value = source.decode(found.get("value", "null"))
     except CorruptError as err:
-        raise CorruptError(f"{source.describe}: id {found.get('id', '')!r}: {err}") from None
+        named = "a job without an id" if found.get("id") is None else f"id {found['id']!r}"
+        raise CorruptError(f"{source.describe}: {named}: {err}") from None
     started = found.get("started_at")
     progress = found.get("progress")
     return Job(
@@ -357,6 +375,7 @@ def _job_of[T](source: Source[T], found: dict[str, Any]) -> Job[T]:
         group=found.get("group"),
         repeat=found.get("repeat"),
         last_run=None if started is None else LastRun(moment(started), moment(found.get("ended_at", started))),
+        _row=found.get("row"),
     )
 
 
@@ -365,9 +384,73 @@ async def _get[T](source: Source[T], job_id: str) -> Job[T] | None:
     return _job_of(source, found) if found.get("found") else None
 
 
-async def _cancel(source: Source[Any], job_id: str) -> bool:
-    body = await source.call("jobs.cancel", lambda h: JobsId.encode(handle=h, id=job_id), "write")
+def _named_by(job: Job[Any] | str, describe: str) -> dict[str, str]:
+    """What a cancel sends of a job: its id, or for one without, the row a page gave."""
+    if isinstance(job, str):
+        return {"id": job}
+    if job.id is not None:
+        return {"id": job.id}
+    row = job._row  # pyright: ignore[reportPrivateUsage]
+    if row is None:
+        raise InvalidError(f"{describe}: a job without an id names no row: cancel the job a list gave")
+    return {"row": row}
+
+
+async def _cancel(source: Source[Any], job: Job[Any] | str) -> bool:
+    named = _named_by(job, source.describe)
+    body = await source.call("jobs.cancel", lambda h: JobsId.encode(handle=h, **named), "write")
     return JobsChanged.decode(body).get("changed", False)
+
+
+async def _page[T](
+    source: Source[T], fields: dict[str, Any], walk: bool
+) -> tuple[list[Job[T] | TinystoreError], str | None]:
+    """A page of the queue's jobs; a walk's has a job whose value no longer reads as its error in its place."""
+    body = await source.call("jobs.list", lambda h: JobsList.encode(handle=h, walk=walk, **fields), "read")
+    page = JobsPage.decode(body)
+    jobs: list[Job[T] | TinystoreError] = []
+    for found in page.get("jobs", []):
+        failure = found.get("failure")
+        if failure is not None:
+            jobs.append(error_of(failure.get("code", "internal"), failure.get("message", ""), failure.get("what")))
+            continue
+        try:
+            jobs.append(_job_of(source, found))
+        except CorruptError as err:
+            if not walk:
+                raise
+            jobs.append(err)
+    return jobs, page.get("next")
+
+
+class _Walk[T]:
+    """Every job a filter names, a page at a time.
+
+    A job whose value no longer reads is its error in its place: the next
+    step raises it, and the step after goes on past it, as an ``async for``
+    that catches it and iterates the same walk again does.
+    """
+
+    def __init__(self, source: Source[T], fields: dict[str, Any]) -> None:
+        self._source = source
+        self._fields = fields
+        self._jobs: list[Job[T] | TinystoreError] = []
+        self._after: str | None = None
+        self._ended = False
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> Job[T]:
+        while not self._jobs and not self._ended:
+            self._jobs, self._after = await _page(self._source, {**self._fields, "after": self._after}, True)
+            self._ended = self._after is None
+        if not self._jobs:
+            raise StopAsyncIteration
+        job = self._jobs.pop(0)
+        if isinstance(job, TinystoreError):
+            raise job
+        return job
 
 
 def _shows_the_same(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -491,13 +574,31 @@ class Queue[T]:
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.update", fields)
 
-    async def cancel(self, id: str) -> bool:
-        """Takes the job under id, whatever its state, and says whether there was one.
+    async def cancel(self, id: Job[T] | str) -> bool:
+        """Takes a job, whatever its state, and says whether it was there.
 
-        A running one's handler task is cancelled, and what it returns then
-        settles nothing; a repeating one stops.
+        It takes the job under an id, or a job a list gave: by its id, or for
+        one without, by the row it was listed from. A job retried, run again
+        for its repeat or cancelled since is in no row, and its cancel takes
+        nothing, never another job. A running one's handler task is cancelled,
+        and what it returns then settles nothing; a repeating one stops::
+
+            async for job in emails.all(state="scheduled"):
+                if job.value.to == bounced:
+                    await emails.cancel(job)
         """
         return await _cancel(self._source, id)
+
+    async def counts(self) -> JobCounts:
+        """How many jobs the queue holds in each state, from one snapshot; it reads no value."""
+        body = await self._source.call("jobs.counts", lambda h: Handle.encode(handle=h), "read")
+        counts = JobsCounts.decode(body)
+        return JobCounts(
+            scheduled=counts.get("scheduled", 0),
+            waiting=counts.get("waiting", 0),
+            running=counts.get("running", 0),
+            failed=counts.get("failed", 0),
+        )
 
     async def get(self, id: str) -> Job[T] | None:
         """Where the job under id is; None for an id with no job."""
@@ -542,30 +643,23 @@ class Queue[T]:
     ) -> JobPage[T]:
         """A page of the queue's jobs: with no prefix every job, those with ids by id,
         then those without as they run, then those without that failed."""
-        body = await self._source.call(
-            "jobs.list",
-            lambda h: JobsList.encode(handle=h, prefix=prefix, state=state, after=after, limit=limit),
-            "read",
-        )
-        page = JobsPage.decode(body)
-        return JobPage([_job_of(self._source, found) for found in page.get("jobs", [])], page.get("next"))
+        fields = {"prefix": prefix, "state": state, "after": after, "limit": limit}
+        jobs, next_page = await _page(self._source, fields, False)
+        return JobPage(cast("list[Job[T]]", jobs), next_page)
 
-    async def all(
+    def all(
         self,
         *,
         prefix: str | None = None,
         state: Literal["scheduled", "waiting", "running", "failed"] | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[Job[T]]:
-        """Every job the options name, a page at a time, holding nothing between pages."""
-        after: str | None = None
-        while True:
-            page = await self.list(prefix=prefix, state=state, after=after, limit=limit)
-            for job in page.jobs:
-                yield job
-            if page.next is None:
-                return
-            after = page.next
+        """Every job the options name, a page at a time, holding nothing between pages.
+
+        A job whose value no longer reads is a CorruptError in its place,
+        naming it, and iterating the same walk again goes on past it.
+        """
+        return _Walk(self._source, {"prefix": prefix, "state": state, "limit": limit})
 
     def work(self, handler: Callable[[T, Run], Awaitable[Outcome | None]], *, concurrency: int | None = None) -> Worker:
         """Runs handler on each job as it falls due, and returns the running worker at once.
@@ -632,12 +726,12 @@ def adding_in(adding: Adding, home: Home) -> Callable[[Connection], Awaitable[di
 
 @dataclass(slots=True)
 class JobOp:
-    """A write the store's transaction keeps for its commit: its method, and its call or the id it cancels."""
+    """A write the store's transaction keeps for its commit: its method, and its call or the job it cancels."""
 
     source: Source[Any]
     method: str
     call: dict[str, Any] | None = None
-    id: str | None = None
+    id: dict[str, str] | None = None
 
 
 class StoreTxQueue[T]:
@@ -700,9 +794,9 @@ class StoreTxQueue[T]:
         timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
         self._write("jobs.update", {**timing, "id": id}, value)
 
-    async def cancel(self, id: str) -> None:
-        """Takes the job under id, whatever its state, with the commit."""
-        self._keep(JobOp(self._source, "jobs.cancel", id=id))
+    async def cancel(self, id: Job[T] | str) -> None:
+        """Takes the job under id, or a job a list gave, whatever its state, with the commit."""
+        self._keep(JobOp(self._source, "jobs.cancel", id=_named_by(id, self._source.describe)))
 
     def _write(self, method: str, fields: dict[str, Any], value: T) -> None:
         self._keep(JobOp(self._source, method, call={**fields, "value": self._source.encode(value)}))
@@ -719,7 +813,7 @@ async def commit_jobs(link: Link, ops: list[JobOp]) -> None:
                 {
                     "method": methods[op.method],
                     "call": None if op.call is None else {**op.call, "handle": handle},
-                    "id": None if op.id is None else {"handle": handle, "id": op.id},
+                    "id": None if op.id is None else {"handle": handle, **op.id},
                 }
             )
         return await connection.session.call(methods["jobs.tx"], JobsTx.encode(writes=writes))

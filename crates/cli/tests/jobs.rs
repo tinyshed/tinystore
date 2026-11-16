@@ -48,7 +48,7 @@ fn a_job_is_added_listed_and_cancelled_from_a_shell() {
     let again = tinystore(&[&"jobs", &data, &"add", &"emails", &welcome, &"--id", &"welcome-42"]);
     assert!(said(&again).contains("holds a job welcome-42 already; nothing added"), "{}", said(&again));
     let unnamed = tinystore(&[&"jobs", &data, &"add", &"emails", &r#"{"to": "bob@example.com"}"#, &"--delay", &"1h"]);
-    assert!(said(&unnamed).contains("a job without --id cannot be cancelled"), "{}", said(&unnamed));
+    assert!(said(&unnamed).contains("a job without --id has no name here"), "{}", said(&unnamed));
     let wrong = tinystore(&[&"jobs", &data, &"add", &"emails", &"{to: ada}"]);
     assert_eq!(wrong.status.code(), Some(2), "a job is JSON: {}", said(&wrong));
     let listed = tinystore(&[&"jobs", &data, &"list", &"emails", &"--json"]);
@@ -57,6 +57,11 @@ fn a_job_is_added_listed_and_cancelled_from_a_shell() {
     assert_eq!((jobs[0]["id"].as_str(), jobs[0]["state"].as_str()), (Some("welcome-42"), Some("scheduled")));
     assert_eq!(jobs[0]["value"]["to"], "ada@example.com");
     assert_eq!((jobs[1]["id"].as_str(), jobs[1]["value"]["to"].as_str()), (None, Some("bob@example.com")));
+    let counts = tinystore(&[&"jobs", &data, &"counts", &"emails"]);
+    assert!(said(&counts).contains("queue emails: 2 scheduled, 0 waiting, 0 running, 0 failed"), "{}", said(&counts));
+    let counts = tinystore(&[&"jobs", &data, &"counts", &"emails", &"--json"]);
+    let counts: Value = String::from_utf8_lossy(&counts.stdout).trim().parse().unwrap();
+    assert_eq!((counts["scheduled"].as_u64(), counts["failed"].as_u64()), (Some(2), Some(0)));
     let cancelled = tinystore(&[&"jobs", &data, &"cancel", &"emails", &"welcome-42"]);
     assert!(said(&cancelled).contains("cancelled welcome-42 in queue emails"), "{}", said(&cancelled));
     let store = stopped(&data);

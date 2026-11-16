@@ -133,6 +133,22 @@ interface ListOptions {
 }
 ```
 
+## JobCounts
+
+```ts
+interface JobCounts {
+    /** due later */
+    scheduled: number
+    /** due, and no handler runs it yet */
+    waiting: number
+    running: number
+    /** kept for the queue's keep */
+    failed: number
+}
+```
+
+How many jobs a queue holds in each state, from one snapshot; a done job has left it.
+
 ## JobPage
 
 ```ts
@@ -328,12 +344,25 @@ failed, or never was answers false.
 ### Queue.cancel
 
 ```ts
-cancel(id: string): Promise<boolean>
+cancel(job: Job<T> | string): Promise<boolean>
 ```
 
-Takes the job under id, whatever its state, and says whether there was
-one. A running one's handler sees its signal abort, and what it returns
+Takes a job, whatever its state, and says whether it was there: the job
+under an id, or a job a list gave, by its id or, for one without, by the
+row it was listed from. A job retried, run again for its repeat or
+cancelled since is in no row, and its cancel takes nothing, never another
+job. A running one's handler sees its signal abort, and what it returns
 then settles nothing; a repeating one stops.
+
+    for await (const job of emails.all({ state: 'scheduled' })) if (job.value.to === bounced) await emails.cancel(job)
+
+### Queue.counts
+
+```ts
+counts(): Promise<JobCounts>
+```
+
+How many jobs the queue holds in each state, from one snapshot; it reads no value.
 
 ### Queue.get
 
@@ -374,7 +403,9 @@ then those without as they run, then those without that failed.
 all(options?: Omit<ListOptions, 'after'>): AsyncGenerator<Job<T>>
 ```
 
-Every job the options name, a page at a time, holding nothing between pages.
+Every job the options name, a page at a time, holding nothing between
+pages. A job whose value no longer reads is a CorruptError in its place,
+naming it, and iterating the same walk again goes on past it.
 
 ### Queue.work
 
@@ -435,7 +466,7 @@ update(id: string, value: T, options?: JobOptions): Promise<boolean>
 ### TxQueue.cancel
 
 ```ts
-cancel(id: string): Promise<boolean>
+cancel(job: Job<T> | string): Promise<boolean>
 ```
 
 ### TxQueue.get
@@ -497,10 +528,10 @@ Changes the id's job when it is not running, its old value's steps dropped, with
 ### StoreTxQueue.cancel
 
 ```ts
-cancel(id: string): Promise<void>
+cancel(job: Job<T> | string): Promise<void>
 ```
 
-Takes the job under id, whatever its state, with the commit.
+Takes the job under id, or a job a list gave, whatever its state, with the commit.
 
 ## Schedule
 

@@ -430,6 +430,10 @@ fn a_job_added_on_a_copy_runs_at_its_home() {
     assert!(mail.id("later").delay(Duration::from_secs(3600)).add(&serde_json::json!({})).unwrap());
     assert!(mail.cancel("later").unwrap());
     assert!(home_mail.get("later").unwrap().is_none());
+    assert!(mail.delay(Duration::from_secs(3600)).add(&serde_json::json!({ "to": 10 })).unwrap());
+    let unnamed = mail.all(crate::jobs::Filter::default()).map(Result::unwrap).find(|job| job.value["to"] == 10);
+    assert!(mail.cancel(&unnamed.expect("the copy lists it")).unwrap(), "passed home by its row");
+    assert!(home_mail.all(crate::jobs::Filter::default()).next().is_none());
     copy.close().unwrap();
     home.close().unwrap();
 }

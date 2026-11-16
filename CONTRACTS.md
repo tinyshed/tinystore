@@ -126,6 +126,8 @@ These contracts are what does not.
 - **JOB-12** A value that no longer decodes MUST fail its job, not its queue.
 - **JOB-13** A page with no prefix MUST list every job its queue holds, those without ids too, and walking its pages MUST meet each job that stayed where it was once.
 - **JOB-14** A page of jobs in a state MUST hold its `limit` of them unless it is the last, which has no `next`, or their values reach the 4 MiB a page holds.
+- **JOB-15** `cancel` of a listed job MUST remove that job or none, never another.
+- **JOB-16** `counts` MUST read every state of a queue from one snapshot.
 
 ### SQL
 

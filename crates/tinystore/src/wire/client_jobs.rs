@@ -43,7 +43,7 @@ impl<S: Read + Write> Client<S> {
 
     /// Cancels the job `id`: whether the queue held one to cancel.
     pub fn cancel(&mut self, queue: u64, id: &str) -> Result<bool> {
-        let id = wire::JobsId { handle: queue, id: id.to_owned() };
+        let id = wire::JobsId { handle: queue, id: id.to_owned(), row: None };
         Ok(self.answer::<wire::JobsChanged>(method::JOBS_CANCEL, &id)?.changed)
     }
 }

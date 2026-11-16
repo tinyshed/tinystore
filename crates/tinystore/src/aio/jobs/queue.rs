@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::run::Run;
-use crate::jobs::{self, Change, Concurrency, Filter, Job, Lease, Outcome, Page, Took};
+use crate::jobs::{self, Change, Concurrency, Counts, Filter, Job, JobRef, Lease, Outcome, Page, Took};
 use crate::pool::Pool;
 use crate::{ErrorKind, Result, Transaction, TxHandle};
 
@@ -154,14 +154,27 @@ where
         self.id(id).update(value)
     }
 
-    /// Takes the job under `id`, whatever its state, and says whether there
-    /// was one. A running one's handler is told to stop: `run.stopped()` turns
+    /// Takes a job, whatever its state, and says whether it was there: the
+    /// job under an id, or a job a page gave, as [`jobs::Queue::cancel`]
+    /// does. A running one's handler is told to stop: `run.stopped()` turns
     /// true, and what it returns settles nothing. A repeating job stops.
-    pub fn cancel(&self, id: impl AsRef<str>) -> impl Future<Output = Result<bool>> + Send + 'static {
-        let (queue, id) = (self.queue.clone(), id.as_ref().to_owned());
-        crate::aio::run::write(&self.pool, format!("{queue:?}: id {id:?}: a cancel"), move |answer| {
-            queue.cancel_then(&id, move |found| answer.send(found));
+    pub fn cancel(&self, job: impl JobRef) -> impl Future<Output = Result<bool>> + Send + 'static {
+        let (queue, which) = (self.queue.clone(), job.which());
+        let what = match &which {
+            Some(which) => format!("{queue:?}: {}: a cancel", which.describe()),
+            None => format!("{queue:?}: a cancel"),
+        };
+        crate::aio::run::write(&self.pool, what, move |answer| match which {
+            Some(which) => queue.cancel_then(which, move |found| answer.send(found)),
+            None => answer.send(Ok(false)),
         })
+    }
+
+    /// How many jobs the queue holds in each state, from one snapshot, read on
+    /// the store's pool; see [`jobs::Queue::counts`].
+    pub fn counts(&self) -> impl Future<Output = Result<Counts>> + Send + 'static {
+        let queue = self.queue.clone();
+        crate::aio::run::read(&self.pool, format!("{queue:?}: a count"), move || queue.counts())
     }
 
     /// Where the job under `id` is, as [`jobs::Queue::get`] says; none for an

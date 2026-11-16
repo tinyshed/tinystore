@@ -141,16 +141,132 @@ without that failed, the last failed first. A state narrows any of them, and
 of one state reads on past the jobs in others, so it holds its `limit` unless
 it is the last, which has no `next` (contract JOB-14).
 
-<div data-for="rust">
+A job whose value no longer reads as the queue's type, or its schema, makes
+a page or a `get` that meets it fail `corrupt`, and the error names the job
+by its id, or says it has none. A walk, `all`, gives that error in the job's
+place and goes on to the next job. In Rust and Go the walk yields it and
+moves on. In TypeScript and Python the walk's next step throws it, and the
+same walk iterated again goes on past it:
 
-In Rust, a job whose value no longer reads as the queue's type, kept failed
-after the type changed, makes a page or a `get` that meets it fail `corrupt`.
-`all` gives it as an error in its place and goes on to the next job. The
-error names the job by its id, or, for one without, by its number and its
-time. The same queue opened as `store.queue::<serde_json::Value>(name)` reads
-it, and `cancel` removes one that has an id.
+```ts
+const walk = emails.all()
+for (;;) {
+	try {
+		for await (const job of walk) await resend(job.value)
+		break
+	} catch (err) {
+		if (!(err instanceof CorruptError)) throw err
+		log.warn(err.message) // and the loop takes up the same walk again
+	}
+}
+```
 
-</div>
+```python
+walk = emails.all()
+while True:
+    try:
+        async for job in walk:
+            await resend(job.value)
+        break
+    except tinystore.CorruptError as err:
+        log.warning(err)  # and the loop takes up the same walk again
+```
+
+```go
+for job, err := range emails.All(ctx) {
+	if errors.Is(err, tinystore.ErrCorrupt) {
+		log.Print(err)
+		continue
+	}
+	// ...
+}
+```
+
+```rust
+for job in emails.all(Filter::default()) {
+    match job {
+        Err(error) if error.kind() == ErrorKind::Corrupt => tracing::warn!("{error}"),
+        job => resend(&job?.value)?,
+    }
+}
+```
+
+The same queue opened without a type, or as `serde_json::Value` in Rust,
+reads such a job as it is.
+
+## Cancel a job without an id
+
+A job added without an id shows in a page and in `all`. `cancel` takes the
+job a page gave, as it takes an id:
+
+```ts
+for await (const job of emails.all({ state: 'scheduled' })) {
+	if (job.value.to === 'typo@example.com') await emails.cancel(job)
+}
+```
+
+```python
+async for job in emails.all(state="scheduled"):
+    if job.value.to == "typo@example.com":
+        await emails.cancel(job)
+```
+
+```go
+for job, err := range emails.All(ctx, jobs.Scheduled) {
+	if err == nil && job.Value.To == "typo@example.com" {
+		_, err = emails.CancelJob(ctx, job)
+	}
+}
+```
+
+```rust
+for job in emails.all(Filter::default().state(State::Scheduled)) {
+    let job = job?;
+    if job.value.to == "typo@example.com" {
+        emails.cancel(&job)?;
+    }
+}
+```
+
+- A job with an id is cancelled by its id. One without is cancelled by where
+  it was listed: its queue, its time and a number the store gave it, which no
+  other job ever gets, so the cancel never takes another job, one added at the
+  same time included (contract JOB-15).
+- It answers `true` when the job was there. It answers `false` when the job
+  ran, was retried or run again for its repeat since it was listed, or was
+  cancelled already. List it again to cancel the retry.
+- Go has no overloading, so the call is `CancelJob`, beside `Cancel(ctx, id)`.
+- The job keeps where it was listed out of sight. In TypeScript a copy, as
+  `{ ...job }`, loses it, and its cancel is `invalid`; cancel the job the page
+  gave.
+- `cancel` of a job works in a transaction too. `update`, `get` and `watch`
+  take an id alone.
+
+## How many jobs are in each state
+
+```ts
+const counts = await emails.counts() // { scheduled: 120, waiting: 8, running: 2, failed: 3 }
+```
+
+```python
+counts = await emails.counts()  # JobCounts(scheduled=120, waiting=8, running=2, failed=3)
+```
+
+```go
+counts, err := emails.Counts(ctx) // jobs.Counts{Scheduled: 120, Waiting: 8, Running: 2, Failed: 3}
+```
+
+```rust
+let counts = emails.counts()?; // Counts { scheduled: 120, waiting: 8, running: 2, failed: 3 }
+```
+
+Every state is read from one snapshot (contract JOB-16). `scheduled` is due
+later, `waiting` is due and no handler has it yet, `running` is in a
+handler's hands, and `failed` waits for the queue's `keep`. A done job has
+left the queue and is not counted. A count reads no value: it walks the rows
+due later and the failed ones, and takes the rest from a total the queue
+keeps, so a million due jobs cost nothing more. From a shell,
+`tinystore jobs ./data counts emails` prints the same.
 
 | What   | Limit                                        |
 |--------|----------------------------------------------|
