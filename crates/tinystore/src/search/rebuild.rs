@@ -279,9 +279,7 @@ impl Search {
                 return Ok(());
             }
             let step = match self.file.read(|connection| copied(connection, rows.0, &beside.data, &progress)) {
-                Err(error) if matches!(error.kind(), ErrorKind::Invalid | ErrorKind::Limit) => {
-                    return self.fail(open, beside.data.id, &error);
-                }
+                Err(error) if a_documents_fault(&error) => return self.fail(open, beside.data.id, &error),
                 step => step?,
             };
             if !step.full {
@@ -313,7 +311,7 @@ impl Search {
             Ok(why)
         });
         let why = match switched {
-            Err(error) if matches!(error.kind(), ErrorKind::Invalid | ErrorKind::Limit) => {
+            Err(error) if a_documents_fault(&error) => {
                 drop(current);
                 return self.fail(open, beside, &error);
             }
@@ -329,7 +327,9 @@ impl Search {
     }
 
     /// Stops a rebuild that cannot read a document, saying why; the serving
-    /// rows answer as before.
+    /// rows answer as before. A pass whose disk was full fails as a pass,
+    /// and the next one goes on: a failed rebuild waits for the index's next
+    /// change, which a disk freed again would never bring.
     fn fail(&self, open: &OpenIndex, beside: i64, error: &Error) -> Result<()> {
         let said = error.to_string();
         let mut current = open.change(&self.file);
@@ -573,6 +573,13 @@ pub struct Listed {
     /// When a program last opened it, by the store's clock.
     pub opened: Option<std::time::SystemTime>,
     pub status: Status,
+}
+
+/// Whether a rebuild's step failed for a document, one the new settings
+/// refuse or a bound it passes, which reading it again would fail the same:
+/// not SQLite's full disk, which a later pass may get past.
+fn a_documents_fault(error: &Error) -> bool {
+    matches!(error.kind(), ErrorKind::Invalid | ErrorKind::Limit) && !crate::sqlite::disk_full(error)
 }
 
 fn listed_status(connection: &Connection, serving: i64) -> Result<Status> {

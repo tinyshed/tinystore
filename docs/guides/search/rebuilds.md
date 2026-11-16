@@ -75,7 +75,9 @@ search products: brand added ready in …; switched
 
 - A rebuild that cannot read a document, a number where a new field reads
   text, stops: `status()` is `failed` with why, `ready()` throws it, and the
-  index answers by its old settings until the next change.
+  index answers by its old settings until the next change. A full disk is
+  not a document's fault: the rebuild waits, as below, and goes on once
+  the disk has room.
 
 ## When maintenance fails
 

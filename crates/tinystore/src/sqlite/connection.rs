@@ -255,6 +255,22 @@ pub(crate) fn sql_error(what: impl Into<String>, error: rusqlite::Error) -> Erro
     error_of(what, error, ErrorKind::Internal)
 }
 
+/// Whether SQLite found its disk full under whatever wraps the error: `limit`
+/// as a bound reached is, but a later try may get past it where a bound's
+/// would fail again.
+pub(crate) fn disk_full(error: &Error) -> bool {
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(now) = cause {
+        if let Some(rusqlite::Error::SqliteFailure(failure, _)) = now.downcast_ref::<rusqlite::Error>()
+            && failure.code == ErrorCode::DiskFull
+        {
+            return true;
+        }
+        cause = now.source();
+    }
+    false
+}
+
 /// A failure of a statement the program wrote, its SQLite plain error
 /// `invalid`: a syntax error, a table or a column that is not there, a
 /// full-text query FTS5 cannot read are the statement's own, not the store's.
@@ -330,6 +346,23 @@ mod tests {
             )
             .unwrap();
         sql_error("t", connection.execute_batch(sql).unwrap_err())
+    }
+
+    #[test]
+    fn a_full_disk_is_told_apart_from_a_bound_under_what_wraps_it() {
+        super::super::give_mutexes();
+        let connection = Connection::open_in_memory().unwrap();
+        // a file that may hold two pages is a disk with no room past them
+        connection.execute_batch("PRAGMA max_page_count = 2; CREATE TABLE t (v BLOB)").unwrap();
+        let full = connection.execute("INSERT INTO t VALUES (zeroblob(1 << 16))", []).unwrap_err();
+        let full = sql_error("t", full).within("index articles");
+        assert_eq!(full.kind(), ErrorKind::Limit);
+        assert!(disk_full(&full), "{full}");
+        connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, 16).unwrap();
+        let too_big = connection.execute("SELECT zeroblob(64)", []).unwrap_err();
+        let too_big = sql_error("t", too_big);
+        assert_eq!(too_big.kind(), ErrorKind::Limit);
+        assert!(!disk_full(&too_big), "{too_big}");
     }
 
     #[test]

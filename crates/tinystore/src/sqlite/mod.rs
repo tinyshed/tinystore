@@ -60,7 +60,7 @@ pub(crate) use config::{CatchUp, Config, GroupLimits};
 #[cfg(feature = "kv")]
 pub(crate) use connection::read_file;
 pub(crate) use connection::{
-    execute_cached, given_sql_error, query_cached, quote_ident, read_copy, sql_error, unheard_warnings,
+    disk_full, execute_cached, given_sql_error, query_cached, quote_ident, read_copy, sql_error, unheard_warnings,
 };
 pub(crate) use constraint::named as name_constraint;
 pub(crate) use drafts::Drafts;
