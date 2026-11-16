@@ -1100,7 +1100,7 @@ impl Watching {
             match read {
                 Ok(Report::Changed(job)) => {
                     let last = matches!(job.state, State::Done | State::Failed | State::Cancelled);
-                    match within(job_of(job).encode(), self.link.max_body) {
+                    match within(job_of(*job).encode(), self.link.max_body) {
                         Ok(body) => {
                             self.lock().report = Some((body, last));
                             self.flush();

@@ -90,7 +90,7 @@ impl Drop for Subscription {
 /// What reading a watched job again gives.
 pub(crate) enum Report<V> {
     /// The job as it is now, which changed since the last report.
-    Changed(Job<V>),
+    Changed(Box<Job<V>>),
     /// Nothing a watcher sees changed.
     Same,
     /// The watch is over: it reported its job's end, or no job had its id.
@@ -125,7 +125,7 @@ where
             return Ok(self.last.take().map_or(Report::Over, |mut last| {
                 last.state = if sub.cancelled() { State::Cancelled } else { State::Done };
                 last.ahead = 0;
-                Report::Changed(last)
+                Report::Changed(Box::new(last))
             }));
         };
         if self.last.as_ref().is_some_and(|last| shows_the_same(last, &job)) {
@@ -133,7 +133,7 @@ where
         }
         self.over = matches!(job.state, State::Done | State::Failed);
         self.last = Some(job.clone());
-        Ok(Report::Changed(job))
+        Ok(Report::Changed(Box::new(job)))
     }
 }
 
@@ -206,7 +206,7 @@ where
     fn next(&mut self) -> Option<Result<Job<V>>> {
         loop {
             match self.seen.read(&self.queue, &self.key, &self.sub) {
-                Ok(Report::Changed(job)) => return Some(Ok(job)),
+                Ok(Report::Changed(job)) => return Some(Ok(*job)),
                 Ok(Report::Over) => return None,
                 Ok(Report::Same) => self.woken.wait(),
                 Err(error) => {

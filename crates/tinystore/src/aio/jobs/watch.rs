@@ -153,7 +153,7 @@ where
             Ok(Report::Same) => None,
             Ok(Report::Changed(job)) => {
                 self.over = matches!(job.state, State::Done | State::Failed | State::Cancelled);
-                Some(Some(Ok(job)))
+                Some(Some(Ok(*job)))
             }
             Ok(Report::Over) => {
                 self.over = true;
