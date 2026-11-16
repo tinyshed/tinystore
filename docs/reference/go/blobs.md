@@ -18,6 +18,22 @@ func ContentType(t string) contentType
 
 ContentType is the file's content type, which serving it says.
 
+## Every
+
+```go
+func Every(d time.Duration) every
+```
+
+Every scans the folder on the store's background work, a period apart: minutes, not seconds.
+
+## Growing
+
+```go
+func Growing() growing
+```
+
+Growing is for a folder whose files are written while they are read: a read holds to no version and goes up to the size the file has now.
+
 ## IfMatch
 
 ```go
@@ -25,6 +41,14 @@ func IfMatch(etag string) ifMatch
 ```
 
 IfMatch writes or removes only while the file is at this ETag: tinystore.ErrConflict otherwise.
+
+## Ignore
+
+```go
+func Ignore(patterns ...string) ignore
+```
+
+Ignore is names a scan passes over, a file's or a folder's, \* for any run of a name's characters: a folder passed over is not entered.
 
 ## Limit
 
@@ -73,6 +97,160 @@ func TTL(d time.Duration) ttl
 ```
 
 TTL is how long a file lives from its write: every file's, or one write's own.
+
+## Change
+
+```go
+type Change string
+```
+
+Change is what became of a file since a cursor.
+
+### Added
+
+```go
+const (
+	Added   Change = "added"
+	Changed Change = "changed"
+	Removed Change = "removed"
+)
+```
+
+## Changes
+
+```go
+type Changes struct {
+	Items []FileChange
+	Next  string
+}
+```
+
+Changes is a page of changes in the order the scans wrote them; Next is always there, with no items the cursor to ask from after the next scan.
+
+## ChangesOption
+
+```go
+type ChangesOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+ChangesOption is where a page of changes starts: After a page's Next.
+
+## Directory
+
+```go
+type Directory struct {
+	// contains filtered or unexported fields
+}
+```
+
+Directory is a directory, or a folder of it: Get, Head, List and Usage are a set of files' calls with a set of files' answers, answered from the list the last scan wrote but a Get's bytes, which come from the disk.
+
+### OpenDirectory
+
+```go
+func OpenDirectory(home tinystore.Home, name, path string, opts ...DirectoryOption) (*Directory, error)
+```
+
+OpenDirectory opens the directory name on the folder path of the store's machine; over a token, with path "", the server's own by its name. It opens at its first call; its error is a name or an option it refuses.
+
+	movies, err := blobs.OpenDirectory(store, "movies", "D:/Movies")
+	photos, err := blobs.OpenDirectory(store, "photos", "/mnt/photos", blobs.Every(15*time.Minute), blobs.Ignore("*.part", ".*"))
+
+### Directory.Changes
+
+```go
+func (d *Directory) Changes(ctx context.Context, opts ...ChangesOption) (Changes, error)
+```
+
+Changes is the changes past a cursor, After a page's Next, or from the first file the directory listed.
+
+### Directory.Folder
+
+```go
+func (d *Directory) Folder(segments ...any) *Directory
+```
+
+Folder is the folder of these segments, one each, whose paths are relative to it.
+
+### Directory.Forget
+
+```go
+func (d *Directory) Forget(ctx context.Context) error
+```
+
+Forget removes every file of the list, each told Removed, and nothing on the disk.
+
+### Directory.Get
+
+```go
+func (d *Directory) Get(ctx context.Context, path string) (*StoredFile, bool, error)
+```
+
+Get is the file at path as a scan listed it and as the disk holds it now, and whether there is one: none when no scan listed it, or it is gone since. A read of a file that moved since fails Conflict, but in a growing directory, which reads up to the size now. Close it once read.
+
+### Directory.Head
+
+```go
+func (d *Directory) Head(ctx context.Context, path string) (FileInfo, bool, error)
+```
+
+Head is what the last scan wrote down of the file at path, and whether it listed one; it reads no disk.
+
+### Directory.List
+
+```go
+func (d *Directory) List(ctx context.Context, opts ...ListOption) (Page, error)
+```
+
+List is a page of the folder's files in the byte order of their paths, as the last scan wrote them.
+
+### Directory.Name
+
+```go
+func (d *Directory) Name() string
+```
+
+Name is the directory's name.
+
+### Directory.Scan
+
+```go
+func (d *Directory) Scan(ctx context.Context) (Scan, error)
+```
+
+Scan walks the folder and writes down what appeared, changed or went since the last scan.
+
+### Directory.Usage
+
+```go
+func (d *Directory) Usage(ctx context.Context) (Usage, error)
+```
+
+Usage is the files the last scan listed in the folder, and their bytes.
+
+## DirectoryOption
+
+```go
+type DirectoryOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+DirectoryOption is how a directory opens.
+
+## FileChange
+
+```go
+type FileChange struct {
+	Path   string
+	Change Change
+	Info   *FileInfo
+}
+```
+
+FileChange is a file's change since a cursor: its path in the directory, and what it carries now, nil once removed.
 
 ## FileInfo
 
@@ -296,6 +474,19 @@ type Page struct {
 
 Page is a page of a folder's files in the byte order of their paths, and where the next starts: "" on the last.
 
+## Scan
+
+```go
+type Scan struct {
+	Added, Changed, Removed int64
+	// Skipped is what it met and could not list: a link, a folder it cannot read, another disk.
+	Skipped     int64
+	Count, Size int64
+}
+```
+
+Scan is what a scan found, and what the list holds once it ended.
+
 ## StoredFile
 
 ```go
@@ -306,6 +497,8 @@ type StoredFile struct {
 ```
 
 StoredFile is a file as Get found it: what it carries, and its bytes, an io.ReadSeekCloser and an io.ReaderAt that http.ServeContent serves. A whole read is checked against its SHA-256 and fails Corrupt before its last bytes when they changed; a read after a Seek, and ReadAt, read a range, which is not checked.
+
+A directory's file has no hash: a read holds to the version Get opened and fails Conflict once the file moved. A growing directory's holds to none, reads up to the size the file has as it reads, and each piece read in order brings that size and time into Size and LastModified.
 
 ### StoredFile.Bytes
 

@@ -234,7 +234,14 @@ func (f *Files) Name() string { return f.name }
 // Folder is the folder of these segments, one each: Folder("users", 42) is
 // users/42, never users/420.
 func (f *Files) Folder(segments ...any) *Files {
-	folder := append([]string{}, f.folder...)
+	in := *f
+	in.folder = folderOf(f.folder, segments)
+	return &in
+}
+
+// folderOf is the folder of these segments in base, an integer its decimal spelling.
+func folderOf(base []string, segments []any) []string {
+	folder := append([]string{}, base...)
 	for _, segment := range segments {
 		switch s := segment.(type) {
 		case string:
@@ -248,9 +255,7 @@ func (f *Files) Folder(segments ...any) *Files {
 			folder = append(folder, text)
 		}
 	}
-	in := *f
-	in.folder = folder
-	return &in
+	return folder
 }
 
 func (f *Files) call(ctx context.Context, method uint16, body func(handle uint64) []byte, idempotence core.Idempotence) ([]byte, error) {
@@ -301,7 +306,11 @@ func (f *Files) Get(ctx context.Context, path string) (*StoredFile, bool, error)
 	if err := decode(answer, &got); err != nil || got.Info == nil {
 		return nil, false, err
 	}
-	stored := &StoredFile{FileInfo: infoOf(*got.Info), files: f, ctx: context.WithoutCancel(ctx), path: path}
+	stored := &StoredFile{FileInfo: infoOf(*got.Info), ctx: context.WithoutCancel(ctx)}
+	etag := stored.ETag
+	stored.reader = func(ctx context.Context, offset, length int64) (*reading, error) {
+		return f.read(ctx, path, etag, offset, length)
+	}
 	if int64(len(got.Bytes)) == stored.Size {
 		stored.whole = got.Bytes
 	}

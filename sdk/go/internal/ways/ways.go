@@ -29,6 +29,9 @@ type Way struct {
 	Home func(dir string) string
 	// Shared says whether a second open of the directory joins the same store.
 	Shared bool
+	// Token says it came with a token, which names no path: a directory
+	// movies is the server's <dir>/movies.
+	Token bool
 }
 
 func binary() string {
@@ -70,7 +73,7 @@ func All() []Way {
 				return store
 			}},
 		{Name: "a remote server over TCP", Ready: served, Home: func(dir string) string { return filepath.Join(dir, "store") },
-			Open: remote},
+			Open: remote, Token: true},
 	}
 }
 
@@ -90,7 +93,13 @@ func remote(t *testing.T, dir string) *tinystore.Store {
 		t.Fatal(err)
 	}
 	served := filepath.Join(dir, "store")
-	cmd := exec.Command(binary(), "serve", served, "--listen", "tcp://127.0.0.1:0", "--tokens", tokens)
+	// a token names no path: the server is given the folder a directory's tests use
+	movies := filepath.Join(dir, "movies")
+	if err := os.MkdirAll(movies, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary(), "serve", served, "--listen", "tcp://127.0.0.1:0", "--tokens", tokens,
+		"--directory", "movies="+movies)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

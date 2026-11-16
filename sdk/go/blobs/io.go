@@ -303,14 +303,20 @@ func (u *Upload) Abort() error {
 // whole read is checked against its SHA-256 and fails Corrupt before its
 // last bytes when they changed; a read after a Seek, and ReadAt, read a
 // range, which is not checked.
+//
+// A directory's file has no hash: a read holds to the version Get opened and
+// fails Conflict once the file moved. A growing directory's holds to none,
+// reads up to the size the file has as it reads, and each piece read in
+// order brings that size and time into Size and LastModified.
 type StoredFile struct {
 	FileInfo
-	files  *Files
 	ctx    context.Context
-	path   string
 	whole  []byte
 	offset int64
 	open   *reading
+	// opens a read of its bytes from offset, length of them or to the end when below zero
+	reader  func(ctx context.Context, offset, length int64) (*reading, error)
+	growing bool
 }
 
 // reading is a read of a file's bytes on a stream, from where it began.
@@ -318,9 +324,15 @@ type reading struct {
 	stream *core.Stream
 	held   []byte
 	ended  bool
+	// a growing file's size and time as its last piece was read
+	size         *uint64
+	lastModified *int64
 }
 
 func (s *StoredFile) Read(p []byte) (int, error) {
+	if s.growing {
+		return s.readGrowing(p)
+	}
 	if s.offset >= s.Size {
 		return 0, io.EOF
 	}
@@ -331,7 +343,7 @@ func (s *StoredFile) Read(p []byte) (int, error) {
 	}
 	if s.open == nil {
 		var err error
-		if s.open, err = s.files.read(s.ctx, s.path, s.ETag, s.offset, -1); err != nil {
+		if s.open, err = s.reader(s.ctx, s.offset, -1); err != nil {
 			return 0, err
 		}
 	}
@@ -339,6 +351,26 @@ func (s *StoredFile) Read(p []byte) (int, error) {
 	s.offset += int64(n)
 	if errors.Is(err, io.EOF) && s.offset < s.Size {
 		err = io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
+// readGrowing reads on to the end the file has now, and takes its size and
+// time from each piece.
+func (s *StoredFile) readGrowing(p []byte) (int, error) {
+	if s.open == nil {
+		var err error
+		if s.open, err = s.reader(s.ctx, s.offset, -1); err != nil {
+			return 0, err
+		}
+	}
+	n, err := s.open.read(s.ctx, p)
+	s.offset += int64(n)
+	if s.open.size != nil {
+		s.Size = int64(*s.open.size)
+	}
+	if s.open.lastModified != nil {
+		s.LastModified = core.Moment(*s.open.lastModified)
 	}
 	return n, err
 }
@@ -364,7 +396,7 @@ func (s *StoredFile) Seek(offset int64, whence int) (int64, error) {
 
 // ReadAt reads len(p) bytes at off, a range of their own, as io.ReaderAt does.
 func (s *StoredFile) ReadAt(p []byte, off int64) (int, error) {
-	if off >= s.Size {
+	if off >= s.Size && !s.growing {
 		return 0, io.EOF
 	}
 	if s.whole != nil {
@@ -374,13 +406,19 @@ func (s *StoredFile) ReadAt(p []byte, off int64) (int, error) {
 		}
 		return n, nil
 	}
-	length := min(int64(len(p)), s.Size-off)
-	r, err := s.files.read(s.ctx, s.path, s.ETag, off, length)
+	length := int64(len(p))
+	if !s.growing {
+		length = min(length, s.Size-off)
+	}
+	r, err := s.reader(s.ctx, off, length)
 	if err != nil {
 		return 0, err
 	}
 	defer r.stream.Cancel()
 	n, err := io.ReadFull(readerOf{r, s.ctx}, p[:length])
+	if s.growing && errors.Is(err, io.ErrUnexpectedEOF) {
+		return n, io.EOF
+	}
 	if err == nil && int64(n) < int64(len(p)) {
 		err = io.EOF
 	}
@@ -389,7 +427,7 @@ func (s *StoredFile) ReadAt(p []byte, off int64) (int, error) {
 
 // Bytes is every byte of the file, held in memory: a large file is read with Read.
 func (s *StoredFile) Bytes() ([]byte, error) {
-	if s.whole != nil {
+	if s.whole != nil && !s.growing {
 		return s.whole, nil
 	}
 	if _, err := s.Seek(0, io.SeekStart); err != nil {
@@ -424,7 +462,12 @@ func (r readerOf) Read(p []byte) (int, error) { return r.r.read(r.ctx, p) }
 // If-Match: on the ETag a get gave, a conflict once the path holds another
 // file or none; the whole file checked, a range not.
 func (f *Files) read(ctx context.Context, path, etag string, offset, length int64) (*reading, error) {
-	message := wire.BlobsRead{Folder: f.folder, Path: path, IfMatch: &etag}
+	return readOn(ctx, f.store, f.opener, wire.BlobsRead{Folder: f.folder, Path: path, IfMatch: &etag}, offset, length)
+}
+
+// readOn opens the read `message` asks on the handle `opener` opens, from
+// offset, length bytes of it or to the end when below zero.
+func readOn(ctx context.Context, store *core.Store, opener *core.Opener, message wire.BlobsRead, offset, length int64) (*reading, error) {
 	if offset > 0 || length >= 0 {
 		o := uint64(offset)
 		message.Offset = &o
@@ -434,8 +477,8 @@ func (f *Files) read(ctx context.Context, path, etag string, offset, length int6
 		message.Length = &l
 	}
 	var r *reading
-	err := f.store.Link.Run(ctx, core.Reading, func(c *core.Connection) error {
-		handle, err := core.HandleOn(ctx, c, f.opener)
+	err := store.Link.Run(ctx, core.Reading, func(c *core.Connection) error {
+		handle, err := core.HandleOn(ctx, c, opener)
 		if err != nil {
 			return err
 		}
@@ -453,7 +496,7 @@ func (f *Files) read(ctx context.Context, path, etag string, offset, length int6
 		if err := decode(first.Body, &piece); err != nil {
 			return err
 		}
-		r = &reading{stream: stream, held: piece.Bytes, ended: first.End}
+		r = &reading{stream: stream, held: piece.Bytes, ended: first.End, size: piece.Size, lastModified: piece.LastModified}
 		return nil
 	})
 	return r, err
@@ -478,6 +521,9 @@ func (r *reading) read(ctx context.Context, p []byte) (int, error) {
 			return 0, err
 		}
 		r.held = piece.Bytes
+		if piece.Size != nil {
+			r.size, r.lastModified = piece.Size, piece.LastModified
+		}
 	}
 	n := copy(p, r.held)
 	r.held = r.held[n:]
