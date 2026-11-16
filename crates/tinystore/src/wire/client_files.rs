@@ -41,7 +41,8 @@ impl<S: Read + Write> Client<S> {
             let mut piece = vec![0; PIECE];
             self.exchange(method::BLOBS_UPLOAD, &write, &mut || {
                 let read = bytes.read(&mut piece).map_err(|error| Error::io("the file's bytes", error))?;
-                Ok((read > 0).then(|| wire::BlobsPiece { bytes: piece[..read].to_vec() }.encode()))
+                Ok((read > 0)
+                    .then(|| wire::BlobsPiece { bytes: piece[..read].to_vec(), ..Default::default() }.encode()))
             })?
         };
         let written = super::decoded::<wire::BlobsWritten>(&answer)?;

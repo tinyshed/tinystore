@@ -82,6 +82,10 @@ pub struct Connect {
     /// HELLO, once read and its token admitted, is answered `GOAWAY` `limit`
     /// with these words where the WELCOME belongs.
     pub turned_away: Option<String>,
+    /// The folders a server was given, by the name of their directory: what
+    /// a connection that names no path opens, and the only folders one that
+    /// came with a token reaches (BLOB-15).
+    pub directories: Option<Arc<std::collections::BTreeMap<String, std::path::PathBuf>>>,
 }
 
 impl fmt::Debug for Connect {
@@ -94,6 +98,7 @@ impl fmt::Debug for Connect {
             .field("admit", &self.admit.is_some())
             .field("greeted", &self.greeted.is_some())
             .field("turned_away", &self.turned_away)
+            .field("directories", &self.directories)
             .finish()
     }
 }

@@ -212,7 +212,7 @@ impl Session {
             #[cfg(feature = "search")]
             search: search::Handles::default(),
             #[cfg(feature = "blobs")]
-            blobs: blobs::Handles::default(),
+            blobs: blobs::Handles::of(&connect),
             #[cfg(feature = "records")]
             records: records::Handles::default(),
             #[cfg(feature = "metrics")]

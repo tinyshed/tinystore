@@ -30,6 +30,10 @@ methods: dict[str, int] = {
     "blobs.usage": 0x040B,
     "blobs.clear": 0x040C,
     "blobs.read": 0x040D,
+    "blobs.directory": 0x040E,
+    "blobs.scan": 0x040F,
+    "blobs.changes": 0x0410,
+    "blobs.forget": 0x0411,
     # Answers once the store has the message, not once anyone handled it; in a
     # database's transaction, it is handed over once the transaction commits.
     "channels.publish": 0x0A01,
@@ -649,6 +653,14 @@ def _write_blobs_piece(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(1)
         w.bin(x)
         n += 1
+    if (x := v.get("size")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    if (x := v.get("last_modified")) is not None:
+        w.uint(3)
+        w.int(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -659,6 +671,10 @@ def _read_blobs_piece(r: Reader) -> dict[str, Any]:
         match r.field(seen):
             case 1:
                 read["bytes"] = r.bin()
+            case 2:
+                read["size"] = r.uint()
+            case 3:
+                read["last_modified"] = r.int()
             case _:
                 r.skip()
     r.leave()
@@ -666,11 +682,14 @@ def _read_blobs_piece(r: Reader) -> dict[str, Any]:
 
 
 # A piece of a file's bytes: an upload's DATA from the client, a read's from
-# the server.
+# the server. A piece of a growing directory's file brings the file's size
+# and time as it was read, so that the reader sees it moved.
 BlobsPiece = Message(
     "blobs.Piece",
     {
         "bytes": (1, bin_),
+        "size": (2, uint),
+        "last_modified": (3, int_),
     },
     _write_blobs_piece,
     _read_blobs_piece,
@@ -1242,6 +1261,292 @@ BlobsUsage = Message(
     },
     _write_blobs_usage,
     _read_blobs_usage,
+)
+
+
+def _write_blobs_directory(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("name")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("path")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("every")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("ignore")) is not None:
+        w.uint(4)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("growing")) is not None:
+        w.uint(5)
+        w.bool(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_directory(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["name"] = r.str()
+            case 2:
+                read["path"] = r.str()
+            case 3:
+                read["every"] = r.uint()
+            case 4:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["ignore"] = items0
+            case 5:
+                read["growing"] = r.bool()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# Opens a directory by name: a folder of the server's machine, which the
+# store lists and reads and never writes. Its handle takes get, head, list,
+# usage and read as a set of files' does, each answered from the list the
+# last scan wrote but a get's and a read's bytes, which come from the disk;
+# every call that writes a file is invalid. A connection that came with a
+# token names no path: it opens the directory the server was given under the
+# name, and one the server was not given is invalid.
+BlobsDirectory = Message(
+    "blobs.Directory",
+    {
+        # [a-z0-9][a-z0-9_-]{0,63}, never a set of files' name too
+        "name": (1, str_),
+        # the folder on the server's machine; the server's own when absent
+        "path": (2, str_),
+        # a scan on the store's background work, a period apart
+        "every": (3, uint),
+        # names a scan passes over, * for any run of a name's characters
+        "ignore": (4, list_(str_)),
+        # a read holds to no version and goes up to the size now
+        "growing": (5, bool_),
+    },
+    _write_blobs_directory,
+    _read_blobs_directory,
+)
+
+
+def _write_blobs_scanned(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("added")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("changed")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    if (x := v.get("removed")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("skipped")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    if (x := v.get("count")) is not None:
+        w.uint(5)
+        w.uint(x)
+        n += 1
+    if (x := v.get("size")) is not None:
+        w.uint(6)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_scanned(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["added"] = r.uint()
+            case 2:
+                read["changed"] = r.uint()
+            case 3:
+                read["removed"] = r.uint()
+            case 4:
+                read["skipped"] = r.uint()
+            case 5:
+                read["count"] = r.uint()
+            case 6:
+                read["size"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# What a scan found, and what the list holds once it ended.
+BlobsScanned = Message(
+    "blobs.Scanned",
+    {
+        "added": (1, uint),
+        "changed": (2, uint),
+        "removed": (3, uint),
+        # what it met and could not list: a link, a folder it cannot read, another disk
+        "skipped": (4, uint),
+        "count": (5, uint),
+        "size": (6, uint),
+    },
+    _write_blobs_scanned,
+    _read_blobs_scanned,
+)
+
+
+def _write_blobs_since(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("handle")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("after")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_since(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["handle"] = r.uint()
+            case 2:
+                read["after"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# The changes of a directory past a cursor, from the first file it listed
+# when absent.
+BlobsSince = Message(
+    "blobs.Since",
+    {
+        "handle": (1, uint),
+        # a page's next
+        "after": (2, str_),
+    },
+    _write_blobs_since,
+    _read_blobs_since,
+)
+
+
+def _write_blobs_change(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("path")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("change")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("info")) is not None:
+        w.uint(3)
+        BlobsInfo.write(w, x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_change(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["path"] = r.str()
+            case 2:
+                read["change"] = r.str()
+            case 3:
+                read["info"] = BlobsInfo.read(r)
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+BlobsChange = Message(
+    "blobs.Change",
+    {
+        # the whole path in the directory
+        "path": (1, str_),
+        # added, changed or removed
+        "change": (2, str_),
+        # none once removed
+        "info": (3, BlobsInfo),
+    },
+    _write_blobs_change,
+    _read_blobs_change,
+)
+
+
+def _write_blobs_changes(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("items")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            BlobsChange.write(w, item0)
+        n += 1
+    if (x := v.get("next")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_changes(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [BlobsChange.read(r) for _ in range(r.array())]
+                r.leave()
+                read["items"] = items0
+            case 2:
+                read["next"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A page of changes in the order the scans wrote them, 1000 at most; next is
+# always there, with no items the cursor to ask from after the next scan.
+BlobsChanges = Message(
+    "blobs.Changes",
+    {
+        "items": (1, list_(BlobsChange)),
+        "next": (2, str_),
+    },
+    _write_blobs_changes,
+    _read_blobs_changes,
 )
 
 
@@ -10751,6 +11056,11 @@ messages: dict[str, Message] = {
     "blobs.Page": BlobsPage,
     "blobs.Folder": BlobsFolder,
     "blobs.Usage": BlobsUsage,
+    "blobs.Directory": BlobsDirectory,
+    "blobs.Scanned": BlobsScanned,
+    "blobs.Since": BlobsSince,
+    "blobs.Change": BlobsChange,
+    "blobs.Changes": BlobsChanges,
     "channels.Publish": ChannelsPublish,
     "channels.Subscribe": ChannelsSubscribe,
     "channels.Message": ChannelsMessage,

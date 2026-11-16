@@ -36,6 +36,10 @@ export const methods = {
 	'blobs.usage': 0x040b,
 	'blobs.clear': 0x040c,
 	'blobs.read': 0x040d,
+	'blobs.directory': 0x040e,
+	'blobs.scan': 0x040f,
+	'blobs.changes': 0x0410,
+	'blobs.forget': 0x0411,
 	/**
 	 * Answers once the store has the message, not once anyone handled it; in a
 	 * database's transaction, it is handed over once the transaction commits.
@@ -779,12 +783,15 @@ export const BlobsWritten = message(
 
 /**
  * A piece of a file's bytes: an upload's DATA from the client, a read's from
- * the server.
+ * the server. A piece of a growing directory's file brings the file's size
+ * and time as it was read, so that the reader sees it moved.
  */
 export const BlobsPiece = message(
 	'blobs.Piece',
 	{
 		bytes: [1, bin],
+		size: [2, uint],
+		lastModified: [3, int],
 	},
 	{
 		write(w, v) {
@@ -795,21 +802,39 @@ export const BlobsPiece = message(
 				w.bin(v.bytes)
 				n++
 			}
+			if (v.size !== undefined) {
+				w.field(2)
+				w.uint(v.size)
+				n++
+			}
+			if (v.lastModified !== undefined) {
+				w.field(3)
+				w.int(v.lastModified)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $bytes: Uint8Array | undefined
+			let $size: number | undefined
+			let $lastModified: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
 						$bytes = r.bytes()
+						break
+					case 2:
+						$size = r.uint()
+						break
+					case 3:
+						$lastModified = r.int()
 						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { bytes: $bytes }
+			return { bytes: $bytes, size: $size, lastModified: $lastModified }
 		},
 	},
 )
@@ -1497,6 +1522,356 @@ export const BlobsUsage = message(
 			}
 			r.leave()
 			return { count: $count, size: $size }
+		},
+	},
+)
+
+/**
+ * Opens a directory by name: a folder of the server's machine, which the
+ * store lists and reads and never writes. Its handle takes get, head, list,
+ * usage and read as a set of files' does, each answered from the list the
+ * last scan wrote but a get's and a read's bytes, which come from the disk;
+ * every call that writes a file is invalid. A connection that came with a
+ * token names no path: it opens the directory the server was given under the
+ * name, and one the server was not given is invalid.
+ */
+export const BlobsDirectory = message(
+	'blobs.Directory',
+	{
+		/** [a-z0-9][a-z0-9_-]{0,63}, never a set of files' name too */
+		name: [1, str],
+		/** the folder on the server's machine; the server's own when absent */
+		path: [2, str],
+		/** a scan on the store's background work, a period apart */
+		every: [3, uint],
+		/** names a scan passes over, * for any run of a name's characters */
+		ignore: [4, list(str)],
+		/** a read holds to no version and goes up to the size now */
+		growing: [5, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(2)
+				w.str(v.path)
+				n++
+			}
+			if (v.every !== undefined) {
+				w.field(3)
+				w.uint(v.every)
+				n++
+			}
+			if (v.ignore !== undefined) {
+				w.field(4)
+				w.array(v.ignore.length)
+				for (const item0 of v.ignore) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.growing !== undefined) {
+				w.field(5)
+				w.bool(v.growing)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $path: string | undefined
+			let $every: number | undefined
+			let $ignore: string[] | undefined
+			let $growing: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$path = r.str()
+						break
+					case 3:
+						$every = r.uint()
+						break
+					case 4: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$ignore = items0
+						break
+					}
+					case 5:
+						$growing = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, path: $path, every: $every, ignore: $ignore, growing: $growing }
+		},
+	},
+)
+
+/**
+ * What a scan found, and what the list holds once it ended.
+ */
+export const BlobsScanned = message(
+	'blobs.Scanned',
+	{
+		added: [1, uint],
+		changed: [2, uint],
+		removed: [3, uint],
+		/** what it met and could not list: a link, a folder it cannot read, another disk */
+		skipped: [4, uint],
+		count: [5, uint],
+		size: [6, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.added !== undefined) {
+				w.field(1)
+				w.uint(v.added)
+				n++
+			}
+			if (v.changed !== undefined) {
+				w.field(2)
+				w.uint(v.changed)
+				n++
+			}
+			if (v.removed !== undefined) {
+				w.field(3)
+				w.uint(v.removed)
+				n++
+			}
+			if (v.skipped !== undefined) {
+				w.field(4)
+				w.uint(v.skipped)
+				n++
+			}
+			if (v.count !== undefined) {
+				w.field(5)
+				w.uint(v.count)
+				n++
+			}
+			if (v.size !== undefined) {
+				w.field(6)
+				w.uint(v.size)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $added: number | undefined
+			let $changed: number | undefined
+			let $removed: number | undefined
+			let $skipped: number | undefined
+			let $count: number | undefined
+			let $size: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$added = r.uint()
+						break
+					case 2:
+						$changed = r.uint()
+						break
+					case 3:
+						$removed = r.uint()
+						break
+					case 4:
+						$skipped = r.uint()
+						break
+					case 5:
+						$count = r.uint()
+						break
+					case 6:
+						$size = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				added: $added,
+				changed: $changed,
+				removed: $removed,
+				skipped: $skipped,
+				count: $count,
+				size: $size,
+			}
+		},
+	},
+)
+
+/**
+ * The changes of a directory past a cursor, from the first file it listed
+ * when absent.
+ */
+export const BlobsSince = message(
+	'blobs.Since',
+	{
+		handle: [1, uint],
+		/** a page's next */
+		after: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.after !== undefined) {
+				w.field(2)
+				w.str(v.after)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $after: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$after = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, after: $after }
+		},
+	},
+)
+
+export const BlobsChange = message(
+	'blobs.Change',
+	{
+		/** the whole path in the directory */
+		path: [1, str],
+		/** added, changed or removed */
+		change: [2, str],
+		/** none once removed */
+		info: [3, BlobsInfo],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.path !== undefined) {
+				w.field(1)
+				w.str(v.path)
+				n++
+			}
+			if (v.change !== undefined) {
+				w.field(2)
+				w.str(v.change)
+				n++
+			}
+			if (v.info !== undefined) {
+				w.field(3)
+				BlobsInfo.write(w, v.info)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $path: string | undefined
+			let $change: string | undefined
+			let $info: Read<typeof BlobsInfo.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$path = r.str()
+						break
+					case 2:
+						$change = r.str()
+						break
+					case 3:
+						$info = BlobsInfo.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { path: $path, change: $change, info: $info }
+		},
+	},
+)
+
+/**
+ * A page of changes in the order the scans wrote them, 1000 at most; next is
+ * always there, with no items the cursor to ask from after the next scan.
+ */
+export const BlobsChanges = message(
+	'blobs.Changes',
+	{
+		items: [1, list(BlobsChange)],
+		next: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.items !== undefined) {
+				w.field(1)
+				w.array(v.items.length)
+				for (const item0 of v.items) {
+					BlobsChange.write(w, item0)
+				}
+				n++
+			}
+			if (v.next !== undefined) {
+				w.field(2)
+				w.str(v.next)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $items: Read<typeof BlobsChange.fields>[] | undefined
+			let $next: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof BlobsChange.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(BlobsChange.read(r))
+						}
+						r.leave()
+						$items = items0
+						break
+					}
+					case 2:
+						$next = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { items: $items, next: $next }
 		},
 	},
 )

@@ -313,7 +313,7 @@ impl Directory {
 
     /// An error said of the directory and the path it is about:
     /// `directory movies: "Dune (2021)/Dune.mkv": io`.
-    fn fail(&self, path: &str, error: Error) -> Error {
+    pub(crate) fn fail(&self, path: &str, error: Error) -> Error {
         let error = if path.is_empty() { error } else { error.within(format!("{path:?}")) };
         error.within(self.describe())
     }
@@ -344,6 +344,23 @@ impl Blobs {
             })
         })
     }
+}
+
+/// Refuses, for a connection that may only read, the directory `name` while
+/// the store does not hold it: neither blobs.db nor the directory is made.
+#[cfg(feature = "wire")]
+pub(crate) fn directory_as_it_is(store: &Store, name: &str) -> Result<()> {
+    let within = |error: Error| error.within(format!("directory {name}"));
+    crate::text::check_name("a directory's", name).map_err(within)?;
+    store.holds("blobs/blobs.db").map_err(within)?;
+    let blobs = Blobs::of(store).map_err(within)?;
+    let found = blobs.file.read(|connection| {
+        connection
+            .prepare_cached(SELECT_DIRECTORY)
+            .and_then(|mut select| select.query_row([name], |_| Ok(())).optional())
+            .map_err(|error| sql_error("blobs: a directory", error))
+    });
+    found.map_err(within)?.ok_or_else(|| within(crate::engine::not_held("directory")))
 }
 
 /// Refuses, in the write that makes a set of files, a name a directory has.

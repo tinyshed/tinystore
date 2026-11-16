@@ -188,6 +188,13 @@ impl StoredFile {
         }
     }
 
+    /// Whether it is a growing directory's file, whose reads go up to the size
+    /// it has as they read, each bringing that size and time.
+    #[cfg(feature = "wire")]
+    pub(crate) fn is_growing(&self) -> bool {
+        matches!(&self.body, Body::Outside(outside) if outside.is_growing())
+    }
+
     /// What its errors call it: `files avatars: "users/42/1.png"`.
     #[cfg(feature = "async")]
     pub(crate) fn label(&self) -> &str {

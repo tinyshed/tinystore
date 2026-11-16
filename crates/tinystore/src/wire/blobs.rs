@@ -5,19 +5,26 @@
 //! the client's credit. An upload's pieces come as the client's DATA,
 //! written in order as they come, the credit of each given back once it is
 //! written, and its last DATA publishes the file.
+//!
+//! A directory's handle takes the reads of a set of files, its bytes from
+//! the disk, and its own calls: a scan, its changes and a forget. A
+//! connection that came with a token names no path of the server's machine:
+//! it reaches the folders the server was given alone (BLOB-15).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use super::codec::{self, Map, Message};
 use super::protocol::{
-    BlobsAt, BlobsDelete, BlobsExpire, BlobsFolder, BlobsFound, BlobsGot, BlobsHead, BlobsInfo, BlobsList, BlobsMove,
-    BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, method,
+    BlobsAt, BlobsChange, BlobsChanges, BlobsDelete, BlobsDirectory, BlobsExpire, BlobsFolder, BlobsFound, BlobsGot,
+    BlobsHead, BlobsInfo, BlobsList, BlobsMove, BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsScanned, BlobsSince,
+    BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, method,
 };
 use super::{Lent, Link, Route};
-use crate::blobs::{FileCall, FileInfo, Files, StoredFile, Upload};
+use crate::blobs::{Change, Directory, FileCall, FileInfo, Files, StoredFile, Upload};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, unix_millis};
 
@@ -34,16 +41,58 @@ pub(crate) fn route(called: u16) -> Route {
 /// What a connection opened, by handle, and its streams of a file's bytes.
 #[derive(Default)]
 pub(crate) struct Handles {
-    open: super::ByHandle<Files>,
+    open: super::ByHandle<Held>,
     reads: Arc<Mutex<HashMap<u32, Arc<Getting>>>>,
     uploads: Arc<Mutex<HashMap<u32, Arc<Uploading>>>>,
+    /// The connection came with a token, and names no path (BLOB-15).
+    token: bool,
+    /// The folders the server was given, by their directory's name.
+    given: Option<Arc<BTreeMap<String, PathBuf>>>,
+}
+
+/// What a handle names: a set of files, or a directory, which no call writes.
+#[derive(Clone)]
+enum Held {
+    Files(Files),
+    Directory(Directory),
 }
 
 impl Handles {
-    /// The files a handle names, in the folder of these segments.
+    /// The handles of a connection, as its host admits it and the folders it was given.
+    pub(crate) fn of(connect: &crate::pipe::Connect) -> Handles {
+        Handles { token: connect.admit.is_some(), given: connect.directories.clone(), ..Handles::default() }
+    }
+
+    /// The files or the directory a handle names, in the folder of these segments.
+    fn held(&self, handle: u64, folder: &[String]) -> Result<Held, Failure> {
+        let held = self.open.get(handle, || format!("handle {handle} names nothing this connection opened"))?;
+        Ok(match held {
+            Held::Files(files) => {
+                Held::Files(folder.iter().fold(files, |files, segment| files.folder(segment.as_str())))
+            }
+            Held::Directory(directory) => {
+                Held::Directory(folder.iter().fold(directory, |directory, segment| directory.folder(segment.as_str())))
+            }
+        })
+    }
+
+    /// The files a handle names, in the folder of these segments; a
+    /// directory's handle is refused, since the store never writes one.
     fn at(&self, handle: u64, folder: &[String]) -> Result<Files, Failure> {
-        let files = self.open.get(handle, || format!("handle {handle} names no files this connection opened"))?;
-        Ok(folder.iter().fold(files, |files, segment| files.folder(segment.as_str())))
+        match self.held(handle, folder)? {
+            Held::Files(files) => Ok(files),
+            Held::Directory(directory) => Err(Failure::invalid(format!(
+                "handle {handle} names {directory:?}, which the store lists and reads and never writes"
+            ))),
+        }
+    }
+
+    /// The directory a handle names, as its own calls take it.
+    fn directory_at(&self, handle: u64) -> Result<Directory, Failure> {
+        match self.held(handle, &[])? {
+            Held::Directory(directory) => Ok(directory),
+            Held::Files(_) => Err(Failure::invalid(format!("handle {handle} names files, not a directory"))),
+        }
     }
 
     /// Credit the client granted a read's stream.
@@ -111,6 +160,10 @@ pub(crate) fn call(
         method::BLOBS_LIST => list(handles, BlobsList::decode(body)?),
         method::BLOBS_USAGE => usage(handles, &BlobsFolder::decode(body)?),
         method::BLOBS_CLEAR => clear(handles, &BlobsFolder::decode(body)?),
+        method::BLOBS_DIRECTORY => directory(store, handles, BlobsDirectory::decode(body)?, read_only),
+        method::BLOBS_SCAN => scan(handles, &BlobsFolder::decode(body)?),
+        method::BLOBS_CHANGES => changes(handles, BlobsSince::decode(body)?),
+        method::BLOBS_FORGET => forget(handles, &BlobsFolder::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -201,8 +254,80 @@ fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: BlobsOpen, read
         files = files.max_file_size(most);
     }
     let files = files.open()?;
-    let handle = handles.open.keep(files);
+    let handle = handles.open.keep(Held::Files(files));
     Ok(Handle { handle }.encode())
+}
+
+/// Opens a directory: on the path a connection of this machine names, or on
+/// the folder the server was given under the name. One that came with a
+/// token names no path, and opens only what the server was given; one that
+/// only reads opens only a directory the store holds, and scans nothing.
+fn directory(store: &Store, handles: &Handles, asked: BlobsDirectory, read_only: bool) -> Answered {
+    let name = asked.name.as_str();
+    let refused = |why: &str| Failure::invalid(format!("directory {name}: {why}"));
+    let given = handles.given.as_ref().and_then(|given| given.get(name)).cloned();
+    let path = match (asked.path, handles.token) {
+        (Some(_), true) => return Err(refused("a connection that came with a token names no path of the server's")),
+        (Some(path), false) => Some(PathBuf::from(path)),
+        (None, true) if given.is_none() => return Err(refused("the server was given no directory of the name")),
+        (None, _) => given,
+    };
+    if read_only {
+        if asked.every.is_some() {
+            return Err(refused("a scan on a connection that only reads"));
+        }
+        crate::blobs::directory_as_it_is(store, name)?;
+    }
+    let mut opening = store.directory(name).ignore(asked.ignore).growing(asked.growing);
+    if let Some(path) = path {
+        opening = opening.path(path);
+    }
+    if let Some(every) = asked.every {
+        opening = opening.every(Duration::from_millis(every));
+    }
+    let handle = handles.open.keep(Held::Directory(opening.open()?));
+    Ok(Handle { handle }.encode())
+}
+
+fn scan(handles: &Handles, asked: &BlobsFolder) -> Answered {
+    let directory = handles.directory_at(asked.handle)?;
+    let at = asked.folder.iter().fold(directory, |directory, segment| directory.folder(segment.as_str()));
+    let scan = at.scan()?;
+    let scanned = BlobsScanned {
+        added: scan.added,
+        changed: scan.changed,
+        removed: scan.removed,
+        skipped: scan.skipped,
+        count: scan.count,
+        size: scan.size,
+    };
+    Ok(scanned.encode())
+}
+
+fn changes(handles: &Handles, asked: BlobsSince) -> Answered {
+    let directory = handles.directory_at(asked.handle)?;
+    let mut call = directory.changes();
+    if let Some(after) = asked.after {
+        call = call.after(after);
+    }
+    let page = call.page()?;
+    let told = |change: Change| match change {
+        Change::Added => "added",
+        Change::Changed => "changed",
+        Change::Removed => "removed",
+    };
+    let items = page
+        .items
+        .into_iter()
+        .map(|item| BlobsChange { path: item.path, change: told(item.change).to_owned(), info: item.info.map(info_of) })
+        .collect();
+    Ok(BlobsChanges { items, next: page.next }.encode())
+}
+
+fn forget(handles: &Handles, asked: &BlobsFolder) -> Answered {
+    let directory = handles.directory_at(asked.handle)?;
+    asked.folder.iter().fold(directory, |directory, segment| directory.folder(segment.as_str())).forget()?;
+    Ok(Empty {}.encode())
 }
 
 fn put(handles: &Handles, mut asked: BlobsWrite) -> Answered {
@@ -213,7 +338,7 @@ fn put(handles: &Handles, mut asked: BlobsWrite) -> Answered {
 }
 
 fn get(handles: &Handles, asked: &BlobsAt, max_body: usize) -> Answered {
-    let Some(mut file) = handles.at(asked.handle, &asked.folder)?.get(&asked.path)? else {
+    let Some(mut file) = handles.held(asked.handle, &asked.folder)?.get(&asked.path)? else {
         return Ok(BlobsGot::default().encode());
     };
     let info = info_of(file.info().clone());
@@ -244,7 +369,7 @@ fn got_whole(info: BlobsInfo, file: &mut StoredFile) -> Answered {
 }
 
 fn head(handles: &Handles, asked: &BlobsAt) -> Answered {
-    let info = handles.at(asked.handle, &asked.folder)?.head(&asked.path)?;
+    let info = handles.held(asked.handle, &asked.folder)?.head(&asked.path)?;
     Ok(BlobsHead { info: info.map(info_of) }.encode())
 }
 
@@ -276,20 +401,37 @@ fn expire(handles: &Handles, asked: &BlobsExpire) -> Answered {
 }
 
 fn list(handles: &Handles, asked: BlobsList) -> Answered {
-    let files = handles.at(asked.handle, &asked.folder)?;
-    let mut list = files.list().prefix(asked.prefix);
-    if let Some(after) = asked.after {
-        list = list.after(after);
-    }
-    if let Some(limit) = asked.limit {
-        list = list.limit(usize::try_from(limit).unwrap_or(usize::MAX));
-    }
-    let page = list.page()?;
+    let limit = asked.limit.map(|limit| usize::try_from(limit).unwrap_or(usize::MAX));
+    let page = match handles.held(asked.handle, &asked.folder)? {
+        Held::Files(files) => {
+            let mut list = files.list().prefix(asked.prefix);
+            if let Some(after) = asked.after {
+                list = list.after(after);
+            }
+            if let Some(limit) = limit {
+                list = list.limit(limit);
+            }
+            list.page()?
+        }
+        Held::Directory(directory) => {
+            let mut list = directory.list().prefix(asked.prefix);
+            if let Some(after) = asked.after {
+                list = list.after(after);
+            }
+            if let Some(limit) = limit {
+                list = list.limit(limit);
+            }
+            list.page()?
+        }
+    };
     Ok(BlobsPage { files: page.files.into_iter().map(info_of).collect(), next: page.next }.encode())
 }
 
 fn usage(handles: &Handles, asked: &BlobsFolder) -> Answered {
-    let usage = handles.at(asked.handle, &asked.folder)?.usage()?;
+    let usage = match handles.held(asked.handle, &asked.folder)? {
+        Held::Files(files) => files.usage()?,
+        Held::Directory(directory) => directory.usage()?,
+    };
     Ok(BlobsUsage { count: usage.count, size: usage.size }.encode())
 }
 
@@ -347,24 +489,33 @@ pub(crate) enum Reading {
 /// Reads a file's bytes: the whole file, checked, or a range, which is not.
 /// The file is opened here and held until the read ends, so that the bytes
 /// are those of the ETag it was asked on, through a replace.
+///
+/// A growing directory's file holds to no version: the read goes on to the
+/// size the file has as each piece is read, and each piece brings it.
 pub(crate) fn read(handles: &Handles, stream: u32, body: &[u8], link: &Link) -> Result<Reading, Failure> {
     let asked = BlobsRead::decode(body)?;
-    let files = handles.at(asked.handle, &asked.folder)?;
-    let mut file = match (files.get(&asked.path)?, &asked.if_match) {
-        (Some(file), Some(etag)) if !file.matches(etag) => return Err(changed(&files, &asked.path)),
-        (None, Some(_)) => return Err(changed(&files, &asked.path)),
-        (None, None) => return Err(files.fail(&asked.path, Error::not_found("no file is there")).into()),
+    let held = handles.held(asked.handle, &asked.folder)?;
+    let found = held.get(&asked.path)?;
+    let growing = found.as_ref().is_some_and(StoredFile::is_growing);
+    let mut file = match (found, &asked.if_match) {
+        (Some(file), Some(etag)) if !growing && !file.matches(etag) => return Err(held.changed(&asked.path)),
+        (None, Some(_)) => return Err(held.changed(&asked.path)),
+        (None, None) => return Err(held.fail(&asked.path, Error::not_found("no file is there"))),
         (Some(file), _) => file,
     };
     let size = file.info().size;
-    let from = asked.offset.unwrap_or(0).min(size);
-    let left = asked.length.map_or(size - from, |length| length.min(size - from));
+    let (from, left) = if growing {
+        (asked.offset.unwrap_or(0), asked.length.unwrap_or(u64::MAX))
+    } else {
+        let from = asked.offset.unwrap_or(0).min(size);
+        (from, asked.length.map_or(size - from, |length| length.min(size - from)))
+    };
     file.seek(SeekFrom::Start(from)).map_err(|error| Error::io("blobs: seek a file", error))?;
     let piece = piece_bound(link);
     let first = bound(piece, left);
-    let response = read_piece(&mut file, first)?;
-    let left = left - first as u64;
-    if left == 0 {
+    let (response, read) = read_piece(&mut file, first)?;
+    let left = left - read as u64;
+    if left == 0 || read < first {
         return Ok(Reading::Whole(response));
     }
     let state = GetState { file: Some(file), left, credit: link.credit, busy: false, ended: false };
@@ -379,10 +530,32 @@ pub(crate) fn read(handles: &Handles, stream: u32, body: &[u8], link: &Link) -> 
     Ok(Reading::Begun(response, getting))
 }
 
-/// A read on an ETag the path no longer holds, as a write's `ifMatch` is.
-fn changed(files: &Files, path: &str) -> Failure {
-    let error = Error::new(ErrorKind::Conflict, "the path holds no file with the ETag given");
-    files.fail(path, error).into()
+impl Held {
+    fn get(&self, path: &str) -> crate::Result<Option<StoredFile>> {
+        match self {
+            Held::Files(files) => files.get(path),
+            Held::Directory(directory) => directory.get(path),
+        }
+    }
+
+    fn head(&self, path: &str) -> crate::Result<Option<FileInfo>> {
+        match self {
+            Held::Files(files) => files.head(path),
+            Held::Directory(directory) => directory.head(path),
+        }
+    }
+
+    /// A read on an ETag the path no longer holds, as a write's `ifMatch` is.
+    fn changed(&self, path: &str) -> Failure {
+        self.fail(path, Error::new(ErrorKind::Conflict, "the path holds no file with the ETag given"))
+    }
+
+    fn fail(&self, path: &str, error: Error) -> Failure {
+        match self {
+            Held::Files(files) => files.fail(path, error).into(),
+            Held::Directory(directory) => directory.fail(path, error).into(),
+        }
+    }
 }
 
 /// The bytes the next piece reads: a piece's, or fewer when the read has
@@ -394,7 +567,11 @@ fn bound(piece: usize, left: u64) -> usize {
 /// The next `length` bytes of a file as a piece's message, read straight
 /// into it: `BlobsPiece { bytes }.encode()`, as the test beside it checks.
 /// The read's last bytes wait until the whole file's SHA-256 is checked.
-fn read_piece(file: &mut StoredFile, length: usize) -> Result<Vec<u8>, Failure> {
+/// And the bytes it read: `length`, or of a growing file fewer at its end.
+fn read_piece(file: &mut StoredFile, length: usize) -> Result<(Vec<u8>, usize), Failure> {
+    if file.is_growing() {
+        return growing_piece(file, length);
+    }
     // as `BlobsPiece::size` reserves: a map's head, a field's number, a bin's head of five
     let mut out = Vec::with_capacity(3 + 1 + 5 + length);
     let mut map = Map::open(&mut out);
@@ -403,7 +580,25 @@ fn read_piece(file: &mut StoredFile, length: usize) -> Result<Vec<u8>, Failure> 
         codec::write_bin_in_place(&mut out, length, |bytes| fill(file, bytes))?;
     }
     map.close(&mut out);
-    Ok(out)
+    Ok((out, length))
+}
+
+/// Up to `length` bytes of a growing file, as many as it holds now, with the
+/// file's size and time as they were read.
+fn growing_piece(file: &mut StoredFile, length: usize) -> Result<(Vec<u8>, usize), Failure> {
+    let mut bytes = vec![0; length];
+    let mut filled = 0;
+    while filled < length {
+        match file.read(&mut bytes[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(error) => return Err(Failure::from(read_error(error))),
+        }
+    }
+    bytes.truncate(filled);
+    let info = file.info();
+    let piece = BlobsPiece { bytes, size: Some(info.size), last_modified: Some(unix_millis(info.last_modified)) };
+    Ok((piece.encode(), filled))
 }
 
 /// Fills `bytes` from where the file's next read begins; the file reads to
@@ -487,13 +682,14 @@ impl Getting {
                 }
             };
             let length = bound(self.piece, left);
-            let body = match read_piece(&mut file, length) {
-                Ok(body) => body,
+            let (body, read) = match read_piece(&mut file, length) {
+                Ok(piece) => piece,
                 Err(failure) => return self.end(Err(failure)),
             };
-            let left = left - length as u64;
-            let ended = left == 0 || length == 0;
-            if length > 0 {
+            let left = left - read as u64;
+            // a growing file's read ends at the end it has now
+            let ended = left == 0 || read < length;
+            if read > 0 {
                 // sent under the lock a cancel's end takes, as records' and
                 // metrics' are: a piece read while a cancel ended the read
                 // never goes after the stream's last frame

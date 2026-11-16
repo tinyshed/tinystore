@@ -52,9 +52,12 @@ message blobs.Written {
 }
 
 # A piece of a file's bytes: an upload's DATA from the client, a read's from
-# the server.
+# the server. A piece of a growing directory's file brings the file's size
+# and time as it was read, so that the reader sees it moved.
 message blobs.Piece {
   1 bytes: bin
+  2 size: uint?
+  3 lastModified: time?
 }
 
 # A get's answer: what the file carries, none when there is no file, and all
@@ -133,16 +136,65 @@ message blobs.Usage {
   2 size: uint
 }
 
-read  0x0401 blobs.open(blobs.Open)     -> Handle
-write 0x0402 blobs.put(blobs.Write)     -> blobs.Written
-write 0x0403 blobs.upload(blobs.Write)  -> exchange blobs.Written for blobs.Piece
-read  0x0404 blobs.get(blobs.At)        -> blobs.Got
-read  0x0405 blobs.head(blobs.At)       -> blobs.Head
-write 0x0406 blobs.delete(blobs.Delete) -> Empty
-write 0x0407 blobs.copy(blobs.Move)     -> blobs.Info
-write 0x0408 blobs.rename(blobs.Move)   -> blobs.Info
-write 0x0409 blobs.expire(blobs.Expire) -> blobs.Found
-read  0x040a blobs.list(blobs.List)     -> blobs.Page
-read  0x040b blobs.usage(blobs.Folder)  -> blobs.Usage
-write 0x040c blobs.clear(blobs.Folder)  -> Empty
-read  0x040d blobs.read(blobs.Read)     -> download blobs.Piece until Empty
+# Opens a directory by name: a folder of the server's machine, which the
+# store lists and reads and never writes. Its handle takes get, head, list,
+# usage and read as a set of files' does, each answered from the list the
+# last scan wrote but a get's and a read's bytes, which come from the disk;
+# every call that writes a file is invalid. A connection that came with a
+# token names no path: it opens the directory the server was given under the
+# name, and one the server was not given is invalid.
+message blobs.Directory {
+  1 name: str           # [a-z0-9][a-z0-9_-]{0,63}, never a set of files' name too
+  2 path: str?          # the folder on the server's machine; the server's own when absent
+  3 every: duration?    # a scan on the store's background work, a period apart
+  4 ignore: [str]       # names a scan passes over, * for any run of a name's characters
+  5 growing: bool       # a read holds to no version and goes up to the size now
+}
+
+# What a scan found, and what the list holds once it ended.
+message blobs.Scanned {
+  1 added: uint
+  2 changed: uint
+  3 removed: uint
+  4 skipped: uint       # what it met and could not list: a link, a folder it cannot read, another disk
+  5 count: uint
+  6 size: uint
+}
+
+# The changes of a directory past a cursor, from the first file it listed
+# when absent.
+message blobs.Since {
+  1 handle: uint
+  2 after: str?         # a page's next
+}
+
+message blobs.Change {
+  1 path: str           # the whole path in the directory
+  2 change: str         # added, changed or removed
+  3 info: blobs.Info?   # none once removed
+}
+
+# A page of changes in the order the scans wrote them, 1000 at most; next is
+# always there, with no items the cursor to ask from after the next scan.
+message blobs.Changes {
+  1 items: [blobs.Change]
+  2 next: str
+}
+
+read  0x0401 blobs.open(blobs.Open)           -> Handle
+write 0x0402 blobs.put(blobs.Write)           -> blobs.Written
+write 0x0403 blobs.upload(blobs.Write)        -> exchange blobs.Written for blobs.Piece
+read  0x0404 blobs.get(blobs.At)              -> blobs.Got
+read  0x0405 blobs.head(blobs.At)             -> blobs.Head
+write 0x0406 blobs.delete(blobs.Delete)       -> Empty
+write 0x0407 blobs.copy(blobs.Move)           -> blobs.Info
+write 0x0408 blobs.rename(blobs.Move)         -> blobs.Info
+write 0x0409 blobs.expire(blobs.Expire)       -> blobs.Found
+read  0x040a blobs.list(blobs.List)           -> blobs.Page
+read  0x040b blobs.usage(blobs.Folder)        -> blobs.Usage
+write 0x040c blobs.clear(blobs.Folder)        -> Empty
+read  0x040d blobs.read(blobs.Read)           -> download blobs.Piece until Empty
+read  0x040e blobs.directory(blobs.Directory) -> Handle
+write 0x040f blobs.scan(blobs.Folder)         -> blobs.Scanned
+read  0x0410 blobs.changes(blobs.Since)       -> blobs.Changes
+write 0x0411 blobs.forget(blobs.Folder)       -> Empty

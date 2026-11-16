@@ -161,6 +161,7 @@ These contracts are what does not.
 - **BLOB-12** A scan MUST NOT tell a file removed whose folder it could not read, MUST NOT enter a folder on another file system, and a scan of a missing, unreadable or newly empty folder MUST fail and change nothing.
 - **BLOB-13** A read MUST hand back only bytes of the version its `get` opened, and fail `conflict` once the file moved; in a `growing` directory each piece MUST bring the size and the time of the file as it was read. A copy MUST NOT serve a file whose size or time is not the list's.
 - **BLOB-14** No read MUST leave the directory's folder, through a link or a path, even one swapped for a link between the scan and the read.
+- **BLOB-15** A connection that came with a token MUST NOT name a path of the server's machine.
 - **BLOB-16** A scan's memory MUST NOT follow the number of files.
 
 ### Records

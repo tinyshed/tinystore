@@ -7,20 +7,24 @@ import "math"
 
 // The methods, by their numbers on the wire.
 const (
-	MethodBackupWrite = 0x0801
-	MethodBlobsOpen   = 0x0401
-	MethodBlobsPut    = 0x0402
-	MethodBlobsUpload = 0x0403
-	MethodBlobsGet    = 0x0404
-	MethodBlobsHead   = 0x0405
-	MethodBlobsDelete = 0x0406
-	MethodBlobsCopy   = 0x0407
-	MethodBlobsRename = 0x0408
-	MethodBlobsExpire = 0x0409
-	MethodBlobsList   = 0x040a
-	MethodBlobsUsage  = 0x040b
-	MethodBlobsClear  = 0x040c
-	MethodBlobsRead   = 0x040d
+	MethodBackupWrite    = 0x0801
+	MethodBlobsOpen      = 0x0401
+	MethodBlobsPut       = 0x0402
+	MethodBlobsUpload    = 0x0403
+	MethodBlobsGet       = 0x0404
+	MethodBlobsHead      = 0x0405
+	MethodBlobsDelete    = 0x0406
+	MethodBlobsCopy      = 0x0407
+	MethodBlobsRename    = 0x0408
+	MethodBlobsExpire    = 0x0409
+	MethodBlobsList      = 0x040a
+	MethodBlobsUsage     = 0x040b
+	MethodBlobsClear     = 0x040c
+	MethodBlobsRead      = 0x040d
+	MethodBlobsDirectory = 0x040e
+	MethodBlobsScan      = 0x040f
+	MethodBlobsChanges   = 0x0410
+	MethodBlobsForget    = 0x0411
 	// Answers once the store has the message, not once anyone handled it; in a
 	// database's transaction, it is handed over once the transaction commits.
 	MethodChannelsPublish = 0x0a01
@@ -160,6 +164,10 @@ var methodNames = []struct {
 	{"blobs.usage", MethodBlobsUsage},
 	{"blobs.clear", MethodBlobsClear},
 	{"blobs.read", MethodBlobsRead},
+	{"blobs.directory", MethodBlobsDirectory},
+	{"blobs.scan", MethodBlobsScan},
+	{"blobs.changes", MethodBlobsChanges},
+	{"blobs.forget", MethodBlobsForget},
 	{"channels.publish", MethodChannelsPublish},
 	{"channels.subscribe", MethodChannelsSubscribe},
 	{"config.open", MethodConfigOpen},
@@ -313,6 +321,16 @@ func NewMessage(name string) Message {
 		return &BlobsFolder{}
 	case "blobs.Usage":
 		return &BlobsUsage{}
+	case "blobs.Directory":
+		return &BlobsDirectory{}
+	case "blobs.Scanned":
+		return &BlobsScanned{}
+	case "blobs.Since":
+		return &BlobsSince{}
+	case "blobs.Change":
+		return &BlobsChange{}
+	case "blobs.Changes":
+		return &BlobsChanges{}
 	case "channels.Publish":
 		return &ChannelsPublish{}
 	case "channels.Subscribe":
@@ -1244,9 +1262,12 @@ func (m BlobsWritten) IsZero() bool {
 // BlobsPiece is the schema's blobs.Piece.
 //
 // A piece of a file's bytes: an upload's DATA from the client, a read's from
-// the server.
+// the server. A piece of a growing directory's file brings the file's size
+// and time as it was read, so that the reader sees it moved.
 type BlobsPiece struct {
-	Bytes []byte `wire:"1,bytes"`
+	Bytes        []byte  `wire:"1,bytes"`
+	Size         *uint64 `wire:"2,size"`
+	LastModified *int64  `wire:"3,lastModified"`
 }
 
 func (m BlobsPiece) Write(w *Writer) {
@@ -1255,6 +1276,16 @@ func (m BlobsPiece) Write(w *Writer) {
 	if len(m.Bytes) > 0 {
 		w.Uint(1)
 		w.Bin(m.Bytes)
+		n++
+	}
+	if m.Size != nil {
+		w.Uint(2)
+		w.Uint(*m.Size)
+		n++
+	}
+	if m.LastModified != nil {
+		w.Uint(3)
+		w.Int(*m.LastModified)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -1267,6 +1298,12 @@ func (m *BlobsPiece) Read(r *Reader) {
 		switch r.Field(&seen) {
 		case 1:
 			m.Bytes = r.Bin()
+		case 2:
+			v := r.Uint()
+			m.Size = &v
+		case 3:
+			v := r.Int()
+			m.LastModified = &v
 		default:
 			r.Skip()
 		}
@@ -1276,7 +1313,9 @@ func (m *BlobsPiece) Read(r *Reader) {
 
 // IsZero says whether BlobsPiece writes as no field at all.
 func (m BlobsPiece) IsZero() bool {
-	return len(m.Bytes) == 0
+	return len(m.Bytes) == 0 &&
+		m.Size == nil &&
+		m.LastModified == nil
 }
 
 // BlobsGot is the schema's blobs.Got.
@@ -1965,6 +2004,348 @@ func (m *BlobsUsage) Read(r *Reader) {
 func (m BlobsUsage) IsZero() bool {
 	return m.Count == 0 &&
 		m.Size == 0
+}
+
+// BlobsDirectory is the schema's blobs.Directory.
+//
+// Opens a directory by name: a folder of the server's machine, which the
+// store lists and reads and never writes. Its handle takes get, head, list,
+// usage and read as a set of files' does, each answered from the list the
+// last scan wrote but a get's and a read's bytes, which come from the disk;
+// every call that writes a file is invalid. A connection that came with a
+// token names no path: it opens the directory the server was given under the
+// name, and one the server was not given is invalid.
+type BlobsDirectory struct {
+	// [a-z0-9][a-z0-9_-]{0,63}, never a set of files' name too
+	Name string `wire:"1,name"`
+	// the folder on the server's machine; the server's own when absent
+	Path *string `wire:"2,path"`
+	// a scan on the store's background work, a period apart
+	Every *uint64 `wire:"3,every"`
+	// names a scan passes over, * for any run of a name's characters
+	Ignore []string `wire:"4,ignore"`
+	// a read holds to no version and goes up to the size now
+	Growing bool `wire:"5,growing"`
+}
+
+func (m BlobsDirectory) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Name != "" {
+		w.Uint(1)
+		w.Str(m.Name)
+		n++
+	}
+	if m.Path != nil {
+		w.Uint(2)
+		w.Str(*m.Path)
+		n++
+	}
+	if m.Every != nil {
+		w.Uint(3)
+		w.Uint(*m.Every)
+		n++
+	}
+	if len(m.Ignore) > 0 {
+		w.Uint(4)
+		w.Array(len(m.Ignore))
+		for _, item0 := range m.Ignore {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Growing {
+		w.Uint(5)
+		w.Bool(m.Growing)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsDirectory) Read(r *Reader) {
+	*m = BlobsDirectory{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Name = r.Str()
+		case 2:
+			v := r.Str()
+			m.Path = &v
+		case 3:
+			v := r.Uint()
+			m.Every = &v
+		case 4:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Ignore = v
+		case 5:
+			m.Growing = r.Bool()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsDirectory writes as no field at all.
+func (m BlobsDirectory) IsZero() bool {
+	return m.Name == "" &&
+		m.Path == nil &&
+		m.Every == nil &&
+		len(m.Ignore) == 0 &&
+		!m.Growing
+}
+
+// BlobsScanned is the schema's blobs.Scanned.
+//
+// What a scan found, and what the list holds once it ended.
+type BlobsScanned struct {
+	Added   uint64 `wire:"1,added"`
+	Changed uint64 `wire:"2,changed"`
+	Removed uint64 `wire:"3,removed"`
+	// what it met and could not list: a link, a folder it cannot read, another disk
+	Skipped uint64 `wire:"4,skipped"`
+	Count   uint64 `wire:"5,count"`
+	Size    uint64 `wire:"6,size"`
+}
+
+func (m BlobsScanned) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Added != 0 {
+		w.Uint(1)
+		w.Uint(m.Added)
+		n++
+	}
+	if m.Changed != 0 {
+		w.Uint(2)
+		w.Uint(m.Changed)
+		n++
+	}
+	if m.Removed != 0 {
+		w.Uint(3)
+		w.Uint(m.Removed)
+		n++
+	}
+	if m.Skipped != 0 {
+		w.Uint(4)
+		w.Uint(m.Skipped)
+		n++
+	}
+	if m.Count != 0 {
+		w.Uint(5)
+		w.Uint(m.Count)
+		n++
+	}
+	if m.Size != 0 {
+		w.Uint(6)
+		w.Uint(m.Size)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsScanned) Read(r *Reader) {
+	*m = BlobsScanned{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Added = r.Uint()
+		case 2:
+			m.Changed = r.Uint()
+		case 3:
+			m.Removed = r.Uint()
+		case 4:
+			m.Skipped = r.Uint()
+		case 5:
+			m.Count = r.Uint()
+		case 6:
+			m.Size = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsScanned writes as no field at all.
+func (m BlobsScanned) IsZero() bool {
+	return m.Added == 0 &&
+		m.Changed == 0 &&
+		m.Removed == 0 &&
+		m.Skipped == 0 &&
+		m.Count == 0 &&
+		m.Size == 0
+}
+
+// BlobsSince is the schema's blobs.Since.
+//
+// The changes of a directory past a cursor, from the first file it listed
+// when absent.
+type BlobsSince struct {
+	Handle uint64 `wire:"1,handle"`
+	// a page's next
+	After *string `wire:"2,after"`
+}
+
+func (m BlobsSince) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Handle != 0 {
+		w.Uint(1)
+		w.Uint(m.Handle)
+		n++
+	}
+	if m.After != nil {
+		w.Uint(2)
+		w.Str(*m.After)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsSince) Read(r *Reader) {
+	*m = BlobsSince{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Handle = r.Uint()
+		case 2:
+			v := r.Str()
+			m.After = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsSince writes as no field at all.
+func (m BlobsSince) IsZero() bool {
+	return m.Handle == 0 &&
+		m.After == nil
+}
+
+// BlobsChange is the schema's blobs.Change.
+type BlobsChange struct {
+	// the whole path in the directory
+	Path string `wire:"1,path"`
+	// added, changed or removed
+	Change string `wire:"2,change"`
+	// none once removed
+	Info *BlobsInfo `wire:"3,info"`
+}
+
+func (m BlobsChange) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Path != "" {
+		w.Uint(1)
+		w.Str(m.Path)
+		n++
+	}
+	if m.Change != "" {
+		w.Uint(2)
+		w.Str(m.Change)
+		n++
+	}
+	if m.Info != nil {
+		w.Uint(3)
+		m.Info.Write(w)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsChange) Read(r *Reader) {
+	*m = BlobsChange{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Path = r.Str()
+		case 2:
+			m.Change = r.Str()
+		case 3:
+			var v BlobsInfo
+			v.Read(r)
+			m.Info = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsChange writes as no field at all.
+func (m BlobsChange) IsZero() bool {
+	return m.Path == "" &&
+		m.Change == "" &&
+		m.Info == nil
+}
+
+// BlobsChanges is the schema's blobs.Changes.
+//
+// A page of changes in the order the scans wrote them, 1000 at most; next is
+// always there, with no items the cursor to ask from after the next scan.
+type BlobsChanges struct {
+	Items []BlobsChange `wire:"1,items"`
+	Next  string        `wire:"2,next"`
+}
+
+func (m BlobsChanges) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Items) > 0 {
+		w.Uint(1)
+		w.Array(len(m.Items))
+		for _, item0 := range m.Items {
+			item0.Write(w)
+		}
+		n++
+	}
+	if m.Next != "" {
+		w.Uint(2)
+		w.Str(m.Next)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsChanges) Read(r *Reader) {
+	*m = BlobsChanges{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []BlobsChange{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 BlobsChange
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Items = v
+		case 2:
+			m.Next = r.Str()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsChanges writes as no field at all.
+func (m BlobsChanges) IsZero() bool {
+	return len(m.Items) == 0 &&
+		m.Next == ""
 }
 
 // ChannelsPublish is the schema's channels.Publish.

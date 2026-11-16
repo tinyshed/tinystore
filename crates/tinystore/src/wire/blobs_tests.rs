@@ -1,11 +1,12 @@
 use std::time::Duration;
 
+use crate::pipe::Capability;
 use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    BlobsAt, BlobsDelete, BlobsGot, BlobsHead, BlobsOpen, BlobsPiece, BlobsRead, BlobsWrite, BlobsWritten, Empty,
-    Failure, Handle, Hello, method,
+    BlobsAt, BlobsChanges, BlobsDelete, BlobsDirectory, BlobsFolder, BlobsGot, BlobsHead, BlobsOpen, BlobsPiece,
+    BlobsRead, BlobsScanned, BlobsSince, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, Hello, method,
 };
 
 fn open(client: &mut Client, name: &str) -> u64 {
@@ -33,7 +34,8 @@ fn upload(client: &mut Client, write: &BlobsWrite, body: &[u8], piece: usize, mu
     assert_eq!((begun.kind, begun.flags), (Kind::Response, 0), "an upload begins: {:?}", answered::<Empty>(&begun));
     let pieces: Vec<&[u8]> = body.chunks(piece).collect();
     for (n, bytes) in pieces.iter().enumerate() {
-        let data = Frame::new(Kind::Data, stream, BlobsPiece { bytes: bytes.to_vec() }.encode());
+        let data =
+            Frame::new(Kind::Data, stream, BlobsPiece { bytes: bytes.to_vec(), ..BlobsPiece::default() }.encode());
         while credit < data.body.len() as u64 {
             credit += client.credit_on(stream);
         }
@@ -276,8 +278,8 @@ fn a_get_and_a_read_write_their_bytes_in_place_as_their_messages_encode() {
         let got = super::got_whole(info.clone(), &mut file).unwrap();
         assert_eq!(got, BlobsGot { info: Some(info), bytes: body.clone() }.encode(), "a get of {size} bytes");
         file.seek(SeekFrom::Start(0)).unwrap();
-        let piece = super::read_piece(&mut file, size).unwrap();
-        assert_eq!(piece, BlobsPiece { bytes: body }.encode(), "a piece of {size} bytes");
+        let (piece, _) = super::read_piece(&mut file, size).unwrap();
+        assert_eq!(piece, BlobsPiece { bytes: body, ..BlobsPiece::default() }.encode(), "a piece of {size} bytes");
     }
     store.close().unwrap();
 }
@@ -309,7 +311,11 @@ fn an_upload_cancelled_or_refused_leaves_nothing() {
     let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
     let stream = client.open_stream(method::BLOBS_UPLOAD, &write);
     assert_eq!(client.next_on(stream).flags, 0);
-    client.write(Frame::new(Kind::Data, stream, BlobsPiece { bytes: bytes(1 << 20) }.encode()));
+    client.write(Frame::new(
+        Kind::Data,
+        stream,
+        BlobsPiece { bytes: bytes(1 << 20), ..BlobsPiece::default() }.encode(),
+    ));
     client.write(Frame::new(Kind::Cancel, stream, Vec::new()));
     assert_eq!(answered::<Empty>(&client.next_on(stream)).unwrap_err().code, "cancelled");
 
@@ -331,7 +337,11 @@ fn a_connection_that_ends_mid_upload_leaves_nothing() {
         let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
         let stream = client.open_stream(method::BLOBS_UPLOAD, &write);
         assert_eq!(client.next_on(stream).flags, 0);
-        client.write(Frame::new(Kind::Data, stream, BlobsPiece { bytes: bytes(1 << 20) }.encode()));
+        client.write(Frame::new(
+            Kind::Data,
+            stream,
+            BlobsPiece { bytes: bytes(1 << 20), ..BlobsPiece::default() }.encode(),
+        ));
         std::thread::sleep(Duration::from_millis(100));
     }
     assert_eq!(std::fs::read_dir(dir.path().join("blobs/uploads")).unwrap().count(), 0);
@@ -369,7 +379,11 @@ fn data_past_its_streams_credit_ends_the_connection() {
     let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
     let stream = client.open_stream(method::BLOBS_UPLOAD, &write);
     // two pieces of the whole credit in one write: the second cannot have been granted
-    let piece = Frame::new(Kind::Data, stream, BlobsPiece { bytes: bytes(credit as usize - 16) }.encode());
+    let piece = Frame::new(
+        Kind::Data,
+        stream,
+        BlobsPiece { bytes: bytes(credit as usize - 16), ..BlobsPiece::default() }.encode(),
+    );
     let mut flood = Vec::new();
     piece.encode_into(&mut flood);
     piece.encode_into(&mut flood);
@@ -452,4 +466,114 @@ fn fill(pipe: &crate::pipe::Pipe, into: &mut [u8]) {
     while filled < into.len() {
         filled += pipe.recv_into(Duration::from_secs(10), &mut into[filled..]);
     }
+}
+
+/// A store, a folder beside it holding `film.mkv`, and a client of the
+/// store, admitted with a token of `token` when one is given, on a server
+/// given that folder as the directory `movies`.
+fn beside_a_folder(token: Option<Capability>) -> (Client, crate::Store, tempfile::TempDir, tempfile::TempDir) {
+    let (dir, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::write(folder.path().join("film.mkv"), b"the folder's film").unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options { background: false, ..Default::default() }).unwrap();
+    (client_of(&store, folder.path(), token), store, dir, folder)
+}
+
+/// A client of `store` on a server given `folder` as the directory `movies`.
+fn client_of(store: &crate::Store, folder: &std::path::Path, token: Option<Capability>) -> Client {
+    let given = std::collections::BTreeMap::from([("movies".to_owned(), folder.to_owned())]);
+    let admit = token.map(|capability| -> crate::pipe::Admit { std::sync::Arc::new(move |_| Some(capability)) });
+    let connect = crate::pipe::Connect { admit, directories: Some(std::sync::Arc::new(given)), ..Default::default() };
+    let mut client = Client::over(crate::pipe::Pipe::connect(store, connect).unwrap());
+    let hello = Hello { protocol: 1, token: token.map(|_| "a token".to_owned()), ..Hello::default() };
+    client.greet(hello).unwrap();
+    client
+}
+
+fn open_directory(client: &mut Client, asked: BlobsDirectory) -> Result<u64, Failure> {
+    client.call::<Handle>(method::BLOBS_DIRECTORY, &asked).map(|handle| handle.handle)
+}
+
+#[test]
+fn a_directory_scans_lists_reads_and_follows_its_changes_over_the_wire_and_takes_no_write() {
+    let (mut client, store, _dir, folder) = beside_a_folder(None);
+    let asked = BlobsDirectory {
+        name: "films".to_owned(),
+        path: Some(folder.path().display().to_string()),
+        ..Default::default()
+    };
+    let handle = open_directory(&mut client, asked).unwrap();
+    let scanned: BlobsScanned = client.call(method::BLOBS_SCAN, &BlobsFolder { handle, folder: Vec::new() }).unwrap();
+    assert_eq!((scanned.added, scanned.count, scanned.size), (1, 1, 17));
+    let at = BlobsAt { handle, folder: Vec::new(), path: "film.mkv".to_owned() };
+    let got: BlobsGot = client.call(method::BLOBS_GET, &at).unwrap();
+    assert_eq!(got.bytes, b"the folder's film");
+    let etag = got.info.unwrap().etag;
+    assert!(etag.starts_with("\"d-11-"), "{etag}");
+    let asked = BlobsRead {
+        if_match: Some(etag.clone()),
+        ..BlobsRead { handle, path: "film.mkv".to_owned(), ..Default::default() }
+    };
+    assert_eq!(read(&mut client, &asked, 1 << 20), (b"the folder's film".to_vec(), Ok(())));
+    let changes: BlobsChanges = client.call(method::BLOBS_CHANGES, &BlobsSince { handle, after: None }).unwrap();
+    assert_eq!((changes.items.len(), changes.items[0].change.as_str()), (1, "added"));
+
+    std::fs::write(folder.path().join("film.mkv"), b"another film, longer").unwrap();
+    let moved = read(&mut client, &asked, 1 << 20).1.unwrap_err();
+    assert_eq!(moved.code, "conflict", "{moved:?}");
+    let write = BlobsWrite { handle, path: "new.mkv".to_owned(), bytes: b"x".to_vec(), ..Default::default() };
+    let refused = client.call::<BlobsWritten>(method::BLOBS_PUT, &write).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{refused:?}");
+    client.call::<Empty>(method::BLOBS_FORGET, &BlobsFolder { handle, folder: Vec::new() }).unwrap();
+    let usage: BlobsUsage = client.call(method::BLOBS_USAGE, &BlobsFolder { handle, folder: Vec::new() }).unwrap();
+    assert_eq!(usage.count, 0);
+    drop(client);
+    store.close().unwrap();
+}
+
+// contract: BLOB-15
+#[test]
+fn a_connection_that_came_with_a_token_names_no_path_and_reaches_only_what_the_server_was_given() {
+    let (mut client, store, _dir, folder) = beside_a_folder(Some(Capability::Data));
+    let path = Some(folder.path().display().to_string());
+    let named = open_directory(&mut client, BlobsDirectory { name: "movies".to_owned(), path, ..Default::default() });
+    assert_eq!(named.unwrap_err().code, "invalid");
+    let missing = open_directory(&mut client, BlobsDirectory { name: "photos".to_owned(), ..Default::default() });
+    assert_eq!(missing.unwrap_err().code, "invalid");
+    let handle =
+        open_directory(&mut client, BlobsDirectory { name: "movies".to_owned(), ..Default::default() }).unwrap();
+    let scanned: BlobsScanned = client.call(method::BLOBS_SCAN, &BlobsFolder { handle, folder: Vec::new() }).unwrap();
+    assert_eq!(scanned.added, 1, "the server's own folder");
+    drop(client);
+
+    let mut reading = client_of(&store, folder.path(), Some(Capability::Read));
+    let handle = open_directory(&mut reading, BlobsDirectory { name: "movies".to_owned(), ..Default::default() });
+    let handle = handle.unwrap();
+    let refused = reading.call::<BlobsScanned>(method::BLOBS_SCAN, &BlobsFolder { handle, folder: Vec::new() });
+    assert!(refused.is_err(), "a token that only reads scanned");
+    let usage: BlobsUsage = reading.call(method::BLOBS_USAGE, &BlobsFolder { handle, folder: Vec::new() }).unwrap();
+    assert_eq!(usage.count, 1, "a token that only reads lists");
+    drop(reading);
+    store.close().unwrap();
+}
+
+// contract: BLOB-13
+#[test]
+fn a_growing_directorys_pieces_go_past_the_size_its_get_gave_and_bring_the_size_now() {
+    let (mut client, store, _dir, folder) = beside_a_folder(None);
+    let path = Some(folder.path().display().to_string());
+    let asked = BlobsDirectory { name: "live".to_owned(), path, growing: true, ..Default::default() };
+    let handle = open_directory(&mut client, asked).unwrap();
+    client.call::<BlobsScanned>(method::BLOBS_SCAN, &BlobsFolder { handle, folder: Vec::new() }).unwrap();
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().append(true).open(folder.path().join("film.mkv")).unwrap();
+        file.write_all(b", and more").unwrap();
+    }
+    let read = BlobsRead { handle, folder: Vec::new(), path: "film.mkv".to_owned(), ..Default::default() };
+    let stream = client.start(method::BLOBS_READ, &read);
+    let piece = answered::<BlobsPiece>(&client.next_on(stream)).unwrap();
+    assert_eq!(piece.bytes, b"the folder's film, and more");
+    assert_eq!(piece.size, Some(27), "a piece of a growing file brings its size");
+    drop(client);
+    store.close().unwrap();
 }
