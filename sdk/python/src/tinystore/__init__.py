@@ -30,6 +30,7 @@ from .config import (
     live,
     secret,
 )
+from .directory import Changes, Directory, FileChange, Scan
 from .errors import (
     CallCancelledError,
     ClosedError,
@@ -128,6 +129,7 @@ __all__ = [
     "Backup",
     "Bucket",
     "CallCancelledError",
+    "Changes",
     "Channel",
     "Clock",
     "ClosedError",
@@ -141,6 +143,7 @@ __all__ = [
     "Counters",
     "Damage",
     "Database",
+    "Directory",
     "Done",
     "Entries",
     "Entry",
@@ -150,6 +153,7 @@ __all__ = [
     "Explained",
     "FieldInfo",
     "FileBytes",
+    "FileChange",
     "FileInfo",
     "FilePage",
     "Files",
@@ -206,6 +210,7 @@ __all__ = [
     "Row",
     "RowPage",
     "Run",
+    "Scan",
     "Schedule",
     "SearchIndex",
     "Secret",

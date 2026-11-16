@@ -44,6 +44,8 @@ class Way:
     """whether a second open of the directory joins the same store"""
     home: Callable[[Path], Path] = lambda directory: directory
     """the store's own directory, where a test's directory holds more than the store"""
+    token: bool = False
+    """whether it came with a token, which names no path: a directory movies is the server's <directory>/movies"""
 
 
 async def _nothing(_: Path) -> None:
@@ -60,6 +62,8 @@ _remotes: dict[Path, subprocess.Popen[bytes]] = {}
 async def _remote(directory: Path) -> tinystore.Store:
     assert BINARY is not None
     (directory / "tokens").write_text(f"admin {TOKEN}\n")
+    # a token names no path: the server is given the folder a directory's tests use
+    (directory / "movies").mkdir(exist_ok=True)
     serve = directory / "store" / "server" / "SERVE"
     _remotes[directory] = subprocess.Popen(
         [
@@ -70,6 +74,8 @@ async def _remote(directory: Path) -> tinystore.Store:
             "tcp://127.0.0.1:0",
             "--tokens",
             str(directory / "tokens"),
+            "--directory",
+            f"movies={directory / 'movies'}",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -108,7 +114,7 @@ WAYS = [
     Way("a private child", SERVED, lambda d: tinystore.open(d, private=True), _nothing),
     # gone at once once the store closes, so that its directory can go
     Way("a sidecar", SERVED, lambda d: tinystore.open(d, idle="1ms"), _sidecar_gone, shared=True),
-    Way("a remote server over TCP", SERVED, _remote, _remote_gone, home=lambda d: d / "store"),
+    Way("a remote server over TCP", SERVED, _remote, _remote_gone, home=lambda d: d / "store", token=True),
 ]
 
 

@@ -273,6 +273,26 @@ A named set of files by path, written whole and replaced whole:
 avatars = store.files("avatars")
 reports = store.files("reports", ttl="24h", max_file_size="2GiB")
 
+### Store.directory
+
+```python
+def directory(
+    name: str,
+    *,
+    path: str | None = None,
+    every: Duration | None = None,
+    ignore: list[str] | None = None,
+    growing: bool = False,
+) -> Directory: ...
+```
+
+A folder of the store's machine under a name, which the store lists and reads and never writes:
+
+movies = store.directory("movies", path="D:/Movies")
+photos = store.directory("photos", path="/mnt/photos", every="15m", ignore=["*.part", ".*"])
+
+Over a token, path is left out: the directory is the server's own, by its name.
+
 ### Store.events
 
 ```python

@@ -37,6 +37,7 @@ from .blobs import Files, Size, open_files
 from .channels import Channel
 from .clock import Clock
 from .config import Config
+from .directory import Directory, open_directory
 from .errors import InvalidError
 from .instruments import Instruments
 from .jobs import Backoff, Concurrency, Outcome, Queue, QueueOptions, Run, Schedule, Worker, open_queue, open_schedule
@@ -316,6 +317,24 @@ class Store:
         reports = store.files("reports", ttl="24h", max_file_size="2GiB")
         """
         return open_files(self._link, name, ttl, max_file_size)
+
+    def directory(
+        self,
+        name: str,
+        *,
+        path: str | None = None,
+        every: Duration | None = None,
+        ignore: list[str] | None = None,
+        growing: bool = False,
+    ) -> Directory:
+        """A folder of the store's machine under a name, which the store lists and reads and never writes::
+
+        movies = store.directory("movies", path="D:/Movies")
+        photos = store.directory("photos", path="/mnt/photos", every="15m", ignore=["*.part", ".*"])
+
+        Over a token, path is left out: the directory is the server's own, by its name.
+        """
+        return open_directory(self._link, name, path, every, ignore, growing)
 
     @overload
     def events(self) -> AllEvents: ...

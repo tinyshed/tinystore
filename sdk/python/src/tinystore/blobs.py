@@ -47,7 +47,7 @@ from ._wire.protocol import (
 from .errors import ClosedError, InvalidError, OutcomeUnknownError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, AsyncIterator, Callable
+    from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
     from types import TracebackType
 
     from ._connection import Connection, Idempotence, Link
@@ -116,7 +116,7 @@ def bytes_of(size: Size) -> int:
     return int(float(parts[1]) * _BINARY[parts[2]])
 
 
-def _info_of(info: dict[str, Any]) -> FileInfo:
+def info_of(info: dict[str, Any]) -> FileInfo:
     return FileInfo(
         path=info.get("path", ""),
         size=info.get("size", 0),
@@ -130,10 +130,10 @@ def _info_of(info: dict[str, Any]) -> FileInfo:
 
 def _written_of(body: bytes) -> FileInfo | None:
     info = BlobsWritten.decode(body).get("info")
-    return None if info is None else _info_of(info)
+    return None if info is None else info_of(info)
 
 
-def _segment_of(segment: str | int) -> str:
+def segment_of(segment: str | int) -> str:
     """A folder's segment as text, an integer its decimal spelling; the store refuses one that is not a segment."""
     if isinstance(segment, bool) or not isinstance(segment, int | str):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise InvalidError(f"the folder segment {segment!r}: a segment is text or an integer")
@@ -185,7 +185,7 @@ class Files:
 
     def folder(self, *segments: str | int) -> Files:
         """The folder of these segments, one each: ``folder("users", 42)`` is users/42, never users/420."""
-        folder = (*self._folder, *(_segment_of(s) for s in segments))
+        folder = (*self._folder, *(segment_of(s) for s in segments))
         return Files(self._link, self.name, self.opener, folder, self.home, self._via if self._inside else None)
 
     def through(self, via: Via) -> Files:
@@ -246,7 +246,7 @@ class Files:
         found = got.get("info")
         if found is None:
             return None
-        info = _info_of(found)
+        info = info_of(found)
         whole: bytes | None = got.get("bytes", b"")
         if whole is not None and len(whole) != info.size:
             whole = None
@@ -258,7 +258,7 @@ class Files:
             "blobs.head", lambda h: BlobsAt.encode(handle=h, folder=list(self._folder), path=path)
         )
         found = BlobsHead.decode(answer).get("info")
-        return None if found is None else _info_of(found)
+        return None if found is None else info_of(found)
 
     async def delete(self, path: str, *, if_match: str | None = None) -> None:
         """Deletes the file, or with if_match only that version of it; no file there is not an error."""
@@ -304,7 +304,7 @@ class Files:
             lambda h: BlobsList.encode(handle=h, folder=list(self._folder), prefix=prefix, after=after, limit=limit),
         )
         page = BlobsPage.decode(answer)
-        return FilePage([_info_of(each) for each in page.get("files", [])], page.get("next"))
+        return FilePage([info_of(each) for each in page.get("files", [])], page.get("next"))
 
     async def all(self, *, prefix: str = "") -> AsyncIterator[FileInfo]:
         """Every file of the folder, a page at a time, holding nothing between pages."""
@@ -359,44 +359,10 @@ class Files:
     async def _call(self, method: str, body: Callable[[int], bytes], idempotence: Idempotence = "read") -> bytes:
         return await self._via.call(methods["blobs.open"], self.opener, methods[method], body, idempotence)
 
-    async def _read(self, path: str, if_match: str, offset: int | None, length: int | None) -> AsyncIterator[bytes]:
-        """A file's bytes as S3's GET reads them with a range and If-Match.
-
-        On the ETag a get gave, ConflictError once the path holds another file
-        or none; the whole file checked, a range not. Nothing is asked before
-        the first read.
-        """
-
-        async def open_read(connection: Connection) -> tuple[Stream, bytes, bool]:
-            read = BlobsRead.encode(
-                handle=await self._handle(connection),
-                folder=list(self._folder),
-                path=path,
-                if_match=if_match,
-                offset=offset,
-                length=length,
-            )
-            stream = await connection.session.open(methods["blobs.read"], read, True)
-            first = await stream.next()
-            return stream, first.body, first.end
-
-        stream, first, end = await self._link.run("read", open_read)
-        try:
-            # the RESPONSE's piece is no DATA, so it takes none of the credit
-            piece = BlobsPiece.decode(first).get("bytes", b"")
-            if piece:
-                yield piece
-            while not end:
-                event = await stream.next()
-                end = event.end
-                if end:
-                    return
-                stream.consumed(len(event.body))
-                piece = BlobsPiece.decode(event.body).get("bytes", b"")
-                if piece:
-                    yield piece
-        finally:
-            stream.cancel()
+    def _read(self, path: str, if_match: str, offset: int | None, length: int | None) -> AsyncIterator[bytes]:
+        """A file's bytes on the ETag a get gave, as read_stream reads them."""
+        at = ReadAt(self._folder, path, if_match, offset, length)
+        return read_stream(self._link, self._handle, at)
 
     async def _move(self, method: str, source: str, to: str, if_match: str | None) -> FileInfo:
         answer = await self._call(
@@ -404,7 +370,7 @@ class Files:
             lambda h: BlobsMove.encode({"from": source}, handle=h, folder=list(self._folder), to=to, if_match=if_match),
             "write",
         )
-        return _info_of(BlobsInfo.decode(answer))
+        return info_of(BlobsInfo.decode(answer))
 
     def _fields(
         self,
@@ -625,6 +591,57 @@ class Upload:
         if self._stream is None:
             raise InvalidError("an upload is written inside its async with")
         return self._stream
+
+
+@dataclass(frozen=True)
+class ReadAt:
+    """Where a read of a file's bytes stands, and the ETag it holds to; None holds to no version."""
+
+    folder: tuple[str, ...]
+    path: str
+    if_match: str | None
+    offset: int | None
+    length: int | None
+
+
+async def read_stream(link: Link, handle: Callable[[Connection], Awaitable[int]], at: ReadAt) -> AsyncIterator[bytes]:
+    """A file's bytes as S3's GET reads them with a range and If-Match.
+
+    On the ETag a get gave, ConflictError once the path holds another file
+    or none; the whole file checked, a range not. Nothing is asked before
+    the first read.
+    """
+
+    async def open_read(connection: Connection) -> tuple[Stream, bytes, bool]:
+        read = BlobsRead.encode(
+            handle=await handle(connection),
+            folder=list(at.folder),
+            path=at.path,
+            if_match=at.if_match,
+            offset=at.offset,
+            length=at.length,
+        )
+        stream = await connection.session.open(methods["blobs.read"], read, True)
+        first = await stream.next()
+        return stream, first.body, first.end
+
+    stream, first, end = await link.run("read", open_read)
+    try:
+        # the RESPONSE's piece is no DATA, so it takes none of the credit
+        piece = BlobsPiece.decode(first).get("bytes", b"")
+        if piece:
+            yield piece
+        while not end:
+            event = await stream.next()
+            end = event.end
+            if end:
+                return
+            stream.consumed(len(event.body))
+            piece = BlobsPiece.decode(event.body).get("bytes", b"")
+            if piece:
+                yield piece
+    finally:
+        stream.cancel()
 
 
 class FileBytes:
