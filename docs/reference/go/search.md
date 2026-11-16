@@ -435,7 +435,7 @@ type Status struct {
 }
 ```
 
-Status is where an index stands: ready, rebuilding with how much is Done, or a rebuild that failed and why.
+Status is where an index stands: ready, rebuilding with how much is Done, or a rebuild that failed and why. Error beside Ready and Rebuilding is the last maintenance pass's failure while the passes keep failing.
 
 ## Vectors
 

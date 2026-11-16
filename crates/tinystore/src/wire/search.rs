@@ -337,9 +337,11 @@ fn floats(bytes: Option<&[u8]>) -> Result<Option<Vec<f32>>, Failure> {
 
 fn status(status: &Status) -> SearchStatus {
     match status {
-        Status::Ready => SearchStatus { state: "ready".to_owned(), ..SearchStatus::default() },
-        Status::Rebuilding { done } => {
-            SearchStatus { state: "rebuilding".to_owned(), done: *done, error: String::new() }
+        Status::Ready { error } => {
+            SearchStatus { state: "ready".to_owned(), done: 0.0, error: error.clone().unwrap_or_default() }
+        }
+        Status::Rebuilding { done, error } => {
+            SearchStatus { state: "rebuilding".to_owned(), done: *done, error: error.clone().unwrap_or_default() }
         }
         Status::Failed { error } => SearchStatus { state: "failed".to_owned(), done: 0.0, error: error.clone() },
     }

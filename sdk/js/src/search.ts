@@ -156,10 +156,13 @@ export interface Found<T> {
 	corrected?: string | undefined
 }
 
-/** Where an index stands: serving what it was opened with, read again beside it, or a rebuild that failed. */
+/**
+ * Where an index stands: serving what it was opened with, read again beside it, or a rebuild that failed.
+ * `error` beside `ready` and `rebuilding` is the last maintenance pass's failure while the passes keep failing.
+ */
 export type IndexStatus =
-	| { state: 'ready' }
-	| { state: 'rebuilding'; done: number }
+	| { state: 'ready'; error?: string | undefined }
+	| { state: 'rebuilding'; done: number; error?: string | undefined }
 	| { state: 'failed'; error: string }
 
 /** An index as `store.indexes()` lists it. */
@@ -463,13 +466,15 @@ function statusOf(status: {
 	done?: number | undefined
 	error?: string | undefined
 }): IndexStatus {
+	// an empty error is none: the wire's field is a string
+	const error = status.error ? { error: status.error } : {}
 	switch (status.state) {
 		case 'rebuilding':
-			return { state: 'rebuilding', done: status.done ?? 0 }
+			return { state: 'rebuilding', done: status.done ?? 0, ...error }
 		case 'failed':
 			return { state: 'failed', error: status.error ?? '' }
 		default:
-			return { state: 'ready' }
+			return { state: 'ready', ...error }
 	}
 }
 

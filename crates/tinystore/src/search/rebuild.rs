@@ -133,7 +133,7 @@ impl Progress {
         let done = self.share();
         match self.failed {
             Some(error) => Status::Failed { error },
-            None => Status::Rebuilding { done },
+            None => Status::Rebuilding { done, error: None },
         }
     }
 
@@ -376,15 +376,18 @@ impl Search {
     /// it may hold it while waiting for that transaction's writer.
     pub(crate) fn status(&self, open: &OpenIndex) -> Result<Status> {
         open.refuse_dropped()?;
-        self.file.read(|connection| {
-            let current = open.current();
-            let serving = &current.serving;
-            let Some(beside) = &current.beside else {
-                let filling = table::filling(connection, serving.id, &serving.settings)?;
-                return Ok(filling.map_or(Status::Ready, |done| Status::Rebuilding { done }));
-            };
-            Ok(progress(connection, (serving.id, beside.data.id))?.status())
-        })
+        self.file
+            .read(|connection| {
+                let current = open.current();
+                let serving = &current.serving;
+                let Some(beside) = &current.beside else {
+                    let filling = table::filling(connection, serving.id, &serving.settings)?;
+                    let status = filling.map(|done| Status::Rebuilding { done, error: None });
+                    return Ok(status.unwrap_or(Status::Ready { error: None }));
+                };
+                Ok(progress(connection, (serving.id, beside.data.id))?.status())
+            })
+            .map(|status| status.failing(open.failing()))
     }
 
     /// Waits until the index serves the settings it was opened with: its
@@ -407,7 +410,7 @@ impl Search {
     /// naming why a rebuild failed.
     pub(crate) fn is_ready(&self, open: &OpenIndex) -> Result<bool> {
         match self.status(open)? {
-            Status::Ready => Ok(true),
+            Status::Ready { .. } => Ok(true),
             Status::Failed { error } => Err(Error::invalid(format!("its rebuild failed: {error}"))),
             Status::Rebuilding { .. } => Ok(false),
         }
@@ -529,7 +532,9 @@ impl Search {
         })?;
         let mut listed = Vec::with_capacity(rows.len());
         for (id, name, documents, vectors, opened_at) in rows {
-            let status = self.file.read(|connection| listed_status(connection, id))?;
+            // what a pass of maintenance failed is known only to the process that ran it
+            let failing = crate::sync::lock(&self.indexes).get(&name).and_then(|open| open.failing());
+            let status = self.file.read(|connection| listed_status(connection, id))?.failing(failing);
             let opened =
                 (opened_at > 0).then(|| std::time::UNIX_EPOCH + std::time::Duration::from_millis(opened_at as u64));
             listed.push(Listed {
@@ -574,7 +579,7 @@ fn listed_status(connection: &Connection, serving: i64) -> Result<Status> {
     let failed = |error| sql_error("read a rebuild", error);
     let mut select = connection.prepare_cached(READ_BESIDE).map_err(failed)?;
     let beside: Option<i64> = select.query_row([serving], |row| row.get(0)).optional().map_err(failed)?;
-    let Some(beside) = beside else { return Ok(Status::Ready) };
+    let Some(beside) = beside else { return Ok(Status::Ready { error: None }) };
     Ok(progress(connection, (serving, beside))?.status())
 }
 

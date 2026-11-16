@@ -843,17 +843,61 @@ fn a_field_removed_leaves_searches_at_once_and_one_added_is_read_beside_the_inde
     assert!(search(&titles, "salt").hits.is_empty());
     assert_eq!(ids(&search(&titles, "bread")), ["a"]);
     let added = fixture.store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).open().unwrap();
-    assert_eq!(added.status().unwrap(), crate::search::Status::Rebuilding { done: 0.0 });
+    assert_eq!(added.status().unwrap(), crate::search::Status::Rebuilding { done: 0.0, error: None });
     assert!(search(&added, "salt").hits.is_empty(), "the index answers as before until then");
     maintain(&fixture.store).unwrap();
     added.ready().unwrap();
-    assert_eq!(added.status().unwrap(), crate::search::Status::Ready);
+    assert_eq!(added.status().unwrap(), crate::search::Status::Ready { error: None });
     assert_eq!(ids(&search(&added, "salt")), ["a"]);
     assert_eq!(ids(&search(&titles, "salt")), ["a"], "every handle of the index reads it");
     let empty = fixture.store.index::<Article>("empty").field("title", 1.0).open().unwrap();
     drop(empty);
     let empty = fixture.store.index::<Article>("empty").field("title", 1.0).field("body", 1.0).open().unwrap();
-    assert_eq!(empty.status().unwrap(), crate::search::Status::Ready, "an empty index takes a field at once");
+    assert_eq!(
+        empty.status().unwrap(),
+        crate::search::Status::Ready { error: None },
+        "an empty index takes a field at once"
+    );
+}
+
+// contract: SRCH-16
+#[test]
+fn a_maintenance_pass_that_keeps_failing_is_told_by_the_status_of_its_index_until_one_passes() {
+    let fixture = fixture();
+    let articles = fixture.articles::<Article>("articles");
+    let other = fixture.articles::<Article>("other");
+    for index in [&articles, &other] {
+        index.set("a", &article("bread", "salt")).unwrap();
+        index.set("b", &article("rye", "flour")).unwrap();
+    }
+    maintain(&fixture.store).unwrap();
+    let id = articles.open.id();
+    // as a full disk would: a purge of articles' documents gone cannot forget them
+    let beside = rusqlite::Connection::open(fixture.dir.path().join("search.db")).unwrap();
+    let full = format!(
+        "create trigger full before delete on _tinystore_search_gone when old.index_id = {id} \
+         begin select raise(abort, 'disk full'); end"
+    );
+    beside.execute_batch(&full).unwrap();
+    assert!(articles.delete("a").unwrap() && other.delete("a").unwrap());
+    let failing = |index: &Index<Article>| match index.status().unwrap() {
+        crate::search::Status::Ready { error: Some(error) } => error,
+        status => panic!("{status:?}"),
+    };
+    for _ in 0..2 {
+        let error = maintain(&fixture.store).unwrap_err();
+        assert!(error.to_string().starts_with("index articles: "), "{error}");
+        assert!(failing(&articles).contains("disk full"), "{}", failing(&articles));
+    }
+    assert_eq!(other.status().unwrap(), crate::search::Status::Ready { error: None }, "the other passed");
+    let listed = crate::search::list(&fixture.store).unwrap();
+    let status = listed.iter().find(|index| index.name == "articles").map(|index| index.status.clone());
+    assert_eq!(status, Some(articles.status().unwrap()), "a listing says it too");
+    articles.ready().unwrap();
+    assert!(search(&articles, "bread").hits.is_empty(), "searches answer meanwhile");
+    beside.execute_batch("drop trigger full").unwrap();
+    maintain(&fixture.store).unwrap();
+    assert_eq!(articles.status().unwrap(), crate::search::Status::Ready { error: None });
 }
 
 // contract: SRCH-10
@@ -1949,7 +1993,7 @@ fn writes_while_an_index_is_read_again_reach_its_new_rows_and_it_answers_by_them
         }
         assert!(matches!(both.status().unwrap(), crate::search::Status::Rebuilding { .. }));
         maintain(&fixture.store).unwrap();
-        assert_eq!(both.status().unwrap(), crate::search::Status::Ready);
+        assert_eq!(both.status().unwrap(), crate::search::Status::Ready { error: None });
         let model = model.read_by(&both.open.settings());
         for _ in 0..40 {
             agrees(&both, &model, &mut random, seed);
@@ -2056,7 +2100,7 @@ fn an_index_reopened_in_the_middle_of_a_rebuild_goes_on_from_where_it_stood() {
     while both.search.copy_step(&both.open).unwrap() {
         images.push(crash_image(fixture.dir.path()));
     }
-    let crate::search::Status::Rebuilding { done } = both.status().unwrap() else { panic!() };
+    let crate::search::Status::Rebuilding { done, .. } = both.status().unwrap() else { panic!() };
     assert!(done > 0.5, "{done}");
     let text = words(&mut random, 3) + " bread";
     maintain(&fixture.store).unwrap();

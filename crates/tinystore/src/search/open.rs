@@ -73,16 +73,35 @@ impl Current {
 
 /// Where an index stands: serving the settings it was opened with, read
 /// again beside them, or a rebuild that stopped.
+///
+/// `error`, beside `Ready` and `Rebuilding`, is the last maintenance pass's
+/// failure, a merge on a full disk, while the passes keep failing; `None`
+/// once one passes. The index still answers searches meanwhile.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
-    Ready,
+    Ready {
+        error: Option<String>,
+    },
     /// The share of the documents the rebuild has read.
     Rebuilding {
         done: f64,
+        error: Option<String>,
     },
     Failed {
         error: String,
     },
+}
+
+impl Status {
+    /// The status with the maintenance failure `failing` beside it; a
+    /// rebuild that failed says its own error.
+    pub(crate) fn failing(self, failing: Option<String>) -> Status {
+        match self {
+            Status::Ready { .. } => Status::Ready { error: failing },
+            Status::Rebuilding { done, .. } => Status::Rebuilding { done, error: failing },
+            failed @ Status::Failed { .. } => failed,
+        }
+    }
 }
 
 /// An index open in this process.
@@ -104,6 +123,10 @@ pub(crate) struct OpenIndex {
     dropped: AtomicBool,
     /// When this process began the rebuild under way, to say how long it took.
     pub(crate) began: Mutex<Option<Instant>>,
+    /// The last maintenance pass's failure while the passes keep failing:
+    /// kept in memory alone, since the store's log says it once and the
+    /// first pass that passes clears it.
+    failing: Mutex<Option<String>>,
     /// Woken when a rebuild switches or fails, for `ready`.
     settled: (Mutex<()>, Condvar),
     /// The awaited readies, each answered at the next settle.
@@ -128,6 +151,7 @@ impl OpenIndex {
             manual: AtomicBool::new(false),
             dropped: AtomicBool::new(false),
             began: Mutex::new(None),
+            failing: Mutex::new(None),
             settled: (Mutex::new(()), Condvar::new()),
             #[cfg(feature = "async")]
             settles: Mutex::default(),
@@ -264,6 +288,18 @@ impl OpenIndex {
             return Err(Error::invalid("the index was dropped"));
         }
         Ok(())
+    }
+
+    /// Keeps what the last maintenance pass of the index did: its failure,
+    /// or none once one passes.
+    pub(crate) fn maintained(&self, outcome: &Result<()>) {
+        let failing = outcome.as_ref().err().map(ToString::to_string);
+        *self.failing.lock().unwrap_or_else(PoisonError::into_inner) = failing;
+    }
+
+    /// The last maintenance pass's failure while the passes keep failing.
+    pub(crate) fn failing(&self) -> Option<String> {
+        self.failing.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     pub(crate) fn mark_dropped(&self) {

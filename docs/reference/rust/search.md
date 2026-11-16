@@ -236,7 +236,8 @@ pub fn status(&self) -> Result<Status>
 ```
 
 Where the index stands: serving the settings it was opened with, read
-again beside them and how far, or a rebuild that failed and why. A
+again beside them and how far, or a rebuild that failed and why; and
+beside the first two, a maintenance pass that keeps failing. A
 search never waits: it answers by the settings the index serves.
 
 ### Index.ready
@@ -616,14 +617,18 @@ typed for a word a [`prefix`](super::SearchCall::prefix) began.
 
 ```rust
 pub enum Status {
-    Ready,
-    Rebuilding { done: f64 },
+    Ready { error: Option<String> },
+    Rebuilding { done: f64, error: Option<String> },
     Failed { error: String },
 }
 ```
 
 Where an index stands: serving the settings it was opened with, read
 again beside them, or a rebuild that stopped.
+
+`error`, beside `Ready` and `Rebuilding`, is the last maintenance pass's
+failure, a merge on a full disk, while the passes keep failing; `None`
+once one passes. The index still answers searches meanwhile.
 
 ## Listed
 

@@ -245,7 +245,8 @@ impl<T: DeserializeOwned> Index<T> {
     }
 
     /// Where the index stands: serving the settings it was opened with, read
-    /// again beside them and how far, or a rebuild that failed and why. A
+    /// again beside them and how far, or a rebuild that failed and why; and
+    /// beside the first two, a maintenance pass that keeps failing. A
     /// search never waits: it answers by the settings the index serves.
     pub fn status(&self) -> Result<Status> {
         self.search.status(&self.open).map_err(|error| error.within(format!("index {}", self.open.name)))

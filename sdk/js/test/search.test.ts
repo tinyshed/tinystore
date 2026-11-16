@@ -14,7 +14,7 @@ import {
 	type Store,
 	search,
 } from '../src/index.ts'
-import { caught, removed, ways } from './ways.ts'
+import { caught, removed, until, ways } from './ways.ts'
 
 interface Product {
 	title: string
@@ -24,6 +24,16 @@ interface Product {
 }
 
 const ids = (found: SearchFound<unknown>) => found.hits.map(hit => hit.id)
+
+/** A connection to an SQLite file beside the store, through Bun's SQLite under Bun and Node's under Node. */
+async function besides(path: string): Promise<{ exec(sql: string): unknown; close(): unknown }> {
+	if ('Bun' in globalThis) {
+		const { Database } = await import('bun:sqlite')
+		return new Database(path)
+	}
+	const { DatabaseSync } = await import('node:sqlite')
+	return new DatabaseSync(path)
+}
 
 for (const way of ways) {
 	describe.skipIf(!way.ready)(`search through ${way.name}`, () => {
@@ -253,6 +263,34 @@ for (const way of ways) {
 				rebuild: 'manual',
 			})
 			await reindexed.ready()
+		})
+
+		// contract: SRCH-16
+		test('a maintenance pass that keeps failing is told by the index status', async () => {
+			const drafts = store.index<{ title: string; body: string }>('drafts', { fields: ['title'] })
+			await drafts.setMany([
+				{ id: 'a', value: { title: 'bread', body: 'salt' } },
+				{ id: 'b', value: { title: 'rye', body: 'flour' } },
+			])
+			// as a full disk would, every pass fails: drafts' rebuild cannot write how far it read
+			const beside = await besides(join(way.home(dir), 'search.db'))
+			beside.exec(`create trigger full before update of copied_through on _tinystore_search_indexes
+				when old.beside_of = (select id from _tinystore_search_indexes where name = 'drafts')
+				begin insert into disk_full values (1); end`)
+			try {
+				// a field added wakes maintenance, whose every pass fails at the rebuild's first step
+				const both = store.index<{ title: string; body: string }>('drafts', {
+					fields: ['title', 'body'],
+				})
+				await until(async () => (await both.status()).error !== undefined)
+				const status = await both.status()
+				expect(status.state).toBe('rebuilding')
+				expect(status.error).toContain('no such table: main.disk_full')
+				expect(ids(await both.search('rye'))).toEqual(['b'])
+			} finally {
+				beside.exec('drop trigger full')
+				beside.close()
+			}
 		})
 
 		test("a table's index finds its rows, each hit its row, and follows every write to the table", async () => {

@@ -128,7 +128,10 @@ class Result[T]:
 
 @dataclass(frozen=True, slots=True)
 class IndexStatus:
-    """Where an index stands: ready, rebuilding with how much is done, or a rebuild that failed and why."""
+    """Where an index stands: ready, rebuilding with how much is done, or a rebuild that failed and why.
+
+    ``error`` beside ``ready`` and ``rebuilding`` is the last maintenance pass's failure while the passes keep failing.
+    """
 
     state: Literal["ready", "rebuilding", "failed"]
     done: float = 0.0
@@ -425,11 +428,12 @@ async def list_indexes(link: Link) -> list[IndexInfo]:
 
 def _status_of(status: dict[str, Any]) -> IndexStatus:
     state = status.get("state")
+    error = status.get("error", "")
     if state == "rebuilding":
-        return IndexStatus("rebuilding", status.get("done", 0.0))
+        return IndexStatus("rebuilding", status.get("done", 0.0), error)
     if state == "failed":
-        return IndexStatus("failed", error=status.get("error", ""))
-    return IndexStatus("ready")
+        return IndexStatus("failed", error=error)
+    return IndexStatus("ready", error=error)
 
 
 def _query(

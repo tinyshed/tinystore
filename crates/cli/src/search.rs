@@ -67,8 +67,12 @@ fn line(index: &Listed) -> String {
         .and_then(|at| jiff::Timestamp::try_from(at).ok())
         .map_or_else(|| "never opened".to_owned(), |at| format!("opened {}", at.strftime("%Y-%m-%d %H:%M:%S UTC")));
     let status = match &index.status {
-        Status::Ready => String::new(),
-        Status::Rebuilding { done } => format!(" · rebuilding, {:.0} % read", done * 100.0),
+        Status::Ready { error: None } => String::new(),
+        Status::Ready { error: Some(error) } => format!(" · its maintenance fails: {error}"),
+        Status::Rebuilding { done, error: None } => format!(" · rebuilding, {:.0} % read", done * 100.0),
+        Status::Rebuilding { done, error: Some(error) } => {
+            format!(" · rebuilding, {:.0} % read, its maintenance fails: {error}", done * 100.0)
+        }
         Status::Failed { error } => format!(" · its rebuild failed: {error}"),
     };
     format!("{}  {} documents{vectors} · {opened}{status}", index.name, index.documents)
@@ -106,7 +110,7 @@ mod tests {
             documents: 12,
             vectors: 0,
             opened: None,
-            status: Status::Rebuilding { done: 0.42 },
+            status: Status::Rebuilding { done: 0.42, error: None },
         };
         assert_eq!(line(&listed), "posts  12 documents · never opened · rebuilding, 42 % read");
     }

@@ -36,7 +36,7 @@ let products = store
     .field("brand", 1.0)
     .filters(["brand", "price"])
     .open()?;
-products.status()?; // Status::Rebuilding { done: 0.42 }
+products.status()?; // Status::Rebuilding { done: 0.42, error: None }
 products.ready()?;
 ```
 
@@ -76,6 +76,39 @@ search products: brand added ready in …; switched
 - A rebuild that cannot read a document, a number where a new field reads
   text, stops: `status()` is `failed` with why, `ready()` throws it, and the
   index answers by its old settings until the next change.
+
+## When maintenance fails
+
+The store merges an index's segments, purges deleted documents and moves a
+rebuild on in the background. When one of those passes fails, a merge on a
+full disk say, the store's log says so once, and `status()` carries the
+error beside `ready` or `rebuilding` for as long as the passes keep failing
+(contract SRCH-16):
+
+```ts
+await docs.status() // { state: 'ready', error: 'merge: disk full' }
+```
+
+```python
+await docs.status()  # IndexStatus(state='ready', done=0.0, error='merge: disk full')
+```
+
+```go
+status, err := docs.Status(ctx) // search.Status{State: search.Ready, Error: "merge: disk full"}
+```
+
+```rust
+docs.status()?; // Status::Ready { error: Some("merge: disk full") }
+```
+
+- The error goes away once a pass succeeds.
+- The index still answers searches and takes writes meanwhile.
+- `ready()` doesn't throw it: a program that waits for its index at start
+  waits as before. A rebuild that can't go on stays `rebuilding` until a
+  pass gets through.
+- Only the process that ran the pass knows the error. A listing from
+  another process, `tinystore search list` beside a running program, doesn't
+  show it.
 
 ## Rebuilding by hand
 

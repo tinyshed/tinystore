@@ -169,9 +169,11 @@ What a search found, the best first, and the text it read in fact when a word wa
 ```ts
 type IndexStatus = {
     state: 'ready'
+    error?: string | undefined
 } | {
     state: 'rebuilding'
     done: number
+    error?: string | undefined
 } | {
     state: 'failed'
     error: string
@@ -179,6 +181,7 @@ type IndexStatus = {
 ```
 
 Where an index stands: serving what it was opened with, read again beside it, or a rebuild that failed.
+`error` beside `ready` and `rebuilding` is the last maintenance pass's failure while the passes keep failing.
 
 ## IndexInfo
 

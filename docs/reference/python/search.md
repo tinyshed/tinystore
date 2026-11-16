@@ -79,6 +79,8 @@ class IndexStatus:
 
 Where an index stands: ready, rebuilding with how much is done, or a rebuild that failed and why.
 
+``error`` beside ``ready`` and ``rebuilding`` is the last maintenance pass's failure while the passes keep failing.
+
 ## IndexInfo
 
 ```python

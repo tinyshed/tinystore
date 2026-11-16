@@ -472,7 +472,7 @@ fn ready_waits_on_no_thread_and_wakes_as_the_rebuild_switches_in() {
         let switch = thread::spawn(move || search.rebuild(&open));
         waiting.await.unwrap().unwrap();
         switch.join().unwrap().unwrap();
-        assert_eq!(both.status().await.unwrap(), Status::Ready);
+        assert_eq!(both.status().await.unwrap(), Status::Ready { error: None });
         assert_eq!(both.search("salt").run().await.unwrap().hits.len(), 1, "the body is read now");
     });
     drop(held);
@@ -493,7 +493,7 @@ fn a_dropped_ready_stops_waiting_and_the_rebuild_goes_on() {
     assert!(timed.is_err(), "the rebuild cannot have switched while maintenance is held");
     drop(held);
     both.blocking().ready().unwrap();
-    assert_eq!(runtime.block_on(both.status()).unwrap(), Status::Ready);
+    assert_eq!(runtime.block_on(both.status()).unwrap(), Status::Ready { error: None });
     runtime.block_on(store.close()).unwrap();
 }
 
@@ -507,7 +507,7 @@ async fn ready_runs_the_maintenance_itself_on_a_store_without_background_work() 
     assert!(matches!(both.status().await.unwrap(), Status::Rebuilding { .. }));
     assert!(both.search("salt").run().await.unwrap().hits.is_empty(), "the index answers as before until then");
     tokio::spawn(both.ready()).await.unwrap().unwrap();
-    assert_eq!(both.status().await.unwrap(), Status::Ready);
+    assert_eq!(both.status().await.unwrap(), Status::Ready { error: None });
     assert_eq!(both.search("salt").run().await.unwrap().hits.len(), 1);
     store.close().await.unwrap();
 }
@@ -637,7 +637,7 @@ mod table {
         let articles = builder.table("articles").field("title", 2.0).field("body", 1.0).open().unwrap();
         assert!(matches!(articles.status().await.unwrap(), Status::Rebuilding { .. }), "its rows are read first");
         tokio::spawn(articles.ready()).await.unwrap().unwrap();
-        assert_eq!(articles.status().await.unwrap(), Status::Ready);
+        assert_eq!(articles.status().await.unwrap(), Status::Ready { error: None });
 
         let found = articles.search("bread").run().await.unwrap();
         assert_eq!(found, articles.blocking().search("bread").run().unwrap());

@@ -517,7 +517,8 @@ const (
 )
 
 // Status is where an index stands: ready, rebuilding with how much is Done,
-// or a rebuild that failed and why.
+// or a rebuild that failed and why. Error beside Ready and Rebuilding is the
+// last maintenance pass's failure while the passes keep failing.
 type Status struct {
 	State State
 	Done  float64
@@ -540,11 +541,11 @@ func (x *Index[T]) Status(ctx context.Context) (Status, error) {
 func statusOf(state string, done float64, why string) Status {
 	switch state {
 	case "rebuilding":
-		return Status{State: Rebuilding, Done: done}
+		return Status{State: Rebuilding, Done: done, Error: why}
 	case "failed":
 		return Status{State: Failed, Error: why}
 	}
-	return Status{State: Ready}
+	return Status{State: Ready, Error: why}
 }
 
 // Ready waits until the index serves the settings it was opened with; a

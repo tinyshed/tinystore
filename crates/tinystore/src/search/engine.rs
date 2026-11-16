@@ -578,7 +578,8 @@ impl Search {
         self.keep_reached()?;
         // One index that fails keeps no other from its maintenance, nor do
         // the rows searches met gone that fail to settle; the first failure
-        // is the pass's error, which the scheduler says once.
+        // is the pass's error, which the scheduler says once, and each index
+        // keeps its own for its status until a pass of it passes.
         let mut failed = self.settle_gone_rows().err();
         self.table_sets.store(0, Ordering::Relaxed);
         let indexes: Vec<Arc<OpenIndex>> = lock(&self.indexes).values().cloned().collect();
@@ -586,7 +587,9 @@ impl Search {
         // any merge would join every segment into one.
         self.convert_legacy(everything)?;
         for open in indexes {
-            if let Err(error) = self.maintain_one(&open, everything, &mut done) {
+            let maintained = self.maintain_one(&open, everything, &mut done);
+            open.maintained(&maintained);
+            if let Err(error) = maintained {
                 failed.get_or_insert(error.within(format!("index {}", open.name)));
             }
         }
