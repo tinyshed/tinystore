@@ -5,7 +5,7 @@ storage runtime for applications. It serves a store's directory to Bun, Node,
 Python and Go programs and to remote clients, and reads a store while its
 program runs.
 
-> **Version 0.9.** Until `1.0`, a minor release may still change the
+> **Version 0.10.** Until `1.0`, a minor release may still change the
 > commands.
 
 ```sh

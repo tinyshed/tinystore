@@ -4,6 +4,10 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.10.0](v0.10.0.md)** · 17 November 2026\
+  A set of files as a cache: a term from the last read, a ceiling that
+  evicts or refuses, one conversion for many requests with `getOrCreate`,
+  and `trim`.
 - **[TinyStore 0.9.0](v0.9.0.md)** · 16 November 2026\
   Folders the store indexes and serves without copying, databases left out
   of backups, `tinystore verify`, `each()` past 64 MiB, cancel and counts
