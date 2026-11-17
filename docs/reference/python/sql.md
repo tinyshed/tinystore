@@ -131,7 +131,10 @@ def files(
     name: str,
     *,
     ttl: Duration | None = None,
+    idle: Duration | None = None,
     max_file_size: Size | None = None,
+    max_size: Size | None = None,
+    when_full: WhenFull | None = None,
 ) -> Files: ...
 ```
 
@@ -142,6 +145,7 @@ through ``tx.with_(files)``. A file's bytes past 16 KiB lie in the
 folder beside the database's file:
 
     packages = db.files("packages", max_file_size="10MiB")
+    pages = cache.files("pages", idle="30d", max_size="512MiB")
 
 ### Database.events
 

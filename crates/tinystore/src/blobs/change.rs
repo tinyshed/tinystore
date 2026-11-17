@@ -133,7 +133,7 @@ const UPSERT_FILE: &str =
     values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
     on conflict (set_id, path) do update set revision = excluded.revision, content = excluded.content,
         size = excluded.size, sha256 = excluded.sha256, type = excluded.type, modified = excluded.modified,
-        expires = excluded.expires, meta = excluded.meta";
+        expires = excluded.expires, meta = excluded.meta, used = null, rank = null";
 const DELETE_FILE: &str = "delete from _tinystore_blobs_files where set_id = ?1 and path = ?2 returning content";
 const UNNAME_CONTENT: &str =
     "update _tinystore_blobs_contents set names = names - ?2 where id = ?1 returning names, inline";
@@ -143,8 +143,8 @@ const DROP_BODY: &str = "delete from _tinystore_blobs_bodies where id = ?1";
 /// One write's transaction, and the files of the contents it left without
 /// names, which go once it commits.
 pub(crate) struct Change<'t, 'c> {
-    tx: &'t Tx<'c>,
-    blobs: &'t Blobs,
+    pub(super) tx: &'t Tx<'c>,
+    pub(super) blobs: &'t Blobs,
     /// The store's clock in the transaction, unix milliseconds.
     pub(crate) now: i64,
     pub(crate) freed: Vec<i64>,

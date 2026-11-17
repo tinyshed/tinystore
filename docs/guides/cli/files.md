@@ -1,15 +1,19 @@
 # files
 
 `tinystore files` puts, gets, lists and deletes a store's files from a shell,
-with no SDK. `put` and `delete` write through a server, as
+with no SDK, and changes a cache's ceiling or frees its room. `put`,
+`delete`, `set-max-size` and `trim` write through a server, as
 [every write](README.md#who-writes) of the command line does. `get` and `list`
-read beside the program or server that holds the directory.
+read beside the program or server that holds the directory, and renew no
+file nor record a use of it.
 
 ```sh
 tinystore files ./data put avatars users/42/avatar.png ./avatar.png
 tinystore files ./data get avatars users/42/avatar.png ./avatar.png
 tinystore files ./data list avatars users/42/
 tinystore files ./data delete avatars users/42/avatar.png
+tinystore files ./data set-max-size pages 1GiB --if-current 512MiB
+tinystore files ./data trim pages --to 300MiB
 ```
 
 ## Put a file
@@ -79,6 +83,40 @@ deleted users/42/avatar.png from files avatars
 
 A path that holds no file says `files avatars holds no users/42/avatar.png`
 and exits 0.
+
+## Change a set's ceiling
+
+```sh
+tinystore files ./data set-max-size pages 1GiB --if-current 512MiB
+tinystore files ./data set-max-size pages none
+```
+
+```text
+files pages holds 1.0 GiB at most
+```
+
+- The words are the set and its new ceiling, in bytes or with `KiB`, `MiB`
+  or `GiB`; `none` removes it.
+- `--if-current` changes it only while the set keeps that ceiling; another
+  fails `conflict`, so two deploys never undo each other.
+- `--when-full evict` or `refuse` says what a write past it does; without it
+  the set keeps what it does.
+- A lower ceiling removes the files used least recently at once, unless the
+  set refuses. [Caching](../blobs/caching.md) has the rules.
+
+## Free room now
+
+```sh
+tinystore files ./data trim pages --to 300MiB
+```
+
+```text
+trimmed files pages: 184 files removed, 210 MiB freed
+```
+
+It removes files in the eviction's order until the set holds at most
+`--to`, and leaves the ceiling where it was. A set whose ceiling refuses is
+refused.
 
 ## See also
 

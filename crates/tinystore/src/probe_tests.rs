@@ -230,6 +230,26 @@ fn files_count_what_was_written_and_read() {
     store.close().unwrap();
 }
 
+#[cfg(feature = "blobs")]
+#[test]
+fn a_set_of_files_counts_what_its_ceiling_evicted_and_what_it_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path(), true);
+    let pages = store.files("pages").max_size(250).open().unwrap();
+    for page in ["1.pdf", "2.pdf", "3.pdf"] {
+        pages.put(page, [7u8; 100]).unwrap();
+    }
+    let metrics = store.metrics().unwrap();
+    metrics.flush().unwrap();
+    let by_set = |name: &str| {
+        let latest = metrics.query().name(name).filter("set", "pages").since(HOUR).latest().unwrap();
+        latest.first().map(|latest| latest.value)
+    };
+    assert_eq!(by_set("tinystore_files_evicted_total"), Some(1.0));
+    assert_eq!(by_set("tinystore_files_bytes"), Some(200.0));
+    store.close().unwrap();
+}
+
 #[cfg(feature = "wire")]
 #[test]
 fn a_connection_counts_while_it_is_open() {

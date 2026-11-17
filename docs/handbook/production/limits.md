@@ -68,6 +68,9 @@ of repeating them.
 | `meta`                  | 2 KiB in all                                     |
 | a page                  | 1,000 files                                      |
 | a file kept as a row    | up to 16 KiB; larger ones are files of their own |
+| a set's files together  | none, unless `maxSize`, which the set keeps      |
+| files one write evicts  | 10,000                                           |
+| a use a read records    | once an hour, or a thirtieth of `idle`           |
 
 ## Search
 
@@ -230,8 +233,8 @@ Each constant has the name below in its language's case:
 A bound that the store's options set is named the same way, but it has no
 constant: `store memory` and `store memory, now` for the memory budget,
 `series in a store` for `maxSeries`, `waiting jobs` for a queue's
-`maxWaiting`, and `file bytes` for a set of files' `maxFileSize`. The error's
-`bound` gives the number that this store uses.
+`maxWaiting`, `file bytes` for a set of files' `maxFileSize`, and `set bytes`
+for its `maxSize`. The error's `bound` gives the number that this store uses.
 
 `testdata/wire/limits.json` holds the table, and each SDK's tests check
 their constants against it.

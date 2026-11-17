@@ -2,6 +2,14 @@
 
 Every public type, function and constant of the Blobs engine in `tinyshed.org/tinystore/blobs`, generated from its source. The [Blobs guide](../../guides/blobs/README.md) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Python](../python/blobs.md) and [Rust](../rust/blobs.md) pages list the same API.
 
+## NoMaxSize
+
+```go
+const NoMaxSize int64 = 0
+```
+
+NoMaxSize is the size SetMaxSize removes the ceiling with.
+
 ## After
 
 ```go
@@ -33,6 +41,22 @@ func Growing() growing
 ```
 
 Growing is for a folder whose files are written while they are read: a read holds to no version and goes up to the size the file has now.
+
+## Idle
+
+```go
+func Idle(d time.Duration) idle
+```
+
+Idle is how long a file lives from its last Get or Head; never beside TTL.
+
+## IfCurrent
+
+```go
+func IfCurrent(bytes int64) ifCurrent
+```
+
+IfCurrent changes the ceiling only while the set keeps this one: another is tinystore.ErrConflict.
 
 ## IfMatch
 
@@ -66,6 +90,14 @@ func MaxFileSize(bytes int64) maxFileSize
 
 MaxFileSize is the largest file the set takes, in bytes: a larger one is a Limit error.
 
+## MaxSize
+
+```go
+func MaxSize(bytes int64) maxSize
+```
+
+MaxSize is the most the set's files hold together, in bytes, kept in the set: a write past it removes the files used least recently, and an open with another is tinystore.ErrConflict. SetMaxSize changes it.
+
 ## Meta
 
 ```go
@@ -97,6 +129,24 @@ func TTL(d time.Duration) ttl
 ```
 
 TTL is how long a file lives from its write: every file's, or one write's own.
+
+## WhenFull
+
+```go
+func WhenFull(f Full) whenFull
+```
+
+WhenFull is what a write past MaxSize does, kept with the ceiling: Evict, or Refuse.
+
+## CeilingOption
+
+```go
+type CeilingOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+CeilingOption is a condition of SetMaxSize, or what the new ceiling does when full.
 
 ## Change
 
@@ -412,6 +462,26 @@ func (f *Files) Rename(ctx context.Context, from, to string, opts ...MatchOption
 
 Rename is the file moved to to in one write. A file there is a conflict unless IfMatch names the version to replace, and none at from NotFound.
 
+### Files.SetMaxSize
+
+```go
+func (f *Files) SetMaxSize(ctx context.Context, bytes int64, opts ...CeilingOption) error
+```
+
+SetMaxSize changes the set's ceiling for every handle, NoMaxSize removing it; a lower one evicts at once. One the set keeps already writes nothing.
+
+	err := pages.SetMaxSize(ctx, 1<<30, blobs.IfCurrent(512<<20))
+
+### Files.Trim
+
+```go
+func (f *Files) Trim(ctx context.Context, to int64) (Trim, error)
+```
+
+Trim removes files in the eviction's order until the set holds at most \`to\` bytes, and leaves its ceiling where it was; a set whose ceiling refuses is tinystore.ErrInvalid.
+
+	trimmed, err := pages.Trim(ctx, 300<<20) // blobs.Trim{Evictions, Freed}
+
 ### Files.Upload
 
 ```go
@@ -432,6 +502,25 @@ func (f *Files) Usage(ctx context.Context) (Usage, error)
 ```
 
 Usage is the files in the folder and their bytes, as it is now: it counts, it does not limit.
+
+## Full
+
+```go
+type Full string
+```
+
+Full is what a write past a set's MaxSize does.
+
+### Evict
+
+```go
+const (
+	// Evict removes the files used least recently until the set fits: a cache.
+	Evict Full = "evict"
+	// Refuse fails the write tinystore.ErrLimit and removes nothing: a quota of files that must stay.
+	Refuse Full = "refuse"
+)
+```
 
 ## ListOption
 
@@ -538,6 +627,16 @@ func (s *StoredFile) Seek(offset int64, whence int) (int64, error)
 
 Seek moves where the next Read reads, as io.Seeker does.
 
+## Trim
+
+```go
+type Trim struct {
+	Evictions, Freed int64
+}
+```
+
+Trim is what a trim removed: its files, and their sizes as Usage counts them.
+
 ## Upload
 
 ```go
@@ -577,10 +676,14 @@ Write takes bytes, waiting while the store catches up.
 ```go
 type Usage struct {
 	Count, Size int64
+	// MaxSize is the set's ceiling, 0 when it keeps none.
+	MaxSize int64
+	// Evictions is the files the ceiling removed since the store opened.
+	Evictions int64
 }
 ```
 
-Usage is the files of a folder and their bytes, as it is now.
+Usage is the files of a folder and their bytes, as it is now, and the set's ceiling and what it evicted since the store opened.
 
 ## WriteOption
 

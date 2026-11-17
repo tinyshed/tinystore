@@ -69,3 +69,26 @@ fn a_file_is_put_listed_got_and_deleted_from_a_shell() {
     assert!(files.head("dump.bin").unwrap().is_none());
     assert_eq!(files.head("users/42/avatar.png").unwrap().unwrap().content_type, "image/png");
 }
+
+#[test]
+fn a_sets_ceiling_changes_and_a_trim_frees_room_from_a_shell_and_verify_checks_its_counters() {
+    let dirs = tempfile::tempdir().unwrap();
+    let data = dirs.path().join("data");
+    let store = Store::open(&data, Options::default()).unwrap();
+    let pages = store.files("pages").max_size(1 << 20).open().unwrap();
+    for page in ["a", "b", "c"] {
+        pages.put(page, vec![7u8; 1000]).unwrap();
+    }
+    store.close().unwrap();
+    let changed = tinystore(&[&"files", &data, &"set-max-size", &"pages", &"2MiB", &"--if-current", &"2MiB"]);
+    assert!(!changed.status.success() && said(&changed).contains("conflict"), "{}", said(&changed));
+    let changed = tinystore(&[&"files", &data, &"set-max-size", &"pages", &"2MiB", &"--if-current", &"1MiB"]);
+    assert!(said(&changed).contains("files pages holds 2.0 MiB at most"), "{}", said(&changed));
+    let trimmed = tinystore(&[&"files", &data, &"trim", &"pages", &"--to", &"1500"]);
+    assert!(said(&trimmed).contains("trimmed files pages: 2 files removed"), "{}", said(&trimmed));
+    let verified = tinystore(&[&"verify", &data]);
+    assert!(verified.status.success() && said(&verified).contains("ok"), "{}", said(&verified));
+    let store = stopped(&data);
+    let usage = store.files("pages").open().unwrap().usage().unwrap();
+    assert_eq!((usage.count, usage.max_size), (1, Some(2 << 20)));
+}

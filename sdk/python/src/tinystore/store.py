@@ -33,7 +33,7 @@ from ._connection import (
 from ._time import Duration, ms, spelled
 from ._values import json_values, values_of
 from .backup import Backup, backup
-from .blobs import Files, Size, open_files
+from .blobs import Files, FilesOptions, Size, WhenFull, open_files
 from .channels import Channel
 from .clock import Clock
 from .config import Config
@@ -310,13 +310,28 @@ class Store:
         """
         return Semaphore(self._link, name, limit, ttl, max_hold)
 
-    def files(self, name: str, *, ttl: Duration | None = None, max_file_size: Size | None = None) -> Files:
+    def files(
+        self,
+        name: str,
+        *,
+        ttl: Duration | None = None,
+        idle: Duration | None = None,
+        max_file_size: Size | None = None,
+        max_size: Size | None = None,
+        when_full: WhenFull | None = None,
+    ) -> Files:
         """A named set of files by path, written whole and replaced whole::
 
         avatars = store.files("avatars")
         reports = store.files("reports", ttl="24h", max_file_size="2GiB")
+
+        ``idle`` counts a file's term from its last get or head; ``max_size``
+        is the ceiling of the set's files together, kept in the set, past
+        which a write evicts the files used least recently, or with
+        ``when_full="refuse"`` fails LimitError.
         """
-        return open_files(self._link, name, ttl, max_file_size)
+        options = FilesOptions(ttl, idle, max_file_size, max_size, when_full)
+        return open_files(self._link, name, options)
 
     def directory(
         self,

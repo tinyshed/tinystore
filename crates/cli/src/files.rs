@@ -9,6 +9,8 @@
 //! tinystore files ./data get avatars users/42/avatar.png ./avatar.png
 //! tinystore files ./data list avatars users/42
 //! tinystore files ./data delete avatars users/42/avatar.png
+//! tinystore files ./data set-max-size pages 1GiB --if-current 512MiB
+//! tinystore files ./data trim pages --to 300MiB
 //! ```
 
 use std::io::{self, IsTerminal as _, Read as _};
@@ -24,11 +26,13 @@ use crate::asked::{self, Asked, Done, Refused, Verb, failed, wrong};
 use crate::on_disk::bytes;
 use crate::{help, reach, window};
 
-const VERBS: [Verb; 4] = [
+const VERBS: [Verb; 6] = [
     Verb { word: "put", command: &help::FILES_PUT, run: put },
     Verb { word: "get", command: &help::FILES_GET, run: get },
     Verb { word: "list", command: &help::FILES_LIST, run: list },
     Verb { word: "delete", command: &help::FILES_DELETE, run: delete },
+    Verb { word: "set-max-size", command: &help::FILES_SET_MAX_SIZE, run: set_max_size },
+    Verb { word: "trim", command: &help::FILES_TRIM, run: trim },
 ];
 
 /// The files a page of `list` holds unless `--limit` says.
@@ -201,6 +205,55 @@ fn delete(asked: Asked) -> Done {
         client.delete_file(files, &at)
     })?;
     if found { outln!("deleted {path} from files {set}") } else { outln!("files {set} holds no {path}") }
+}
+
+/// Changes a set's ceiling, or with `none` removes it, through the server
+/// that holds the directory.
+fn set_max_size(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("files", "set-max-size", false)?;
+    let [set, size] = &rest[..] else {
+        return Err(wrong("set-max-size takes a set and a size: set-max-size pages 1GiB, or none to remove it"));
+    };
+    let max_size = if size == "none" { None } else { Some(size_given(size)?) };
+    let if_current = asked.value("--if-current").map(size_given).transpose()?;
+    let when_full = asked.value("--when-full").map(str::to_owned);
+    if when_full.as_deref().is_some_and(|when| !["evict", "refuse"].contains(&when)) {
+        return Err(wrong("--when-full is evict or refuse"));
+    }
+    reach::store_at(&dir)?;
+    let named = set.clone();
+    reach::write(&dir, "files set-max-size", move |client| {
+        let files = client.files(&named)?;
+        client.set_max_size(files, max_size, (if_current, when_full.as_deref()))
+    })?;
+    match max_size {
+        Some(most) => outln!("files {set} holds {} at most", bytes(most)),
+        None => outln!("files {set} keeps no ceiling"),
+    }
+}
+
+/// Frees room in a set now, in the eviction's order, through the server that
+/// holds the directory; its ceiling stays.
+fn trim(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("files", "trim", false)?;
+    let [set] = &rest[..] else {
+        return Err(wrong("trim takes a set and --to: trim pages --to 300MiB"));
+    };
+    let to = asked.value("--to").ok_or_else(|| wrong("trim takes --to, the size to leave: --to 300MiB"))?;
+    let to = size_given(to)?;
+    reach::store_at(&dir)?;
+    let named = set.clone();
+    let (evictions, freed) = reach::write(&dir, "files trim", move |client| {
+        let files = client.files(&named)?;
+        client.trim(files, to)
+    })?;
+    let plural = if evictions == 1 { "" } else { "s" };
+    outln!("trimmed files {set}: {evictions} file{plural} removed, {} freed", bytes(freed))
+}
+
+/// A size as the command line takes it: bytes, or a number and KiB, MiB or GiB.
+fn size_given(text: &str) -> Result<u64, Refused> {
+    crate::args::size(text).map_err(wrong)
 }
 
 /// The set `name` beside whoever holds the store; one never written to is

@@ -16,7 +16,7 @@ fn a_folder_is_whole_segments_never_a_prefix_of_text() {
     let four = media.folder("users").folder(4);
     let page = four.list().page().unwrap();
     assert_eq!(page.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), ["a.jpg"]);
-    assert_eq!(four.usage().unwrap(), Usage { count: 1, size: 1 });
+    assert_eq!(four.usage().unwrap(), Usage { count: 1, size: 1, ..Usage::default() });
     four.clear().unwrap();
     assert_eq!(media.usage().unwrap().count, 2, "users/42 and users/420 stay");
     assert!(media.head("users/42/a.jpg").unwrap().is_some());

@@ -33,13 +33,16 @@ const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
     Migration::of(2, "0002_names.sql", include_str!("migrations/0002_names.sql")),
     Migration::of(3, "0003_directories.sql", include_str!("migrations/0003_directories.sql")),
+    Migration::of(4, "0004_cache.sql", include_str!("migrations/0004_cache.sql")),
 ];
 /// A database's files, whose tables are made with blobs.db's names of its
 /// step 2: a step after it goes to both histories, the next of each, but for
 /// a directory's tables, which blobs.db alone keeps.
 #[cfg(feature = "sql")]
-const IN_A_DATABASE: &[Migration] =
-    &[Migration::of(1, "0001_in_a_database.sql", include_str!("migrations/0001_in_a_database.sql"))];
+const IN_A_DATABASE: &[Migration] = &[
+    Migration::of(1, "0001_in_a_database.sql", include_str!("migrations/0001_in_a_database.sql")),
+    Migration::of(2, "0002_cache.sql", include_str!("migrations/0002_cache.sql")),
+];
 /// A content id taken in a database's transaction, which a rollback gives
 /// back with every row the transaction wrote.
 #[cfg(feature = "sql")]
@@ -65,6 +68,10 @@ pub(crate) struct Blobs {
     sets: Mutex<HashMap<String, i64>>,
     /// The scans of directories under way, which a second scan waits on.
     pub(crate) scans: super::directory::Scans,
+    /// The uses reads asked for, which the next flush writes.
+    pub(crate) uses: super::uses::Uses,
+    /// What each set's ceiling evicted since the store opened.
+    pub(crate) evictions: Arc<super::cache::Evictions>,
     /// The store, for the writes a copy passes to its home.
     #[cfg(feature = "replication")]
     store: crate::store::WeakStore,
@@ -152,8 +159,14 @@ pub(crate) struct Kept {
 }
 
 impl Engine for Blobs {
-    /// Closes blobs.db; a database's file is the database's to close.
+    /// Writes the uses reads asked for, then closes blobs.db; a database's
+    /// file is the database's to close.
     fn close(&self) -> Result<()> {
+        if !self.file.is_copy()
+            && let Err(error) = self.flush_uses()
+        {
+            tracing::debug!(target: "tinystore", %error, "blobs: the uses of the last second, which the close loses");
+        }
         if self.kept.lent_by.is_some() {
             return Ok(());
         }
@@ -256,6 +269,8 @@ impl Opening<'_> {
             keep_free: store.keep_free(),
             sets: Mutex::new(HashMap::new()),
             scans: super::directory::Scans::default(),
+            uses: super::uses::Uses::default(),
+            evictions: Arc::default(),
             #[cfg(feature = "replication")]
             store: store.downgrade(),
             #[cfg(feature = "async")]
@@ -268,6 +283,12 @@ impl Opening<'_> {
         if !blobs.file.is_copy() {
             blobs.recover()?;
         }
+        let sampler: std::sync::Weak<dyn crate::probe::Sample> = Arc::downgrade(&blobs) as std::sync::Weak<Blobs>;
+        store.probe().sampled(sampler);
+        let weak = Arc::downgrade(&blobs);
+        store.every(&format!("{tasks}: uses"), super::uses::USES, move || {
+            weak.upgrade().map_or(Ok(()), |blobs| blobs.flush_uses().map(drop))
+        })?;
         let weak = Arc::downgrade(&blobs);
         store.every(&format!("{tasks}: maintenance"), MAINTENANCE, move || {
             weak.upgrade().filter(|blobs| !blobs.file.is_copy()).map_or(Ok(()), |blobs| {
@@ -552,6 +573,17 @@ impl Blobs {
         crate::clock::from_unix_millis(millis)
     }
 
+    /// Writes the uses reads asked for, or on a copy passes them to its home;
+    /// says how many files they reached.
+    pub(crate) fn flush_uses(&self) -> Result<usize> {
+        #[cfg(feature = "replication")]
+        if self.file.is_copy() {
+            return super::forward::pass_uses(&self.store()?, self.uses.take());
+        }
+        let clock = Arc::clone(&self.clock);
+        own_work(|| self.uses.flush(&self.file, move || unix_millis(clock.now())))
+    }
+
     /// Removes the files of the contents a commit left without names. One that
     /// will not go stays listed, and maintenance tries it again.
     pub(crate) fn remove_freed(&self, ids: &[i64]) {
@@ -564,6 +596,21 @@ impl Blobs {
 }
 
 pub(super) use crate::sqlite::query_cached as rows_of;
+
+/// Each set's files' sizes together, as its row counts them.
+const SELECT_SIZES: &str = "select name, size from _tinystore_blobs_sets order by id";
+
+impl crate::probe::Sample for Blobs {
+    /// What each set holds now: `tinystore_files_bytes`, by set.
+    fn sample(&self, probe: &crate::probe::Probe) {
+        let sizes: Result<Vec<(String, i64)>> = self.file.read(|connection| {
+            rows_of(connection, (SELECT_SIZES, "blobs: its sets' sizes"), [], |row| Ok((row.get(0)?, row.get(1)?)))
+        });
+        for (set, size) in sizes.unwrap_or_default() {
+            probe.set("tinystore_files_bytes", &[("set", &set)], size as f64);
+        }
+    }
+}
 
 /// Refuses, for a connection that may only read, the set of files `name`
 /// while the store does not hold it: neither `blobs/` and its file nor the
@@ -635,6 +682,71 @@ pub(crate) fn held(store: &Store) -> Result<Vec<crate::engine::Held>> {
         Ok(crate::engine::Held { name, count: count.unsigned_abs(), bytes: bytes.unsigned_abs() })
     };
     sets.into_iter().map(held_in).collect()
+}
+
+/// Each set of blobs.db that keeps a ceiling, by name, with it.
+#[cfg(feature = "client")]
+pub(crate) fn ceilings(store: &Store) -> Result<Vec<(String, u64)>> {
+    const SELECT_CEILINGS: &str = "select name, max_size from _tinystore_blobs_sets where max_size is not null";
+    if !store.dir().join(DIR).join(FILE).exists() {
+        return Ok(Vec::new());
+    }
+    Blobs::of(store)?.file.read(|c| {
+        rows_of(c, (SELECT_CEILINGS, "blobs: its sets' ceilings"), [], |row| {
+            Ok((row.get(0)?, row.get::<_, i64>(1)?.unsigned_abs()))
+        })
+    })
+}
+
+/// The sets whose counters are not what their rows sum to: the set's name,
+/// what its row counts, files and bytes, and what its files' rows hold.
+#[cfg(feature = "client")]
+const SELECT_MISCOUNTED: &str = "select s.name, s.count, s.size, coalesce(f.count, 0), coalesce(f.size, 0)
+    from _tinystore_blobs_sets as s left join (
+        select set_id, count(*) as count, sum(size) as size from _tinystore_blobs_files group by set_id
+    ) as f on f.set_id = s.id
+    where s.count <> coalesce(f.count, 0) or s.size <> coalesce(f.size, 0) order by s.name";
+
+/// Each set whose counters differ from its rows, in blobs.db and in every
+/// database's file of the store at `dir`, a line each: what `tinystore
+/// verify` reports. A file read in one snapshot, beside whoever holds it,
+/// through a connection that writes nothing; one whose sets keep no counters
+/// yet, of a release before them, is left out.
+#[cfg(feature = "client")]
+pub(crate) fn miscounted(dir: &std::path::Path) -> Result<Vec<String>> {
+    let mut files = vec![format!("{DIR}/{FILE}")];
+    for folder in ["sql", "local"] {
+        let Ok(entries) = std::fs::read_dir(dir.join(folder)) else { continue };
+        let mut databases: Vec<String> = entries
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter(|name| name.ends_with(".db"))
+            .map(|name| format!("{folder}/{name}"))
+            .collect();
+        databases.sort();
+        files.extend(databases);
+    }
+    let mut found = Vec::new();
+    for file in files.into_iter().filter(|file| dir.join(file).is_file()) {
+        let lines = crate::sqlite::read_file(&dir.join(&file), |c| {
+            const COUNTED: &str =
+                "select count(*) from pragma_table_info('_tinystore_blobs_sets') where name = 'count'";
+            if c.query_row(COUNTED, [], |row| row.get::<_, i64>(0))? == 0 {
+                return Ok(Vec::new());
+            }
+            let mut select = c.prepare(SELECT_MISCOUNTED)?;
+            let rows = select.query_map([], |row| {
+                let (name, count, size): (String, i64, i64) = (row.get(0)?, row.get(1)?, row.get(2)?);
+                let (rows, bytes): (i64, i64) = (row.get(3)?, row.get(4)?);
+                Ok(format!(
+                    "{file}: files {name} counts {count} files and {size} bytes, and its rows hold {rows} files and \
+                     {bytes} bytes"
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<String>>>()
+        })?;
+        found.extend(lines);
+    }
+    Ok(found)
 }
 
 #[cfg(all(test, feature = "replication"))]

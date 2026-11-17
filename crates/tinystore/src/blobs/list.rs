@@ -68,24 +68,31 @@ impl Files {
     }
 
     /// The files of this folder and of the folders in it, and their bytes, as
-    /// they are now: a count, not a bound.
+    /// they are now, with the set's ceiling and what it evicted since the
+    /// store opened. It renews nothing.
     pub fn usage(&self) -> Result<Usage> {
         let folder = self.whole_folder()?;
         let (from, to) = self.bounds("").map_err(|error| self.fail(&folder, error))?;
         let now = self.blobs.now();
-        let (count, size): (i64, i64) = self
+        let ((count, size), ceiling): ((i64, i64), _) = self
             .blobs
             .file
             .read(|connection| {
-                connection
+                let held = connection
                     .prepare_cached(SELECT_USAGE)
                     .and_then(|mut statement| {
                         statement.query_row(params![self.set, from, to, now], |row| Ok((row.get(0)?, row.get(1)?)))
                     })
-                    .map_err(|error| sql_error("blobs: a folder's usage", error))
+                    .map_err(|error| sql_error("blobs: a folder's usage", error))?;
+                Ok((held, super::cache::kept_on(connection, self.set)?))
             })
             .map_err(|error| self.fail(&folder, error))?;
-        Ok(Usage { count: u64::try_from(count).unwrap_or(0), size: u64::try_from(size).unwrap_or(0) })
+        Ok(Usage {
+            count: u64::try_from(count).unwrap_or(0),
+            size: u64::try_from(size).unwrap_or(0),
+            max_size: ceiling.map(|ceiling| ceiling.max_size),
+            evictions: self.blobs.evictions.of(self.set),
+        })
     }
 
     /// Removes this folder and every folder in it, at once for every reader,

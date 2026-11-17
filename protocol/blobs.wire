@@ -11,6 +11,9 @@ message blobs.Open {
   2 ttl: duration?      # the term of every file written without its own
   3 maxFileSize: uint?  # the largest file a write may leave
   4 database: uint?     # a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent
+  5 idle: duration?     # the term of every file written without its own, from its last get or head; never beside ttl
+  6 maxSize: uint?      # the set's ceiling, kept in the set: an open with another is a conflict
+  7 whenFull: str?      # evict or refuse, what a write past the ceiling does; kept with it
 }
 
 # Where a call stands: the files, a folder's segments, a path within it.
@@ -134,6 +137,29 @@ message blobs.Folder {
 message blobs.Usage {
   1 count: uint
   2 size: uint
+  3 maxSize: uint?      # the set's ceiling, none when it keeps none
+  4 evictions: uint     # the files the ceiling removed since the store opened
+}
+
+# A change of a set's ceiling, which every handle follows from its commit:
+# a lower one evicts at once, and one the set keeps already writes nothing.
+message blobs.SetMaxSize {
+  1 handle: uint
+  2 maxSize: uint?      # none removes the ceiling
+  3 whenFull: str?      # evict or refuse; what the set does now when absent
+  4 ifCurrent: uint?    # changes it only while the set keeps this ceiling: another is a conflict
+}
+
+# Removes files in the eviction's order until the set holds at most to
+# bytes, a batch of 10,000 a commit; a refusing set is invalid.
+message blobs.Trim {
+  1 handle: uint
+  2 to: uint
+}
+
+message blobs.Trimmed {
+  1 evictions: uint
+  2 freed: uint         # the files' sizes, as usage counts them
 }
 
 # Opens a directory by name: a folder of the server's machine, which the
@@ -181,20 +207,22 @@ message blobs.Changes {
   2 next: str
 }
 
-read  0x0401 blobs.open(blobs.Open)           -> Handle
-write 0x0402 blobs.put(blobs.Write)           -> blobs.Written
-write 0x0403 blobs.upload(blobs.Write)        -> exchange blobs.Written for blobs.Piece
-read  0x0404 blobs.get(blobs.At)              -> blobs.Got
-read  0x0405 blobs.head(blobs.At)             -> blobs.Head
-write 0x0406 blobs.delete(blobs.Delete)       -> Empty
-write 0x0407 blobs.copy(blobs.Move)           -> blobs.Info
-write 0x0408 blobs.rename(blobs.Move)         -> blobs.Info
-write 0x0409 blobs.expire(blobs.Expire)       -> blobs.Found
-read  0x040a blobs.list(blobs.List)           -> blobs.Page
-read  0x040b blobs.usage(blobs.Folder)        -> blobs.Usage
-write 0x040c blobs.clear(blobs.Folder)        -> Empty
-read  0x040d blobs.read(blobs.Read)           -> download blobs.Piece until Empty
-read  0x040e blobs.directory(blobs.Directory) -> Handle
-write 0x040f blobs.scan(blobs.Folder)         -> blobs.Scanned
-read  0x0410 blobs.changes(blobs.Since)       -> blobs.Changes
-write 0x0411 blobs.forget(blobs.Folder)       -> Empty
+read  0x0401 blobs.open(blobs.Open)             -> Handle
+write 0x0402 blobs.put(blobs.Write)             -> blobs.Written
+write 0x0403 blobs.upload(blobs.Write)          -> exchange blobs.Written for blobs.Piece
+read  0x0404 blobs.get(blobs.At)                -> blobs.Got
+read  0x0405 blobs.head(blobs.At)               -> blobs.Head
+write 0x0406 blobs.delete(blobs.Delete)         -> Empty
+write 0x0407 blobs.copy(blobs.Move)             -> blobs.Info
+write 0x0408 blobs.rename(blobs.Move)           -> blobs.Info
+write 0x0409 blobs.expire(blobs.Expire)         -> blobs.Found
+read  0x040a blobs.list(blobs.List)             -> blobs.Page
+read  0x040b blobs.usage(blobs.Folder)          -> blobs.Usage
+write 0x040c blobs.clear(blobs.Folder)          -> Empty
+read  0x040d blobs.read(blobs.Read)             -> download blobs.Piece until Empty
+read  0x040e blobs.directory(blobs.Directory)   -> Handle
+write 0x040f blobs.scan(blobs.Folder)           -> blobs.Scanned
+read  0x0410 blobs.changes(blobs.Since)         -> blobs.Changes
+write 0x0411 blobs.forget(blobs.Folder)         -> Empty
+write 0x0413 blobs.setMaxSize(blobs.SetMaxSize) -> Empty
+write 0x0414 blobs.trim(blobs.Trim)             -> blobs.Trimmed

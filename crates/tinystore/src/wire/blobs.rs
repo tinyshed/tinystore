@@ -20,11 +20,12 @@ use std::time::Duration;
 use super::codec::{self, Map, Message};
 use super::protocol::{
     BlobsAt, BlobsChange, BlobsChanges, BlobsDelete, BlobsDirectory, BlobsExpire, BlobsFolder, BlobsFound, BlobsGot,
-    BlobsHead, BlobsInfo, BlobsList, BlobsMove, BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsScanned, BlobsSince,
-    BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, method,
+    BlobsHead, BlobsInfo, BlobsList, BlobsMove, BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsScanned,
+    BlobsSetMaxSize, BlobsSince, BlobsTrim, BlobsTrimmed, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle,
+    method,
 };
 use super::{Lent, Link, Route};
-use crate::blobs::{Change, Directory, FileCall, FileInfo, Files, StoredFile, Upload};
+use crate::blobs::{Change, Directory, FileCall, FileInfo, Files, StoredFile, Upload, WhenFull};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, unix_millis};
 
@@ -164,6 +165,8 @@ pub(crate) fn call(
         method::BLOBS_SCAN => scan(handles, &BlobsFolder::decode(body)?),
         method::BLOBS_CHANGES => changes(handles, BlobsSince::decode(body)?),
         method::BLOBS_FORGET => forget(handles, &BlobsFolder::decode(body)?),
+        method::BLOBS_SET_MAX_SIZE => set_max_size(handles, &BlobsSetMaxSize::decode(body)?),
+        method::BLOBS_TRIM => trim(handles, &BlobsTrim::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -224,8 +227,13 @@ pub(crate) fn call_in(handles: &Handles, tx: &crate::Transaction<'_>, called: u1
 
 /// Opens a set of files as the call says; a connection that only reads opens
 /// only one the store holds, found first, so that the open finds it as that
-/// did and makes nothing.
+/// did and makes nothing. Its reads record no use, and it gives the set no
+/// idle term nor a ceiling it does not keep: each would be a write.
 fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: BlobsOpen, read_only: bool) -> Answered {
+    if read_only && asked.idle.is_some() {
+        return Err(Failure::permission("a read connection gives a set no idle: a read that renews a file writes it"));
+    }
+    let when_full = asked.when_full.as_deref().map(WhenFull::of).transpose()?;
     let mut files = match asked.database {
         #[cfg(feature = "sql")]
         Some(database) => {
@@ -253,9 +261,52 @@ fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: BlobsOpen, read
     if let Some(most) = asked.max_file_size {
         files = files.max_file_size(most);
     }
-    let files = files.open()?;
+    if let Some(idle) = asked.idle {
+        files = files.idle(Duration::from_millis(idle));
+    }
+    let files = if read_only {
+        let files = files.observing().open()?;
+        let kept = files.kept_ceiling()?;
+        let other_size = asked.max_size.is_some_and(|asked| kept.map(|(size, _)| size) != Some(asked));
+        let other_when = when_full.is_some_and(|asked| kept.map(|(_, when)| when) != Some(asked));
+        if other_size || other_when {
+            return Err(Failure::permission(
+                "a read connection writes no ceiling: open the set without max_size, or with the one it keeps",
+            ));
+        }
+        files
+    } else {
+        if let Some(bytes) = asked.max_size {
+            files = files.max_size(bytes);
+        }
+        if let Some(when_full) = when_full {
+            files = files.when_full(when_full);
+        }
+        files.open()?
+    };
     let handle = handles.open.keep(Held::Files(files));
     Ok(Handle { handle }.encode())
+}
+
+fn set_max_size(handles: &Handles, asked: &BlobsSetMaxSize) -> Answered {
+    let files = handles.at(asked.handle, &[])?;
+    let mut change = match asked.max_size {
+        Some(bytes) => files.set_max_size(bytes),
+        None => files.remove_max_size(),
+    };
+    if let Some(when_full) = asked.when_full.as_deref() {
+        change = change.when_full(WhenFull::of(when_full)?);
+    }
+    if let Some(current) = asked.if_current {
+        change = change.if_current(current);
+    }
+    change.apply()?;
+    Ok(Empty {}.encode())
+}
+
+fn trim(handles: &Handles, asked: &BlobsTrim) -> Answered {
+    let trim = handles.at(asked.handle, &[])?.trim(asked.to)?;
+    Ok(BlobsTrimmed { evictions: trim.evictions, freed: trim.freed }.encode())
 }
 
 /// Opens a directory: on the path a connection of this machine names, or on
@@ -432,7 +483,8 @@ fn usage(handles: &Handles, asked: &BlobsFolder) -> Answered {
         Held::Files(files) => files.usage()?,
         Held::Directory(directory) => directory.usage()?,
     };
-    Ok(BlobsUsage { count: usage.count, size: usage.size }.encode())
+    Ok(BlobsUsage { count: usage.count, size: usage.size, max_size: usage.max_size, evictions: usage.evictions }
+        .encode())
 }
 
 fn clear(handles: &Handles, asked: &BlobsFolder) -> Answered {

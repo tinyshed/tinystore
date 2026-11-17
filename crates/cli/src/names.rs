@@ -94,6 +94,8 @@ pub(crate) struct Holding {
     pub(crate) bytes: Option<u64>,
     /// A stream's or a metric's.
     pub(crate) kept: Option<Kept>,
+    /// A set of files' ceiling, the most its files hold together.
+    pub(crate) max_size: Option<u64>,
 }
 
 /// What a stream or a metric keeps, and from when to when it holds.
@@ -114,7 +116,7 @@ impl Holdings {
         let mut holdings = Holdings {
             buckets: buckets_held(&store),
             queues: held(tinystore::client::queues_held(&store)),
-            files: held(tinystore::client::file_sets_held(&store)),
+            files: files_held(&store),
             streams: streams_held(&store),
             metrics: metrics_held(&store),
             databases: databases_held(dir),
@@ -168,6 +170,9 @@ impl Holding {
         if let Some(role) = &self.role {
             shown["role"] = json!(role);
         }
+        if let Some(max_size) = self.max_size {
+            shown["maxSize"] = json!(max_size);
+        }
         if let Some(kept) = &self.kept {
             shown["keep"] = json!(window::span_text(kept.keep));
             shown["oldest"] = json!(window::utc(kept.oldest));
@@ -182,6 +187,16 @@ fn held(read: tinystore::Result<Vec<Held>>) -> Vec<Holding> {
     let held = read.unwrap_or_default().into_iter();
     held.map(|held| Holding { name: held.name, count: Some(held.count), bytes: Some(held.bytes), ..Holding::default() })
         .collect()
+}
+
+/// Each set of files with what it holds, and its ceiling when it keeps one.
+fn files_held(store: &Store) -> Vec<Holding> {
+    let ceilings = tinystore::client::file_ceilings(store).unwrap_or_default();
+    let mut files = held(tinystore::client::file_sets_held(store));
+    for set in &mut files {
+        set.max_size = ceilings.iter().find(|(name, _)| *name == set.name).map(|(_, max_size)| *max_size);
+    }
+    files
 }
 
 fn buckets_held(store: &Store) -> Vec<Holding> {

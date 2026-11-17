@@ -8,12 +8,14 @@ use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
 
+use super::cache::{Asked, Counted, WhenFull};
 use super::change::{Change, Condition, Content, Place, Version, WhenThere, hidden};
 use super::engine::Blobs;
 use super::info::{FileInfo, FileRow, OCTETS, file_columns, meta_text};
 use super::paths::Folder;
 use super::read::StoredFile;
 use super::upload::Upload;
+use super::uses::{Seen, ceiled};
 #[cfg(feature = "async")]
 use crate::memory::Waiting;
 use crate::sqlite::{Tx, sql_error};
@@ -25,14 +27,19 @@ const MAX_TYPE: usize = 256;
 /// Meta's names and values together, at most.
 const MAX_META: usize = 2 << 10;
 
-/// What opens a set of files: its name, and the term and the bound of the
-/// files written in it.
+/// What opens a set of files: its name, the term and the bound of the files
+/// written in it, and the ceiling of them all.
 #[derive(Debug)]
 pub struct FilesBuilder<'s> {
     home: Home<'s>,
     name: String,
     ttl: Option<Duration>,
+    idle: Option<Duration>,
     max_file_size: Option<u64>,
+    ceiling: Asked,
+    /// Its reads record no use and its open writes no ceiling: a connection
+    /// that only reads, and the command line's look from outside.
+    observing: bool,
 }
 
 /// Where a set of files opens: in blobs.db, or in a database's file.
@@ -45,19 +52,40 @@ enum Home<'s> {
 
 impl<'s> FilesBuilder<'s> {
     pub(crate) fn new(store: &'s Store, name: &str) -> Self {
-        FilesBuilder { home: Home::Store(store), name: name.to_owned(), ttl: None, max_file_size: None }
+        FilesBuilder::at(Home::Store(store), name)
     }
 
     /// The set of files `name` kept in a database's file.
     #[cfg(feature = "sql")]
     pub(crate) fn in_file(shared: Arc<crate::engine::SharedFile>, name: &str) -> FilesBuilder<'static> {
-        FilesBuilder { home: Home::Database(shared), name: name.to_owned(), ttl: None, max_file_size: None }
+        FilesBuilder::at(Home::Database(shared), name)
+    }
+
+    fn at(home: Home<'s>, name: &str) -> Self {
+        let name = name.to_owned();
+        FilesBuilder {
+            home,
+            name,
+            ttl: None,
+            idle: None,
+            max_file_size: None,
+            ceiling: Asked::default(),
+            observing: false,
+        }
     }
 
     /// The term of every file written without its own, counted from its
     /// write; not a ceiling.
     pub fn ttl(mut self, ttl: Duration) -> Self {
         self.ttl = Some(ttl);
+        self
+    }
+
+    /// The term of every file written without its own, counted from its last
+    /// `get` or `head`, as a bucket's `idle` counts a key's; `ttl` and `idle`
+    /// exclude each other.
+    pub fn idle(mut self, idle: Duration) -> Self {
+        self.idle = Some(idle);
         self
     }
 
@@ -68,15 +96,45 @@ impl<'s> FilesBuilder<'s> {
         self
     }
 
+    /// The most the set's files may hold together: a write past it removes
+    /// the files used least recently until the set fits. The set keeps it, so
+    /// that it holds for every handle; an open with another fails `conflict`,
+    /// and [`Files::set_max_size`] changes it.
+    pub fn max_size(mut self, bytes: u64) -> Self {
+        self.ceiling.max_size = Some(bytes);
+        self
+    }
+
+    /// What a write past `max_size` does: evicts, or with
+    /// [`WhenFull::Refuse`] fails `limit` and removes nothing. Kept with the
+    /// ceiling.
+    pub fn when_full(mut self, when_full: WhenFull) -> Self {
+        self.ceiling.when_full = Some(when_full);
+        self
+    }
+
+    /// Opens the set for a look from outside: its reads record no use, and
+    /// its open writes no ceiling.
+    #[cfg(any(feature = "wire", feature = "client"))]
+    pub(crate) fn observing(mut self) -> Self {
+        self.observing = true;
+        self
+    }
+
     pub fn open(self) -> Result<Files> {
         check_name(&self.name)?;
-        let blobs = match &self.home {
-            Home::Store(store) => Blobs::of(store)?,
+        if self.ttl.is_some() && self.idle.is_some() {
+            return Err(Error::invalid("ttl and idle exclude each other: a term from the write, or from the last use")
+                .within(format!("files {}", self.name)));
+        }
+        let (blobs, beside) = match &self.home {
+            Home::Store(store) => (Blobs::of(store)?, store.is_beside()),
             #[cfg(feature = "sql")]
-            Home::Database(shared) => Blobs::in_file(shared)?,
+            Home::Database(shared) => (Blobs::in_file(shared)?, false),
         };
         let set = blobs.set_id(&self.name)?;
-        Ok(Files {
+        let observing = self.observing || beside;
+        let files = Files {
             blobs,
             name: Arc::from(self.name),
             set,
@@ -84,7 +142,10 @@ impl<'s> FilesBuilder<'s> {
             refused: None,
             ttl: self.ttl,
             max_file_size: self.max_file_size,
-        })
+            policy: Arc::new(Policy { idle: self.idle, observing }),
+        };
+        self.ceiling.settle(&files, !observing).map_err(|error| error.within(files.describe()))?;
+        Ok(files)
     }
 }
 
@@ -94,13 +155,23 @@ impl<'s> FilesBuilder<'s> {
 #[derive(Clone)]
 pub struct Files {
     pub(crate) blobs: Arc<Blobs>,
-    name: Arc<str>,
+    pub(super) name: Arc<str>,
     pub(crate) set: i64,
     pub(crate) folder: Folder,
     /// A folder that is not one, refused by the first call that uses it.
     refused: Option<Arc<Error>>,
     ttl: Option<Duration>,
     pub(crate) max_file_size: Option<u64>,
+    policy: Arc<Policy>,
+}
+
+/// What the uses a set's reads record follow, shared by every folder of one
+/// open: its `idle`, and whether it only looks. A read also records a use on
+/// a set that keeps a ceiling, which its lookup reads in the set's row.
+#[derive(Debug)]
+struct Policy {
+    idle: Option<Duration>,
+    observing: bool,
 }
 
 impl fmt::Debug for Files {
@@ -147,15 +218,33 @@ impl Files {
 
     /// The file at the path and the bytes it reads, which stay what they were
     /// now through a replace, a delete or an expiry; none when there is none.
+    ///
+    /// On a set with `idle` it renews the file's term, and on a set with a
+    /// ceiling it moves the file up the eviction's order.
     pub fn get(&self, path: &str) -> Result<Option<StoredFile>> {
         let whole = self.whole(path)?;
-        StoredFile::open(self, &whole).map_err(|error| self.fail(&whole, error))
+        let opened = (|| {
+            let Some((mut file, seen)) = StoredFile::open(self, &whole)? else { return Ok(None) };
+            if let Some(until) = self.used(&whole, &seen)? {
+                file.renewed(Blobs::time(until));
+            }
+            Ok(Some(file))
+        })();
+        opened.map_err(|error| self.fail(&whole, error))
     }
 
-    /// What the file at the path carries, none of its bytes.
+    /// What the file at the path carries, none of its bytes. A use, as a
+    /// `get` is: a conditional request answered `304` used the file.
     pub fn head(&self, path: &str) -> Result<Option<FileInfo>> {
         let whole = self.whole(path)?;
-        self.head_of(&whole).map_err(|error| self.fail(&whole, error))
+        let found = (|| {
+            let Some((mut info, seen)) = self.head_seen(&whole)? else { return Ok(None) };
+            if let Some(until) = self.used(&whole, &seen)? {
+                info.expires = Some(Blobs::time(until));
+            }
+            Ok(Some(info))
+        })();
+        found.map_err(|error| self.fail(&whole, error))
     }
 
     /// Removes the file at the path; nothing to remove is not an error.
@@ -200,7 +289,9 @@ impl Files {
     /// it wrote or found a file.
     #[cfg(feature = "replication")]
     pub(crate) fn pass_on(&self, call: &super::forward::Call<'_>) -> Result<bool> {
-        let set = super::forward::Set { name: &self.name, ttl: self.ttl, max_file_size: self.max_file_size };
+        // an idle set's write gives its file the term a ttl would; its reads renew it here
+        let ttl = self.ttl.or(self.policy.idle);
+        let set = super::forward::Set { name: &self.name, ttl, max_file_size: self.max_file_size };
         super::forward::pass_on(&self.blobs.store()?, &set, call)
     }
 
@@ -232,14 +323,61 @@ impl Files {
     }
 
     pub(crate) fn expiry(&self, ttl: Option<Duration>, now: i64) -> Option<i64> {
-        ttl.or(self.ttl).map(|ttl| now.saturating_add(crate::clock::millis(ttl)))
+        ttl.or(self.ttl).or(self.policy.idle).map(|ttl| now.saturating_add(crate::clock::millis(ttl)))
     }
 
+    /// Whether a read of a row it `seen` records the use it makes: on a set
+    /// with `idle` or a ceiling, unless the handle only looks.
+    pub(super) fn records_uses(&self, seen: &Seen) -> bool {
+        !self.policy.observing && (self.policy.idle.is_some() || seen.ceiled)
+    }
+
+    pub(super) fn idle(&self) -> Option<Duration> {
+        self.policy.idle
+    }
+
+    /// Whose evictions a write counts.
+    pub(super) fn counted(&self) -> Counted {
+        Counted { set: self.set, name: Arc::clone(&self.name) }
+    }
+
+    #[cfg(feature = "replication")]
     fn head_of(&self, whole: &str) -> Result<Option<FileInfo>> {
         self.blobs.file.read(|connection| self.head_on(connection, whole))
     }
 
+    /// What the file at a whole path carries, and what its read saw of its
+    /// row, which a use it records is bound to.
+    fn head_seen(&self, whole: &str) -> Result<Option<(FileInfo, Seen)>> {
+        const SELECT_SEEN: &str = concat!(
+            "select ",
+            file_columns!(),
+            ", f.revision, f.used, ",
+            ceiled!(),
+            " from _tinystore_blobs_files as f where f.set_id = ?1 and f.path = ?2
+                and (f.expires is null or f.expires > ?3) and not ",
+            hidden!()
+        );
+        let now = self.blobs.now();
+        let row = self.blobs.file.read(|connection| {
+            connection
+                .prepare_cached(SELECT_SEEN)
+                .and_then(|mut statement| {
+                    let seen =
+                        |row: &rusqlite::Row<'_>| Ok((FileRow::read(row)?, (row.get(7)?, row.get(8)?, row.get(9)?)));
+                    statement.query_row(params![self.set, whole, now], seen).optional()
+                })
+                .map_err(|error| sql_error("blobs: a file's head", error))
+        })?;
+        row.map(|(row, (revision, used, ceiled)): (FileRow, (i64, Option<i64>, bool))| {
+            let seen = Seen { revision, modified: row.modified, used, expires: row.expires, ceiled };
+            Ok((row.info(&self.folder)?, seen))
+        })
+        .transpose()
+    }
+
     /// What the file at a whole path carries, as `connection` reads it.
+    #[cfg(any(feature = "replication", feature = "sql"))]
     pub(super) fn head_on(&self, connection: &rusqlite::Connection, whole: &str) -> Result<Option<FileInfo>> {
         const SELECT_HEAD: &str = concat!(
             "select ",
@@ -290,11 +428,13 @@ impl Files {
         };
         let publication = move |tx: &Tx<'_>| {
             let mut change = Change::new(tx, &blobs);
+            let before = change.total(files.set)?.size;
             let version =
                 Version { content, content_type, meta, modified: change.now, expires: files.expiry(ttl, change.now) };
             if !change.write(files.set, &path, &version, &condition)? {
                 return Ok((None, Vec::new()));
             }
+            change.fit(&files.counted(), (&path, version.content.size), before)?;
             Ok((Some(version.info(&files.folder, &path)?), change.freed))
         };
         (bytes, Box::new(publication))
@@ -334,6 +474,7 @@ impl Files {
         let condition = Condition { if_match: options.if_match.clone(), when_there: WhenThere::Conflict };
         Box::new(move |tx| {
             let mut change = Change::new(tx, &blobs);
+            let before = change.total(files.set)?.size;
             let source =
                 change.current(files.set, &from)?.filter(|current| current.live(change.now)).ok_or_else(|| {
                     Error::not_found(format!("no file at {from:?} to {}", if rename { "rename" } else { "copy" }))
@@ -349,6 +490,7 @@ impl Files {
             if rename {
                 change.remove(files.set, &from)?;
             }
+            change.fit(&files.counted(), (&to, version.content.size), before)?;
             Ok((version.info(&files.folder, &to)?, change.freed))
         })
     }

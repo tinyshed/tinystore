@@ -688,25 +688,27 @@ and a transaction whose client stalls, cancels or leaves is rolled back.
 carries.
 
 <!-- written from protocol/*.wire by `just protocol`: methods of blobs -->
-| method   | name            | may   | request           | answer                                     |
-|----------|-----------------|-------|-------------------|--------------------------------------------|
-| `0x0401` | blobs.open      | read  | `blobs.Open`      | `Handle`                                   |
-| `0x0402` | blobs.put       | write | `blobs.Write`     | `blobs.Written`                            |
-| `0x0403` | blobs.upload    | write | `blobs.Write`     | exchange `blobs.Written` for `blobs.Piece` |
-| `0x0404` | blobs.get       | read  | `blobs.At`        | `blobs.Got`                                |
-| `0x0405` | blobs.head      | read  | `blobs.At`        | `blobs.Head`                               |
-| `0x0406` | blobs.delete    | write | `blobs.Delete`    | `Empty`                                    |
-| `0x0407` | blobs.copy      | write | `blobs.Move`      | `blobs.Info`                               |
-| `0x0408` | blobs.rename    | write | `blobs.Move`      | `blobs.Info`                               |
-| `0x0409` | blobs.expire    | write | `blobs.Expire`    | `blobs.Found`                              |
-| `0x040a` | blobs.list      | read  | `blobs.List`      | `blobs.Page`                               |
-| `0x040b` | blobs.usage     | read  | `blobs.Folder`    | `blobs.Usage`                              |
-| `0x040c` | blobs.clear     | write | `blobs.Folder`    | `Empty`                                    |
-| `0x040d` | blobs.read      | read  | `blobs.Read`      | download `blobs.Piece` until `Empty`       |
-| `0x040e` | blobs.directory | read  | `blobs.Directory` | `Handle`                                   |
-| `0x040f` | blobs.scan      | write | `blobs.Folder`    | `blobs.Scanned`                            |
-| `0x0410` | blobs.changes   | read  | `blobs.Since`     | `blobs.Changes`                            |
-| `0x0411` | blobs.forget    | write | `blobs.Folder`    | `Empty`                                    |
+| method   | name             | may   | request            | answer                                     |
+|----------|------------------|-------|--------------------|--------------------------------------------|
+| `0x0401` | blobs.open       | read  | `blobs.Open`       | `Handle`                                   |
+| `0x0402` | blobs.put        | write | `blobs.Write`      | `blobs.Written`                            |
+| `0x0403` | blobs.upload     | write | `blobs.Write`      | exchange `blobs.Written` for `blobs.Piece` |
+| `0x0404` | blobs.get        | read  | `blobs.At`         | `blobs.Got`                                |
+| `0x0405` | blobs.head       | read  | `blobs.At`         | `blobs.Head`                               |
+| `0x0406` | blobs.delete     | write | `blobs.Delete`     | `Empty`                                    |
+| `0x0407` | blobs.copy       | write | `blobs.Move`       | `blobs.Info`                               |
+| `0x0408` | blobs.rename     | write | `blobs.Move`       | `blobs.Info`                               |
+| `0x0409` | blobs.expire     | write | `blobs.Expire`     | `blobs.Found`                              |
+| `0x040a` | blobs.list       | read  | `blobs.List`       | `blobs.Page`                               |
+| `0x040b` | blobs.usage      | read  | `blobs.Folder`     | `blobs.Usage`                              |
+| `0x040c` | blobs.clear      | write | `blobs.Folder`     | `Empty`                                    |
+| `0x040d` | blobs.read       | read  | `blobs.Read`       | download `blobs.Piece` until `Empty`       |
+| `0x040e` | blobs.directory  | read  | `blobs.Directory`  | `Handle`                                   |
+| `0x040f` | blobs.scan       | write | `blobs.Folder`     | `blobs.Scanned`                            |
+| `0x0410` | blobs.changes    | read  | `blobs.Since`      | `blobs.Changes`                            |
+| `0x0411` | blobs.forget     | write | `blobs.Folder`     | `Empty`                                    |
+| `0x0413` | blobs.setMaxSize | write | `blobs.SetMaxSize` | `Empty`                                    |
+| `0x0414` | blobs.trim       | write | `blobs.Trim`       | `blobs.Trimmed`                            |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/blobs.wire`. `blobs.upload` takes a file's

@@ -264,7 +264,10 @@ def files(
     name: str,
     *,
     ttl: Duration | None = None,
+    idle: Duration | None = None,
     max_file_size: Size | None = None,
+    max_size: Size | None = None,
+    when_full: WhenFull | None = None,
 ) -> Files: ...
 ```
 
@@ -272,6 +275,11 @@ A named set of files by path, written whole and replaced whole:
 
 avatars = store.files("avatars")
 reports = store.files("reports", ttl="24h", max_file_size="2GiB")
+
+``idle`` counts a file's term from its last get or head; ``max_size``
+is the ceiling of the set's files together, kept in the set, past
+which a write evicts the files used least recently, or with
+``when_full="refuse"`` fails LimitError.
 
 ### Store.directory
 

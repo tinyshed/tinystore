@@ -82,6 +82,29 @@ async fn each_call_answers_as_its_blocking_twin_does_on_the_same_store() {
     assert_eq!(blocking.head("small").unwrap(), None);
 }
 
+// contract: BLOB-20, BLOB-24
+#[tokio::test]
+async fn a_ceiling_changes_and_a_trim_frees_room_awaited_as_the_blocking_calls_do() {
+    let f = fixture();
+    let store = Store::from(f.store.clone());
+    let pages = store.files("pages").max_size(300).open().unwrap();
+    for page in ["a", "b", "c"] {
+        pages.put(page, bytes(100)).await.unwrap();
+    }
+    let refused = pages.set_max_size(100).if_current(512).apply().await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Conflict, "{refused}");
+    pages.set_max_size(200).if_current(300).apply().await.unwrap();
+    let usage = pages.usage().await.unwrap();
+    assert_eq!((usage.count, usage.max_size, usage.evictions), (2, Some(200), 1));
+    let trimmed = pages.trim(0).await.unwrap();
+    assert_eq!((trimmed.evictions, trimmed.freed), (2, 200));
+    pages.remove_max_size().apply().await.unwrap();
+    assert_eq!(f.files("pages").usage().unwrap().max_size, None);
+    let idle = store.files("sessions").idle(HOUR).open().unwrap();
+    idle.put("a", b"1".to_vec()).await.unwrap();
+    assert!(idle.head("a").await.unwrap().unwrap().expires.is_some());
+}
+
 // contract: BLOB-08
 #[tokio::test]
 async fn a_path_that_is_not_one_is_refused_as_the_blocking_call_refuses_it() {

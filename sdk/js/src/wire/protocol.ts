@@ -40,6 +40,8 @@ export const methods = {
 	'blobs.scan': 0x040f,
 	'blobs.changes': 0x0410,
 	'blobs.forget': 0x0411,
+	'blobs.setMaxSize': 0x0413,
+	'blobs.trim': 0x0414,
 	/**
 	 * Answers once the store has the message, not once anyone handled it; in a
 	 * database's transaction, it is handed over once the transaction commits.
@@ -366,6 +368,12 @@ export const BlobsOpen = message(
 		maxFileSize: [3, uint],
 		/** a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent */
 		database: [4, uint],
+		/** the term of every file written without its own, from its last get or head; never beside ttl */
+		idle: [5, uint],
+		/** the set's ceiling, kept in the set: an open with another is a conflict */
+		maxSize: [6, uint],
+		/** evict or refuse, what a write past the ceiling does; kept with it */
+		whenFull: [7, str],
 	},
 	{
 		write(w, v) {
@@ -391,6 +399,21 @@ export const BlobsOpen = message(
 				w.uint(v.database)
 				n++
 			}
+			if (v.idle !== undefined) {
+				w.field(5)
+				w.uint(v.idle)
+				n++
+			}
+			if (v.maxSize !== undefined) {
+				w.field(6)
+				w.uint(v.maxSize)
+				n++
+			}
+			if (v.whenFull !== undefined) {
+				w.field(7)
+				w.str(v.whenFull)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -398,6 +421,9 @@ export const BlobsOpen = message(
 			let $ttl: number | undefined
 			let $maxFileSize: number | undefined
 			let $database: number | undefined
+			let $idle: number | undefined
+			let $maxSize: number | undefined
+			let $whenFull: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -412,12 +438,29 @@ export const BlobsOpen = message(
 					case 4:
 						$database = r.uint()
 						break
+					case 5:
+						$idle = r.uint()
+						break
+					case 6:
+						$maxSize = r.uint()
+						break
+					case 7:
+						$whenFull = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name, ttl: $ttl, maxFileSize: $maxFileSize, database: $database }
+			return {
+				name: $name,
+				ttl: $ttl,
+				maxFileSize: $maxFileSize,
+				database: $database,
+				idle: $idle,
+				maxSize: $maxSize,
+				whenFull: $whenFull,
+			}
 		},
 	},
 )
@@ -1488,6 +1531,10 @@ export const BlobsUsage = message(
 	{
 		count: [1, uint],
 		size: [2, uint],
+		/** the set's ceiling, none when it keeps none */
+		maxSize: [3, uint],
+		/** the files the ceiling removed since the store opened */
+		evictions: [4, uint],
 	},
 	{
 		write(w, v) {
@@ -1503,11 +1550,23 @@ export const BlobsUsage = message(
 				w.uint(v.size)
 				n++
 			}
+			if (v.maxSize !== undefined) {
+				w.field(3)
+				w.uint(v.maxSize)
+				n++
+			}
+			if (v.evictions !== undefined) {
+				w.field(4)
+				w.uint(v.evictions)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $count: number | undefined
 			let $size: number | undefined
+			let $maxSize: number | undefined
+			let $evictions: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -1516,12 +1575,179 @@ export const BlobsUsage = message(
 					case 2:
 						$size = r.uint()
 						break
+					case 3:
+						$maxSize = r.uint()
+						break
+					case 4:
+						$evictions = r.uint()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { count: $count, size: $size }
+			return { count: $count, size: $size, maxSize: $maxSize, evictions: $evictions }
+		},
+	},
+)
+
+/**
+ * A change of a set's ceiling, which every handle follows from its commit:
+ * a lower one evicts at once, and one the set keeps already writes nothing.
+ */
+export const BlobsSetMaxSize = message(
+	'blobs.SetMaxSize',
+	{
+		handle: [1, uint],
+		/** none removes the ceiling */
+		maxSize: [2, uint],
+		/** evict or refuse; what the set does now when absent */
+		whenFull: [3, str],
+		/** changes it only while the set keeps this ceiling: another is a conflict */
+		ifCurrent: [4, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.maxSize !== undefined) {
+				w.field(2)
+				w.uint(v.maxSize)
+				n++
+			}
+			if (v.whenFull !== undefined) {
+				w.field(3)
+				w.str(v.whenFull)
+				n++
+			}
+			if (v.ifCurrent !== undefined) {
+				w.field(4)
+				w.uint(v.ifCurrent)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $maxSize: number | undefined
+			let $whenFull: string | undefined
+			let $ifCurrent: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$maxSize = r.uint()
+						break
+					case 3:
+						$whenFull = r.str()
+						break
+					case 4:
+						$ifCurrent = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, maxSize: $maxSize, whenFull: $whenFull, ifCurrent: $ifCurrent }
+		},
+	},
+)
+
+/**
+ * Removes files in the eviction's order until the set holds at most to
+ * bytes, a batch of 10,000 a commit; a refusing set is invalid.
+ */
+export const BlobsTrim = message(
+	'blobs.Trim',
+	{
+		handle: [1, uint],
+		to: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.to !== undefined) {
+				w.field(2)
+				w.uint(v.to)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $to: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$to = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, to: $to }
+		},
+	},
+)
+
+export const BlobsTrimmed = message(
+	'blobs.Trimmed',
+	{
+		evictions: [1, uint],
+		/** the files' sizes, as usage counts them */
+		freed: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.evictions !== undefined) {
+				w.field(1)
+				w.uint(v.evictions)
+				n++
+			}
+			if (v.freed !== undefined) {
+				w.field(2)
+				w.uint(v.freed)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $evictions: number | undefined
+			let $freed: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$evictions = r.uint()
+						break
+					case 2:
+						$freed = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { evictions: $evictions, freed: $freed }
 		},
 	},
 )

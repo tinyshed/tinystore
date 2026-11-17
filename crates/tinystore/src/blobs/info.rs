@@ -22,11 +22,16 @@ pub struct FileInfo {
     pub meta: BTreeMap<String, String>,
 }
 
-/// What a folder holds now: its files and their bytes.
+/// What a folder holds now: its files and their bytes, and the set's
+/// ceiling and what it evicted since the store opened.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Usage {
     pub count: u64,
     pub size: u64,
+    /// The set's ceiling, none when it keeps none.
+    pub max_size: Option<u64>,
+    /// The files the ceiling removed since the store opened, in this process.
+    pub evictions: u64,
 }
 
 /// A page of a folder's files, in the byte order of their paths, and where

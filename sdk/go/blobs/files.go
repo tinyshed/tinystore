@@ -41,10 +41,33 @@ type Page struct {
 	Next  string
 }
 
-// Usage is the files of a folder and their bytes, as it is now.
+// Usage is the files of a folder and their bytes, as it is now, and the
+// set's ceiling and what it evicted since the store opened.
 type Usage struct {
 	Count, Size int64
+	// MaxSize is the set's ceiling, 0 when it keeps none.
+	MaxSize int64
+	// Evictions is the files the ceiling removed since the store opened.
+	Evictions int64
 }
+
+// Trim is what a trim removed: its files, and their sizes as Usage counts them.
+type Trim struct {
+	Evictions, Freed int64
+}
+
+// Full is what a write past a set's MaxSize does.
+type Full string
+
+const (
+	// Evict removes the files used least recently until the set fits: a cache.
+	Evict Full = "evict"
+	// Refuse fails the write tinystore.ErrLimit and removes nothing: a quota of files that must stay.
+	Refuse Full = "refuse"
+)
+
+// NoMaxSize is the size SetMaxSize removes the ceiling with.
+const NoMaxSize int64 = 0
 
 func infoOf(info wire.BlobsInfo) FileInfo {
 	out := FileInfo{
@@ -62,8 +85,14 @@ type Option interface{ open(*openOptions) }
 
 type openOptions struct {
 	ttl         *time.Duration
+	idle        *time.Duration
 	maxFileSize *uint64
+	maxSize     *uint64
+	whenFull    *string
 }
+
+// CeilingOption is a condition of SetMaxSize, or what the new ceiling does when full.
+type CeilingOption interface{ ceiling(*wire.BlobsSetMaxSize) }
 
 // WriteOption is what a write gives besides its bytes.
 type WriteOption interface{ write(*wire.BlobsWrite) }
@@ -93,6 +122,42 @@ type maxFileSize int64
 func MaxFileSize(bytes int64) maxFileSize { return maxFileSize(bytes) }
 
 func (m maxFileSize) open(o *openOptions) { n := uint64(max(int64(m), 0)); o.maxFileSize = &n }
+
+type idle time.Duration
+
+// Idle is how long a file lives from its last Get or Head; never beside TTL.
+func Idle(d time.Duration) idle { return idle(d) }
+
+func (i idle) open(o *openOptions) { d := time.Duration(i); o.idle = &d }
+
+type maxSize int64
+
+// MaxSize is the most the set's files hold together, in bytes, kept in the
+// set: a write past it removes the files used least recently, and an open
+// with another is tinystore.ErrConflict. SetMaxSize changes it.
+func MaxSize(bytes int64) maxSize { return maxSize(bytes) }
+
+func (m maxSize) open(o *openOptions) {
+	if m > 0 {
+		n := uint64(m)
+		o.maxSize = &n
+	}
+}
+
+type whenFull Full
+
+// WhenFull is what a write past MaxSize does, kept with the ceiling: Evict, or Refuse.
+func WhenFull(f Full) whenFull { return whenFull(f) }
+
+func (w whenFull) open(o *openOptions)             { s := string(w); o.whenFull = &s }
+func (w whenFull) ceiling(c *wire.BlobsSetMaxSize) { s := string(w); c.WhenFull = &s }
+
+type ifCurrent int64
+
+// IfCurrent changes the ceiling only while the set keeps this one: another is tinystore.ErrConflict.
+func IfCurrent(bytes int64) ifCurrent { return ifCurrent(bytes) }
+
+func (i ifCurrent) ceiling(c *wire.BlobsSetMaxSize) { n := uint64(max(int64(i), 0)); c.IfCurrent = &n }
 
 type contentType string
 
@@ -181,13 +246,26 @@ func OpenFiles(home tinystore.Home, name string, opts ...Option) (*Files, error)
 	if err := core.CheckName(name, "files"); err != nil {
 		return nil, err
 	}
-	message := wire.BlobsOpen{Name: name, MaxFileSize: o.maxFileSize}
+	message := wire.BlobsOpen{Name: name, MaxFileSize: o.maxFileSize, MaxSize: o.maxSize, WhenFull: o.whenFull}
+	if o.ttl != nil && o.idle != nil {
+		return nil, core.Errorf(core.Invalid, "files %s: TTL and Idle are one or the other", name)
+	}
+	if o.whenFull != nil && *o.whenFull != string(Evict) && *o.whenFull != string(Refuse) {
+		return nil, core.Errorf(core.Invalid, "files %s: WhenFull %q: Evict or Refuse", name, *o.whenFull)
+	}
 	if o.ttl != nil {
 		ms, err := core.Millis(*o.ttl, "files "+name+": ttl")
 		if err != nil {
 			return nil, err
 		}
 		message.Ttl = &ms
+	}
+	if o.idle != nil {
+		ms, err := core.Millis(*o.idle, "files "+name+": idle")
+		if err != nil {
+			return nil, err
+		}
+		message.Idle = &ms
 	}
 	of := home.CoreHome()
 	files := &Files{
@@ -467,7 +545,47 @@ func (f *Files) Usage(ctx context.Context) (Usage, error) {
 	}
 	var usage wire.BlobsUsage
 	err = decode(answer, &usage)
-	return Usage{int64(usage.Count), int64(usage.Size)}, err
+	out := Usage{Count: int64(usage.Count), Size: int64(usage.Size), Evictions: int64(usage.Evictions)}
+	if usage.MaxSize != nil {
+		out.MaxSize = int64(*usage.MaxSize)
+	}
+	return out, err
+}
+
+// SetMaxSize changes the set's ceiling for every handle, NoMaxSize removing
+// it; a lower one evicts at once. One the set keeps already writes nothing.
+//
+//	err := pages.SetMaxSize(ctx, 1<<30, blobs.IfCurrent(512<<20))
+func (f *Files) SetMaxSize(ctx context.Context, bytes int64, opts ...CeilingOption) error {
+	_, err := f.call(ctx, wire.MethodBlobsSetMaxSize, func(handle uint64) []byte {
+		change := wire.BlobsSetMaxSize{Handle: handle}
+		if bytes > 0 {
+			n := uint64(bytes)
+			change.MaxSize = &n
+		}
+		for _, opt := range opts {
+			opt.ceiling(&change)
+		}
+		return wire.Encode(&change)
+	}, core.Writing)
+	return err
+}
+
+// Trim removes files in the eviction's order until the set holds at most
+// `to` bytes, and leaves its ceiling where it was; a set whose ceiling
+// refuses is tinystore.ErrInvalid.
+//
+//	trimmed, err := pages.Trim(ctx, 300<<20) // blobs.Trim{Evictions, Freed}
+func (f *Files) Trim(ctx context.Context, to int64) (Trim, error) {
+	answer, err := f.call(ctx, wire.MethodBlobsTrim, func(handle uint64) []byte {
+		return wire.Encode(&wire.BlobsTrim{Handle: handle, To: uint64(max(to, 0))})
+	}, core.Writing)
+	if err != nil {
+		return Trim{}, err
+	}
+	var trimmed wire.BlobsTrimmed
+	err = decode(answer, &trimmed)
+	return Trim{Evictions: int64(trimmed.Evictions), Freed: int64(trimmed.Freed)}, err
 }
 
 // Clear removes the folder's every file and every folder in it, at once for every reader.

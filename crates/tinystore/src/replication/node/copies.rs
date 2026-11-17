@@ -112,7 +112,7 @@ impl State {
 
     /// Passes a write of `file` on toward its home as `write_toward` does,
     /// over a link up now, and hands its answer to `answered`.
-    #[cfg(feature = "kv")]
+    #[cfg(any(feature = "kv", feature = "blobs"))]
     pub(crate) fn write_toward_then(
         &self,
         file: &str,

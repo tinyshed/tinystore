@@ -57,7 +57,7 @@ pub(crate) use apply::{Applier, checkpoint_away};
 pub(crate) use capture::{Commit, Observe, Position, answering, each_commit_past, own_work, wal_end, wal_of};
 pub use config::Durability;
 pub(crate) use config::{CatchUp, Config, GroupLimits};
-#[cfg(feature = "kv")]
+#[cfg(any(feature = "kv", all(feature = "blobs", feature = "client")))]
 pub(crate) use connection::read_file;
 pub(crate) use connection::{
     disk_full, execute_cached, given_sql_error, query_cached, quote_ident, read_copy, sql_error, unheard_warnings,
@@ -104,7 +104,7 @@ impl<'a> Tx<'a> {
     /// could hand B's over before A's. A rollback runs nothing, and a call
     /// whose savepoint rolled back takes back what it asked for. The hook
     /// must not block: every commit after it waits.
-    #[cfg(any(feature = "channels", feature = "records", all(feature = "blobs", feature = "sql")))]
+    #[cfg(any(feature = "channels", feature = "records", feature = "blobs"))]
     pub(crate) fn after_commit(&self, hook: Box<dyn FnOnce()>) {
         self.committed.push(hook);
     }
@@ -140,7 +140,7 @@ pub(crate) type Hook = Box<dyn FnOnce(Ended)>;
 pub(crate) struct Committed(RefCell<Vec<Hook>>);
 
 impl Committed {
-    #[cfg(any(feature = "channels", feature = "records", all(feature = "blobs", feature = "sql")))]
+    #[cfg(any(feature = "channels", feature = "records", feature = "blobs"))]
     pub(crate) fn push(&self, hook: Box<dyn FnOnce()>) {
         self.push_told(Box::new(move |ended| {
             if ended == Ended::Committed {
@@ -149,7 +149,7 @@ impl Committed {
         }));
     }
 
-    #[cfg(any(feature = "channels", feature = "records", all(feature = "blobs", feature = "sql")))]
+    #[cfg(any(feature = "channels", feature = "records", feature = "blobs"))]
     fn push_told(&self, hook: Hook) {
         self.0.borrow_mut().push(hook);
     }

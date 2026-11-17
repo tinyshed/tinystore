@@ -23,6 +23,9 @@ import {
 	BlobsPage,
 	BlobsPiece,
 	BlobsRead,
+	BlobsSetMaxSize,
+	BlobsTrim,
+	BlobsTrimmed,
 	BlobsUsage,
 	BlobsWrite,
 	BlobsWritten,
@@ -33,10 +36,38 @@ import {
 export type Size = number | `${number}${'KiB' | 'MiB' | 'GiB' | 'TiB'}`
 
 export interface FilesOptions {
-	/** the term of every file written without its own; not a ceiling */
+	/** the term of every file written without its own, from its write; not a ceiling */
 	ttl?: Duration | undefined
+	/** the term of every file written without its own, from its last get or head; not beside ttl */
+	idle?: Duration | undefined
 	/** the largest file a write may leave: past it, a write is refused and leaves nothing */
 	maxFileSize?: Size | undefined
+	/**
+	 * the most the set's files hold together, kept in the set: a write past it
+	 * removes the files used least recently, and an open with another is ConflictError
+	 */
+	maxSize?: Size | undefined
+	/** what a write past maxSize does: 'evict', the default, or 'refuse', a LimitError that removes nothing */
+	whenFull?: WhenFull | undefined
+}
+
+/** What a write past a set's maxSize does. */
+export type WhenFull = 'evict' | 'refuse'
+
+/** What a folder holds now, and the set's ceiling and what it evicted since the store opened. */
+export interface FilesUsage {
+	count: number
+	size: number
+	/** undefined when the set keeps no ceiling */
+	maxSize: number | undefined
+	/** the files the ceiling removed since the store opened */
+	evictions: number
+}
+
+/** What a trim removed: its files, and their sizes as usage counts them. */
+export interface Trim {
+	evictions: number
+	freed: number
 }
 
 /** What a file carries: what serving it needs. */
@@ -102,11 +133,17 @@ export function openFiles(link: Link, name: string, options?: FilesOptions): Fil
 /** The open of a set of files, kept in the database of the handle `database` when it is given. */
 export function filesOpen(name: string, options?: FilesOptions, database?: number): Uint8Array {
 	checkName(name, 'files')
+	if (options?.ttl !== undefined && options.idle !== undefined) {
+		throw new InvalidError(`files ${name}: ttl and idle are one or the other`)
+	}
 	return BlobsOpen.encode({
 		name,
 		ttl: options?.ttl === undefined ? undefined : ms(options.ttl),
 		maxFileSize: options?.maxFileSize === undefined ? undefined : bytesOf(options.maxFileSize),
 		database,
+		idle: options?.idle === undefined ? undefined : ms(options.idle),
+		maxSize: options?.maxSize === undefined ? undefined : bytesOf(options.maxSize),
+		whenFull: options?.whenFull,
 	})
 }
 
@@ -298,15 +335,57 @@ export class Files {
 		}
 	}
 
-	/** The files in the folder and their bytes, as it is now: it counts, it does not limit. */
-	async usage(): Promise<{ count: number; size: number }> {
+	/**
+	 * The files in the folder and their bytes, as it is now, with the set's
+	 * ceiling and what it evicted since the store opened. It renews nothing.
+	 */
+	async usage(): Promise<FilesUsage> {
 		const answer = await this.#call(
 			'blobs.usage',
 			handle => BlobsFolder.encode({ handle, folder: this.#folder }),
 			'read',
 		)
 		const usage = BlobsUsage.decode(answer)
-		return { count: usage.count ?? 0, size: usage.size ?? 0 }
+		return {
+			count: usage.count ?? 0,
+			size: usage.size ?? 0,
+			maxSize: usage.maxSize,
+			evictions: usage.evictions ?? 0,
+		}
+	}
+
+	/**
+	 * Changes the set's ceiling for every handle, 'none' removing it; a lower
+	 * one evicts at once. With ifCurrent it changes only while the set keeps
+	 * that ceiling, and another is ConflictError; one the set keeps already
+	 * writes nothing.
+	 */
+	async setMaxSize(
+		size: Size | 'none',
+		options?: { ifCurrent?: Size | undefined; whenFull?: WhenFull | undefined },
+	): Promise<void> {
+		const maxSize = size === 'none' ? undefined : bytesOf(size)
+		const ifCurrent = options?.ifCurrent === undefined ? undefined : bytesOf(options.ifCurrent)
+		await this.#call(
+			'blobs.setMaxSize',
+			handle => BlobsSetMaxSize.encode({ handle, maxSize, whenFull: options?.whenFull, ifCurrent }),
+			'write',
+		)
+	}
+
+	/**
+	 * Removes files in the eviction's order until the set holds at most `to`,
+	 * and leaves its ceiling where it was; a set whose ceiling refuses is InvalidError.
+	 */
+	async trim(options: { to: Size }): Promise<Trim> {
+		const to = bytesOf(options.to)
+		const answer = await this.#call(
+			'blobs.trim',
+			handle => BlobsTrim.encode({ handle, to }),
+			'write',
+		)
+		const trimmed = BlobsTrimmed.decode(answer)
+		return { evictions: trimmed.evictions ?? 0, freed: trimmed.freed ?? 0 }
 	}
 
 	/** Removes the folder's every file and every folder in it, at once for every reader. */

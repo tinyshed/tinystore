@@ -43,7 +43,7 @@ from ._wire.protocol import (
     SqlTxOpen,
     methods,
 )
-from .blobs import Files, Size, files_open
+from .blobs import Files, FilesOptions, Size, WhenFull, files_open
 from .channels import Channel, TxChannel
 from .errors import InvalidError, OutcomeUnknownError, error_of
 from .jobs import Adding, Backoff, Concurrency, Job, Queue, QueueOptions, adding_in, open_queue
@@ -754,7 +754,16 @@ class Database:
         parts = Parts(self._link, name, opener, "kv.bucket.open", (), values_of(of), self)
         return Bucket(parts, self.via(f"kv bucket {name}"))
 
-    def files(self, name: str, *, ttl: Duration | None = None, max_file_size: Size | None = None) -> Files:
+    def files(
+        self,
+        name: str,
+        *,
+        ttl: Duration | None = None,
+        idle: Duration | None = None,
+        max_file_size: Size | None = None,
+        max_size: Size | None = None,
+        when_full: WhenFull | None = None,
+    ) -> Files:
         """A set of files kept in this database's file, as ``store.files`` keeps one in blobs.db.
 
         The same calls, and its writes commit with the rows in ``db.tx``,
@@ -762,11 +771,13 @@ class Database:
         folder beside the database's file::
 
             packages = db.files("packages", max_file_size="10MiB")
+            pages = cache.files("pages", idle="30d", max_size="512MiB")
         """
-        body = files_open(name, ttl, max_file_size)
+        options = FilesOptions(ttl, idle, max_file_size, max_size, when_full)
+        body = files_open(name, options)
 
         async def make(connection: Connection) -> bytes:
-            return files_open(name, ttl, max_file_size, await self.handle(connection))
+            return files_open(name, options, await self.handle(connection))
 
         opener = self.keep(methods["blobs.open"], body, make)
         return Files(self._link, name, opener, (), self)

@@ -254,3 +254,20 @@ fn a_blobs_db_written_before_its_tables_took_their_names_opens_with_its_files() 
     notes.put("b.txt", b"written after").unwrap();
     assert_eq!(notes.list().page().unwrap().files.len(), 2);
 }
+
+#[test]
+fn a_blobs_db_written_before_its_sets_kept_their_totals_counts_its_files_at_its_open() {
+    let dir = tempfile::tempdir().unwrap();
+    written_by_0_3_0(dir.path());
+    let options = crate::Options { background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let notes = store.files("notes").open().unwrap();
+    let totals = "select count, size, max_size from _tinystore_blobs_sets where name = 'notes'";
+    let read = |c: &rusqlite::Connection| {
+        let row = c.query_row(totals, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)));
+        Ok::<(i64, i64, Option<i64>), crate::Error>(row.unwrap())
+    };
+    assert_eq!(notes.blobs.file.read(read).unwrap(), (1, 2, None));
+    notes.put("b.txt", b"abc").unwrap();
+    assert_eq!(notes.blobs.file.read(read).unwrap(), (2, 5, None));
+}

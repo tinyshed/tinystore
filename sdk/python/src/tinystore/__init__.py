@@ -10,7 +10,7 @@
 from . import bounds
 from ._console import colors
 from .backup import Backup
-from .blobs import FileBytes, FileInfo, FilePage, Files, StoredFile, Upload, Usage
+from .blobs import FileBytes, FileInfo, FilePage, Files, StoredFile, Trim, Upload, Usage, WhenFull
 from .channels import Channel, Message, Missed, Subscription, TxChannel
 from .clock import Clock
 from .config import (
@@ -237,6 +237,7 @@ __all__ = [
     "TooNewError",
     "TooOldError",
     "Top",
+    "Trim",
     "Tx",
     "TxBucket",
     "TxChannel",
@@ -249,6 +250,7 @@ __all__ = [
     "Upload",
     "Usage",
     "Vectors",
+    "WhenFull",
     "WindowUse",
     "Worker",
     "bounds",

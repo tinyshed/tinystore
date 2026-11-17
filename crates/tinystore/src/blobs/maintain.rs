@@ -1,7 +1,8 @@
-//! What the store runs every minute: expired files and the files marked
-//! clears hid, removed a batch at a time; the files of contents no row names
-//! any more; the lines of directories' files removed 30 days ago; what
-//! uploads left; the settled mark; and a slice of the scrub.
+//! What the store runs every minute: the uses reads asked for; expired files,
+//! the files marked clears hid and those of a set past its ceiling, removed a
+//! batch at a time; the files of contents no row names any more; the lines of
+//! directories' files removed 30 days ago; what uploads left; the settled
+//! mark; and a slice of the scrub.
 
 use std::sync::Arc;
 
@@ -36,6 +37,8 @@ pub struct Maintenance {
     pub expired: usize,
     /// Files a marked clear hid, removed.
     pub cleared: usize,
+    /// Files of sets past their ceiling, evicted.
+    pub evicted: usize,
     /// Files on disk of contents no file names, removed.
     pub removed: usize,
     /// Bytes the scrub read.
@@ -64,8 +67,10 @@ impl Blobs {
                 first.get_or_insert(error);
             }
         };
+        keep(self.flush_uses().map(drop));
         keep(self.expire().map(|expired| done.expired = expired));
         keep(self.drop_cleared().map(|cleared| done.cleared = cleared));
+        keep(self.trim_over().map(|evicted| done.evicted = evicted));
         keep(self.remove_unnamed().map(|removed| done.removed = removed));
         keep(self.purge_removed().map(drop));
         keep(self.disk.sweep_uploads(&self.ids).map(drop));

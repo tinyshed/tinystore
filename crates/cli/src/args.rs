@@ -314,7 +314,7 @@ fn remote(
 /// ```text
 /// 1GiB → 1,073,741,824     512MiB → 536,870,912     4096 → 4,096
 /// ```
-fn size(text: &str) -> Result<u64, String> {
+pub(crate) fn size(text: &str) -> Result<u64, String> {
     let digits = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
     let (number, unit) = text.split_at(digits);
     let number: u64 = number.parse().map_err(|_| format!("the size {text}: as 1GiB or 512MiB"))?;

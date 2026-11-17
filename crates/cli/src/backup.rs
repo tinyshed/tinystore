@@ -1,12 +1,14 @@
 //! `tinystore backup`, `restore` and `verify`: a store's directory as one
 //! checked zip, that zip back into an empty directory, and that zip checked
-//! as a restore checks it, nothing written. A backup reads beside a program
-//! or a server that holds the directory, and alone when none does.
+//! as a restore checks it, nothing written; or a store's directory checked,
+//! each set of files' counters against its rows. A backup reads beside a
+//! program or a server that holds the directory, and alone when none does.
 //!
 //! ```text
 //! tinystore backup ./data backup-2026-10-13.zip [--include secret.key]… [--include-encryption-key]
 //! tinystore restore backup-2026-10-13.zip ./data
 //! tinystore verify backup-2026-10-13.zip
+//! tinystore verify ./data
 //! ```
 
 use std::path::PathBuf;
@@ -96,8 +98,11 @@ fn put_back(asked: Asked) -> Done {
 
 fn check(asked: Asked) -> Done {
     let [zip] = &asked.words[..] else {
-        return Err(wrong("a zip: verify backup.zip"));
+        return Err(wrong("a zip or a store's directory: verify backup.zip"));
     };
+    if std::path::Path::new(zip).is_dir() {
+        return check_store(std::path::Path::new(zip));
+    }
     let began = Instant::now();
     let checked = tinystore::backup::verify(zip).map_err(failed)?;
     outln!(
@@ -111,4 +116,18 @@ fn check(asked: Asked) -> Done {
         outln!("  its encrypted buckets open with the store's key, which the backup left out: keep it beside")?;
     }
     Ok(())
+}
+
+/// Checks a store's directory beside whoever holds it: each set of files'
+/// count and size, which its writes keep, against what its rows sum to.
+fn check_store(dir: &std::path::Path) -> Done {
+    asked::existing(dir)?;
+    let differing = tinystore::client::file_counters_differing(dir).map_err(failed)?;
+    if differing.is_empty() {
+        return outln!("● {}  ok · every set of files counts what its rows hold", dir.display());
+    }
+    for line in &differing {
+        outln!("  {line}")?;
+    }
+    Err(failed(format!("{}: {} sets of files count what their rows do not hold", dir.display(), differing.len())))
 }

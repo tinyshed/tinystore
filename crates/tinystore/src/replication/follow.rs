@@ -69,7 +69,7 @@ impl Upstream {
     /// Passes `op` on over the link up now, and hands what it answers to
     /// `answered`: it waits neither for a link, failing `unavailable` at once
     /// when none is up, nor for the answer.
-    #[cfg(feature = "kv")]
+    #[cfg(any(feature = "kv", feature = "blobs"))]
     pub(crate) fn write_then(&self, op: Vec<u8>, answered: Answered) -> Result<()> {
         let out = lock(&self.out).clone();
         let out = out.ok_or_else(|| Error::new(ErrorKind::Unavailable, "no link reaches the home"))?;

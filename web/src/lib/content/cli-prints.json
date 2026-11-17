@@ -1,7 +1,7 @@
 {
   "status": {
     "example": "tinystore status ./data",
-    "prints": "● ./data  served by tinystore 0.0.0 · pid 36368 · up 0s · durability not set: full, os for records and metrics\n\n  kv        80 KiB\n  jobs     129 KiB\n  blobs    133 KiB\n  sql/app   16 KiB\n  records   55 KiB\n  metrics  173 KiB\n  ────────────────\n  total    586 KiB"
+    "prints": "● ./data  served by tinystore 0.0.0 · pid 49420 · up 0s · durability not set: full, os for records and metrics\n\n  kv        80 KiB\n  jobs     129 KiB\n  blobs    229 KiB\n  sql/app   16 KiB\n  records   55 KiB\n  metrics  217 KiB\n  ────────────────\n  total    727 KiB"
   },
   "logs": {
     "example": "tinystore logs ./data -f",
@@ -17,7 +17,7 @@
   },
   "jobs list": {
     "example": "tinystore jobs ./data list emails welcome-",
-    "prints": "welcome-40  scheduled  9 Nov 18:54:24.921  attempt 0\nwelcome-41  scheduled  9 Nov 19:54:24.936  attempt 0"
+    "prints": "welcome-40  scheduled  17 Nov 04:05:16.378  attempt 0\nwelcome-41  scheduled  17 Nov 05:05:16.397  attempt 0"
   },
   "jobs counts": {
     "example": "tinystore jobs ./data counts emails",
@@ -25,7 +25,7 @@
   },
   "files list": {
     "example": "tinystore files ./data list avatars",
-    "prints": "users/42/avatar.png        8 B  9 Nov 17:54:24.977  image/png\nusers/43/avatar.png        8 B  9 Nov 17:54:24.995  image/png"
+    "prints": "users/42/avatar.png        8 B  17 Nov 03:05:16.459  image/png\nusers/43/avatar.png        8 B  17 Nov 03:05:16.481  image/png"
   },
   "files get": {
     "example": "tinystore files ./data get avatars users/42/avatar.png ./avatar.png",
@@ -49,15 +49,15 @@
   },
   "metrics read": {
     "example": "tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h",
-    "prints": "ping_rtt_ms{target=\"poland\"}   9 Nov 16:54–17:54 Europe/Moscow · 60 samples\n  16:55:25.064   24.6\n  16:56:25.064   23.8\n  16:57:25.064   23\n  16:58:25.064   24.2\n  16:59:25.064   23.4\n  17:00:25.064   24.6\n  17:01:25.064   23.8\n  17:02:25.064   23\n  17:03:25.064   24.2\n  17:04:25.064   23.4\n  17:05:25.064   24.6\n…"
+    "prints": "ping_rtt_ms{target=\"poland\"}   17 Nov 02:05–03:05 Europe/Moscow · 60 samples\n  02:06:16.610   24.6\n  02:07:16.610   23.8\n  02:08:16.610   23\n  02:09:16.610   24.2\n  02:10:16.610   23.4\n  02:11:16.610   24.6\n  02:12:16.610   23.8\n  02:13:16.610   23\n  02:14:16.610   24.2\n  02:15:16.610   23.4\n  02:16:16.610   24.6\n…"
   },
   "metrics aggregate": {
     "example": "tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target",
-    "prints": "ping_rtt_ms max every 10m   9 Nov 16:54–17:54 Europe/Moscow\n             finland   poland   sweden\n  16:50:00      32.6     24.6     41.6\n  17:00:00      32.6     24.6     41.6\n  17:10:00      32.6     24.6     41.6\n  17:20:00      32.6     24.6     41.6\n  17:30:00      32.6     24.6     41.6\n  17:40:00      32.6     24.6     41.6\n  17:50:00      32.6     24.6     41.6"
+    "prints": "ping_rtt_ms max every 10m   17 Nov 02:05–03:05 Europe/Moscow\n             finland   poland   sweden\n  02:00:00      32.6     24.6     41.6\n  02:10:00      32.6     24.6     41.6\n  02:20:00      32.6     24.6     41.6\n  02:30:00      32.6     24.6     41.6\n  02:40:00      32.6     24.6     41.6\n  02:50:00      32.6     24.6     41.6\n  03:00:00      32.6     24.6     41.6"
   },
   "events list": {
     "example": "tinystore events ./data list audit --since 1h",
-    "prints": "17:54:25.029 EVENT audit  role.changed  role=admin user=42\n17:54:25.043 EVENT audit  login  user=43"
+    "prints": "03:05:16.566 EVENT audit  role.changed  role=admin user=42\n03:05:16.581 EVENT audit  login  user=43"
   },
   "kv set": {
     "example": "tinystore kv ./data set flags beta on --ttl 1h",
@@ -82,6 +82,14 @@
   "files delete": {
     "example": "tinystore files ./data delete avatars users/42/avatar.png",
     "prints": "deleted users/42/avatar.png from files avatars"
+  },
+  "files set-max-size": {
+    "example": "tinystore files ./data set-max-size pages 1GiB --if-current 512MiB",
+    "prints": "files pages holds 1.0 GiB at most"
+  },
+  "files trim": {
+    "example": "tinystore files ./data trim pages --to 300MiB",
+    "prints": "trimmed files pages: 0 files removed, 0 B freed"
   },
   "channels publish": {
     "example": "tinystore channels ./data publish chat-events '{\"kind\": \"reload\"}'",
@@ -121,19 +129,19 @@
   },
   "stop": {
     "example": "tinystore stop ./data",
-    "prints": "● ./data  stopped in 0.1s · pid 36368"
+    "prints": "● ./data  stopped in 0.1s · pid 49420"
   },
   "backup": {
     "example": "tinystore backup ./data backup.zip",
-    "prints": "● ./data  backed up to backup.zip · 6 files, 347 KiB"
+    "prints": "● ./data  backed up to backup.zip · 6 files, 391 KiB"
   },
   "restore": {
     "example": "tinystore restore backup.zip ./data2",
-    "prints": "● ./data2  restored from backup.zip · 6 files, 347 KiB"
+    "prints": "● ./data2  restored from backup.zip · 6 files, 391 KiB"
   },
   "verify": {
     "example": "tinystore verify backup.zip",
-    "prints": "● backup.zip  ok · 6 files · 347 KiB · checked in 0.1s\n  a restore of it writes 355328 bytes"
+    "prints": "● backup.zip  ok · 6 files · 391 KiB · checked in 0.1s\n  a restore of it writes 400384 bytes"
   },
   "mcp": {
     "example": "claude mcp add tinystore -- tinystore mcp ./data",
@@ -141,7 +149,7 @@
   },
   "token": {
     "example": "tinystore token new admin >> tokens.txt",
-    "prints": "admin gkicUzvPUUvOaJaANDSyA5eaz2Doam8Q6lf_IVksqq0"
+    "prints": "admin i1mK1uediugeEqepI9EX9YErxNF3pkikQ7xGYbEWWMg"
   },
   "lock hold": {
     "example": "tinystore lock ./data hold cron nightly-backup -- ./backup.sh",

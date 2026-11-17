@@ -76,6 +76,29 @@ fn a_queue_counts_its_jobs_and_a_set_its_files() {
 }
 
 #[test]
+fn a_set_with_a_ceiling_names_it_and_verify_finds_counters_that_differ_from_the_rows() {
+    let f = fixture();
+    let pages = f.store.files("pages").max_size(512 << 20).open().unwrap();
+    pages.put("a.pdf", [7u8; 300]).unwrap();
+    f.store.files("plain").open().unwrap().put("b", [1u8; 10]).unwrap();
+    assert_eq!(super::file_ceilings(&f.store).unwrap(), [("pages".to_owned(), 512 << 20)]);
+    assert_eq!(super::file_counters_differing(f._dir.path()).unwrap(), Vec::<String>::new());
+    let db = f.store.database("app").open().unwrap();
+    let cache = db.files("cache").open().unwrap();
+    cache.put("c", [1u8; 20]).unwrap();
+    // a counter moved by hand, as a damaged file would hold it
+    let bump = "update _tinystore_blobs_sets set size = size + 1";
+    cache
+        .blobs
+        .file
+        .write(0, move |tx| crate::sqlite::execute_cached(tx, bump, [], "a change by hand").map(drop))
+        .unwrap();
+    let differing = super::file_counters_differing(f._dir.path()).unwrap();
+    assert_eq!(differing.len(), 1, "{differing:?}");
+    assert!(differing[0].starts_with("sql/app.db: files cache counts 1 files and 21 bytes"), "{differing:?}");
+}
+
+#[test]
 fn a_stream_counts_its_events_in_its_head_and_once_packed() {
     let f = fixture();
     let audit = f.store.events("audit").keep(400 * DAY).open().unwrap();

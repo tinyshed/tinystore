@@ -224,6 +224,36 @@ pub(crate) const FILES_DELETE: Command = Command {
     more: WRITES,
 };
 
+pub(crate) const FILES_SET_MAX_SIZE: Command = Command {
+    name: "files set-max-size",
+    takes: "<dir> set-max-size <set> <size>",
+    does: "change the most a set's files hold together",
+    flags: &[
+        flag("--if-current", "<size>", "change it only while the set keeps this ceiling; another is a conflict"),
+        flag("--when-full", "<evict|refuse>", "what a write past it does; what the set does now when not given"),
+    ],
+    examples: &[
+        "tinystore files ./data set-max-size pages 1GiB --if-current 512MiB",
+        "tinystore files ./data set-max-size pages none",
+    ],
+    more: "The set keeps its ceiling for every program that opens it. A size is bytes, or a number and KiB, MiB or \
+           GiB; none removes the ceiling. A lower one evicts the files used least recently at once, unless the set \
+           refuses. It writes through the server that holds the directory, or starts one that stops 30 s after its \
+           last client; a directory a program holds inside its own process is refused.",
+};
+
+pub(crate) const FILES_TRIM: Command = Command {
+    name: "files trim",
+    takes: "<dir> trim <set>",
+    does: "free room in a set now, the files used least recently first",
+    flags: &[flag("--to", "<size>", "the size to leave the set at, at most")],
+    examples: &["tinystore files ./data trim pages --to 300MiB"],
+    more: "Files read once go first, then the files used least recently, to within an hour. Its ceiling stays where \
+           it was, and a set whose ceiling refuses is refused. It writes through the server that holds the \
+           directory, or starts one that stops 30 s after its last client; a directory a program holds inside its \
+           own process is refused.",
+};
+
 pub(crate) const CHANNELS_PUBLISH: Command = Command {
     name: "channels publish",
     takes: "<dir> publish <channel> <json>",
@@ -367,12 +397,14 @@ pub(crate) const RESTORE: Command = Command {
 
 pub(crate) const VERIFY: Command = Command {
     name: "verify",
-    takes: "<zip>",
-    does: "check a backup as a restore would, writing nothing",
+    takes: "<zip|dir>",
+    does: "check a backup as a restore would, or a store's counters, writing nothing",
     flags: &[],
-    examples: &["tinystore verify backup.zip"],
-    more: "The zip's directory, its manifest and every file's size, CRC-32 and SHA-256, and on Windows the names \
+    examples: &["tinystore verify backup.zip", "tinystore verify ./data"],
+    more: "A zip: its directory, its manifest and every file's size, CRC-32 and SHA-256, and on Windows the names \
            Windows reads as devices. It prints the bytes a restore writes; a file that does not match exits 1, \
+           naming it. A store's directory: the files and bytes each set of files counts, in blobs.db and in every \
+           database's file, against what its rows hold, read beside whoever holds it; a set that differs exits 1, \
            naming it.",
 };
 
@@ -630,7 +662,7 @@ pub(crate) const METRICS_INGEST: Command = Command {
 /// What each word a command takes stands for, as `help --json` and the
 /// site's explain say it: every `<word>` and `[word]` of a command's `takes`
 /// is here, and nothing else.
-pub(crate) const WORDS: [(&str, &str); 35] = [
+pub(crate) const WORDS: [(&str, &str); 37] = [
     ("<bucket>", "a kv bucket's name"),
     ("<channel>", "a channel's name"),
     ("<command>", "the command to run, with its own arguments"),
@@ -653,9 +685,11 @@ pub(crate) const WORDS: [(&str, &str); 35] = [
     ("<queue>", "a queue's name"),
     ("<set>", "a set of files' name"),
     ("<shell>", "bash, zsh, fish or powershell"),
+    ("<size>", "bytes, or a number and KiB, MiB or GiB, as 512MiB"),
     ("<stream>", "a stream of events' name"),
     ("<value>", "the value: text unless --as says int or json; - reads it from stdin"),
     ("<zip>", "a backup's zip file"),
+    ("<zip|dir>", "a backup's zip file, or a store's directory"),
     ("[admin|data|read]", "what a token lets its client do: everything, data alone, or read"),
     ("[branch]", "the keys under a branch, its owners as 42/devices"),
     ("[db]", "one of the application's databases; every one when left out"),
@@ -699,6 +733,8 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &JOBS_CANCEL,
             &FILES_PUT,
             &FILES_DELETE,
+            &FILES_SET_MAX_SIZE,
+            &FILES_TRIM,
             &CHANNELS_PUBLISH,
             &CHANNELS_SUBSCRIBE,
             &CONFIG_UPDATE,

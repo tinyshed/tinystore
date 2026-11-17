@@ -74,17 +74,26 @@
         "database": {
           "uint": "407"
         },
+        "idle": {
+          "uint": "1500"
+        },
         "maxFileSize": {
           "uint": "307"
+        },
+        "maxSize": {
+          "uint": "607"
         },
         "name": {
           "str": "name"
         },
         "ttl": {
           "uint": "1500"
+        },
+        "whenFull": {
+          "str": "whenFull"
         }
       },
-      "hex": "8401a46e616d6502cd05dc03cd013304cd0197",
+      "hex": "8701a46e616d6502cd05dc03cd013304cd019705cd05dc06cd025f07a87768656e46756c6c",
       "message": "blobs.Open",
       "name": "blobs.Open with every field"
     },
@@ -610,11 +619,17 @@
         "count": {
           "uint": "107"
         },
+        "evictions": {
+          "uint": "407"
+        },
+        "maxSize": {
+          "uint": "307"
+        },
         "size": {
           "uint": "207"
         }
       },
-      "hex": "82016b02cccf",
+      "hex": "84016b02cccf03cd013304cd0197",
       "message": "blobs.Usage",
       "name": "blobs.Usage with every field"
     },
@@ -623,6 +638,69 @@
       "hex": "80",
       "message": "blobs.Usage",
       "name": "blobs.Usage with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "ifCurrent": {
+          "uint": "407"
+        },
+        "maxSize": {
+          "uint": "207"
+        },
+        "whenFull": {
+          "str": "whenFull"
+        }
+      },
+      "hex": "84016b02cccf03a87768656e46756c6c04cd0197",
+      "message": "blobs.SetMaxSize",
+      "name": "blobs.SetMaxSize with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.SetMaxSize",
+      "name": "blobs.SetMaxSize with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "to": {
+          "uint": "207"
+        }
+      },
+      "hex": "82016b02cccf",
+      "message": "blobs.Trim",
+      "name": "blobs.Trim with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Trim",
+      "name": "blobs.Trim with no field"
+    },
+    {
+      "fields": {
+        "evictions": {
+          "uint": "107"
+        },
+        "freed": {
+          "uint": "207"
+        }
+      },
+      "hex": "82016b02cccf",
+      "message": "blobs.Trimmed",
+      "name": "blobs.Trimmed with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Trimmed",
+      "name": "blobs.Trimmed with no field"
     },
     {
       "fields": {
@@ -6612,6 +6690,8 @@
     "blobs.read": 1037,
     "blobs.rename": 1032,
     "blobs.scan": 1039,
+    "blobs.setMaxSize": 1043,
+    "blobs.trim": 1044,
     "blobs.upload": 1027,
     "blobs.usage": 1035,
     "channels.publish": 2561,

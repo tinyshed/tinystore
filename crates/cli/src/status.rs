@@ -281,7 +281,7 @@ impl Columns {
                 columns.name = columns.name.max(holding.name.chars().count());
                 columns.count = columns.count.max(count.to_string().len());
                 columns.unit = columns.unit.max(unit_of(count, counts).len());
-                columns.bytes = columns.bytes.max(holding.bytes.map_or(0, |bytes| on_disk::bytes(bytes).len()));
+                columns.bytes = columns.bytes.max(weight(holding).chars().count());
                 columns.keep = columns.keep.max(holding.kept.as_ref().map_or(0, |kept| keep_of(kept).len()));
             }
         }
@@ -294,7 +294,7 @@ impl Columns {
         let Columns { name: name_width, count: count_width, unit: unit_width, bytes: bytes_width, keep: keep_width } =
             *self;
         let count = holding.count.unwrap_or_default();
-        let bytes = holding.bytes.map_or_else(String::new, on_disk::bytes);
+        let bytes = weight(holding);
         let row = format!(
             "    {:name_width$}  {count:>count_width$} {:unit_width$}  {bytes:>bytes_width$}",
             holding.name,
@@ -310,6 +310,15 @@ impl Columns {
             (None, None) => return row + "\n",
         };
         row + "   " + &paint(colours, Style::new().dimmed(), &said) + "\n"
+    }
+}
+
+/// What a name weighs, and a set of files' ceiling after it: `498 MiB / 512 MiB`.
+fn weight(holding: &Holding) -> String {
+    let bytes = holding.bytes.map_or_else(String::new, on_disk::bytes);
+    match holding.max_size {
+        Some(max_size) => format!("{bytes} / {}", on_disk::bytes(max_size)),
+        None => bytes,
     }
 }
 
@@ -412,6 +421,10 @@ mod tests {
             let values: Vec<serde_json::Value> = names.collect();
             courses.set_many((from..).zip(&values)).unwrap();
         }
+        let pages = store.files("pages").max_size(512 << 20).open().unwrap();
+        for page in 0..3 {
+            pages.put(&format!("{page}.pdf"), vec![7u8; 1 << 20]).unwrap();
+        }
         // packed, as a program's background work packs each thousand documents set
         tinystore::search::maintain(&store).unwrap();
         store.close().unwrap();
@@ -449,6 +462,8 @@ mod tests {
         assert!(lines[at("audit")].contains("2000 events") && lines[at("audit")].contains("keep 400d"), "{text}");
         assert!(lines[at("client-errors")].contains("   1 event "), "{text}");
         assert!(lines[at("courses")].contains("3000 documents"), "{text}");
+        assert!(lines[at("pages")].contains("3 files") && lines[at("pages")].contains("3.0 MiB / 512 MiB"), "{text}");
+        assert_eq!(names["files"][0]["maxSize"], json!(512 << 20));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! A shell's writes to a set of files: `files put` and `files delete`.
+//! A shell's writes to a set of files: `files put`, `delete`, `set-max-size` and `trim`.
 
 use std::io::{Read, Write};
 
@@ -56,6 +56,26 @@ impl<S: Read + Write> Client<S> {
             expires: info.expires.map(from_unix_millis),
             meta: info.meta.unwrap_or_default(),
         })
+    }
+
+    /// Changes the set's ceiling, none removing it, only while it keeps
+    /// `if_current` when that is given; `when_full` is `evict` or `refuse`.
+    pub fn set_max_size(
+        &mut self,
+        files: u64,
+        max_size: Option<u64>,
+        (if_current, when_full): (Option<u64>, Option<&str>),
+    ) -> Result<()> {
+        let change =
+            wire::BlobsSetMaxSize { handle: files, max_size, when_full: when_full.map(str::to_owned), if_current };
+        self.call(method::BLOBS_SET_MAX_SIZE, &change).map(drop)
+    }
+
+    /// Removes the set's files in the eviction's order until it holds at
+    /// most `to` bytes: the files removed, and their bytes.
+    pub fn trim(&mut self, files: u64, to: u64) -> Result<(u64, u64)> {
+        let trimmed = self.answer::<wire::BlobsTrimmed>(method::BLOBS_TRIM, &wire::BlobsTrim { handle: files, to })?;
+        Ok((trimmed.evictions, trimmed.freed))
     }
 
     /// Deletes the file at `path`: whether there was one.

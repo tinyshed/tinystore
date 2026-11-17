@@ -18,7 +18,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Protocol, Self, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, cast
 
 from ._connection import check_name, piece_of
 from ._handles import handle_on, via_link
@@ -39,6 +39,9 @@ from ._wire.protocol import (
     BlobsPage,
     BlobsPiece,
     BlobsRead,
+    BlobsSetMaxSize,
+    BlobsTrim,
+    BlobsTrimmed,
     BlobsUsage,
     BlobsWrite,
     BlobsWritten,
@@ -92,10 +95,37 @@ class FilePage:
 
 @dataclass(frozen=True, slots=True)
 class Usage:
-    """The files of a folder and their bytes, as it is now."""
+    """The files of a folder and their bytes, as it is now, and the set's ceiling and what it evicted."""
 
     count: int
     size: int
+    max_size: int | None = None
+    """the set's ceiling, None when it keeps none"""
+    evictions: int = 0
+    """the files the ceiling removed since the store opened"""
+
+
+@dataclass(frozen=True, slots=True)
+class Trim:
+    """What a trim removed: its files, and their sizes as usage counts them."""
+
+    evictions: int
+    freed: int
+
+
+type WhenFull = Literal["evict", "refuse"]
+"""What a write past a set's max_size does: "evict", the default, or "refuse", a LimitError that removes nothing."""
+
+
+@dataclass(frozen=True, slots=True)
+class FilesOptions:
+    """How a set of files opens: its files' terms and bounds, and the ceiling of them all."""
+
+    ttl: Duration | None = None
+    idle: Duration | None = None
+    max_file_size: Size | None = None
+    max_size: Size | None = None
+    when_full: WhenFull | None = None
 
 
 _BINARY = {"KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40}
@@ -140,19 +170,26 @@ def segment_of(segment: str | int) -> str:
     return str(segment)
 
 
-def open_files(link: Link, name: str, ttl: Duration | None, max_file_size: Size | None) -> Files:
+def open_files(link: Link, name: str, options: FilesOptions) -> Files:
     """Files as ``store.files`` opens them."""
-    return Files(link, name, files_open(name, ttl, max_file_size), ())
+    return Files(link, name, files_open(name, options), ())
 
 
-def files_open(name: str, ttl: Duration | None, max_file_size: Size | None, database: int | None = None) -> bytes:
+def files_open(name: str, options: FilesOptions, database: int | None = None) -> bytes:
     """The open of a set of files, kept in the database of the handle ``database`` when it is given."""
     check_name(name, "files")
+    if options.ttl is not None and options.idle is not None:
+        raise InvalidError(f"files {name}: ttl and idle are one or the other")
+    if options.when_full not in (None, "evict", "refuse"):
+        raise InvalidError(f"files {name}: when_full {options.when_full!r}: evict or refuse")
     return BlobsOpen.encode(
         name=name,
-        ttl=None if ttl is None else ms(ttl, f"files {name}: ttl"),
-        max_file_size=None if max_file_size is None else bytes_of(max_file_size),
+        ttl=None if options.ttl is None else ms(options.ttl, f"files {name}: ttl"),
+        max_file_size=None if options.max_file_size is None else bytes_of(options.max_file_size),
         database=database,
+        idle=None if options.idle is None else ms(options.idle, f"files {name}: idle"),
+        max_size=None if options.max_size is None else bytes_of(options.max_size),
+        when_full=options.when_full,
     )
 
 
@@ -318,10 +355,45 @@ class Files:
             after = page.next
 
     async def usage(self) -> Usage:
-        """The files in the folder and their bytes, as it is now: it counts, it does not limit."""
+        """The files in the folder and their bytes, as it is now, with the set's ceiling and its evictions.
+
+        It renews nothing.
+        """
         answer = await self._call("blobs.usage", lambda h: BlobsFolder.encode(handle=h, folder=list(self._folder)))
         usage = BlobsUsage.decode(answer)
-        return Usage(usage.get("count", 0), usage.get("size", 0))
+        return Usage(usage.get("count", 0), usage.get("size", 0), usage.get("max_size"), usage.get("evictions", 0))
+
+    async def set_max_size(
+        self, size: Size, *, if_current: Size | None = None, when_full: WhenFull | None = None
+    ) -> None:
+        """Changes the set's ceiling for every handle, "none" removing it; a lower one evicts at once.
+
+        With ``if_current`` it changes only while the set keeps that ceiling,
+        and another is ConflictError; one the set keeps already writes nothing::
+
+            await pages.set_max_size("1GiB", if_current="512MiB")
+        """
+        max_size = None if size == "none" else bytes_of(size)
+        current = None if if_current is None else bytes_of(if_current)
+        if when_full not in (None, "evict", "refuse"):
+            raise InvalidError(f"files {self.name}: when_full {when_full!r}: evict or refuse")
+        await self._call(
+            "blobs.setMaxSize",
+            lambda h: BlobsSetMaxSize.encode(handle=h, max_size=max_size, when_full=when_full, if_current=current),
+            "write",
+        )
+
+    async def trim(self, *, to: Size) -> Trim:
+        """Removes files in the eviction's order until the set holds at most ``to``; its ceiling stays.
+
+        A set whose ceiling refuses is InvalidError::
+
+            trimmed = await pages.trim(to="300MiB")  # Trim(evictions=184, freed=220000000)
+        """
+        bound = bytes_of(to)
+        answer = await self._call("blobs.trim", lambda h: BlobsTrim.encode(handle=h, to=bound), "write")
+        trimmed = BlobsTrimmed.decode(answer)
+        return Trim(trimmed.get("evictions", 0), trimmed.get("freed", 0))
 
     async def clear(self) -> None:
         """Removes the folder's every file and every folder in it, at once for every reader."""

@@ -59,7 +59,7 @@ fn a_file_reads_as_the_disk_holds_it_with_an_etag_of_its_version() {
     let folder = movies.folder("Dune (2021)");
     assert_eq!(folder.head("Dune.mkv").unwrap().unwrap().path, "Dune.mkv");
     assert_eq!(folder.list().page().unwrap().files.len(), 1);
-    assert_eq!(folder.usage().unwrap(), Usage { count: 1, size: 15 });
+    assert_eq!(folder.usage().unwrap(), Usage { count: 1, size: 15, ..Usage::default() });
     assert_eq!(f.picture(), before, "a read wrote under the directory's path");
 }
 

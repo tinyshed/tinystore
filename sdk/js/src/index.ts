@@ -8,9 +8,12 @@ export type {
 	FilePage,
 	Files,
 	FilesOptions,
+	FilesUsage,
 	Size,
 	StoredFile,
+	Trim,
 	Upload,
+	WhenFull,
 } from './blobs.ts'
 export { withSignal } from './cancel.ts'
 export type {

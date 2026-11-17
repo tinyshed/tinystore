@@ -34,6 +34,8 @@ methods: dict[str, int] = {
     "blobs.scan": 0x040F,
     "blobs.changes": 0x0410,
     "blobs.forget": 0x0411,
+    "blobs.setMaxSize": 0x0413,
+    "blobs.trim": 0x0414,
     # Answers once the store has the message, not once anyone handled it; in a
     # database's transaction, it is handed over once the transaction commits.
     "channels.publish": 0x0A01,
@@ -316,6 +318,18 @@ def _write_blobs_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(4)
         w.uint(x)
         n += 1
+    if (x := v.get("idle")) is not None:
+        w.uint(5)
+        w.uint(x)
+        n += 1
+    if (x := v.get("max_size")) is not None:
+        w.uint(6)
+        w.uint(x)
+        n += 1
+    if (x := v.get("when_full")) is not None:
+        w.uint(7)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -332,6 +346,12 @@ def _read_blobs_open(r: Reader) -> dict[str, Any]:
                 read["max_file_size"] = r.uint()
             case 4:
                 read["database"] = r.uint()
+            case 5:
+                read["idle"] = r.uint()
+            case 6:
+                read["max_size"] = r.uint()
+            case 7:
+                read["when_full"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -351,6 +371,12 @@ BlobsOpen = Message(
         # a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions;
         # blobs.db when absent
         "database": (4, uint),
+        # the term of every file written without its own, from its last get or head; never beside ttl
+        "idle": (5, uint),
+        # the set's ceiling, kept in the set: an open with another is a conflict
+        "max_size": (6, uint),
+        # evict or refuse, what a write past the ceiling does; kept with it
+        "when_full": (7, str_),
     },
     _write_blobs_open,
     _read_blobs_open,
@@ -1235,6 +1261,14 @@ def _write_blobs_usage(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(2)
         w.uint(x)
         n += 1
+    if (x := v.get("max_size")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("evictions")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -1247,6 +1281,10 @@ def _read_blobs_usage(r: Reader) -> dict[str, Any]:
                 read["count"] = r.uint()
             case 2:
                 read["size"] = r.uint()
+            case 3:
+                read["max_size"] = r.uint()
+            case 4:
+                read["evictions"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -1258,9 +1296,155 @@ BlobsUsage = Message(
     {
         "count": (1, uint),
         "size": (2, uint),
+        # the set's ceiling, none when it keeps none
+        "max_size": (3, uint),
+        # the files the ceiling removed since the store opened
+        "evictions": (4, uint),
     },
     _write_blobs_usage,
     _read_blobs_usage,
+)
+
+
+def _write_blobs_set_max_size(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("handle")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("max_size")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    if (x := v.get("when_full")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    if (x := v.get("if_current")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_set_max_size(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["handle"] = r.uint()
+            case 2:
+                read["max_size"] = r.uint()
+            case 3:
+                read["when_full"] = r.str()
+            case 4:
+                read["if_current"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A change of a set's ceiling, which every handle follows from its commit:
+# a lower one evicts at once, and one the set keeps already writes nothing.
+BlobsSetMaxSize = Message(
+    "blobs.SetMaxSize",
+    {
+        "handle": (1, uint),
+        # none removes the ceiling
+        "max_size": (2, uint),
+        # evict or refuse; what the set does now when absent
+        "when_full": (3, str_),
+        # changes it only while the set keeps this ceiling: another is a conflict
+        "if_current": (4, uint),
+    },
+    _write_blobs_set_max_size,
+    _read_blobs_set_max_size,
+)
+
+
+def _write_blobs_trim(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("handle")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("to")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_trim(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["handle"] = r.uint()
+            case 2:
+                read["to"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# Removes files in the eviction's order until the set holds at most to
+# bytes, a batch of 10,000 a commit; a refusing set is invalid.
+BlobsTrim = Message(
+    "blobs.Trim",
+    {
+        "handle": (1, uint),
+        "to": (2, uint),
+    },
+    _write_blobs_trim,
+    _read_blobs_trim,
+)
+
+
+def _write_blobs_trimmed(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("evictions")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("freed")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_blobs_trimmed(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["evictions"] = r.uint()
+            case 2:
+                read["freed"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+BlobsTrimmed = Message(
+    "blobs.Trimmed",
+    {
+        "evictions": (1, uint),
+        # the files' sizes, as usage counts them
+        "freed": (2, uint),
+    },
+    _write_blobs_trimmed,
+    _read_blobs_trimmed,
 )
 
 
@@ -11056,6 +11240,9 @@ messages: dict[str, Message] = {
     "blobs.Page": BlobsPage,
     "blobs.Folder": BlobsFolder,
     "blobs.Usage": BlobsUsage,
+    "blobs.SetMaxSize": BlobsSetMaxSize,
+    "blobs.Trim": BlobsTrim,
+    "blobs.Trimmed": BlobsTrimmed,
     "blobs.Directory": BlobsDirectory,
     "blobs.Scanned": BlobsScanned,
     "blobs.Since": BlobsSince,

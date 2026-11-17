@@ -204,9 +204,9 @@ for (const way of ways) {
 				'users/420/photos/1.jpg',
 			])
 
-			expect(await user.usage()).toEqual({ count: 2, size: 6 })
+			expect(await user.usage()).toEqual({ count: 2, size: 6, maxSize: undefined, evictions: 0 })
 			await user.clear()
-			expect(await user.usage()).toEqual({ count: 0, size: 0 })
+			expect(await user.usage()).toEqual({ count: 0, size: 0, maxSize: undefined, evictions: 0 })
 			expect(await media.head('users/420/photos/1.jpg')).toBeDefined()
 			expect(await caught(media.folder('users', '').put('a', 'x'))).toBeInstanceOf(InvalidError)
 			expect(await caught(media.folder('users/42').put('a', 'x'))).toBeInstanceOf(InvalidError)

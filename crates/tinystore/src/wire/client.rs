@@ -134,6 +134,20 @@ pub fn file_sets_held(store: &crate::Store) -> Result<Vec<Held>> {
     crate::blobs::held(store)
 }
 
+/// The sets of files that keep a ceiling, each with it, read as `buckets` is.
+#[cfg(feature = "blobs")]
+pub fn file_ceilings(store: &crate::Store) -> Result<Vec<(String, u64)>> {
+    crate::blobs::ceilings(store)
+}
+
+/// Each set of files whose counters differ from its rows, in blobs.db and in
+/// every database's file of the store at `dir`, a line each, read beside
+/// whoever holds it: what `tinystore verify` reports of a store's directory.
+#[cfg(feature = "blobs")]
+pub fn file_counters_differing(dir: &std::path::Path) -> Result<Vec<String>> {
+    crate::blobs::miscounted(dir)
+}
+
 /// What each stream with events holds of what it keeps, its events and
 /// what they weigh, read as `buckets_held` is.
 #[cfg(feature = "records")]

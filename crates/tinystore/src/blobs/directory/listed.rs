@@ -111,7 +111,7 @@ pub(super) fn usage_of(blobs: &Arc<Blobs>, directory: i64, from: &str, to: &str)
             .and_then(|mut select| select.query_row(params![directory, from, to], |row| Ok((row.get(0)?, row.get(1)?))))
             .map_err(|error| sql_error("blobs: a directory's usage", error))
     })?;
-    Ok(Usage { count: count.cast_unsigned(), size: size.cast_unsigned() })
+    Ok(Usage { count: count.cast_unsigned(), size: size.cast_unsigned(), ..Usage::default() })
 }
 
 impl DirectoryList<'_> {

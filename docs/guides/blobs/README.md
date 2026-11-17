@@ -54,6 +54,11 @@ avatars.folder("users").folder(42).clear()?; // every file of user 42
 - A set of files opened from a database, `db.files(…)`, commits with the
   database's rows in its transaction (contract DUR-06). See
   [Files in a database](../sql/buckets-and-queues.md#files-in-a-database).
+- A set with `idle` keeps a file for its term from its last `get` or
+  `head`, and a write past a set's `maxSize` removes the files used least
+  recently, or with `whenFull: 'refuse'` fails and removes nothing; the set
+  keeps its ceiling (contracts BLOB-17 to BLOB-20, BLOB-23, BLOB-24). See
+  [Caching](caching.md).
 
 ## In these guides
 
@@ -63,6 +68,7 @@ avatars.folder("users").folder(42).clear()?; // every file of user 42
 | [Serving files](serving.md)               | ETags, ranges, `content-disposition`, Go's `ServeContent`  |
 | [Copies and expiry](copies-and-expiry.md) | `copy`, `rename`, `ttl`, `expire`                          |
 | [Integrity](integrity.md)                 | checked reads, the scrub, `ifMatch` and `create`           |
+| [Caching](caching.md)                     | `idle`, `maxSize`, `whenFull`, `setMaxSize`, `trim`        |
 | [Directories](directories.md)             | a folder of the machine listed and read, `scan`, `changes` |
 
 New to Blobs? [Attachments](../../handbook/chat/attachments.md) in the

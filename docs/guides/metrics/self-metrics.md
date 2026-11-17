@@ -107,6 +107,7 @@ seconds after the store opens. In a container they read the container's.
 | `tinystore_locks_wait_ms`, `tinystore_locks_busy_total`, `tinystore_locks_lost_total` | by `lock`                                 |
 | `tinystore_search_ms`                                                                 | a search, by `index`                      |
 | `tinystore_blobs_written_total`, `_read_total`, `_damaged_total`                      | files, and their bytes                    |
+| `tinystore_files_evicted_total`, `tinystore_files_bytes`                              | evicted by a ceiling, held now, by `set`  |
 | `tinystore_wire_requests_total`, `tinystore_wire_call_ms`                             | requests by `method`, `kv.get`            |
 | `tinystore_replication_ack_wait_ms`                                                   | a synchronous home's wait for a copy      |
 

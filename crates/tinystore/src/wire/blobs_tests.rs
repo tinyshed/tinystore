@@ -6,7 +6,8 @@ use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
     BlobsAt, BlobsChanges, BlobsDelete, BlobsDirectory, BlobsFolder, BlobsGot, BlobsHead, BlobsOpen, BlobsPiece,
-    BlobsRead, BlobsScanned, BlobsSince, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, Hello, method,
+    BlobsRead, BlobsScanned, BlobsSetMaxSize, BlobsSince, BlobsTrim, BlobsTrimmed, BlobsUsage, BlobsWrite,
+    BlobsWritten, Empty, Failure, Handle, Hello, method,
 };
 
 fn open(client: &mut Client, name: &str) -> u64 {
@@ -575,5 +576,110 @@ fn a_growing_directorys_pieces_go_past_the_size_its_get_gave_and_bring_the_size_
     assert_eq!(piece.bytes, b"the folder's film, and more");
     assert_eq!(piece.size, Some(27), "a piece of a growing file brings its size");
     drop(client);
+    store.close().unwrap();
+}
+
+fn put(client: &mut Client, handle: u64, path: &str, size: usize) -> Result<BlobsWritten, Failure> {
+    let write = BlobsWrite { handle, path: path.to_owned(), bytes: bytes(size), ..Default::default() };
+    client.call::<BlobsWritten>(method::BLOBS_PUT, &write)
+}
+
+fn usage_of(client: &mut Client, handle: u64) -> BlobsUsage {
+    client.call(method::BLOBS_USAGE, &BlobsFolder { handle, folder: Vec::new() }).unwrap()
+}
+
+// contract: BLOB-20, BLOB-24
+#[test]
+fn a_ceiling_over_the_wire_evicts_conflicts_with_another_and_changes_by_set_max_size() {
+    let (mut client, store, _dir, _folder) = beside_a_folder(None);
+    let open = BlobsOpen { name: "pages".to_owned(), max_size: Some(200), ..BlobsOpen::default() };
+    let handle = client.call::<Handle>(method::BLOBS_OPEN, &open).unwrap().handle;
+    for path in ["a", "b", "c"] {
+        put(&mut client, handle, path, 100).unwrap();
+    }
+    let usage = usage_of(&mut client, handle);
+    assert_eq!((usage.count, usage.size, usage.max_size, usage.evictions), (2, 200, Some(200), 1));
+    let other = BlobsOpen { max_size: Some(300), ..open.clone() };
+    assert_eq!(client.call::<Handle>(method::BLOBS_OPEN, &other).unwrap_err().code, "conflict");
+    let refusing = BlobsOpen { when_full: Some("refuse".to_owned()), ..open.clone() };
+    assert_eq!(client.call::<Handle>(method::BLOBS_OPEN, &refusing).unwrap_err().code, "conflict");
+    let change = BlobsSetMaxSize { handle, max_size: Some(100), if_current: Some(300), ..BlobsSetMaxSize::default() };
+    assert_eq!(client.call::<Empty>(method::BLOBS_SET_MAX_SIZE, &change).unwrap_err().code, "conflict");
+    let change = BlobsSetMaxSize { if_current: Some(200), ..change };
+    client.call::<Empty>(method::BLOBS_SET_MAX_SIZE, &change).unwrap();
+    let usage = usage_of(&mut client, handle);
+    assert_eq!((usage.count, usage.max_size, usage.evictions), (1, Some(100), 2), "a lower ceiling evicts at once");
+    let trimmed: BlobsTrimmed = client.call(method::BLOBS_TRIM, &BlobsTrim { handle, to: 0 }).unwrap();
+    assert_eq!((trimmed.evictions, trimmed.freed), (1, 100));
+    let none = BlobsSetMaxSize { handle, ..BlobsSetMaxSize::default() };
+    client.call::<Empty>(method::BLOBS_SET_MAX_SIZE, &none).unwrap();
+    assert_eq!(usage_of(&mut client, handle).max_size, None);
+    drop(client);
+    store.close().unwrap();
+}
+
+// contract: BLOB-23
+#[test]
+fn a_refusing_ceiling_over_the_wire_fails_limit_and_refuses_a_trim() {
+    let (mut client, store, _dir, _folder) = beside_a_folder(None);
+    let open = BlobsOpen {
+        name: "uploads".to_owned(),
+        max_size: Some(150),
+        when_full: Some("refuse".to_owned()),
+        ..BlobsOpen::default()
+    };
+    let handle = client.call::<Handle>(method::BLOBS_OPEN, &open).unwrap().handle;
+    put(&mut client, handle, "a", 100).unwrap();
+    assert_eq!(put(&mut client, handle, "b", 100).unwrap_err().code, "limit");
+    assert_eq!(usage_of(&mut client, handle).count, 1);
+    let refused = client.call::<BlobsTrimmed>(method::BLOBS_TRIM, &BlobsTrim { handle, to: 0 }).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{refused:?}");
+    let unknown = BlobsOpen { name: "other".to_owned(), when_full: Some("drop".to_owned()), ..BlobsOpen::default() };
+    assert_eq!(client.call::<Handle>(method::BLOBS_OPEN, &unknown).unwrap_err().code, "invalid");
+    drop(client);
+    store.close().unwrap();
+}
+
+#[test]
+fn a_read_connection_writes_no_policy_and_its_reads_record_no_use() {
+    let (mut client, store, dir, folder) = beside_a_folder(None);
+    let open = BlobsOpen { name: "pages".to_owned(), max_size: Some(1000), ..BlobsOpen::default() };
+    let handle = client.call::<Handle>(method::BLOBS_OPEN, &open).unwrap().handle;
+    put(&mut client, handle, "a", 10).unwrap();
+    let mut reading = client_of(&store, folder.path(), Some(Capability::Read));
+    let idle = BlobsOpen { name: "pages".to_owned(), idle: Some(60_000), ..BlobsOpen::default() };
+    assert_eq!(reading.call::<Handle>(method::BLOBS_OPEN, &idle).unwrap_err().code, "permission");
+    let other = BlobsOpen { max_size: Some(2000), ..open.clone() };
+    assert_eq!(reading.call::<Handle>(method::BLOBS_OPEN, &other).unwrap_err().code, "permission");
+    let read = reading.call::<Handle>(method::BLOBS_OPEN, &open).unwrap().handle;
+    let change = BlobsSetMaxSize { handle: read, max_size: Some(5), ..BlobsSetMaxSize::default() };
+    assert_eq!(reading.call::<Empty>(method::BLOBS_SET_MAX_SIZE, &change).unwrap_err().code, "permission");
+    assert_eq!(
+        reading.call::<BlobsTrimmed>(method::BLOBS_TRIM, &BlobsTrim { handle: read, to: 0 }).unwrap_err().code,
+        "permission"
+    );
+    // written long ago, so that a read's use is due
+    let made = "update _tinystore_blobs_files set modified = 0";
+    let pages = store.files("pages").open().unwrap();
+    pages
+        .blobs
+        .file
+        .write(0, move |tx| crate::sqlite::execute_cached(tx, made, [], "a change by hand").map(drop))
+        .unwrap();
+    let at = BlobsAt { handle: read, folder: Vec::new(), path: "a".to_owned() };
+    reading.call::<BlobsHead>(method::BLOBS_HEAD, &at).unwrap().info.unwrap();
+    crate::blobs::maintain(&store).unwrap();
+    let used = || {
+        let read = |c: &rusqlite::Connection| {
+            Ok(c.query_row("select used from _tinystore_blobs_files", [], |row| row.get::<_, Option<i64>>(0)).unwrap())
+        };
+        pages.blobs.file.read(read).unwrap()
+    };
+    assert_eq!(used(), None::<i64>, "a read connection's head recorded no use");
+    client.call::<BlobsHead>(method::BLOBS_HEAD, &BlobsAt { handle, ..at }).unwrap().info.unwrap();
+    crate::blobs::maintain(&store).unwrap();
+    assert!(used().is_some(), "a connection that writes records its head's use");
+    drop((reading, client, pages));
+    let _ = dir;
     store.close().unwrap();
 }

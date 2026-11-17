@@ -42,6 +42,62 @@ pub fn files(&self, name: &str) -> FilesBuilder<'_>
 The set of files `name`, made the first time it opens, as
 `crate::Store::files` opens it.
 
+## SetMaxSize
+
+```rust
+pub struct SetMaxSize<'f> { /* private fields */ }
+```
+
+A change of a set's ceiling, its condition before `SetMaxSize::apply`.
+
+### SetMaxSize.if_current
+
+```rust
+pub fn if_current(self, bytes: u64) -> Self
+```
+
+Changes the ceiling only while the set keeps `bytes`: another is a
+conflict, so that two deploys never silently undo each other.
+
+### SetMaxSize.when_full
+
+```rust
+pub fn when_full(self, when_full: WhenFull) -> Self
+```
+
+What a write past the new ceiling does; what the set does now when
+not given.
+
+### SetMaxSize.apply
+
+```rust
+pub fn apply(self) -> Result<()>
+```
+
+Writes the ceiling, nothing when the set keeps it already.
+
+## Trim
+
+```rust
+pub struct Trim {
+    pub evictions: u64,
+    pub freed: u64,
+}
+```
+
+What a trim removed: its files, and their sizes as `usage` counts them.
+
+## WhenFull
+
+```rust
+pub enum WhenFull {
+    Evict,
+    Refuse,
+}
+```
+
+What a write that would take a set past its ceiling does.
+
 ## Change
 
 ```rust
@@ -393,6 +449,33 @@ A set of files by path, or a folder of it: bytes written whole and
 replaced whole, each with a type, an ETag and a few strings of the
 program's.
 
+### Files.set_max_size
+
+```rust
+pub fn set_max_size(&self, bytes: u64) -> SetMaxSize<'_>
+```
+
+Changes the set's ceiling for every handle, in this process and in
+every other, from its commit on; a lower one evicts at once.
+
+### Files.remove_max_size
+
+```rust
+pub fn remove_max_size(&self) -> SetMaxSize<'_>
+```
+
+Removes the set's ceiling: it grows as its writes take it.
+
+### Files.trim
+
+```rust
+pub fn trim(&self, to: u64) -> Result<Trim>
+```
+
+Removes files in the eviction's order until the set holds at most `to`
+bytes, and leaves its ceiling where it was: a batch of 10,000 files a
+commit, so that no trim holds the writer long.
+
 ### Files.folder
 
 ```rust
@@ -445,13 +528,17 @@ pub fn get(&self, path: &str) -> Result<Option<StoredFile>>
 The file at the path and the bytes it reads, which stay what they were
 now through a replace, a delete or an expiry; none when there is none.
 
+On a set with `idle` it renews the file's term, and on a set with a
+ceiling it moves the file up the eviction's order.
+
 ### Files.head
 
 ```rust
 pub fn head(&self, path: &str) -> Result<Option<FileInfo>>
 ```
 
-What the file at the path carries, none of its bytes.
+What the file at the path carries, none of its bytes. A use, as a
+`get` is: a conditional request answered `304` used the file.
 
 ### Files.delete
 
@@ -514,7 +601,8 @@ pub fn usage(&self) -> Result<Usage>
 ```
 
 The files of this folder and of the folders in it, and their bytes, as
-they are now: a count, not a bound.
+they are now, with the set's ceiling and what it evicted since the
+store opened. It renews nothing.
 
 ### Files.clear
 
@@ -531,8 +619,8 @@ however many files it holds. On the files themselves it empties them.
 pub struct FilesBuilder<'s> { /* private fields */ }
 ```
 
-What opens a set of files: its name, and the term and the bound of the
-files written in it.
+What opens a set of files: its name, the term and the bound of the files
+written in it, and the ceiling of them all.
 
 ### FilesBuilder.ttl
 
@@ -543,6 +631,16 @@ pub fn ttl(self, ttl: Duration) -> Self
 The term of every file written without its own, counted from its
 write; not a ceiling.
 
+### FilesBuilder.idle
+
+```rust
+pub fn idle(self, idle: Duration) -> Self
+```
+
+The term of every file written without its own, counted from its last
+`get` or `head`, as a bucket's `idle` counts a key's; `ttl` and `idle`
+exclude each other.
+
 ### FilesBuilder.max_file_size
 
 ```rust
@@ -551,6 +649,27 @@ pub fn max_file_size(self, bytes: u64) -> Self
 
 The largest file a write may leave: one past it is refused and leaves
 nothing, and nothing stored is ever removed to make room.
+
+### FilesBuilder.max_size
+
+```rust
+pub fn max_size(self, bytes: u64) -> Self
+```
+
+The most the set's files may hold together: a write past it removes
+the files used least recently until the set fits. The set keeps it, so
+that it holds for every handle; an open with another fails `conflict`,
+and `Files::set_max_size` changes it.
+
+### FilesBuilder.when_full
+
+```rust
+pub fn when_full(self, when_full: WhenFull) -> Self
+```
+
+What a write past `max_size` does: evicts, or with
+`WhenFull::Refuse` fails `limit` and removes nothing. Kept with the
+ceiling.
 
 ### FilesBuilder.open
 
@@ -592,10 +711,13 @@ the next page starts when one follows.
 pub struct Usage {
     pub count: u64,
     pub size: u64,
+    pub max_size: Option<u64>,
+    pub evictions: u64,
 }
 ```
 
-What a folder holds now: its files and their bytes.
+What a folder holds now: its files and their bytes, and the set's
+ceiling and what it evicted since the store opened.
 
 ## All
 
@@ -656,6 +778,7 @@ Files a page holds at most, and when a list does not say.
 pub struct Maintenance {
     pub expired: usize,
     pub cleared: usize,
+    pub evicted: usize,
     pub removed: usize,
     pub scrubbed: u64,
     pub damaged: usize,
@@ -793,6 +916,39 @@ pub fn abort(self)
 ```
 
 Ends the upload and leaves nothing; dropping it does the same.
+
+## aio::blobs::SetMaxSize
+
+```rust
+pub struct SetMaxSize { /* private fields */ }
+```
+
+A change of a set's ceiling, its condition before `SetMaxSize::apply`.
+
+### aio::blobs::SetMaxSize.if_current
+
+```rust
+pub fn if_current(self, bytes: u64) -> Self
+```
+
+Changes the ceiling only while the set keeps `bytes`.
+
+### aio::blobs::SetMaxSize.when_full
+
+```rust
+pub fn when_full(self, when_full: WhenFull) -> Self
+```
+
+What a write past the new ceiling does; what the set does now when
+not given.
+
+### aio::blobs::SetMaxSize.apply
+
+```rust
+pub fn apply(self) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Writes the ceiling on the store's pool, nothing when the set keeps it.
 
 ## aio::blobs::All
 
@@ -965,6 +1121,15 @@ pub fn ttl(self, ttl: Duration) -> Self
 The term of every file written without its own, counted from its
 write; not a ceiling.
 
+### aio::blobs::FilesBuilder.idle
+
+```rust
+pub fn idle(self, idle: Duration) -> Self
+```
+
+The term of every file written without its own, counted from its last
+`get` or `head`, as `crate::blobs::FilesBuilder::idle` counts it.
+
 ### aio::blobs::FilesBuilder.max_file_size
 
 ```rust
@@ -973,6 +1138,23 @@ pub fn max_file_size(self, bytes: u64) -> Self
 
 The largest file a write may leave: one past it is refused and leaves
 nothing, and nothing stored is ever removed to make room.
+
+### aio::blobs::FilesBuilder.max_size
+
+```rust
+pub fn max_size(self, bytes: u64) -> Self
+```
+
+The most the set's files may hold together, kept in the set, as
+`crate::blobs::FilesBuilder::max_size` keeps it.
+
+### aio::blobs::FilesBuilder.when_full
+
+```rust
+pub fn when_full(self, when_full: WhenFull) -> Self
+```
+
+What a write past `max_size` does, kept with the ceiling.
 
 ### aio::blobs::FilesBuilder.open
 
@@ -992,6 +1174,32 @@ pub struct Files { /* private fields */ }
 A set of files by path, or a folder of it, whose calls are awaited: the
 same set as `crate::blobs::Files`, and the same set when one is made
 from the other.
+
+### aio::blobs::Files.set_max_size
+
+```rust
+pub fn set_max_size(&self, bytes: u64) -> SetMaxSize
+```
+
+Changes the set's ceiling for every handle, as
+`crate::blobs::Files::set_max_size` does; a lower one evicts at once.
+
+### aio::blobs::Files.remove_max_size
+
+```rust
+pub fn remove_max_size(&self) -> SetMaxSize
+```
+
+Removes the set's ceiling.
+
+### aio::blobs::Files.trim
+
+```rust
+pub fn trim(&self, to: u64) -> impl Future<Output = Result<Trim>> + Send + 'static
+```
+
+Removes files in the eviction's order until the set holds at most `to`
+bytes, as `crate::blobs::Files::trim` does, a batch a commit.
 
 ### aio::blobs::Files.list
 

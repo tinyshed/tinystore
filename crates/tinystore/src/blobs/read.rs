@@ -11,6 +11,7 @@ use super::directory::{Outside, time_of, version_etag};
 use super::disk::{being_removed, read_at};
 use super::files::Files;
 use super::info::{FileInfo, FileRow, file_columns};
+use super::uses::{Seen, ceiled};
 use crate::limits::Limit;
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
@@ -25,7 +26,9 @@ pub(crate) const PIECE: usize = 256 << 10;
 const SELECT_OPEN: &str = concat!(
     "select ",
     file_columns!(),
-    ", f.content, c.id, c.inline, c.damaged, b.bytes
+    ", f.content, c.id, c.inline, c.damaged, b.bytes, f.revision, f.used, ",
+    ceiled!(),
+    "
     from _tinystore_blobs_files as f left join _tinystore_blobs_contents as c on c.id = f.content
         left join _tinystore_blobs_bodies as b on c.inline and b.id = f.content
     where f.set_id = ?1 and f.path = ?2 and (f.expires is null or f.expires > ?3) and not ",
@@ -79,19 +82,30 @@ struct Found {
     inline: Option<bool>,
     damaged: Option<bool>,
     body: Option<Vec<u8>>,
+    revision: i64,
+    used: Option<i64>,
+    ceiled: bool,
 }
 
 impl StoredFile {
     /// The file at a whole path and its bytes. A file gone between the lookup
     /// and its open went because its path changed, so the path is looked up
-    /// again, three lookups in all.
-    pub(crate) fn open(files: &Files, whole: &str) -> Result<Option<StoredFile>> {
+    /// again, three lookups in all. What the lookup saw of the file's row
+    /// comes with it.
+    pub(crate) fn open(files: &Files, whole: &str) -> Result<Option<(StoredFile, Seen)>> {
         let mut failed = None;
         for _ in 0..LOOKUPS {
             let Some(found) = lookup(files, whole)? else { return Ok(None) };
             if failed == Some(found.content) {
                 return Err(Error::corrupt(format!("the file of content {} is missing", found.content)));
             }
+            let seen = Seen {
+                revision: found.revision,
+                modified: found.row.modified,
+                used: found.used,
+                expires: found.row.expires,
+                ceiled: found.ceiled,
+            };
             // an awaited get opens a file on the store's pool, never where its future is polled
             if found.inline != Some(true) && crate::polled::waits_refused() {
                 return Err(crate::polled::refused(|| format!("{}: {whole:?}: open its file", files.describe())));
@@ -103,7 +117,7 @@ impl StoredFile {
                         files.blobs.probe.count("tinystore_blobs_read_total", &[], 1.0);
                         files.blobs.probe.count("tinystore_blobs_read_bytes_total", &[], opened.info().size as f64);
                     }
-                    return opened.map(Some);
+                    return opened.map(|opened| Some((opened, seen)));
                 }
             }
         }
@@ -176,6 +190,11 @@ impl StoredFile {
 
     pub fn info(&self) -> &FileInfo {
         &self.info
+    }
+
+    /// Its term, as the renewal its read wrote moved it.
+    pub(super) fn renewed(&mut self, until: std::time::SystemTime) {
+        self.info.expires = Some(until);
     }
 
     /// Whether an ETag a read was given names these bytes, as a write's
@@ -399,6 +418,9 @@ fn lookup(files: &Files, whole: &str) -> Result<Option<Found>> {
                             inline: row.get(9)?,
                             damaged: row.get(10)?,
                             body: row.get(11)?,
+                            revision: row.get(12)?,
+                            used: row.get(13)?,
+                            ceiled: row.get(14)?,
                         })
                     })
                     .optional()

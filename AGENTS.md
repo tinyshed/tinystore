@@ -41,7 +41,7 @@ research's submodule is pinned to `v0.1.0-rc.5`.
 | sql            | the application's databases, migrations, tables, a query builder, batches and transactions         | [sql](docs/guides/sql/README.md)                     |
 | kv             | buckets, branches, expiry, versions, encrypted values, counters, rate limits, quotas, `once`       | [kv](docs/guides/kv/README.md)                       |
 | jobs           | queues, ids, repeats and cron, schedules, concurrency, rate, retries, steps, workers               | [jobs](docs/guides/jobs/README.md)                   |
-| blobs          | files by path, uploads, conditions, copies, expiry, checked reads, the scrub, a folder's directory | [blobs](docs/guides/blobs/README.md)                 |
+| blobs          | files by path, uploads, conditions, copies, expiry, a ceiling, checked reads, a scrub, directories | [blobs](docs/guides/blobs/README.md)                 |
 | search         | words, vectors or both, filters, typos, prefixes, layouts, matches, rebuilds, a table's index      | [search](docs/guides/search/README.md)               |
 | channels       | messages to whoever listens now, a transaction's at its commit                                     | [channels](docs/guides/channels/README.md)           |
 | locks          | locks and semaphores with fences, leases over the wire                                             | [locks](docs/guides/locks/README.md)                 |

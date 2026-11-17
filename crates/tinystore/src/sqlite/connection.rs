@@ -190,7 +190,7 @@ pub(crate) fn read_copy<T>(path: &Path, read: impl FnOnce(&Connection) -> rusqli
 /// store asks of a file no engine may have opened yet. The connection writes
 /// nothing, not even the checkpoint SQLite runs as the last one closes, which
 /// would move a node's frames into the file before its log holds them.
-#[cfg(feature = "kv")]
+#[cfg(any(feature = "kv", all(feature = "blobs", feature = "client")))]
 pub(crate) fn read_file<T>(path: &Path, read: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T> {
     let what = || format!("read {}", path.display());
     super::give_mutexes();

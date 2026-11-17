@@ -36,9 +36,22 @@ A page of a folder's files in the byte order of their paths, and where the next 
 class Usage:
     count: int
     size: int
+    max_size: int | None = None  # the set's ceiling, None when it keeps none
+    evictions: int = 0  # the files the ceiling removed since the store opened
 ```
 
-The files of a folder and their bytes, as it is now.
+The files of a folder and their bytes, as it is now, and the set's ceiling and what it evicted.
+
+## Trim
+
+```python
+@dataclass(frozen=True, slots=True)
+class Trim:
+    evictions: int
+    freed: int
+```
+
+What a trim removed: its files, and their sizes as usage counts them.
 
 ## Files
 
@@ -192,7 +205,39 @@ Every file of the folder, a page at a time, holding nothing between pages.
 async def usage() -> Usage: ...
 ```
 
-The files in the folder and their bytes, as it is now: it counts, it does not limit.
+The files in the folder and their bytes, as it is now, with the set's ceiling and its evictions.
+
+It renews nothing.
+
+### Files.set_max_size
+
+```python
+async def set_max_size(
+    size: Size,
+    *,
+    if_current: Size | None = None,
+    when_full: WhenFull | None = None,
+) -> None: ...
+```
+
+Changes the set's ceiling for every handle, "none" removing it; a lower one evicts at once.
+
+With ``if_current`` it changes only while the set keeps that ceiling,
+and another is ConflictError; one the set keeps already writes nothing:
+
+    await pages.set_max_size("1GiB", if_current="512MiB")
+
+### Files.trim
+
+```python
+async def trim(*, to: Size) -> Trim: ...
+```
+
+Removes files in the eviction's order until the set holds at most ``to``; its ceiling stays.
+
+A set whose ceiling refuses is InvalidError:
+
+    trimmed = await pages.trim(to="300MiB")  # Trim(evictions=184, freed=220000000)
 
 ### Files.clear
 

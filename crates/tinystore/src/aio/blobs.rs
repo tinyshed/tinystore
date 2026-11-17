@@ -66,10 +66,12 @@ use crate::pool::Pool;
 use crate::sync::lock;
 use crate::{Error, Key, Result};
 
+mod cache;
 mod list;
 mod read;
 mod upload;
 
+pub use cache::SetMaxSize;
 pub use list::{All, List};
 pub use read::StoredFile;
 pub use upload::Upload;
@@ -103,10 +105,30 @@ impl<'s> FilesBuilder<'s> {
         self
     }
 
+    /// The term of every file written without its own, counted from its last
+    /// `get` or `head`, as [`crate::blobs::FilesBuilder::idle`] counts it.
+    pub fn idle(mut self, idle: Duration) -> Self {
+        self.builder = self.builder.idle(idle);
+        self
+    }
+
     /// The largest file a write may leave: one past it is refused and leaves
     /// nothing, and nothing stored is ever removed to make room.
     pub fn max_file_size(mut self, bytes: u64) -> Self {
         self.builder = self.builder.max_file_size(bytes);
+        self
+    }
+
+    /// The most the set's files may hold together, kept in the set, as
+    /// [`crate::blobs::FilesBuilder::max_size`] keeps it.
+    pub fn max_size(mut self, bytes: u64) -> Self {
+        self.builder = self.builder.max_size(bytes);
+        self
+    }
+
+    /// What a write past `max_size` does, kept with the ceiling.
+    pub fn when_full(mut self, when_full: crate::blobs::WhenFull) -> Self {
+        self.builder = self.builder.when_full(when_full);
         self
     }
 

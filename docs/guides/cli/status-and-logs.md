@@ -75,6 +75,9 @@ grows with your users, or which stream keeps too much.
 The bytes leave out SQLite's pages, its indexes and its free space, so the
 names under a file add up to less than the file.
 
+A set of files with a ceiling shows it after its size, as `498 MiB / 512 MiB`,
+and `--json` gives it as `maxSize` ([Caching](../blobs/caching.md)).
+
 > [!NOTE]
 > **`--names` reads every name whole**
 > It scans each bucket, queue, set of files, stream and index, one name per

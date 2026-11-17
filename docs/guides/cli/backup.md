@@ -67,6 +67,21 @@ the bytes a restore would write, so the disk can be checked before one:
 
 A file that does not match exits 1, naming it and what broke, `corrupt`.
 
+Given a store's directory instead of a zip, it checks the store beside
+whoever holds it: each set of files keeps its count and size in its row,
+which its writes move, and `verify` compares them with what its files' rows
+hold, in blobs.db and in every database's file.
+
+```sh
+tinystore verify ./data
+```
+
+```text
+● ./data  ok · every set of files counts what its rows hold
+```
+
+A set that differs is named, with both counts, and exits 1.
+
 ## Every night
 
 ```sh

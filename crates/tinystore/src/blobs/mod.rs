@@ -14,6 +14,7 @@
 //! # }
 //! ```
 
+mod cache;
 mod change;
 mod directory;
 mod disk;
@@ -33,12 +34,14 @@ mod scrub;
 #[cfg(feature = "sql")]
 mod tx;
 mod upload;
+mod uses;
 
+pub use cache::{SetMaxSize, Trim, WhenFull};
 #[cfg(feature = "replication")]
 pub(crate) use engine::{FILE_IN_STORE, is_object, objects_after, objects_missing};
 // What the command line lists of a store's names, and what each holds.
 #[cfg(feature = "client")]
-pub(crate) use engine::{held, sets};
+pub(crate) use engine::{ceilings, held, miscounted, sets};
 // What a connection that only reads opens: a set of files the store holds.
 #[cfg(feature = "wire")]
 pub(crate) use directory::directory_as_it_is;

@@ -163,6 +163,12 @@ These contracts are what does not.
 - **BLOB-14** No read MUST leave the directory's folder, through a link or a path, even one swapped for a link between the scan and the read.
 - **BLOB-15** A connection that came with a token MUST NOT name a path of the server's machine.
 - **BLOB-16** A scan's memory MUST NOT follow the number of files.
+- **BLOB-17** A file of a set with `idle` MUST live its term from its last `get` or `head`, and `list` and `usage` MUST renew nothing.
+- **BLOB-18** A write past `max_size` MUST remove the lowest rank first, the rank a file's last use, a day later for a file read since its write, and never the file it writes.
+- **BLOB-19** A write MUST commit only leaving its set at most `max(max_size, its size before)`, or fail `limit` with nothing it evicted removed.
+- **BLOB-20** `max_size` and `when_full` MUST be the set's, kept in its file: an open with another MUST fail `conflict`, and only `set_max_size` MUST change them.
+- **BLOB-23** With `when_full` refuse, a write that grows its set past `max_size` MUST fail `limit` and remove nothing.
+- **BLOB-24** `trim` MUST leave its set at most `to` in the eviction's order and keep its ceiling, and MUST be refused on a set whose ceiling refuses.
 
 ### Records
 

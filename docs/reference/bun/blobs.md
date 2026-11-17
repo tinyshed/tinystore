@@ -14,12 +14,55 @@ A size in bytes: a number, or text in binary units, 64KiB or 2GiB; '2GB' does no
 
 ```ts
 interface FilesOptions {
-    /** the term of every file written without its own; not a ceiling */
+    /** the term of every file written without its own, from its write; not a ceiling */
     ttl?: Duration | undefined
+    /** the term of every file written without its own, from its last get or head; not beside ttl */
+    idle?: Duration | undefined
     /** the largest file a write may leave: past it, a write is refused and leaves nothing */
     maxFileSize?: Size | undefined
+    /**
+     * the most the set's files hold together, kept in the set: a write past it
+     * removes the files used least recently, and an open with another is ConflictError
+     */
+    maxSize?: Size | undefined
+    /** what a write past maxSize does: 'evict', the default, or 'refuse', a LimitError that removes nothing */
+    whenFull?: WhenFull | undefined
 }
 ```
+
+## WhenFull
+
+```ts
+type WhenFull = 'evict' | 'refuse'
+```
+
+What a write past a set's maxSize does.
+
+## FilesUsage
+
+```ts
+interface FilesUsage {
+    count: number
+    size: number
+    /** undefined when the set keeps no ceiling */
+    maxSize: number | undefined
+    /** the files the ceiling removed since the store opened */
+    evictions: number
+}
+```
+
+What a folder holds now, and the set's ceiling and what it evicted since the store opened.
+
+## Trim
+
+```ts
+interface Trim {
+    evictions: number
+    freed: number
+}
+```
+
+What a trim removed: its files, and their sizes as usage counts them.
 
 ## FileInfo
 
@@ -205,13 +248,36 @@ Every file of the folder, a page at a time, holding nothing between pages.
 ### Files.usage
 
 ```ts
-usage(): Promise<{
-        count: number
-        size: number
-    }>
+usage(): Promise<FilesUsage>
 ```
 
-The files in the folder and their bytes, as it is now: it counts, it does not limit.
+The files in the folder and their bytes, as it is now, with the set's
+ceiling and what it evicted since the store opened. It renews nothing.
+
+### Files.setMaxSize
+
+```ts
+setMaxSize(size: Size | 'none', options?: {
+        ifCurrent?: Size | undefined
+        whenFull?: WhenFull | undefined
+    }): Promise<void>
+```
+
+Changes the set's ceiling for every handle, 'none' removing it; a lower
+one evicts at once. With ifCurrent it changes only while the set keeps
+that ceiling, and another is ConflictError; one the set keeps already
+writes nothing.
+
+### Files.trim
+
+```ts
+trim(options: {
+        to: Size
+    }): Promise<Trim>
+```
+
+Removes files in the eviction's order until the set holds at most `to`,
+and leaves its ceiling where it was; a set whose ceiling refuses is InvalidError.
 
 ### Files.clear
 

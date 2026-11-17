@@ -88,7 +88,7 @@ pub(crate) fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Ve
 /// called. The home's answer goes to `answered` on the link's thread, none
 /// when the link broke before it came, and this node's copy may not hold the
 /// write yet.
-#[cfg(feature = "kv")]
+#[cfg(any(feature = "kv", feature = "blobs"))]
 pub(crate) fn pass_on_then(
     store: &Store,
     file: &str,
@@ -104,7 +104,7 @@ pub(crate) fn pass_on_then(
 
 /// Passes many writes on at once as `pass_on_then` does, run in order at the
 /// home, which stops at the first that fails.
-#[cfg(feature = "kv")]
+#[cfg(any(feature = "kv", feature = "blobs"))]
 pub(crate) fn pass_on_all_then(
     store: &Store,
     file: &str,

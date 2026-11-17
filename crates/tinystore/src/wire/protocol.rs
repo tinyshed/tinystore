@@ -181,6 +181,12 @@ pub(crate) struct BlobsOpen {
     pub(crate) max_file_size: Option<u64>,
     /// A database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent.
     pub(crate) database: Option<u64>,
+    /// The term of every file written without its own, from its last get or head; never beside ttl. Milliseconds.
+    pub(crate) idle: Option<u64>,
+    /// The set's ceiling, kept in the set: an open with another is a conflict.
+    pub(crate) max_size: Option<u64>,
+    /// Evict or refuse, what a write past the ceiling does; kept with it.
+    pub(crate) when_full: Option<String>,
 }
 
 #[cfg(feature = "blobs")]
@@ -196,6 +202,9 @@ impl Message for BlobsOpen {
                 2 => message.ttl = Some(codec::uint(r, "ttl")?),
                 3 => message.max_file_size = Some(codec::uint(r, "maxFileSize")?),
                 4 => message.database = Some(codec::uint(r, "database")?),
+                5 => message.idle = Some(codec::uint(r, "idle")?),
+                6 => message.max_size = Some(codec::uint(r, "maxSize")?),
+                7 => message.when_full = Some(codec::str(r, "whenFull")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -220,6 +229,18 @@ impl Message for BlobsOpen {
             map.field(out, 4);
             codec::write_uint(out, database);
         }
+        if let Some(idle) = &self.idle {
+            map.field(out, 5);
+            codec::write_uint(out, idle);
+        }
+        if let Some(max_size) = &self.max_size {
+            map.field(out, 6);
+            codec::write_uint(out, max_size);
+        }
+        if let Some(when_full) = &self.when_full {
+            map.field(out, 7);
+            codec::write_str(out, when_full);
+        }
         map.close(out);
     }
 
@@ -229,6 +250,9 @@ impl Message for BlobsOpen {
             + self.ttl.map_or(0, |_| 10)
             + self.max_file_size.map_or(0, |_| 10)
             + self.database.map_or(0, |_| 10)
+            + self.idle.map_or(0, |_| 10)
+            + self.max_size.map_or(0, |_| 10)
+            + self.when_full.as_ref().map_or(0, |when_full| 1 + 5 + when_full.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -236,6 +260,9 @@ impl Message for BlobsOpen {
             && self.ttl.is_none()
             && self.max_file_size.is_none()
             && self.database.is_none()
+            && self.idle.is_none()
+            && self.max_size.is_none()
+            && self.when_full.is_none()
     }
 }
 
@@ -1222,6 +1249,10 @@ impl Message for BlobsFolder {
 pub(crate) struct BlobsUsage {
     pub(crate) count: u64,
     pub(crate) size: u64,
+    /// The set's ceiling, none when it keeps none.
+    pub(crate) max_size: Option<u64>,
+    /// The files the ceiling removed since the store opened.
+    pub(crate) evictions: u64,
 }
 
 #[cfg(feature = "blobs")]
@@ -1235,6 +1266,8 @@ impl Message for BlobsUsage {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.count = codec::uint(r, "count")?,
                 2 => message.size = codec::uint(r, "size")?,
+                3 => message.max_size = Some(codec::uint(r, "maxSize")?),
+                4 => message.evictions = codec::uint(r, "evictions")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -1251,6 +1284,139 @@ impl Message for BlobsUsage {
             map.field(out, 2);
             codec::write_uint(out, &self.size);
         }
+        if let Some(max_size) = &self.max_size {
+            map.field(out, 3);
+            codec::write_uint(out, max_size);
+        }
+        if self.evictions != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.evictions);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + self.max_size.map_or(0, |_| 10)
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.count == 0
+            && self.size == 0
+            && self.max_size.is_none()
+            && self.evictions == 0
+    }
+}
+
+/// A change of a set's ceiling, which every handle follows from its commit:
+/// a lower one evicts at once, and one the set keeps already writes nothing.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsSetMaxSize {
+    pub(crate) handle: u64,
+    /// None removes the ceiling.
+    pub(crate) max_size: Option<u64>,
+    /// Evict or refuse; what the set does now when absent.
+    pub(crate) when_full: Option<String>,
+    /// Changes it only while the set keeps this ceiling: another is a conflict.
+    pub(crate) if_current: Option<u64>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsSetMaxSize {
+    const NAME: &'static str = "blobs.SetMaxSize";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.max_size = Some(codec::uint(r, "maxSize")?),
+                3 => message.when_full = Some(codec::str(r, "whenFull")?),
+                4 => message.if_current = Some(codec::uint(r, "ifCurrent")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if let Some(max_size) = &self.max_size {
+            map.field(out, 2);
+            codec::write_uint(out, max_size);
+        }
+        if let Some(when_full) = &self.when_full {
+            map.field(out, 3);
+            codec::write_str(out, when_full);
+        }
+        if let Some(if_current) = &self.if_current {
+            map.field(out, 4);
+            codec::write_uint(out, if_current);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + self.max_size.map_or(0, |_| 10)
+            + self.when_full.as_ref().map_or(0, |when_full| 1 + 5 + when_full.len())
+            + self.if_current.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.max_size.is_none()
+            && self.when_full.is_none()
+            && self.if_current.is_none()
+    }
+}
+
+/// Removes files in the eviction's order until the set holds at most to
+/// bytes, a batch of 10,000 a commit; a refusing set is invalid.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsTrim {
+    pub(crate) handle: u64,
+    pub(crate) to: u64,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsTrim {
+    const NAME: &'static str = "blobs.Trim";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.to = codec::uint(r, "to")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if self.to != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.to);
+        }
         map.close(out);
     }
 
@@ -1261,8 +1427,58 @@ impl Message for BlobsUsage {
     }
 
     fn is_zero(&self) -> bool {
-        self.count == 0
-            && self.size == 0
+        self.handle == 0
+            && self.to == 0
+    }
+}
+
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsTrimmed {
+    pub(crate) evictions: u64,
+    /// The files' sizes, as usage counts them.
+    pub(crate) freed: u64,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsTrimmed {
+    const NAME: &'static str = "blobs.Trimmed";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.evictions = codec::uint(r, "evictions")?,
+                2 => message.freed = codec::uint(r, "freed")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.evictions != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.evictions);
+        }
+        if self.freed != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.freed);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.evictions == 0
+            && self.freed == 0
     }
 }
 
@@ -12408,6 +12624,10 @@ pub(crate) mod method {
     pub(crate) const BLOBS_CHANGES: u16 = 0x0410;
     #[cfg(feature = "blobs")]
     pub(crate) const BLOBS_FORGET: u16 = 0x0411;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_SET_MAX_SIZE: u16 = 0x0413;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_TRIM: u16 = 0x0414;
     /// Answers once the store has the message, not once anyone handled it; in a
     /// database's transaction, it is handed over once the transaction commits.
     #[cfg(feature = "channels")]
@@ -12670,6 +12890,10 @@ pub(crate) mod method {
             BLOBS_CHANGES => Some(Access::Read),
             #[cfg(feature = "blobs")]
             BLOBS_FORGET => Some(Access::Write),
+            #[cfg(feature = "blobs")]
+            BLOBS_SET_MAX_SIZE => Some(Access::Write),
+            #[cfg(feature = "blobs")]
+            BLOBS_TRIM => Some(Access::Write),
             #[cfg(feature = "channels")]
             CHANNELS_PUBLISH => Some(Access::Write),
             #[cfg(feature = "channels")]
@@ -12909,6 +13133,10 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("blobs.changes", 0x0410, "call"),
     #[cfg(feature = "blobs")]
     ("blobs.forget", 0x0411, "call"),
+    #[cfg(feature = "blobs")]
+    ("blobs.setMaxSize", 0x0413, "call"),
+    #[cfg(feature = "blobs")]
+    ("blobs.trim", 0x0414, "call"),
     #[cfg(feature = "channels")]
     ("channels.publish", 0x0a01, "call"),
     #[cfg(feature = "channels")]
@@ -13151,6 +13379,12 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "blobs.Folder" => BlobsFolder::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]
         "blobs.Usage" => BlobsUsage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.SetMaxSize" => BlobsSetMaxSize::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Trim" => BlobsTrim::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Trimmed" => BlobsTrimmed::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]
         "blobs.Directory" => BlobsDirectory::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]

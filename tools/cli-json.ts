@@ -133,6 +133,8 @@ async function demo(at: string) {
 	copyFileSync(join(at, 'seed.png'), join(at, 'seed-43.png'))
 	made(['files', './data', 'put', 'avatars', 'users/42/avatar.png', './seed.png'])
 	made(['files', './data', 'put', 'avatars', 'users/43/avatar.png', './seed-43.png'])
+	made(['files', './data', 'set-max-size', 'pages', '512MiB'])
+	made(['files', './data', 'put', 'pages', '1.pdf', './seed.png'])
 	made(['events', './data', 'append', 'audit', 'role.changed', 'user:=42', 'role=admin'])
 	made(['events', './data', 'append', 'audit', 'login', 'user:=43'])
 	made(['sql', './data', 'app', "insert into users (email) values ('ada@example.com'), ('bob@example.com')", '--write'])

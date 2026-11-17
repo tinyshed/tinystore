@@ -7,24 +7,26 @@ import "math"
 
 // The methods, by their numbers on the wire.
 const (
-	MethodBackupWrite    = 0x0801
-	MethodBlobsOpen      = 0x0401
-	MethodBlobsPut       = 0x0402
-	MethodBlobsUpload    = 0x0403
-	MethodBlobsGet       = 0x0404
-	MethodBlobsHead      = 0x0405
-	MethodBlobsDelete    = 0x0406
-	MethodBlobsCopy      = 0x0407
-	MethodBlobsRename    = 0x0408
-	MethodBlobsExpire    = 0x0409
-	MethodBlobsList      = 0x040a
-	MethodBlobsUsage     = 0x040b
-	MethodBlobsClear     = 0x040c
-	MethodBlobsRead      = 0x040d
-	MethodBlobsDirectory = 0x040e
-	MethodBlobsScan      = 0x040f
-	MethodBlobsChanges   = 0x0410
-	MethodBlobsForget    = 0x0411
+	MethodBackupWrite     = 0x0801
+	MethodBlobsOpen       = 0x0401
+	MethodBlobsPut        = 0x0402
+	MethodBlobsUpload     = 0x0403
+	MethodBlobsGet        = 0x0404
+	MethodBlobsHead       = 0x0405
+	MethodBlobsDelete     = 0x0406
+	MethodBlobsCopy       = 0x0407
+	MethodBlobsRename     = 0x0408
+	MethodBlobsExpire     = 0x0409
+	MethodBlobsList       = 0x040a
+	MethodBlobsUsage      = 0x040b
+	MethodBlobsClear      = 0x040c
+	MethodBlobsRead       = 0x040d
+	MethodBlobsDirectory  = 0x040e
+	MethodBlobsScan       = 0x040f
+	MethodBlobsChanges    = 0x0410
+	MethodBlobsForget     = 0x0411
+	MethodBlobsSetMaxSize = 0x0413
+	MethodBlobsTrim       = 0x0414
 	// Answers once the store has the message, not once anyone handled it; in a
 	// database's transaction, it is handed over once the transaction commits.
 	MethodChannelsPublish = 0x0a01
@@ -168,6 +170,8 @@ var methodNames = []struct {
 	{"blobs.scan", MethodBlobsScan},
 	{"blobs.changes", MethodBlobsChanges},
 	{"blobs.forget", MethodBlobsForget},
+	{"blobs.setMaxSize", MethodBlobsSetMaxSize},
+	{"blobs.trim", MethodBlobsTrim},
 	{"channels.publish", MethodChannelsPublish},
 	{"channels.subscribe", MethodChannelsSubscribe},
 	{"config.open", MethodConfigOpen},
@@ -321,6 +325,12 @@ func NewMessage(name string) Message {
 		return &BlobsFolder{}
 	case "blobs.Usage":
 		return &BlobsUsage{}
+	case "blobs.SetMaxSize":
+		return &BlobsSetMaxSize{}
+	case "blobs.Trim":
+		return &BlobsTrim{}
+	case "blobs.Trimmed":
+		return &BlobsTrimmed{}
 	case "blobs.Directory":
 		return &BlobsDirectory{}
 	case "blobs.Scanned":
@@ -842,6 +852,12 @@ type BlobsOpen struct {
 	MaxFileSize *uint64 `wire:"3,maxFileSize"`
 	// a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent
 	Database *uint64 `wire:"4,database"`
+	// the term of every file written without its own, from its last get or head; never beside ttl
+	Idle *uint64 `wire:"5,idle"`
+	// the set's ceiling, kept in the set: an open with another is a conflict
+	MaxSize *uint64 `wire:"6,maxSize"`
+	// evict or refuse, what a write past the ceiling does; kept with it
+	WhenFull *string `wire:"7,whenFull"`
 }
 
 func (m BlobsOpen) Write(w *Writer) {
@@ -867,6 +883,21 @@ func (m BlobsOpen) Write(w *Writer) {
 		w.Uint(*m.Database)
 		n++
 	}
+	if m.Idle != nil {
+		w.Uint(5)
+		w.Uint(*m.Idle)
+		n++
+	}
+	if m.MaxSize != nil {
+		w.Uint(6)
+		w.Uint(*m.MaxSize)
+		n++
+	}
+	if m.WhenFull != nil {
+		w.Uint(7)
+		w.Str(*m.WhenFull)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -886,6 +917,15 @@ func (m *BlobsOpen) Read(r *Reader) {
 		case 4:
 			v := r.Uint()
 			m.Database = &v
+		case 5:
+			v := r.Uint()
+			m.Idle = &v
+		case 6:
+			v := r.Uint()
+			m.MaxSize = &v
+		case 7:
+			v := r.Str()
+			m.WhenFull = &v
 		default:
 			r.Skip()
 		}
@@ -898,7 +938,10 @@ func (m BlobsOpen) IsZero() bool {
 	return m.Name == "" &&
 		m.Ttl == nil &&
 		m.MaxFileSize == nil &&
-		m.Database == nil
+		m.Database == nil &&
+		m.Idle == nil &&
+		m.MaxSize == nil &&
+		m.WhenFull == nil
 }
 
 // BlobsAt is the schema's blobs.At.
@@ -1966,6 +2009,10 @@ func (m BlobsFolder) IsZero() bool {
 type BlobsUsage struct {
 	Count uint64 `wire:"1,count"`
 	Size  uint64 `wire:"2,size"`
+	// the set's ceiling, none when it keeps none
+	MaxSize *uint64 `wire:"3,maxSize"`
+	// the files the ceiling removed since the store opened
+	Evictions uint64 `wire:"4,evictions"`
 }
 
 func (m BlobsUsage) Write(w *Writer) {
@@ -1981,6 +2028,16 @@ func (m BlobsUsage) Write(w *Writer) {
 		w.Uint(m.Size)
 		n++
 	}
+	if m.MaxSize != nil {
+		w.Uint(3)
+		w.Uint(*m.MaxSize)
+		n++
+	}
+	if m.Evictions != 0 {
+		w.Uint(4)
+		w.Uint(m.Evictions)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -1993,6 +2050,11 @@ func (m *BlobsUsage) Read(r *Reader) {
 			m.Count = r.Uint()
 		case 2:
 			m.Size = r.Uint()
+		case 3:
+			v := r.Uint()
+			m.MaxSize = &v
+		case 4:
+			m.Evictions = r.Uint()
 		default:
 			r.Skip()
 		}
@@ -2003,7 +2065,172 @@ func (m *BlobsUsage) Read(r *Reader) {
 // IsZero says whether BlobsUsage writes as no field at all.
 func (m BlobsUsage) IsZero() bool {
 	return m.Count == 0 &&
-		m.Size == 0
+		m.Size == 0 &&
+		m.MaxSize == nil &&
+		m.Evictions == 0
+}
+
+// BlobsSetMaxSize is the schema's blobs.SetMaxSize.
+//
+// A change of a set's ceiling, which every handle follows from its commit:
+// a lower one evicts at once, and one the set keeps already writes nothing.
+type BlobsSetMaxSize struct {
+	Handle uint64 `wire:"1,handle"`
+	// none removes the ceiling
+	MaxSize *uint64 `wire:"2,maxSize"`
+	// evict or refuse; what the set does now when absent
+	WhenFull *string `wire:"3,whenFull"`
+	// changes it only while the set keeps this ceiling: another is a conflict
+	IfCurrent *uint64 `wire:"4,ifCurrent"`
+}
+
+func (m BlobsSetMaxSize) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Handle != 0 {
+		w.Uint(1)
+		w.Uint(m.Handle)
+		n++
+	}
+	if m.MaxSize != nil {
+		w.Uint(2)
+		w.Uint(*m.MaxSize)
+		n++
+	}
+	if m.WhenFull != nil {
+		w.Uint(3)
+		w.Str(*m.WhenFull)
+		n++
+	}
+	if m.IfCurrent != nil {
+		w.Uint(4)
+		w.Uint(*m.IfCurrent)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsSetMaxSize) Read(r *Reader) {
+	*m = BlobsSetMaxSize{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Handle = r.Uint()
+		case 2:
+			v := r.Uint()
+			m.MaxSize = &v
+		case 3:
+			v := r.Str()
+			m.WhenFull = &v
+		case 4:
+			v := r.Uint()
+			m.IfCurrent = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsSetMaxSize writes as no field at all.
+func (m BlobsSetMaxSize) IsZero() bool {
+	return m.Handle == 0 &&
+		m.MaxSize == nil &&
+		m.WhenFull == nil &&
+		m.IfCurrent == nil
+}
+
+// BlobsTrim is the schema's blobs.Trim.
+//
+// Removes files in the eviction's order until the set holds at most to
+// bytes, a batch of 10,000 a commit; a refusing set is invalid.
+type BlobsTrim struct {
+	Handle uint64 `wire:"1,handle"`
+	To     uint64 `wire:"2,to"`
+}
+
+func (m BlobsTrim) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Handle != 0 {
+		w.Uint(1)
+		w.Uint(m.Handle)
+		n++
+	}
+	if m.To != 0 {
+		w.Uint(2)
+		w.Uint(m.To)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsTrim) Read(r *Reader) {
+	*m = BlobsTrim{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Handle = r.Uint()
+		case 2:
+			m.To = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsTrim writes as no field at all.
+func (m BlobsTrim) IsZero() bool {
+	return m.Handle == 0 &&
+		m.To == 0
+}
+
+// BlobsTrimmed is the schema's blobs.Trimmed.
+type BlobsTrimmed struct {
+	Evictions uint64 `wire:"1,evictions"`
+	// the files' sizes, as usage counts them
+	Freed uint64 `wire:"2,freed"`
+}
+
+func (m BlobsTrimmed) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Evictions != 0 {
+		w.Uint(1)
+		w.Uint(m.Evictions)
+		n++
+	}
+	if m.Freed != 0 {
+		w.Uint(2)
+		w.Uint(m.Freed)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *BlobsTrimmed) Read(r *Reader) {
+	*m = BlobsTrimmed{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Evictions = r.Uint()
+		case 2:
+			m.Freed = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether BlobsTrimmed writes as no field at all.
+func (m BlobsTrimmed) IsZero() bool {
+	return m.Evictions == 0 &&
+		m.Freed == 0
 }
 
 // BlobsDirectory is the schema's blobs.Directory.
