@@ -7,6 +7,7 @@
 
 import { type Connection, download, type Link, pieceOf } from './connection.ts'
 import { InvalidError, OutcomeUnknownError } from './errors.ts'
+import { refuseUnknown } from './fields.ts'
 import {
 	Counter,
 	Gauge,
@@ -420,6 +421,7 @@ export class Metrics {
 	 * which may hold fewer samples than limit and still have next.
 	 */
 	async read(query: Query): Promise<SeriesPage> {
+		checked('read', query, queryFields)
 		const parts = (await this.#download('metrics.read', MetricsQuery.encode(queryOf(query)))).map(
 			part => MetricsRead.decode(part),
 		)
@@ -459,6 +461,7 @@ export class Metrics {
 
 	/** The newest sample of each series the query finds, when it has one in the range. */
 	async latest(query: Query): Promise<Newest[]> {
+		checked('latest', query, queryFields)
 		const parts = await this.#download('metrics.latest', MetricsQuery.encode(queryOf(query)))
 		return parts.flatMap(part =>
 			(MetricsLatest.decode(part).series ?? []).map(newest => ({
@@ -475,6 +478,7 @@ export class Metrics {
 	 * value of op, rounded once; a bucket of count … last has its value.
 	 */
 	async aggregate<O extends Op>(query: AggregateQuery<O>): Promise<AggregatePage<O>> {
+		checked('aggregate', query, aggregateFields)
 		const asked = MetricsAggregateAsked.encode(aggregateOf(query))
 		const parts = (await this.#download('metrics.aggregate', asked)).map(part =>
 			MetricsAggregates.decode(part),
@@ -509,6 +513,7 @@ export class Metrics {
 
 	/** What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample. */
 	async explain(query: Query & Partial<Omit<AggregateQuery, keyof Query>>): Promise<Plan> {
+		checked('explain', query, aggregateFields)
 		const asked =
 			query.op === undefined ? { query: queryOf(query) } : aggregateOf(query as AggregateQuery)
 		const answer = await this.#read('metrics.explain', MetricsAggregateAsked.encode(asked))
@@ -712,6 +717,49 @@ function walked<P extends { next?: string }, T>(
 			}
 		},
 	})
+}
+
+/** A query's fields, each once: a field added to Query and left out here does not compile. */
+const queryFields = Object.keys({
+	name: 0,
+	where: 0,
+	since: 0,
+	from: 0,
+	to: 0,
+	limit: 0,
+	after: 0,
+} satisfies Record<keyof Query, 0>)
+
+/** An aggregate's fields, a query's among them. */
+const aggregateFields = Object.keys({
+	name: 0,
+	where: 0,
+	since: 0,
+	from: 0,
+	to: 0,
+	limit: 0,
+	after: 0,
+	every: 0,
+	calendar: 0,
+	timeZone: 0,
+	op: 0,
+	by: 0,
+	without: 0,
+	estimate: 0,
+	skipNaN: 0,
+} satisfies Record<keyof AggregateQuery, 0>)
+
+/**
+ * Refuses a field a call's query does not take, naming it: an aggregate's on
+ * a read or latest as an aggregate's, any other as no field of a query.
+ */
+function checked(call: string, query: object, known: readonly string[]): void {
+	for (const [key, value] of Object.entries(query)) {
+		if (value !== undefined && !known.includes(key) && aggregateFields.includes(key)) {
+			throw new InvalidError(`metrics ${call}: \`${key}\` is an aggregate's, which ${call} is not`)
+		}
+	}
+	refuseUnknown(`metrics ${call}`, query, known)
 }
 
 /** A query as the wire carries it; a condition given as undefined is refused, never left out. */

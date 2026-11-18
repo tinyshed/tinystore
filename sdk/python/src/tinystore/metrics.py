@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
 from ._connection import download, piece_of
+from ._fields import refuse_unknown
 from ._session import ConnectionLostError
 from ._time import moment as _moment
 from ._time import ms, spelled_keep, unix_ms
@@ -424,6 +425,7 @@ class Metrics:
 
         With limit, a page, which may hold fewer samples than limit and still have next.
         """
+        _checked("read", query, _QUERY_FIELDS)
         parts = [
             MetricsRead.decode(part)
             for part in await self._download("metrics.read", MetricsQuery.encode(_query_of(query)))
@@ -448,6 +450,7 @@ class Metrics:
 
     async def latest(self, **query: Unpack[SeriesQuery]) -> list[Point]:
         """The newest sample of each series the query finds, when it has one in the range."""
+        _checked("latest", query, _QUERY_FIELDS)
         parts = await self._download("metrics.latest", MetricsQuery.encode(_query_of(query)))
         return [
             Point(
@@ -462,6 +465,7 @@ class Metrics:
 
         With limit, a page, which ends between two whole buckets of a group.
         """
+        _checked("aggregate", query, _AGGREGATE_FIELDS)
         if "op" not in query:
             raise InvalidError(
                 "an aggregate takes an op: count, sum, avg, min, max, increase, rate, delta, first, last, p95"
@@ -484,6 +488,7 @@ class Metrics:
 
     async def explain(self, **query: Unpack[AggregateQuery]) -> Plan:
         """What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample."""
+        _checked("explain", query, _AGGREGATE_FIELDS)
         asked = _aggregate_of(query) if "op" in query else {"query": _query_of(query)}
         plan = MetricsPlan.decode(await self._read("metrics.explain", MetricsAggregateAsked.encode(asked)))
         exceeds = plan.get("exceeds")
@@ -634,6 +639,18 @@ class Metrics:
     async def _download(self, method: str, body: bytes) -> list[bytes]:
         got = await self._link.run("read", lambda c: download(c, methods[method], body))
         return [got.trailer] if not got.items else [*got.items, got.trailer]
+
+
+_QUERY_FIELDS = SeriesQuery.__required_keys__ | SeriesQuery.__optional_keys__
+_AGGREGATE_FIELDS = AggregateQuery.__required_keys__ | AggregateQuery.__optional_keys__
+
+
+def _checked(call: str, query: Mapping[str, object], known: frozenset[str]) -> None:
+    """Refuses a field a call's query does not take, naming it: an aggregate's on a read as an aggregate's."""
+    for key, value in query.items():
+        if value is not None and key not in known and key in _AGGREGATE_FIELDS:
+            raise InvalidError(f"metrics {call}: `{key}` is an aggregate's, which {call} is not")
+    refuse_unknown(f"metrics {call}", query, known)
 
 
 def _query_of(query: Mapping[str, Any]) -> dict[str, Any]:

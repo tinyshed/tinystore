@@ -86,6 +86,10 @@ let failing = stats
   every series. There are no regular expressions.
 - A number in `where` is its text: `{ status: 200 }` finds `"200"`.
 - A condition given as `undefined` is `invalid`, never left out.
+- A field a query does not take is `invalid` and named, never dropped:
+  `names` on a metrics query says `` no field `names`; did you mean `name`? ``.
+  A metrics query names one series name, `name`; a records query a list,
+  `names`.
 - A query is data: the same object is kept in a dashboard's settings, sent
   over the wire, and read the same in every language.
 

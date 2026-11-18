@@ -528,6 +528,25 @@ for (const way of ways) {
 			expect(await last(store, 'jobs_total')).toEqual({ '{}': 40 })
 		})
 
+		// contract: MET-25
+		test('a query field the SDK does not know is refused by name, never dropped', async () => {
+			const names = await caught(
+				store.metrics.aggregate({ names: ['calls'], since: '1h', op: 'increase' } as never),
+			)
+			expect(names).toBeInstanceOf(InvalidError)
+			expect(String(names)).toContain('no field `names`; did you mean `name`?')
+			const every = await caught(store.metrics.read({ name: 'cpu', every: '1h' } as never))
+			expect(String(every)).toContain('`every` is an aggregate')
+			const typo = await caught(store.metrics.latest({ name: 'cpu', snice: '1h' } as never))
+			expect(String(typo)).toContain('no field `snice`')
+			expect(await store.metrics.read({ name: 'cpu', since: '1h', to: undefined })).toBeDefined()
+			// a query of no condition reaches the store, which says so in its own words
+			const none = await caught(store.metrics.aggregate({ since: '1h', op: 'increase' }))
+			expect(none).toBeInstanceOf(InvalidError)
+			expect(String(none)).toContain("by `name` or by a label's value")
+			expect(String(none)).not.toContain('Not')
+		})
+
 		test('what a store holds, a page at a time, and its removal', async () => {
 			const page = await store.metrics.names({ prefix: 'http_' })
 			const requests = page.names.find(name => name.name === 'http_requests_total')

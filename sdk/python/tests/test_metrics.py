@@ -410,6 +410,21 @@ async def test_a_query_is_refused_before_it_leaves(store: tinystore.Store) -> No
         await store.metrics.ingest(Series(name="cpu", kind="gauge", samples=[(datetime(2026, 10, 18), 1.0)]))
 
 
+# contract: MET-25
+async def test_a_query_field_the_sdk_does_not_know_is_refused_by_name(store: tinystore.Store) -> None:
+    unknown = cast("dict[str, object]", {"names": ["calls"], "since": "1h", "op": "increase"})
+    with pytest.raises(tinystore.InvalidError, match="no field `names`; did you mean `name`"):
+        await store.metrics.aggregate(**unknown)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(tinystore.InvalidError, match="`every` is an aggregate's"):
+        await store.metrics.read(name="cpu", every="1h")  # pyright: ignore[reportCallIssue]
+    with pytest.raises(tinystore.InvalidError, match="no field `snice`"):
+        await store.metrics.latest(name="cpu", snice="1h")  # pyright: ignore[reportCallIssue]
+    # a query of no condition reaches the store, which says so in its own words
+    with pytest.raises(tinystore.InvalidError, match="by `name` or by a label's value") as none:
+        await store.metrics.aggregate(since="1h", op="increase")
+    assert "Not" not in str(none.value)
+
+
 def _embedded(directory: Path, dialled: list[Connection], down: list[bool] | None = None) -> Link:
     """A link to the core in this process that a test can cut, keeping each connection it dialled."""
     dial = in_process(directory, None, Started())

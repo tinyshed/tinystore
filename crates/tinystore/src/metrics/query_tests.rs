@@ -68,7 +68,11 @@ fn a_condition_that_finds_nothing_or_cannot_be_taken_is_refused() {
     let error = refused(f.metrics().query().filter("env", Not("dev")));
     assert_eq!(error.kind(), ErrorKind::Invalid);
     assert!(error.to_string().contains("`Not` alone"), "{error}");
-    assert_eq!(refused(f.metrics().query()).kind(), ErrorKind::Invalid);
+    // contract: MET-25
+    let none = refused(f.metrics().query().since(HOUR));
+    assert_eq!(none.kind(), ErrorKind::Invalid);
+    assert!(none.to_string().contains("by `name` or by a label's value"), "{none}");
+    assert!(!none.to_string().contains("Not"), "no condition at all is not `Not` alone: {none}");
     assert_eq!(refused(f.metrics().query().filter("__name__", "cpu")).kind(), ErrorKind::Invalid);
     assert_eq!(refused(f.metrics().query().filter("host", Vec::<String>::new())).kind(), ErrorKind::Invalid);
     assert_eq!(refused(f.metrics().query().filter("host", Prefix(""))).kind(), ErrorKind::Invalid);

@@ -498,7 +498,12 @@ impl Query {
         for (label, condition) in &self.conditions {
             conditions.push((label.clone(), check(label, condition)?));
         }
-        if !conditions.iter().any(|(_, condition)| !matches!(condition, Condition::NoneOf(_))) {
+        if conditions.is_empty() {
+            return Err(Error::invalid(
+                "a query finds its series by `name` or by a label's value, list or prefix: this one gives neither",
+            ));
+        }
+        if conditions.iter().all(|(_, condition)| matches!(condition, Condition::NoneOf(_))) {
             return Err(Error::invalid(
                 "a query finds its series by a name, or a label's value, list or prefix: `Not` alone would read every \
                  series",

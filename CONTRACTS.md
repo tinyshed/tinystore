@@ -245,6 +245,7 @@ These contracts are what does not.
 - **MET-21** An aggregate's page MUST count toward its `limit` only buckets that hold samples or lie inside a stored run of samples with one a bucket or more, so that a stretch without samples ends no page, and a page that is not the last MUST answer a bucket unless every bucket it reached is a timer's that measured nothing or one of NaN alone that an aggregate skipping NaN passed over.
 - **MET-22** A read's page that is not the last MUST hold a sample.
 - **MET-23** An aggregate that skips NaN MUST say each bucket's NaN samples it passed over, count them in no value, and refuse an infinity as one that does not skip; a bucket of NaN alone MUST have no value, never a zero, and is left out as a bucket without samples is.
+- **MET-25** A metrics query field an SDK does not take MUST be refused `invalid`, naming the field, never dropped; a query of no condition at all MUST be refused saying so, not as one of `Not` alone.
 
 ### Search
 
