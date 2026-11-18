@@ -683,7 +683,12 @@ A batch's results travel in one message, and past the agreed body they are
 server's memory before the first leaves, as many as one `all` may hold
 ([Limits and defaults](handbook/production/limits.md#sql)). A
 `sql.tx` holds its database's writer while the client's calls come as `DATA`,
-and a transaction whose client stalls, cancels or leaves is rolled back.
+and a transaction whose client stalls, cancels or leaves is rolled back. A
+call with `parts` set gets rows past one answer in several `sql.TxAnswer`s,
+each within the client's credit and every one but the last with `more`; a
+call without it, as a client before 0.11 sends, is refused them as `limit`.
+A client sends `parts` only to a server of its own release or newer, which
+`WELCOME`'s `server` says, since an older one refuses the field.
 
 ### blobs
 

@@ -12689,6 +12689,8 @@ pub(crate) struct SqlTxCall {
     /// With want call: the method, its request in body.
     pub(crate) method: Option<u64>,
     pub(crate) body: Option<Vec<u8>>,
+    /// With want all: the rows may come in several answers, each within the client's credit.
+    pub(crate) parts: bool,
 }
 
 #[cfg(feature = "sql")]
@@ -12706,6 +12708,7 @@ impl Message for SqlTxCall {
                 4 => message.commit = codec::bool(r, "commit")?,
                 5 => message.method = Some(codec::uint(r, "method")?),
                 6 => message.body = Some(codec::bin(r, "body")?),
+                7 => message.parts = codec::bool(r, "parts")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -12738,6 +12741,10 @@ impl Message for SqlTxCall {
             map.field(out, 6);
             codec::write_bin(out, body);
         }
+        if self.parts {
+            map.field(out, 7);
+            codec::write_bool(out, &self.parts);
+        }
         map.close(out);
     }
 
@@ -12749,6 +12756,7 @@ impl Message for SqlTxCall {
             + 2
             + self.method.map_or(0, |_| 10)
             + self.body.as_ref().map_or(0, |body| 1 + 5 + body.len())
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -12758,11 +12766,14 @@ impl Message for SqlTxCall {
             && !self.commit
             && self.method.is_none()
             && self.body.is_none()
+            && !self.parts
     }
 }
 
 /// A call's answer: its rows, what it changed, a method's answer, or why it
-/// failed, which leaves the transaction as it was before the call.
+/// failed, which leaves the transaction as it was before the call. A call
+/// that asked for parts may have its rows in several answers, every one but
+/// the last saying more; one that did not is refused rows past one answer.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlTxAnswer {
@@ -12771,6 +12782,8 @@ pub(crate) struct SqlTxAnswer {
     pub(crate) failure: Option<Failure>,
     /// What a method answered, as its own answer.
     pub(crate) body: Option<Vec<u8>>,
+    /// Rows of the same call follow in the next answer.
+    pub(crate) more: bool,
 }
 
 #[cfg(feature = "sql")]
@@ -12786,6 +12799,7 @@ impl Message for SqlTxAnswer {
                 2 => message.done = Some(SqlDone::read(r)?),
                 3 => message.failure = Some(Failure::read(r)?),
                 4 => message.body = Some(codec::bin(r, "body")?),
+                5 => message.more = codec::bool(r, "more")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -12810,6 +12824,10 @@ impl Message for SqlTxAnswer {
             map.field(out, 4);
             codec::write_bin(out, body);
         }
+        if self.more {
+            map.field(out, 5);
+            codec::write_bool(out, &self.more);
+        }
         map.close(out);
     }
 
@@ -12819,6 +12837,7 @@ impl Message for SqlTxAnswer {
             + self.done.as_ref().map_or(0, |done| 1 + done.size())
             + self.failure.as_ref().map_or(0, |failure| 1 + failure.size())
             + self.body.as_ref().map_or(0, |body| 1 + 5 + body.len())
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -12826,6 +12845,7 @@ impl Message for SqlTxAnswer {
             && self.done.is_none()
             && self.failure.is_none()
             && self.body.is_none()
+            && !self.more
     }
 }
 

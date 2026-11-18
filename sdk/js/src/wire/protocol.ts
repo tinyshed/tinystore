@@ -12941,6 +12941,8 @@ export const SqlTxCall = message(
 		/** with want call: the method, its request in body */
 		method: [5, uint],
 		body: [6, bin],
+		/** with want all: the rows may come in several answers, each within the client's credit */
+		parts: [7, bool],
 	},
 	{
 		write(w, v) {
@@ -12979,6 +12981,11 @@ export const SqlTxCall = message(
 				w.bin(v.body)
 				n++
 			}
+			if (v.parts !== undefined) {
+				w.field(7)
+				w.bool(v.parts)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -12988,6 +12995,7 @@ export const SqlTxCall = message(
 			let $commit: boolean | undefined
 			let $method: number | undefined
 			let $body: Uint8Array | undefined
+			let $parts: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -13014,6 +13022,9 @@ export const SqlTxCall = message(
 					case 6:
 						$body = r.bytes()
 						break
+					case 7:
+						$parts = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -13026,6 +13037,7 @@ export const SqlTxCall = message(
 				commit: $commit,
 				method: $method,
 				body: $body,
+				parts: $parts,
 			}
 		},
 	},
@@ -13033,7 +13045,9 @@ export const SqlTxCall = message(
 
 /**
  * A call's answer: its rows, what it changed, a method's answer, or why it
- * failed, which leaves the transaction as it was before the call.
+ * failed, which leaves the transaction as it was before the call. A call
+ * that asked for parts may have its rows in several answers, every one but
+ * the last saying more; one that did not is refused rows past one answer.
  */
 export const SqlTxAnswer = message(
 	'sql.TxAnswer',
@@ -13043,6 +13057,8 @@ export const SqlTxAnswer = message(
 		failure: [3, Failure],
 		/** what a method answered, as its own answer */
 		body: [4, bin],
+		/** rows of the same call follow in the next answer */
+		more: [5, bool],
 	},
 	{
 		write(w, v) {
@@ -13068,6 +13084,11 @@ export const SqlTxAnswer = message(
 				w.bin(v.body)
 				n++
 			}
+			if (v.more !== undefined) {
+				w.field(5)
+				w.bool(v.more)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -13075,6 +13096,7 @@ export const SqlTxAnswer = message(
 			let $done: Read<typeof SqlDone.fields> | undefined
 			let $failure: Read<typeof Failure.fields> | undefined
 			let $body: Uint8Array | undefined
+			let $more: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -13089,12 +13111,15 @@ export const SqlTxAnswer = message(
 					case 4:
 						$body = r.bytes()
 						break
+					case 5:
+						$more = r.bool()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { rows: $rows, done: $done, failure: $failure, body: $body }
+			return { rows: $rows, done: $done, failure: $failure, body: $body, more: $more }
 		},
 	},
 )

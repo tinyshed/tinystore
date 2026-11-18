@@ -579,6 +579,15 @@ export function olderRelease(server: string, own: string): boolean {
 	return theirs !== undefined && ours !== undefined && compareReleases(theirs, ours) < 0
 }
 
+/**
+ * Whether the connection's server is of this SDK's release or newer, and so
+ * knows what this release added to a message: an older one refuses a field
+ * it does not know as unimplemented.
+ */
+export function ofThisRelease(connection: Connection): boolean {
+	return !olderRelease(connection.session.agreed?.server ?? '', manifest.version)
+}
+
 /** What a program whose SDK replaced a sidecar of an older release is told. */
 export function replacedSidecar(server: string, own: string, dir: string): string {
 	return (

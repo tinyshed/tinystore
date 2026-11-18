@@ -221,6 +221,33 @@ func TestATransactionSeesItsOwnWritesCommitsAndRollsBackAnError(t *testing.T) {
 	})
 }
 
+// contract: SQL-14
+func TestAReadInATransactionCarriesTheRowsItCarriesOutsideOnePastOneAnswer(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		ways.Must(db.Exec(ctx, `with recursive n(i) as (select 1 union all select i + 1 from n where i < 20000)
+			insert into notes (id, author_id, title) select printf('tx%05d', i), 14, printf('%0200d', i) from n`))
+		const read = `select id, author_id, title from notes where author_id = 14 order by id`
+		outside := ways.Must(sqldb.All[Note](ctx, db, read))
+		var inside []Note
+		ways.Must(0, db.Tx(ctx, func(tx *sqldb.Tx) error {
+			var err error
+			if inside, err = sqldb.All[Note](ctx, tx, read); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `delete from notes where author_id = 14`)
+			return err
+		}))
+		if len(inside) != 20000 || !slices.EqualFunc(inside, outside, func(a, b Note) bool { return a.ID == b.ID && a.Title == b.Title }) {
+			t.Fatalf("%d rows inside, %d outside", len(inside), len(outside))
+		}
+		if ways.Must(sqldb.Scalar[int64](ctx, db, `select count(*) from notes where author_id = 14`)) != 0 {
+			t.Fatal("the transaction committed its delete")
+		}
+	})
+}
+
 func TestTransactionsPastTheThreadsOfTheStoreWaitTheirTurnAndTheOneHoldingTheWriterGoesOn(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

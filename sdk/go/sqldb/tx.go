@@ -129,7 +129,9 @@ func (tx *Tx) rows(ctx context.Context, statement Piece, want string) (answered,
 	if statement.err != nil {
 		return answered{}, statement.err
 	}
-	answer, err := tx.send(ctx, wire.SqlTxCall{Text: statement.text, Values: statement.values, Want: want})
+	// rows past one answer come in several, from a server that knows parts: 0.11 or later
+	parts := want == "all" && tx.conn.OfThisRelease()
+	answer, err := tx.send(ctx, wire.SqlTxCall{Text: statement.text, Values: statement.values, Want: want, Parts: parts})
 	if err != nil || answer.Rows == nil {
 		return answered{}, err
 	}
@@ -170,7 +172,8 @@ func (tx *Tx) Exec(ctx context.Context, text string, args ...any) (Result, error
 	return tx.exec(ctx, statementOf(text, args))
 }
 
-// send sends one call of the transaction and reads its answer, one call at a time.
+// send sends one call of the transaction and reads its answer, one call at a
+// time, the rows of every part joined into one.
 func (tx *Tx) send(ctx context.Context, call wire.SqlTxCall) (wire.SqlTxAnswer, error) {
 	tx.turn.Lock()
 	defer tx.turn.Unlock()
@@ -180,6 +183,19 @@ func (tx *Tx) send(ctx context.Context, call wire.SqlTxCall) (wire.SqlTxAnswer, 
 	if err := tx.stream.Send(ctx, wire.Encode(&call), false); err != nil {
 		return wire.SqlTxAnswer{}, err
 	}
+	answer, err := tx.answer(ctx)
+	for more := answer.More; err == nil && more; {
+		var part wire.SqlTxAnswer
+		if part, err = tx.answer(ctx); err == nil && part.Rows != nil && answer.Rows != nil {
+			answer.Rows.Rows = append(answer.Rows.Rows, part.Rows.Rows...)
+		}
+		more = part.More
+	}
+	return answer, err
+}
+
+// answer reads one answer of the transaction's call.
+func (tx *Tx) answer(ctx context.Context) (wire.SqlTxAnswer, error) {
 	event, err := tx.stream.Next(ctx)
 	if err != nil {
 		return wire.SqlTxAnswer{}, err

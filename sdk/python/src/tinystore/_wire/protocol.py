@@ -10631,6 +10631,10 @@ def _write_sql_tx_call(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(6)
         w.bin(x)
         n += 1
+    if (x := v.get("parts")) is not None:
+        w.uint(7)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -10653,6 +10657,8 @@ def _read_sql_tx_call(r: Reader) -> dict[str, Any]:
                 read["method"] = r.uint()
             case 6:
                 read["body"] = r.bin()
+            case 7:
+                read["parts"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -10677,6 +10683,8 @@ SqlTxCall = Message(
         # with want call: the method, its request in body
         "method": (5, uint),
         "body": (6, bin_),
+        # with want all: the rows may come in several answers, each within the client's credit
+        "parts": (7, bool_),
     },
     _write_sql_tx_call,
     _read_sql_tx_call,
@@ -10702,6 +10710,10 @@ def _write_sql_tx_answer(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(4)
         w.bin(x)
         n += 1
+    if (x := v.get("more")) is not None:
+        w.uint(5)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -10718,6 +10730,8 @@ def _read_sql_tx_answer(r: Reader) -> dict[str, Any]:
                 read["failure"] = Failure.read(r)
             case 4:
                 read["body"] = r.bin()
+            case 5:
+                read["more"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -10725,7 +10739,9 @@ def _read_sql_tx_answer(r: Reader) -> dict[str, Any]:
 
 
 # A call's answer: its rows, what it changed, a method's answer, or why it
-# failed, which leaves the transaction as it was before the call.
+# failed, which leaves the transaction as it was before the call. A call
+# that asked for parts may have its rows in several answers, every one but
+# the last saying more; one that did not is refused rows past one answer.
 SqlTxAnswer = Message(
     "sql.TxAnswer",
     {
@@ -10734,6 +10750,8 @@ SqlTxAnswer = Message(
         "failure": (3, Failure),
         # what a method answered, as its own answer
         "body": (4, bin_),
+        # rows of the same call follow in the next answer
+        "more": (5, bool_),
     },
     _write_sql_tx_answer,
     _read_sql_tx_answer,

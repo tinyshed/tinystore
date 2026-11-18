@@ -524,9 +524,10 @@ fn part_bound(link: &Link) -> usize {
     super::part_bound(link.max_body, link.credit, 0)
 }
 
-/// A query's rows in parts of at most `bound` bytes, the first naming the
-/// columns; a row larger than a part alone is `limit`.
-fn row_parts(rows: Rows, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
+/// Rows in parts of at most `bound` bytes as they are written, the first
+/// naming the columns, for a transaction, which sends each inside an answer
+/// of its own; a row larger than a part alone is `limit`.
+fn row_parts(rows: Rows, bound: usize) -> Result<VecDeque<SqlRows>, Failure> {
     let columns: Vec<String> = rows.columns().to_vec();
     let width = rows.width().max(1);
     let mut parts = VecDeque::new();
@@ -539,13 +540,13 @@ fn row_parts(rows: Rows, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
             return Err(past_a_message(weight, bound));
         }
         if size + weight > bound && !part.rows.is_empty() {
-            parts.push_back(std::mem::take(&mut part).encode());
+            parts.push_back(std::mem::take(&mut part));
             size = 16;
         }
         size += weight;
         part.rows.push(row.iter_mut().map(|value| cell_of(std::mem::replace(value, Value::Null))).collect());
     }
-    parts.push_back(part.encode());
+    parts.push_back(part);
     Ok(parts)
 }
 
@@ -906,12 +907,14 @@ impl Txing {
                 Err(RecvTimeoutError::Timeout) => return Err(Ended::Failed(past_bound())),
                 Err(RecvTimeoutError::Disconnected) => return Err(Ended::Failed(left_its_transaction())),
             };
-            let answer = answer(tx, call, link.max_body, nested);
+            let answers = answer(tx, call, link, nested);
             // before the answer: by the time a client reads it, its call's credit is counted back
             if let Ok(read) = u32::try_from(read) {
                 (link.grant)(read);
             }
-            self.send(link, answer.encode(), deadline)?;
+            for answer in answers {
+                self.send(link, answer.encode(), deadline)?;
+            }
         }
     }
 
@@ -946,37 +949,51 @@ fn left_its_transaction() -> Error {
 /// the largest answer the connection agreed.
 pub(crate) type Nested<'a> = &'a dyn Fn(&Transaction<'_>, u16, &[u8], usize) -> Answered;
 
-/// A call's answer: its rows, what it changed, a method's answer, or why it
+/// A call's answers: its rows, what it changed, a method's answer, or why it
 /// failed, which left the transaction as it was before the call. A DATA that
 /// is not a call ran nothing, and its failure names the field that did not
 /// read.
-fn answer(tx: &Tx<'_>, call: Result<SqlTxCall, Failure>, max_body: usize, nested: Nested<'_>) -> SqlTxAnswer {
-    let ran = || -> Result<SqlTxAnswer, Failure> {
+///
+/// Rows past one answer go in several, each within the client's credit and
+/// every one but the last saying `more`, to a client that asked for parts;
+/// a client of 0.10 or before asks for none and is refused them.
+fn answer(tx: &Tx<'_>, call: Result<SqlTxCall, Failure>, link: &Link, nested: Nested<'_>) -> Vec<SqlTxAnswer> {
+    let ran = || -> Result<Vec<SqlTxAnswer>, Failure> {
         let call = call?;
         if call.want == "call" {
             let method = call.method.and_then(|method| u16::try_from(method).ok());
             let method = method.ok_or_else(|| Failure::invalid("a call inside a transaction names its method"))?;
-            let body = nested(tx.transaction(), method, call.body.as_deref().unwrap_or_default(), max_body)?;
-            return Ok(SqlTxAnswer { body: Some(body), ..SqlTxAnswer::default() });
+            let body = nested(tx.transaction(), method, call.body.as_deref().unwrap_or_default(), link.max_body)?;
+            return Ok(vec![SqlTxAnswer { body: Some(body), ..SqlTxAnswer::default() }]);
         }
         let statement = statement(call.text, call.values)?;
         if call.want == "exec" {
-            return Ok(SqlTxAnswer { done: Some(done_of(&tx.exec(statement)?)), ..SqlTxAnswer::default() });
+            return Ok(vec![SqlTxAnswer { done: Some(done_of(&tx.exec(statement)?)), ..SqlTxAnswer::default() }]);
         }
         let wanted = Wanted::named(&call.want).ok_or_else(|| {
             Failure::invalid(format!("want {:?}: a call wants all, one, scalar, exec or call", call.want))
         })?;
-        let rows = tx.rows_of(&statement, wanted)?;
-        let mut parts = row_parts(rows, max_body / 2)?;
-        if parts.len() > 1 {
-            let wanted = parts.iter().map(Vec::len).sum::<usize>() as u64;
-            let refused = "rows past what one answer carries: read them outside the transaction, or fewer at a time";
-            return Err(Failure::from(Limit { bound: max_body as u64 / 2, ..ANSWER_BYTES }.refuse(wanted, refused)));
+        let bound = part_bound(link);
+        let parts = row_parts(tx.rows_of(&statement, wanted)?, bound)?;
+        if parts.len() > 1 && !call.parts {
+            return Err(rows_past_one_answer(&parts, bound));
         }
-        let rows = SqlRows::decode(&parts.pop_front().unwrap_or_default())?;
-        Ok(SqlTxAnswer { rows: Some(rows), ..SqlTxAnswer::default() })
+        let last = parts.len().saturating_sub(1);
+        let answer = |(at, rows)| SqlTxAnswer { rows: Some(rows), more: at < last, ..SqlTxAnswer::default() };
+        Ok(parts.into_iter().enumerate().map(answer).collect())
     };
-    ran().unwrap_or_else(|failure| SqlTxAnswer { failure: Some(failure), ..SqlTxAnswer::default() })
+    ran().unwrap_or_else(|failure| vec![SqlTxAnswer { failure: Some(failure), ..SqlTxAnswer::default() }])
+}
+
+/// Why a client that reads one answer a call, of 0.10 or before, is refused
+/// rows past it: never "read them outside the transaction", which loses the
+/// write a transaction is for.
+fn rows_past_one_answer(parts: &VecDeque<SqlRows>, bound: usize) -> Failure {
+    let wanted = parts.iter().map(|part| part.encode().len()).sum::<usize>() as u64;
+    let carried = if bound.is_multiple_of(1 << 20) { format!("{} MiB", bound >> 20) } else { format!("{bound} bytes") };
+    let refused =
+        format!("rows past what one answer of this client carries, {carried}: a client of 0.11 reads them whole");
+    Failure::from(Limit { bound: bound as u64, ..ANSWER_BYTES }.refuse(wanted, refused))
 }
 
 /// A batch's write: a statement, or a call of another engine, which has no

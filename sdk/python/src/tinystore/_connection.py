@@ -366,6 +366,16 @@ def older_release(server: str, own: str) -> bool:
     return theirs is not None and ours is not None and _compare_releases(theirs, ours) < 0
 
 
+def of_this_release(connection: Connection) -> bool:
+    """Whether the connection's server is of this SDK's release or newer.
+
+    Such a server knows what this release added to a message: an older one
+    refuses a field it does not know as unimplemented.
+    """
+    agreed = connection.session.agreed
+    return not older_release(agreed.server if agreed is not None else "", _runtime.VERSION)
+
+
 def replaced_sidecar(server: str, own: str, directory: str | os.PathLike[str]) -> str:
     """What a program whose SDK replaced a sidecar of an older release is told."""
     return (

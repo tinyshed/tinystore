@@ -25,7 +25,7 @@ of repeating them.
 | What                               | Limit or default                                           |
 |------------------------------------|------------------------------------------------------------|
 | a transaction                      | 5 seconds                                                  |
-| rows `all` or `columns` holds      | 64 MiB of values                                           |
+| rows `all` or `columns` holds      | 64 MiB of values, inside a transaction too                 |
 | one `each` read                    | 5 seconds of one snapshot, then `limit` naming `list`      |
 | an `each` ordered by a unique key  | a new snapshot every 5 seconds, after its last row         |
 | rows `each` holds                  | a few parts of about 1 MiB                                 |

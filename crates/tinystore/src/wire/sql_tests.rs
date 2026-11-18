@@ -372,8 +372,7 @@ fn begin(client: &mut Client, handle: u64) -> u32 {
 }
 
 fn call(client: &mut Client, stream: u32, sql: &str, values: Vec<Cell>, want: &str) -> SqlTxAnswer {
-    let call =
-        SqlTxCall { text: sql.to_owned(), values, want: want.to_owned(), commit: false, method: None, body: None };
+    let call = SqlTxCall { text: sql.to_owned(), values, want: want.to_owned(), ..SqlTxCall::default() };
     client.write(Frame::new(Kind::Data, stream, call.encode()));
     let answer = client.next_on(stream);
     assert_eq!((answer.kind, answer.flags), (Kind::Data, 0), "an answer, the transaction open");
@@ -500,6 +499,79 @@ fn a_transactions_data_that_is_not_a_call_is_invalid_naming_its_field_and_runs_n
     let rows = query(&mut client, handle, "select count(*) from notes", "scalar").rows;
     assert_eq!(rows, [vec![Cell::Int(0)]], "rolled back");
     assert_eq!(client.pipe.streams(), 0);
+}
+
+/// A client whose stream credit is 64 KiB, so that a read of 400 KB in a
+/// transaction comes in parts of 32 KiB, two of them within the credit.
+fn of_little_credit(dir: &std::path::Path) -> Client {
+    let mut client = Client::connect(dir);
+    let hello = Hello { protocol: 1, client: "test/0".to_owned(), stream_credit: Some(64 << 10), ..Hello::default() };
+    client.greet(hello).unwrap();
+    client
+}
+
+const TWO_THOUSAND_NOTES: &str = "with recursive n(i) as (select 1 union all select i + 1 from n where i < 2000)     insert into notes (id, title) select printf('n%05d', i), printf('%0200d', i) from n";
+
+// contract: SQL-14
+#[test]
+fn a_read_in_a_transaction_past_one_answer_comes_in_parts_to_a_client_that_asks_for_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = of_little_credit(dir.path());
+    let handle = open(&mut client);
+    let stream = begin(&mut client, handle);
+    assert_eq!(call(&mut client, stream, TWO_THOUSAND_NOTES, Vec::new(), "exec").done.unwrap().changes, 2000);
+
+    let read = SqlTxCall {
+        text: "select * from notes order by id".to_owned(),
+        want: "all".to_owned(),
+        parts: true,
+        ..SqlTxCall::default()
+    };
+    client.write(Frame::new(Kind::Data, stream, read.encode()));
+    let (mut rows, mut parts) = (Vec::new(), 0);
+    loop {
+        let frame = client.next_on(stream);
+        assert_eq!((frame.kind, frame.flags), (Kind::Data, 0), "an answer, the transaction open");
+        assert!(frame.body.len() <= 32 << 10, "a part of {} bytes, within half the credit", frame.body.len());
+        let grant = u32::try_from(frame.body.len()).unwrap().to_le_bytes().to_vec();
+        client.write(Frame::new(Kind::Credit, stream, grant));
+        let answer = SqlTxAnswer::decode(&frame.body).unwrap();
+        assert_eq!(answer.failure, None);
+        let part = answer.rows.unwrap();
+        if parts == 0 {
+            assert_eq!(part.columns, ["id", "title", "done"], "the first part names the columns");
+        }
+        rows.extend(part.rows);
+        parts += 1;
+        if !answer.more {
+            break;
+        }
+    }
+    assert!(parts > 10, "{parts} parts");
+    let ids: Vec<Cell> = rows.iter().map(|row| row[0].clone()).collect();
+    assert_eq!(ids, (1..=2000).map(|n| text(&format!("n{n:05}"))).collect::<Vec<_>>(), "every row once, in order");
+
+    let after = call(&mut client, stream, "select count(*) from notes", Vec::new(), "scalar");
+    assert_eq!(after.rows.unwrap().rows, [vec![Cell::Int(2000)]], "the transaction goes on after the parts");
+    assert_eq!(end(&mut client, stream, true).flags, frame::END, "committed");
+    assert_eq!(client.pipe.streams(), 0);
+}
+
+#[test]
+fn a_read_in_a_transaction_past_one_answer_is_refused_to_a_client_that_reads_one_naming_the_release_that_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = of_little_credit(dir.path());
+    let handle = open(&mut client);
+    let stream = begin(&mut client, handle);
+    call(&mut client, stream, TWO_THOUSAND_NOTES, Vec::new(), "exec");
+    let refused = call(&mut client, stream, "select * from notes", Vec::new(), "all").failure.unwrap();
+    assert_eq!(refused.code, "limit");
+    assert!(refused.message.contains("one answer of this client carries, 32768 bytes"), "{}", refused.message);
+    assert!(refused.message.contains("a client of 0.11 reads them whole"), "{}", refused.message);
+    assert!(!refused.message.contains("outside the transaction"), "{}", refused.message);
+    let seen = call(&mut client, stream, "select count(*) from notes", Vec::new(), "scalar");
+    assert_eq!(seen.rows.unwrap().rows, [vec![Cell::Int(2000)]], "the refusal leaves the transaction open");
+    assert_eq!(end(&mut client, stream, true).flags, frame::END, "committed");
 }
 
 /// Opens a transaction on `handle` that inserts the note `id` and commits,
@@ -1093,7 +1165,15 @@ fn rows_written_as_they_are_read_are_the_message_its_codec_writes() {
         let read = Sql::new(text);
         let written: Kept<RowBytes> = db.read(&read, Wanted::All).unwrap().expect("a query");
         let kept: Rows = db.read(&read, Wanted::All).unwrap().expect("a query");
-        assert_eq!(written.parts(1 << 20).unwrap(), row_parts(kept, 1 << 20).unwrap(), "{text}");
+        assert_eq!(
+            written.parts(1 << 20).unwrap(),
+            row_parts(kept, 1 << 20)
+                .unwrap()
+                .into_iter()
+                .map(|part| part.encode())
+                .collect::<std::collections::VecDeque<_>>(),
+            "{text}"
+        );
     }
 }
 

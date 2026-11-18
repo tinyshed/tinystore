@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { Files, type FilesOptions, filesOpen, filesParts } from './blobs.ts'
 import { type Channel, channelParts, type TxChannel, txChannel } from './channels.ts'
 import type { Connection, Durability, Idempotence, Link } from './connection.ts'
-import { checkDurability, download } from './connection.ts'
+import { checkDurability, download, ofThisRelease } from './connection.ts'
 import { CancelledError, errorOf, InvalidError, OutcomeUnknownError } from './errors.ts'
 import {
 	askByCall,
@@ -1330,28 +1330,43 @@ export class SqlTx implements Runner {
 	}
 
 	#call(statement: Sql, want: Want | 'exec') {
+		// rows past one answer come in several, from a server that knows parts: 0.11 or later
+		const parts = want === 'all' && ofThisRelease(this.#connection)
 		return this.#send(
-			SqlTxCall.encode({ text: statement.text, values: [...statement.values], want }),
+			SqlTxCall.encode({ text: statement.text, values: [...statement.values], want, parts }),
 		)
 	}
 
+	/** Sends a call and reads its answer, the rows of every part joined into one. */
 	#send(body: Uint8Array) {
 		const call = async () => {
 			await this.#stream.send(body, false)
-			const event = await this.#stream.next()
-			this.#stream.consumed(event.body.length)
-			const answer = SqlTxAnswer.decode(event.body)
-			if (answer.failure !== undefined) {
-				throw errorOf(
-					answer.failure.code ?? 'internal',
-					answer.failure.message ?? '',
-					answer.failure.what ?? {},
-				)
+			const answer = await this.#answer()
+			const rows = answer.rows?.rows
+			for (let more = answer.more; more; ) {
+				const part = await this.#answer()
+				// a row at a time: a part of a hundred thousand rows is past what a spread passes
+				for (const row of part.rows?.rows ?? []) rows?.push(row)
+				more = part.more
 			}
 			return answer
 		}
 		const next = this.#last.catch(() => {}).then(call)
 		this.#last = next
 		return next
+	}
+
+	async #answer() {
+		const event = await this.#stream.next()
+		this.#stream.consumed(event.body.length)
+		const answer = SqlTxAnswer.decode(event.body)
+		if (answer.failure !== undefined) {
+			throw errorOf(
+				answer.failure.code ?? 'internal',
+				answer.failure.message ?? '',
+				answer.failure.what ?? {},
+			)
+		}
+		return answer
 	}
 }

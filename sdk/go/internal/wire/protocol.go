@@ -14247,6 +14247,8 @@ type SqlTxCall struct {
 	// with want call: the method, its request in body
 	Method *uint64 `wire:"5,method"`
 	Body   *[]byte `wire:"6,body"`
+	// with want all: the rows may come in several answers, each within the client's credit
+	Parts bool `wire:"7,parts"`
 }
 
 func (m SqlTxCall) Write(w *Writer) {
@@ -14285,6 +14287,11 @@ func (m SqlTxCall) Write(w *Writer) {
 		w.Bin(*m.Body)
 		n++
 	}
+	if m.Parts {
+		w.Uint(7)
+		w.Bool(m.Parts)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -14313,6 +14320,8 @@ func (m *SqlTxCall) Read(r *Reader) {
 		case 6:
 			v := r.Bin()
 			m.Body = &v
+		case 7:
+			m.Parts = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -14327,19 +14336,24 @@ func (m SqlTxCall) IsZero() bool {
 		m.Want == "" &&
 		!m.Commit &&
 		m.Method == nil &&
-		m.Body == nil
+		m.Body == nil &&
+		!m.Parts
 }
 
 // SqlTxAnswer is the schema's sql.TxAnswer.
 //
 // A call's answer: its rows, what it changed, a method's answer, or why it
-// failed, which leaves the transaction as it was before the call.
+// failed, which leaves the transaction as it was before the call. A call
+// that asked for parts may have its rows in several answers, every one but
+// the last saying more; one that did not is refused rows past one answer.
 type SqlTxAnswer struct {
 	Rows    *SqlRows `wire:"1,rows"`
 	Done    *SqlDone `wire:"2,done"`
 	Failure *Failure `wire:"3,failure"`
 	// what a method answered, as its own answer
 	Body *[]byte `wire:"4,body"`
+	// rows of the same call follow in the next answer
+	More bool `wire:"5,more"`
 }
 
 func (m SqlTxAnswer) Write(w *Writer) {
@@ -14365,6 +14379,11 @@ func (m SqlTxAnswer) Write(w *Writer) {
 		w.Bin(*m.Body)
 		n++
 	}
+	if m.More {
+		w.Uint(5)
+		w.Bool(m.More)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -14388,6 +14407,8 @@ func (m *SqlTxAnswer) Read(r *Reader) {
 		case 4:
 			v := r.Bin()
 			m.Body = &v
+		case 5:
+			m.More = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -14400,5 +14421,6 @@ func (m SqlTxAnswer) IsZero() bool {
 	return m.Rows == nil &&
 		m.Done == nil &&
 		m.Failure == nil &&
-		m.Body == nil
+		m.Body == nil &&
+		!m.More
 }

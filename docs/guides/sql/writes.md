@@ -238,6 +238,11 @@ let booked = db.tx(|tx| -> tinystore::Result<bool> {
 
 - Returning commits; throwing, or returning an error, rolls back (contract
   SQL-07).
+- Its reads carry what they carry outside it, `all` up to 64 MiB of rows,
+  so read the rows a write decides from inside the transaction, never
+  before it (contract SQL-14). Over the wire the rows come in parts of
+  about 1 MiB and the SDK joins them. An SDK of 0.10 or before reads only
+  one part, and is refused more as `limit`.
 - Its reads see its own writes. A call that fails leaves the transaction as
   it was before that call, so the function may catch an error and go on.
   The exception is a statement that rolls back the whole transaction, such

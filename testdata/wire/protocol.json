@@ -6719,6 +6719,9 @@
         "method": {
           "uint": "507"
         },
+        "parts": {
+          "bool": true
+        },
         "text": {
           "str": "text"
         },
@@ -6733,7 +6736,7 @@
           "str": "want"
         }
       },
-      "hex": "8601a4746578740291a676616c75657303a477616e7404c305cd01fb06c40201ff",
+      "hex": "8701a4746578740291a676616c75657303a477616e7404c305cd01fb06c40201ff07c3",
       "message": "sql.TxCall",
       "name": "sql.TxCall with every field"
     },
@@ -6775,6 +6778,9 @@
             }
           }
         },
+        "more": {
+          "bool": true
+        },
         "rows": {
           "fields": {
             "columns": {
@@ -6798,7 +6804,7 @@
           }
         }
       },
-      "hex": "8401820191a7636f6c756d6e73029191a4726f77730282016b02cf0020000000000001038301a4636f646502a76d6573736167650381a161a47768617404c40201ff",
+      "hex": "8501820191a7636f6c756d6e73029191a4726f77730282016b02cf0020000000000001038301a4636f646502a76d6573736167650381a161a47768617404c40201ff05c3",
       "message": "sql.TxAnswer",
       "name": "sql.TxAnswer with every field"
     },

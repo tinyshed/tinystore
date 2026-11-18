@@ -189,6 +189,23 @@ for (const way of ways) {
 			expect(await app.scalar<number>`select count(*) from notes where author_id = 9`).toBe(1)
 		})
 
+		// contract: SQL-14
+		test('a read in a transaction carries the rows it carries outside one, past one answer', async () => {
+			await app.exec(`with recursive n(i) as (select 1 union all select i + 1 from n where i < 20000)
+				insert into notes (id, author_id, title) select printf('tx%05d', i), 14, printf('%0200d', i) from n`)
+			const outside =
+				await app.all<Note>`select id, title from notes where author_id = 14 order by id`
+			const inside = await app.tx(async tx => {
+				const read =
+					await tx.all<Note>`select id, title from notes where author_id = 14 order by id`
+				await tx.exec`delete from notes where author_id = 14`
+				return read
+			})
+			expect(inside.length).toBe(20000)
+			expect(inside).toEqual(outside)
+			expect(await app.scalar<number>`select count(*) from notes where author_id = 14`).toBe(0)
+		})
+
 		test('a value goes as SQLite keeps it, and one it would change is refused before it leaves', async () => {
 			const raw = new Uint8Array([0, 255, 7])
 			const at = new Date('2026-10-10T12:00:00.123Z')

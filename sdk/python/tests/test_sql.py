@@ -145,6 +145,28 @@ async def test_a_transaction_sees_its_own_writes_commits_what_it_returns_and_rol
     assert await app.scalar(int, "select count(*) from notes where author_id = 9") == 1
 
 
+# contract: SQL-14
+async def test_a_read_in_a_transaction_carries_the_rows_it_carries_outside_one_past_one_answer(
+    app: tinystore.Database,
+) -> None:
+    await app.exec(
+        "with recursive n(i) as (select 1 union all select i + 1 from n where i < 20000) "
+        "insert into notes (id, author_id, title) select printf('tx%05d', i), 14, printf('%0200d', i) from n"
+    )
+    read = "select id, title from notes where author_id = 14 order by id"
+    outside = await app.all(read)
+
+    async def read_and_delete(tx: tinystore.SqlTx) -> list[dict[str, Any]]:
+        inside = await tx.all(read)
+        await tx.exec("delete from notes where author_id = 14")
+        return inside
+
+    inside = await app.tx(read_and_delete)
+    assert len(inside) == 20000
+    assert inside == outside
+    assert await app.scalar(int, "select count(*) from notes where author_id = 14") == 0
+
+
 async def test_a_value_goes_as_sqlite_keeps_it_and_one_it_would_change_is_refused(app: tinystore.Database) -> None:
     raw = bytes([0, 255, 7])
     at = datetime(2026, 10, 10, 12, 0, 0, 123000, tzinfo=UTC)

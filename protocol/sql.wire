@@ -130,15 +130,19 @@ message sql.TxCall {
   4 commit: bool      # in the last: true commits, false rolls back
   5 method: uint?     # with want call: the method, its request in body
   6 body: bin?
+  7 parts: bool       # with want all: the rows may come in several answers, each within the client's credit
 }
 
 # A call's answer: its rows, what it changed, a method's answer, or why it
-# failed, which leaves the transaction as it was before the call.
+# failed, which leaves the transaction as it was before the call. A call
+# that asked for parts may have its rows in several answers, every one but
+# the last saying more; one that did not is refused rows past one answer.
 message sql.TxAnswer {
   1 rows: sql.Rows?
   2 done: sql.Done?
   3 failure: Failure?
   4 body: bin?        # what a method answered, as its own answer
+  5 more: bool        # rows of the same call follow in the next answer
 }
 
 read  0x0301 sql.open(sql.Open)         -> Handle

@@ -24,7 +24,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast, overload
 
-from ._connection import Durability, check_durability, check_name, download
+from ._connection import Durability, check_durability, check_name, download, of_this_release
 from ._handles import Opener, Via, handle_on, via_link
 from ._rows import SqlArg, SqlValue, cell_of, check_columns, named_values, reader, row_of, value_reader
 from ._session import ConnectionLostError
@@ -1244,6 +1244,8 @@ class SqlTx:
         self._guests = guests
         self._via = _TxVia(self, connection)
         self._turn = asyncio.Lock()
+        # rows past one answer come in several, from a server that knows parts: 0.11 or later
+        self._parts = of_this_release(connection)
 
     @property
     def describe(self) -> str:
@@ -1384,13 +1386,26 @@ class SqlTx:
         return answer.get("body", b"")
 
     async def _call(self, statement: Sql, want: str) -> dict[str, Any]:
-        return await self._send(SqlTxCall.encode(text=statement.text, values=list(statement.values), want=want))
+        parts = want == "all" and self._parts
+        return await self._send(
+            SqlTxCall.encode(text=statement.text, values=list(statement.values), want=want, parts=parts)
+        )
 
     async def _send(self, body: bytes) -> dict[str, Any]:
+        """Sends a call and reads its answer, the rows of every part joined into one."""
         async with self._turn:
             await self._stream.send(body, False)
-            event = await self._stream.next()
-            self._stream.consumed(len(event.body))
+            answer = await self._answer()
+            more = answer.get("more", False)
+            while more:
+                part = await self._answer()
+                answer["rows"]["rows"].extend(part.get("rows", {}).get("rows", []))
+                more = part.get("more", False)
+        return answer
+
+    async def _answer(self) -> dict[str, Any]:
+        event = await self._stream.next()
+        self._stream.consumed(len(event.body))
         answer = SqlTxAnswer.decode(event.body)
         failure = answer.get("failure")
         if failure is not None:

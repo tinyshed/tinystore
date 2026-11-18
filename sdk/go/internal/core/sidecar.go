@@ -333,6 +333,14 @@ func OlderRelease(server, own string) bool {
 	return theirs != nil && ours != nil && compareReleases(theirs, ours) < 0
 }
 
+// OfThisRelease says whether the connection's server is of the SDK's release
+// or newer, and so knows what this release added to a message: an older one
+// refuses a field it does not know as unimplemented.
+func (c *Connection) OfThisRelease() bool {
+	agreed := c.Session.Agreed()
+	return agreed == nil || !OlderRelease(agreed.Server, Version)
+}
+
 type version struct {
 	core [3]int
 	pre  []string
