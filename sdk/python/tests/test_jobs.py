@@ -107,6 +107,12 @@ async def test_what_a_handler_returns_settles_its_job(store: tinystore.Store) ->
     assert unreturned is not None and (unreturned.state, unreturned.attempt) == ("scheduled", 1)
     assert "run.snooze(...)" in (unreturned.error or "")
 
+    # contract: JOB-03
+    assert await pushes.add("fail", id="fail")  # a failed job holds no id
+    again = await pushes.get("fail")
+    assert again is not None
+    assert (again.state, again.attempt, again.error) == ("waiting", 0, "the provider no longer knows the token")
+
 
 async def test_a_step_one_attempt_kept_is_found_by_the_next(store: tinystore.Store) -> None:
     orders = store.queue("orders", dict[str, int])

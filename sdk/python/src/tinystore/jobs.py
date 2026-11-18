@@ -503,9 +503,10 @@ class Queue[T]:
     ) -> bool:
         """Adds a job unless its id is taken, and says whether it added one.
 
-        An id is taken by a job scheduled, waiting, running or failed, or done
-        while the queue's dedupe keeps it. It returns once the job is on disk;
-        a job without an id is always added.
+        An id is taken by a job scheduled, waiting or running, or done while
+        the queue's dedupe keeps it; a job failed for good holds no id, and the
+        new job takes its place. It returns once the job is on disk; a job
+        without an id is always added.
         """
         timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
         fields = {**timing, "id": id, "value": self._source.encode(value)}

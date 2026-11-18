@@ -130,6 +130,15 @@ for (const way of ways) {
 			const unreturned = await pushes.get('unreturned')
 			expect([unreturned?.state, unreturned?.attempt]).toEqual(['scheduled', 1])
 			expect(unreturned?.error).toContain('run.snooze(…)')
+
+			// contract: JOB-03
+			expect(await pushes.add('fail', { id: 'fail' })).toBe(true) // a failed job holds no id
+			const again = await pushes.get('fail')
+			expect([again?.state, again?.attempt, again?.error]).toEqual([
+				'waiting',
+				0,
+				'the provider no longer knows the token',
+			])
 		})
 
 		test('a step one attempt kept is found by the next, which runs only the steps left', async () => {

@@ -141,6 +141,13 @@ func TestWhatAHandlerReturnsSettlesItsJob(t *testing.T) {
 		if fail, _ := ways.Must2(pushes.Get(ctx, "fail")); fail.State != jobs.StateFailed || fail.Error != "the provider no longer knows the token" {
 			t.Fatalf("fail %+v", fail)
 		}
+		// contract: JOB-03
+		if !ways.Must(pushes.Add(ctx, "fail", jobs.ID("fail"))) {
+			t.Fatal("a failed job holds no id")
+		}
+		if again, _ := ways.Must2(pushes.Get(ctx, "fail")); again.State != jobs.StateWaiting || again.Error != "the provider no longer knows the token" {
+			t.Fatalf("again %+v", again)
+		}
 	})
 }
 

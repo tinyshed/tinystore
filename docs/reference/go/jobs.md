@@ -283,7 +283,7 @@ OpenQueue opens a queue of jobs of type T, kept as JSON, on a store or on a data
 func (q *Queue[T]) Add(ctx context.Context, value T, opts ...AddOption) (bool, error)
 ```
 
-Add adds a job unless its id is taken, and says whether it added one. An id is taken by a job scheduled, waiting, running or failed, or done while the queue's dedupe keeps it. It returns once the job is on disk; a job without an id is always added. Inside the store's transaction it is kept for the commit, and says true.
+Add adds a job unless its id is taken, and says whether it added one. An id is taken by a job scheduled, waiting or running, or done while the queue's dedupe keeps it; a job failed for good holds no id, and the new job takes its place. It returns once the job is on disk; a job without an id is always added. Inside the store's transaction it is kept for the commit, and says true.
 
 ### Queue.Adding
 

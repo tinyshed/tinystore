@@ -104,9 +104,10 @@ where
         self
     }
 
-    /// Adds the job unless its id is taken: by a job scheduled, waiting,
-    /// running or failed, or done while the queue's dedupe keeps it. Says
-    /// whether it added one; a job without an id is always added.
+    /// Adds the job unless its id is taken: by a job scheduled, waiting or
+    /// running, or done while the queue's dedupe keeps it. A job failed for
+    /// good holds no id, and the new job takes its place. Says whether it
+    /// added one; a job without an id is always added.
     #[expect(clippy::should_implement_trait, reason = "a queue's add puts a job in it, as BullMQ's does: no sum")]
     pub fn add(self, value: &V) -> Result<bool> {
         self.queue.add_asked(self.asked, value, self.tx)

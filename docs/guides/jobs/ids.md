@@ -45,19 +45,25 @@ let job = later.get(&id)?;
 
 ## Four calls, one table
 
-An id is taken while its job is scheduled, waiting, running or failed, and
-while `dedupe` keeps it once the job is done.
+An id is taken while its job is scheduled, waiting or running, and while
+`dedupe` keeps it once the job is done. A job that failed for good is kept
+for the queue's `keep`, a week, so that you can look at it, but it doesn't
+hold its id: the next `add` starts a new job in its place.
 
 | The id's job is               | `add`            | `set`                                        | `update`           | `cancel`                          |
 |-------------------------------|------------------|----------------------------------------------|--------------------|-----------------------------------|
 | none                          | adds it: `true`  | adds it                                      | nothing: `false`   | `false`                           |
 | scheduled, or waiting         | nothing: `false` | replaces its value and time                  | changes it: `true` | removes it: `true`                |
 | running                       | nothing: `false` | one run more after this one, with this value | nothing: `false`   | tells its handler to stop: `true` |
-| failed, kept for `keep`       | nothing: `false` | starts it again, its attempts from one       | nothing: `false`   | removes it: `true`                |
+| failed, kept for `keep`       | adds it: `true`  | starts it again, its attempts from one       | nothing: `false`   | removes it: `true`                |
 | done, while `dedupe` keeps it | nothing: `false` | adds it again                                | nothing: `false`   | `false`                           |
 
 `add`, `update` and `cancel` answer rather than throw: a message being sent
 says it is too late to edit, and the program shows that.
+
+An `add` in the place of a failed job starts a new job, its attempts from
+one. Until its first run ends, its `error` is the failed one's, so a `get`
+still says why the last one failed (contract JOB-03).
 
 A job waiting for a retry is not running, so `update` changes it too. The
 answers its steps kept were for the old value, so they go with it, and the
@@ -91,6 +97,31 @@ _, err = reports.Add(ctx, Report{Team: team}, jobs.ID("report:"+team), jobs.Dela
 indexing.id(&format!("note:{id}")).delay(Duration::from_secs(5)).set(&Index { note_id: id })?; // debounce
 reports.id(&format!("report:{team}")).delay(Duration::from_mins(1)).add(&Report { team })?; // throttle
 ```
+
+## Look now
+
+"Look now" requests that arrive in a burst should become one job, and one
+that arrives while the job runs should get a run that sees it. `set` does
+both, with no id window:
+
+```ts
+await works.set(`now:${course}`, { course }) // many in a row: one job; one during a run: one run more after it
+```
+
+```python
+await works.set(f"now:{course}", Work(course=course))
+```
+
+```go
+err = works.Set(ctx, fmt.Sprint("now:", course), Work{Course: course})
+```
+
+```rust
+works.set(format!("now:{course}"), &Work { course })?;
+```
+
+`add` would drop a request made during the run, since the running job holds
+its id.
 
 ## Once per hour
 

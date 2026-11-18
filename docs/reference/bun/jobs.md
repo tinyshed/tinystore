@@ -296,10 +296,11 @@ A queue of jobs of one type, run in the order of their time: open it with `store
 add(value: T, options?: AddOptions): Promise<boolean>
 ```
 
-Adds a job unless its id is taken: by a job scheduled, waiting, running
-or failed, or done while the queue's dedupe keeps it. It returns once
-the job is on disk, and says whether it added one; a job without an id
-is always added.
+Adds a job unless its id is taken: by a job scheduled, waiting or
+running, or done while the queue's dedupe keeps it. A job failed for
+good holds no id: the new job takes its place. It returns once the job
+is on disk, and says whether it added one; a job without an id is
+always added.
 
     await reminders.add({ userId: 42, text: 'Call mom' }, { delay: '1h' })
 

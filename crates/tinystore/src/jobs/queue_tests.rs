@@ -84,7 +84,25 @@ fn add_adds_only_to_an_id_that_is_free() {
     let failing = notes.concurrency(1).run_due(|_: Note, _run| -> Result<(), String> { Err("down".into()) });
     assert_eq!(failing.unwrap(), 1);
     assert_eq!(notes.get("a").unwrap().unwrap().state, State::Failed);
-    assert!(!notes.id("a").add(&note("after the failure")).unwrap(), "a failed job is kept to be looked at");
+    assert!(notes.id("a").add(&note("after the failure")).unwrap(), "a failed job holds no id");
+    let job = notes.get("a").unwrap().unwrap();
+    assert_eq!((job.state, job.value, job.attempt), (State::Waiting, note("after the failure"), 0));
+    assert_eq!(job.error.as_deref(), Some("down"), "it says why the last one failed until its own run ends");
+    assert!(!notes.id("a").add(&note("third")).unwrap(), "the new job holds the id again");
+    assert_eq!(ran(&notes), ["after the failure"]);
+    assert!(notes.get("a").unwrap().is_none(), "the failed record went with the add");
+}
+
+// contract: JOB-03
+#[test]
+fn add_in_the_place_of_a_failed_job_keeps_its_group_unless_it_names_one() {
+    let f = fixture();
+    let notes = f.store.queue::<Note>("notes").attempts(1).open().unwrap();
+    notes.id("a").group("acme").add(&note("first")).unwrap();
+    notes.concurrency(1).run_due(|_: Note, _run| -> Result<(), String> { Err("down".into()) }).unwrap();
+    assert!(notes.id("a").add(&note("again")).unwrap());
+    assert_eq!(notes.get("a").unwrap().unwrap().group.as_deref(), Some("acme"));
+    assert_eq!(notes.counts().unwrap().failed, 0);
 }
 
 // contract: JOB-03

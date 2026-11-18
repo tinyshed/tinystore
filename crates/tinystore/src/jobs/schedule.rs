@@ -203,7 +203,16 @@ fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &
         rows::drop_failed(c, queue.id, key)?;
         rows::check_room(c, queue.id, queue.policy.max_waiting)?;
         let id = rows::next_id(c)?;
-        let job = NewJob { queue: queue.id, id, key: Some(key), at: next, repeat: Some(text), group: None, value };
+        let job = NewJob {
+            queue: queue.id,
+            id,
+            key: Some(key),
+            at: next,
+            repeat: Some(text),
+            group: None,
+            error: None,
+            value,
+        };
         return rows::insert(c, &job);
     };
     if there.repeat.as_deref() == Some(text) {

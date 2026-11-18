@@ -6,13 +6,13 @@
 //! | none                 | adds it        | adds it                     | false                     | false                      |
 //! | scheduled or waiting | false          | makes it new                | changes what it names     | removes it                 |
 //! | running              | false          | one run more after this one | false                     | tells its handler to stop  |
-//! | failed               | false          | starts it again             | false                     | removes it                 |
+//! | failed               | adds it        | starts it again             | false                     | removes it                 |
 //! | done, kept by dedupe | false          | adds it again               | false                     | false                      |
 
 use rusqlite::Connection;
 
 use super::read::Row;
-use super::rows::{self, Change, NewJob};
+use super::rows::{self, Change, Failed, NewJob};
 use super::state::QueueState;
 use super::values::Kept;
 use crate::Result;
@@ -32,14 +32,17 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
-    fn new_job<'a>(&'a self, id: i64, queue: &QueueState, group: Option<&'a str>) -> NewJob<'a> {
+    /// The job the call adds, in the place of the failed one it took when
+    /// there was one: that one's group when the call names none, and its error.
+    fn new_job<'a>(&'a self, id: i64, queue: &QueueState, failed: Option<&'a Failed>) -> NewJob<'a> {
         NewJob {
             queue: queue.id,
             id,
             key: self.key.as_deref(),
             at: self.at,
             repeat: self.repeat.as_deref(),
-            group,
+            group: self.group.as_deref().or(failed.and_then(|failed| failed.group.as_deref())),
+            error: failed.and_then(|failed| failed.error.as_deref()),
             value: &self.value,
         }
     }
@@ -49,18 +52,22 @@ impl Prepared {
     }
 }
 
-/// Adds a job, to an id that is free; says whether it did.
+/// Adds a job, to an id that is free; says whether it did. A failed job is
+/// kept to be looked at and holds no id: the new job takes its place, and
+/// its error until the new one's first run ends, so that a `get` still says
+/// why the last one failed.
 pub(crate) fn add(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<bool> {
+    let mut failed = None;
     if let Some(key) = &call.key {
         let taken = rows::job_by_key(c, queue.id, key)?.is_some()
-            || rows::failed_key(c, queue.id, key)?
             || queue.policy.dedupe.is_some() && rows::done_key(c, queue.id, key, call.now)?;
         if taken {
             return Ok(false);
         }
+        failed = rows::drop_failed(c, queue.id, key)?;
     }
     rows::check_room(c, queue.id, queue.policy.max_waiting)?;
-    rows::insert(c, &call.new_job(rows::next_id(c)?, queue, call.group.as_deref()))?;
+    rows::insert(c, &call.new_job(rows::next_id(c)?, queue, failed.as_ref()))?;
     Ok(true)
 }
 
@@ -83,10 +90,10 @@ pub(crate) fn set(c: &Connection, queue: &QueueState, call: &Prepared) -> Result
         rows::renew(c, queue.id, key, &there, &call.change(call.at))?;
         return Ok(Set { due: call.at });
     }
-    let failed_group = rows::drop_failed(c, queue.id, key)?.flatten();
+    // a set starts a failed job anew, its error gone with the rest of it
+    let failed = rows::drop_failed(c, queue.id, key)?.map(|failed| Failed { error: None, ..failed });
     rows::check_room(c, queue.id, queue.policy.max_waiting)?;
-    let group = call.group.as_deref().or(failed_group.as_deref());
-    rows::insert(c, &call.new_job(rows::next_id(c)?, queue, group))?;
+    rows::insert(c, &call.new_job(rows::next_id(c)?, queue, failed.as_ref()))?;
     Ok(Set { due: call.at })
 }
 

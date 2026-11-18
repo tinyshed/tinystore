@@ -132,9 +132,10 @@ Repeats the job by a five-field cron expression on the wall clock of
 pub fn add(self, value: &V) -> Result<bool>
 ```
 
-Adds the job unless its id is taken: by a job scheduled, waiting,
-running or failed, or done while the queue's dedupe keeps it. Says
-whether it added one; a job without an id is always added.
+Adds the job unless its id is taken: by a job scheduled, waiting or
+running, or done while the queue's dedupe keeps it. A job failed for
+good holds no id, and the new job takes its place. Says whether it
+added one; a job without an id is always added.
 
 ### JobCall.set
 

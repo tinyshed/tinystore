@@ -57,11 +57,11 @@ const JOB_BY_KEY: &str = "select j.next, j.id, j.again, j.repeat, j.spill
     from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
     where k.queue = ?1 and k.key = ?2";
 const LEASE_HELD: &str = "select 1 from _tinystore_jobs_leases where id = ?1 and until > ?2";
-const FAILED_KEY: &str = "select 1 from _tinystore_jobs_failed where queue = ?1 and key = ?2";
 const DONE_KEY: &str = "select 1 from _tinystore_jobs_done where queue = ?1 and key = ?2 and until > ?3";
 
-const INSERT_JOB: &str = "insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill, grp)
-    values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7, ?8)";
+const INSERT_JOB: &str =
+    "insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill, grp, error)
+    values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7, ?8, ?9)";
 const INSERT_SPILLED: &str = "insert into _tinystore_jobs_spilled (id, value) values (?1, ?2)";
 const DELETE_SPILLED: &str = "delete from _tinystore_jobs_spilled where id = ?1";
 /// A key's row: where its job lies, replacing a key a job left behind.
@@ -85,7 +85,8 @@ const UPDATE_JOB: &str = "update _tinystore_jobs
 const ASK_AGAIN: &str = "update _tinystore_jobs
     set again = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp)
     where queue = ?1 and next = ?2 and id = ?3";
-const DROP_FAILED: &str = "delete from _tinystore_jobs_failed where queue = ?1 and key = ?2 returning spill, grp";
+const DROP_FAILED: &str =
+    "delete from _tinystore_jobs_failed where queue = ?1 and key = ?2 returning spill, grp, error";
 const CANCEL_JOB: &str = "delete from _tinystore_jobs where (queue, next, id) in (
         select k.queue, k.next, k.id from _tinystore_jobs_keys k where k.queue = ?1 and k.key = ?2)
     returning id, spill, next, grp";
@@ -126,7 +127,16 @@ pub(crate) struct NewJob<'a> {
     pub(crate) at: i64,
     pub(crate) repeat: Option<&'a str>,
     pub(crate) group: Option<&'a str>,
+    /// Why the failed job it takes the place of failed, until its first run ends.
+    pub(crate) error: Option<&'a str>,
     pub(crate) value: &'a Kept,
+}
+
+/// What a failed job a write took the place of leaves to the new one.
+#[derive(Debug)]
+pub(crate) struct Failed {
+    pub(crate) group: Option<String>,
+    pub(crate) error: Option<String>,
 }
 
 /// What a write gives a job that is there: its value, its time and repeat,
@@ -217,10 +227,6 @@ pub(crate) fn lease_held(c: &Connection, id: i64, now: i64) -> Result<bool> {
     exists(c, LEASE_HELD, params![id, now])
 }
 
-pub(crate) fn failed_key(c: &Connection, queue: i64, key: &str) -> Result<bool> {
-    exists(c, FAILED_KEY, params![queue, key])
-}
-
 pub(crate) fn done_key(c: &Connection, queue: i64, key: &str, now: i64) -> Result<bool> {
     exists(c, DONE_KEY, params![queue, key, now])
 }
@@ -244,7 +250,8 @@ pub(crate) fn check_room(c: &Connection, queue: i64, max_waiting: u64) -> Result
 /// bound, and its key where it has one.
 pub(crate) fn insert(c: &Connection, job: &NewJob<'_>) -> Result<()> {
     let spill = spill(c, job.id, job.value)?;
-    let params = params![job.queue, job.at, job.id, job.key, job.repeat, job.value.inline(), spill, job.group];
+    let inline = job.value.inline();
+    let params = params![job.queue, job.at, job.id, job.key, job.repeat, inline, spill, job.group, job.error];
     execute(c, INSERT_JOB, params, "a job's row")?;
     if let Some(key) = job.key {
         execute(c, INSERT_KEY, params![job.queue, key, job.at, job.id], "a job's id")?;
@@ -311,18 +318,21 @@ pub(crate) fn ask_again(
     execute(c, ASK_AGAIN, params, "a set of a running job").map(drop)
 }
 
-/// Deletes the failed job under a key and its spilled value, and answers its
-/// group when there was one.
-pub(crate) fn drop_failed(c: &Connection, queue: i64, key: &str) -> Result<Option<Option<String>>> {
-    let dropped: Option<(Option<i64>, Option<String>)> = c
+/// Deletes the failed job under a key and its spilled value, and answers
+/// its group and its error when there was one.
+pub(crate) fn drop_failed(c: &Connection, queue: i64, key: &str) -> Result<Option<Failed>> {
+    let dropped: Option<(Option<i64>, Failed)> = c
         .prepare_cached(DROP_FAILED)
-        .and_then(|mut delete| delete.query_row(params![queue, key], |row| Ok((row.get(0)?, row.get(1)?))).optional())
+        .and_then(|mut delete| {
+            let failed = |row: &rusqlite::Row<'_>| Ok((row.get(0)?, Failed { group: row.get(1)?, error: row.get(2)? }));
+            delete.query_row(params![queue, key], failed).optional()
+        })
         .map_err(|error| sql_error("a failed job", error))?;
-    let Some((spilled, group)) = dropped else {
+    let Some((spilled, failed)) = dropped else {
         return Ok(None);
     };
     drop_spill(c, spilled)?;
-    Ok(Some(group))
+    Ok(Some(failed))
 }
 
 /// A job a cancel took from the queue's rows.
