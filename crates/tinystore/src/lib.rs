@@ -19,6 +19,8 @@ pub mod channels;
 mod clock;
 #[cfg(any(feature = "records", feature = "metrics", feature = "search", feature = "backup"))]
 mod compress;
+#[cfg(any(feature = "metrics", feature = "records"))]
+mod condition;
 #[cfg(feature = "config-load")]
 pub mod config;
 #[cfg(feature = "console")]
@@ -106,6 +108,8 @@ pub use calendar::Calendar;
 #[cfg(any(feature = "store", feature = "mcp"))]
 pub use cancel::CancellationToken;
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
+#[cfg(any(feature = "metrics", feature = "records"))]
+pub use condition::{Not, Prefix};
 pub use error::{Constraint, ConstraintKind, Error, ErrorKind, Result};
 pub use key::Key;
 #[cfg(feature = "store")]

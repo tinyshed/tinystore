@@ -168,6 +168,23 @@ pub fn unix_nanos(time: SystemTime) -> i64
 
 Nanoseconds since the Unix epoch; negative before it.
 
+## Not
+
+```rust
+pub struct Not<T>(pub T)
+```
+
+A value equal to none of these, or absent: `Not("dev")`, `Not(["dev",
+"test"])`.
+
+## Prefix
+
+```rust
+pub struct Prefix<T>(pub T)
+```
+
+A text that starts with this one: `Prefix("api-")`.
+
 ## Constraint
 
 ```rust

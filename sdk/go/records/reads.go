@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"iter"
 	"log/slog"
 	"time"
@@ -99,29 +101,105 @@ func (q Query) asked(handle *uint64) (wire.RecordsQuery, error) {
 		limit := uint64(q.Limit)
 		out.Limit = &limit
 	}
-	where, err := q.where()
-	out.Where = where
+	var err error
+	out.Where, out.Conditions, err = q.where()
 	return out, err
 }
 
-// where is each key's value as the JSON it was written as; nil finds nothing
-// it was not asked, so it is refused.
-func (q Query) where() (map[string]string, error) {
-	if q.Where == nil {
-		return nil, nil
-	}
-	out := make(map[string]string, len(q.Where))
+// where is the query's Where as the wire carries it: a plain value as its
+// JSON in where, which every server reads, and a list or a Condition in
+// conditions, which a server older than them refuses rather than matching
+// nothing. A nil finds nothing it was not asked, so it is refused.
+func (q Query) where() (map[string]string, map[string]wire.RecordsCondition, error) {
+	where, conditions := map[string]string{}, map[string]wire.RecordsCondition{}
 	for key, value := range q.Where {
 		if value == nil {
-			return nil, core.Errorf(core.Invalid, "a query's where %q given as nil: leave it out to read without it", key)
+			return nil, nil, core.Errorf(core.Invalid, "a query's where %q given as nil: leave it out to read without it", key)
 		}
-		var spelled bytes.Buffer
-		encoder := json.NewEncoder(&spelled)
-		encoder.SetEscapeHTML(false)
-		if err := encoder.Encode(value); err != nil {
-			return nil, core.Wrap(core.Invalid, err, "a query's where %q: JSON cannot write it", key)
+		if condition, ok := value.(Condition); ok {
+			if condition.err != nil {
+				return nil, nil, core.Wrap(core.Invalid, condition.err, "a query's where %q", key)
+			}
+			conditions[key] = condition.wire
+			continue
 		}
-		out[key] = string(bytes.TrimSpace(spelled.Bytes()))
+		spelled, items, err := valuesOf(value)
+		switch {
+		case err != nil:
+			return nil, nil, core.Wrap(core.Invalid, err, "a query's where %q", key)
+		case items != nil:
+			conditions[key] = wire.RecordsCondition{Values: items}
+		default:
+			where[key] = spelled
+		}
+	}
+	return where, conditions, nil
+}
+
+// valuesOf is a value's JSON, and a list's items each as its JSON; an object
+// is refused, as the value itself goes inside a list.
+func valuesOf(value any) (string, []string, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", nil, fmt.Errorf("JSON cannot write it: %w", err)
+	}
+	spelled := bytes.TrimSpace(buffer.Bytes())
+	switch spelled[0] {
+	case '[':
+		var items []json.RawMessage
+		if err := json.Unmarshal(spelled, &items); err != nil {
+			return "", nil, err
+		}
+		texts := make([]string, len(items))
+		for i, item := range items {
+			texts[i] = string(item)
+		}
+		return "", texts, nil
+	case '{':
+		return "", nil, errors.New("an object, where a value, a list or a Condition goes: an object as the value itself goes in a list")
+	}
+	return string(spelled), nil, nil
+}
+
+// Condition is what a key's value must be beside a value of its own: one of
+// a list, none of one, or a prefix.
+type Condition struct {
+	wire wire.RecordsCondition
+	err  error
+}
+
+// OneOf is a value equal to one of these, each by the JSON it is written
+// as; a slice given is its items, as a bare slice in a Where is.
+func OneOf(values ...any) Condition {
+	items, err := listed(values)
+	return Condition{wire: wire.RecordsCondition{Values: items}, err: err}
+}
+
+// Not is a value equal to none of these, or the key absent.
+func Not(values ...any) Condition {
+	items, err := listed(values)
+	return Condition{wire: wire.RecordsCondition{Values: items, Not: true}, err: err}
+}
+
+// Prefix is a text that starts with this one; a number or a bool never does.
+func Prefix(text string) Condition {
+	return Condition{wire: wire.RecordsCondition{Prefix: &text}}
+}
+
+// listed is each value's JSON, a slice's items spread.
+func listed(values []any) ([]string, error) {
+	out := []string{}
+	for _, value := range values {
+		spelled, items, err := valuesOf(value)
+		if err != nil {
+			return nil, err
+		}
+		if items == nil {
+			items = []string{spelled}
+		}
+		out = append(out, items...)
 	}
 	return out, nil
 }

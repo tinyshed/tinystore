@@ -194,6 +194,46 @@ func TestAQueryFindsByWhatEventsHoldAPageAtATime(t *testing.T) {
 	})
 }
 
+// contract: REC-18
+func TestAWhereListIsOneOfNotFindsAnAbsentKeyAndPrefixAText(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		calls := ways.Must(records.OpenEvents(store, "calls"))
+		ways.Must(calls.AppendMany(ctx, []records.Event{
+			{Name: "call", Fields: records.Fields{"userId": 1, "op": "review.list"}},
+			{Name: "call", Fields: records.Fields{"userId": 2, "op": "drafts.get"}},
+			{Name: "call", Fields: records.Fields{"userId": 3, "op": "courses.list", "env": "test"}},
+			{Name: "call", Fields: records.Fields{"userId": 4, "tags": []string{"a", "b"}}},
+		}))
+		users := func(where records.Where) string {
+			var out []string
+			for _, event := range ways.Must(calls.List(ctx, records.Query{Where: where})).Events {
+				out = append(out, fields(t, event.Fields)["userId"].(json.Number).String())
+			}
+			return fmt.Sprint(out)
+		}
+		for where, want := range map[string]struct {
+			where records.Where
+			users string
+		}{
+			"a bare slice":    {records.Where{"op": []string{"review.list", "drafts.get"}}, "[1 2]"},
+			"one of":          {records.Where{"userId": records.OneOf(1, 3, 99)}, "[1 3]"},
+			"not":             {records.Where{"env": records.Not("test")}, "[1 2 4]"},
+			"not a list":      {records.Where{"op": records.Not("review.list", "drafts.get")}, "[3 4]"},
+			"a prefix":        {records.Where{"op": records.Prefix("courses.")}, "[3]"},
+			"the list itself": {records.Where{"tags": [][]string{{"a", "b"}}}, "[4]"},
+		} {
+			if got := users(want.where); got != want.users {
+				t.Errorf("%s: %s, want %s", where, got, want.users)
+			}
+		}
+		for _, where := range []records.Where{{"op": []string{}}, {"op": map[string]int{"a": 1}}, {"op": records.Prefix("")}} {
+			_, err := calls.Count(ctx, records.Query{Where: where})
+			is(t, err, tinystore.ErrInvalid)
+		}
+	})
+}
+
 func TestCountsAKeysTopValuesAndRowsOfASpanWithTheirStats(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

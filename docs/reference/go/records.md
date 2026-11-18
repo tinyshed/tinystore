@@ -188,6 +188,40 @@ type Batch struct {
 
 Batch is every event once, a batch a poll: its events, where the next poll begins, and what expired before it.
 
+## Condition
+
+```go
+type Condition struct {
+	// contains filtered or unexported fields
+}
+```
+
+Condition is what a key's value must be beside a value of its own: one of a list, none of one, or a prefix.
+
+### Not
+
+```go
+func Not(values ...any) Condition
+```
+
+Not is a value equal to none of these, or the key absent.
+
+### OneOf
+
+```go
+func OneOf(values ...any) Condition
+```
+
+OneOf is a value equal to one of these, each by the JSON it is written as; a slice given is its items, as a bare slice in a Where is.
+
+### Prefix
+
+```go
+func Prefix(text string) Condition
+```
+
+Prefix is a text that starts with this one; a number or a bool never does.
+
 ## Damage
 
 ```go
@@ -718,7 +752,7 @@ Top is one of a key's most frequent values, and how many events hold it.
 type Where map[string]any
 ```
 
-Where is what a query finds in an event's fields or context: each key with this value, by the JSON it was written as.
+Where is what a query finds in an event's fields or context: each key with this value, by the JSON it was written as; one of a slice's items, or of a OneOf; none of them, the key absent too, with Not; or a text that starts with a Prefix. A slice or an object as the value itself goes inside a slice: \[]\[]string{{"a", "b"}}.
 
 ## console.AddSource
 

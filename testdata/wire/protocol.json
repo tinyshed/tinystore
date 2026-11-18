@@ -4821,8 +4821,55 @@
     },
     {
       "fields": {
+        "not": {
+          "bool": true
+        },
+        "prefix": {
+          "str": "prefix"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "{\"a\":1}"
+            }
+          ]
+        }
+      },
+      "hex": "830191a77b2261223a317d02c303a6707265666978",
+      "message": "records.Condition",
+      "name": "records.Condition with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Condition",
+      "name": "records.Condition with no field"
+    },
+    {
+      "fields": {
         "after": {
           "str": "after"
+        },
+        "conditions": {
+          "names": {
+            "a": {
+              "fields": {
+                "not": {
+                  "bool": true
+                },
+                "prefix": {
+                  "str": "prefix"
+                },
+                "values": {
+                  "list": [
+                    {
+                      "str": "{\"a\":1}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
         },
         "from": {
           "int": "1790000000000123456"
@@ -4873,7 +4920,7 @@
           }
         }
       },
-      "hex": "8d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da56166746572",
+      "hex": "8e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a6707265666978",
       "message": "records.Query",
       "name": "records.Query with every field"
     },
@@ -4963,6 +5010,27 @@
             "after": {
               "str": "after"
             },
+            "conditions": {
+              "names": {
+                "a": {
+                  "fields": {
+                    "not": {
+                      "bool": true
+                    },
+                    "prefix": {
+                      "str": "prefix"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "{\"a\":1}"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
             "from": {
               "int": "1790000000000123456"
             },
@@ -5014,7 +5082,7 @@
           }
         }
       },
-      "hex": "82018d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da5616674657202a36b6579",
+      "hex": "82018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802a36b6579",
       "message": "records.TopAsked",
       "name": "records.TopAsked with every field"
     },
@@ -5097,6 +5165,27 @@
             "after": {
               "str": "after"
             },
+            "conditions": {
+              "names": {
+                "a": {
+                  "fields": {
+                    "not": {
+                      "bool": true
+                    },
+                    "prefix": {
+                      "str": "prefix"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "{\"a\":1}"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
             "from": {
               "int": "1790000000000123456"
             },
@@ -5158,7 +5247,7 @@
           "str": "timeZone"
         }
       },
-      "hex": "87018d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da5616674657202cd05dc0391a262790491a573746174730591a864697374696e637406a863616c656e64617207a874696d655a6f6e65",
+      "hex": "87018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802cd05dc0391a262790491a573746174730591a864697374696e637406a863616c656e64617207a874696d655a6f6e65",
       "message": "records.AggregateAsked",
       "name": "records.AggregateAsked with every field"
     },
@@ -5514,6 +5603,27 @@
             "after": {
               "str": "after"
             },
+            "conditions": {
+              "names": {
+                "a": {
+                  "fields": {
+                    "not": {
+                      "bool": true
+                    },
+                    "prefix": {
+                      "str": "prefix"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "{\"a\":1}"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
             "from": {
               "int": "1790000000000123456"
             },
@@ -5565,7 +5675,7 @@
           }
         }
       },
-      "hex": "82018d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da5616674657202a6707265666978",
+      "hex": "82018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802a6707265666978",
       "message": "records.FieldNamesAsked",
       "name": "records.FieldNamesAsked with every field"
     },

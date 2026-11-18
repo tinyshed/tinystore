@@ -16,16 +16,16 @@ use serde_json::value::RawValue;
 
 use super::codec::Message;
 use super::protocol::{
-    Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCount,
-    RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsFieldInfo, RecordsFieldNamesAsked,
-    RecordsFieldsAsked, RecordsNameCount, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece,
-    RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats, RecordsStream, RecordsStreamFields,
-    RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
+    Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCondition,
+    RecordsCount, RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsFieldInfo,
+    RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsNameCount, RecordsNames, RecordsNewEvent, RecordsOpen,
+    RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats, RecordsStream,
+    RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
 };
 use super::{Lent, Link, Route};
 use crate::records::{
-    Aggregate, AllEvents, Damage, Event, Events, FieldInfo, Fields, Level, Lines, List, NewEvent, Number, Part, SpanId,
-    Stats, Tail, TailBatch, TraceId,
+    Aggregate, AllEvents, Condition, Damage, Event, Events, FieldInfo, Fields, Level, Lines, List, NewEvent, Number,
+    Part, SpanId, Stats, Tail, TailBatch, TraceId,
 };
 use crate::sync::lock;
 use crate::{Calendar, ErrorKind, Store, unix_nanos};
@@ -406,9 +406,14 @@ fn query(reading: &Reading<'_>, asked: &RecordsQuery) -> Result<List, Failure> {
         list = list.trace_id(TraceId(sized(trace)?));
     }
     for (key, json) in &asked.r#where {
-        let value =
-            RawValue::from_string(json.clone()).map_err(|_| Failure::invalid(format!("where {key:?}: no JSON")))?;
-        list = list.filter(key, &value);
+        RawValue::from_string(json.clone()).map_err(|_| Failure::invalid(format!("where {key:?}: no JSON")))?;
+        if asked.conditions.contains_key(key) {
+            return Err(Failure::invalid(format!("where {key:?}: a key is a value or a condition, not both")));
+        }
+        list = list.filter(key, Condition::exactly(json.clone()));
+    }
+    for (key, condition) in &asked.conditions {
+        list = list.filter(key, condition_of(key, condition)?);
     }
     if let Some(text) = &asked.search {
         list = list.search(text);
@@ -423,6 +428,20 @@ fn query(reading: &Reading<'_>, asked: &RecordsQuery) -> Result<List, Failure> {
         list = list.after(after);
     }
     Ok(list)
+}
+
+/// A condition as the client sent it: a list, none of a list with `not`, or
+/// a prefix alone.
+fn condition_of(key: &str, condition: &RecordsCondition) -> Result<Condition, Failure> {
+    match condition {
+        RecordsCondition { values, not: false, prefix: Some(prefix) } if values.is_empty() => {
+            Ok(Condition::prefix(prefix.clone()))
+        }
+        RecordsCondition { prefix: Some(_), .. } => {
+            Err(Failure::invalid(format!("where {key:?}: a prefix alone, without values or not")))
+        }
+        RecordsCondition { values, not, .. } => Ok(Condition::listed(values.clone(), *not)),
+    }
 }
 
 fn event_of(event: Event) -> RecordsEvent {

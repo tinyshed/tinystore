@@ -208,26 +208,35 @@ pub(super) fn read_values(
     values.into_iter().enumerate().map(quoted).collect()
 }
 
-/// Which values of a column are written as `json`, compared as the column
-/// keeps them: text by its bytes, a dictionary's distinct values once, and
-/// integers as integers, so that no value is spelled to be compared. A
-/// quoted column's values are its quotes' insides.
-pub(super) fn values_equal(reader: &mut Reader<'_>, times: &[i64], decoder: &mut Decoder<'_>, json: &str) -> Vec<bool> {
+/// Which values of a column are written as one of `jsons`, compared as the
+/// column keeps them: text by its bytes, a dictionary's distinct values
+/// once, and integers as integers, so that no value is spelled to be
+/// compared. A quoted column's values are its quotes' insides.
+pub(super) fn values_equal(
+    reader: &mut Reader<'_>,
+    times: &[i64],
+    decoder: &mut Decoder<'_>,
+    jsons: &[String],
+) -> Vec<bool> {
     if times.is_empty() {
         return Vec::new();
     }
     let kind = reader.byte();
-    let inner = if kind & QUOTED == 0 { Some(json) } else { unquoted(json) };
-    match (kind & KIND, kind & !(KIND | QUOTED), inner) {
-        (TEXT, 0, Some(inner)) => texts_equal(reader, times.len(), decoder, inner.as_bytes()),
-        (INTEGERS, 0, Some(inner)) => {
-            let integer = integer(inner);
-            read_ints(reader, times.len()).iter().map(|value| Some(*value) == integer).collect()
+    // a JSON without quotes is no value of a quoted column, which is still read through
+    let mut inners: Vec<&str> =
+        jsons.iter().filter_map(|json| if kind & QUOTED == 0 { Some(json.as_str()) } else { unquoted(json) }).collect();
+    inners.sort_unstable();
+    match (kind & KIND, kind & !(KIND | QUOTED)) {
+        (TEXT, 0) => texts_equal(reader, times.len(), decoder, &inners),
+        (INTEGERS, 0) => {
+            let mut integers: Vec<i64> = inners.iter().filter_map(|inner| integer(inner)).collect();
+            integers.sort_unstable();
+            read_ints(reader, times.len()).iter().map(|value| integers.binary_search(value).is_ok()).collect()
         }
-        // a JSON without quotes is no value of a quoted column, which is still read through
-        _ => {
-            read_inner(reader, kind, (times, None), decoder).iter().map(|value| inner == Some(value.as_str())).collect()
-        }
+        _ => read_inner(reader, kind, (times, None), decoder)
+            .iter()
+            .map(|value| inners.binary_search(&value.as_str()).is_ok())
+            .collect(),
     }
 }
 
@@ -444,7 +453,8 @@ mod tests {
             let (mut out, times) = (Vec::new(), vec![AT; values.len()]);
             put_values(&mut out, values, &times, &mut codec).unwrap();
             let mut reader = Reader::new(&out);
-            let equal = values_equal(&mut reader, &times, &mut Decoder { codec: &mut codec, left: 1 << 20 }, json);
+            let jsons = [json.to_owned()];
+            let equal = values_equal(&mut reader, &times, &mut Decoder { codec: &mut codec, left: 1 << 20 }, &jsons);
             reader.finish().unwrap();
             assert_eq!(equal, values.iter().map(|value| *value == json).collect::<Vec<_>>(), "{json}");
         };

@@ -120,7 +120,12 @@ export interface Query {
 	/** this level and worse; an event without a level is not found */
 	minLevel?: EventLevel
 	traceId?: string
-	/** each key with this value, by the JSON it was written as, in fields or in context */
+	/**
+	 * each key, in fields or in context, with this value by the JSON it was
+	 * written as; one of a list, `[7, 12]`; none of them with `{ not }`, the
+	 * key absent too; or a text that starts with `{ prefix }`. A list or an
+	 * object as the value itself goes inside a list: `[['a', 'b']]`.
+	 */
 	where?: Record<string, unknown>
 	/** this text in the message, the name or a value, its case ignored */
 	search?: string
@@ -1007,12 +1012,7 @@ function queryOf(query: Query | undefined): Parameters<typeof RecordsQuery.encod
 			throw new InvalidError(`a query's ${key} given as undefined: leave it out to read without it`)
 		}
 	}
-	const where = q.where === undefined ? undefined : Object.entries(q.where)
-	for (const [key, value] of where ?? []) {
-		if (value === undefined) {
-			throw new InvalidError(`a query's where ${JSON.stringify(key)} given as undefined`)
-		}
-	}
+	const { where, conditions } = whereOf(q.where)
 	return {
 		since: q.since === undefined ? undefined : ms(q.since),
 		from: q.from === undefined ? undefined : nanosOf(q.from),
@@ -1021,15 +1021,59 @@ function queryOf(query: Query | undefined): Parameters<typeof RecordsQuery.encod
 		names: q.names === undefined ? undefined : [...q.names],
 		minLevel: q.minLevel === undefined ? undefined : levelNumber(q.minLevel, 'minLevel'),
 		traceId: q.traceId === undefined ? undefined : idBytes(q.traceId, 16, 'traceId'),
-		where:
-			where === undefined
-				? undefined
-				: Object.fromEntries(where.map(([key, value]) => [key, jsonOf(value)])),
+		where,
+		conditions,
 		search: q.search,
 		newest: q.newest,
 		limit: q.limit,
 		after: q.after,
 	}
+}
+
+type WireCondition = { values?: string[]; not?: boolean; prefix?: string }
+
+/**
+ * A where as the wire carries it: a plain value as its JSON in `where`, which
+ * every server reads, and a list, `{ not }` or `{ prefix }` in `conditions`,
+ * which a server older than them refuses rather than matching nothing.
+ */
+function whereOf(given: Record<string, unknown> | undefined): {
+	where?: Record<string, string> | undefined
+	conditions?: Record<string, WireCondition> | undefined
+} {
+	const where: Record<string, string> = {}
+	const conditions: Record<string, WireCondition> = {}
+	for (const [key, value] of Object.entries(given ?? {})) {
+		const named = `a query's where ${JSON.stringify(key)}`
+		if (value === undefined) {
+			throw new InvalidError(`${named} given as undefined`)
+		}
+		if (Array.isArray(value)) {
+			conditions[key] = { values: value.map(item => jsonOf(item)) }
+		} else if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
+			conditions[key] = conditionOf(named, value as Record<string, unknown>)
+		} else {
+			where[key] = jsonOf(value)
+		}
+	}
+	return {
+		where: Object.keys(where).length === 0 ? undefined : where,
+		conditions: Object.keys(conditions).length === 0 ? undefined : conditions,
+	}
+}
+
+function conditionOf(named: string, condition: Record<string, unknown>): WireCondition {
+	const keys = Object.keys(condition)
+	if (keys.length === 1 && keys[0] === 'not') {
+		const not = condition.not
+		return { values: (Array.isArray(not) ? not : [not]).map(item => jsonOf(item)), not: true }
+	}
+	if (keys.length === 1 && keys[0] === 'prefix' && typeof condition.prefix === 'string') {
+		return { prefix: condition.prefix }
+	}
+	throw new InvalidError(
+		`${named}: a value, a list, { not } or { prefix }; an object as the value itself goes in a list, [{ … }]`,
+	)
 }
 
 function eventOf(read: ReturnType<typeof RecordsEvent.decode>): Event {

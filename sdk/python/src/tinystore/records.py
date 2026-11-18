@@ -16,9 +16,10 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, overload
+from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, cast, overload
 
 from ._connection import check_name, piece_of
 from ._console import Line, encode_fields
@@ -56,7 +57,7 @@ from .errors import ClosedError, InvalidError
 from .trace import current_trace
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
     from types import TracebackType
 
     from ._connection import Connection, Idempotence, Link
@@ -226,7 +227,9 @@ class TailQuery(TypedDict, total=False):
     """this level and worse; an event without a level is not found"""
     trace_id: str
     where: Mapping[str, Any]
-    """each key with this value, by the JSON it was written as, in fields or in context"""
+    """each key, in fields or in context, with this value by the JSON it was written as; one of a
+    list, [7, 12]; none of them with {"not": …}, the key absent too; or a text that starts with
+    {"prefix": …}. A list or a dict as the value itself goes inside a list: [["a", "b"]]."""
     search: str
     """this text in the message, the name or a value, its case ignored"""
 
@@ -311,10 +314,7 @@ def _query_of(query: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in query.items():
         if value is None:
             raise InvalidError(f"a query's {key} given as None: leave it out to read without it")
-    where: Mapping[str, Any] | None = query.get("where")
-    for key, value in (where or {}).items():
-        if value is None:
-            raise InvalidError(f"a query's where {key!r} given as None")
+    where, conditions = _where_of(query.get("where") or {})
     return {
         "since": None if "since" not in query else ms(query["since"], "a query's since"),
         "from": None if "from_" not in query else _nanos(query["from_"], "a query's from_"),
@@ -323,12 +323,42 @@ def _query_of(query: Mapping[str, Any]) -> dict[str, Any]:
         "names": None if "names" not in query else list(query["names"]),
         "min_level": None if "min_level" not in query else _level_number(query["min_level"], "min_level"),
         "trace_id": None if "trace_id" not in query else _id_bytes(query["trace_id"], 16, "trace_id"),
-        "where": None if where is None else {key: to_json(value) for key, value in where.items()},
+        "where": where or None,
+        "conditions": conditions or None,
         "search": query.get("search"),
         "newest": query.get("newest"),
         "limit": query.get("limit"),
         "after": query.get("after"),
     }
+
+
+def _where_of(given: Mapping[str, Any]) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """A where as the wire carries it: a plain value as its JSON in where, which every server
+    reads, and a list, {"not": …} or {"prefix": …} in conditions, which a server older than them
+    refuses rather than matching nothing."""
+    where: dict[str, str] = {}
+    conditions: dict[str, dict[str, Any]] = {}
+    for key, value in given.items():
+        named = f"a query's where {key!r}"
+        if value is None:
+            raise InvalidError(f"{named} given as None")
+        if isinstance(value, (list, tuple)):
+            conditions[key] = {"values": [to_json(item) for item in cast("Sequence[Any]", value)]}
+        elif isinstance(value, Mapping):
+            conditions[key] = _condition_of(named, cast("Mapping[str, Any]", value))
+        else:
+            where[key] = to_json(value)
+    return where, conditions
+
+
+def _condition_of(named: str, condition: Mapping[str, Any]) -> dict[str, Any]:
+    if list(condition) == ["not"]:
+        nots = condition["not"]
+        listed = list(cast("Sequence[Any]", nots)) if isinstance(nots, (list, tuple)) else [nots]
+        return {"values": [to_json(item) for item in listed], "not": True}
+    if list(condition) == ["prefix"] and isinstance(condition["prefix"], str):
+        return {"prefix": condition["prefix"]}
+    raise InvalidError(f"{named}: a value, a list, not or prefix; a dict as the value itself goes in a list, [{{…}}]")
 
 
 def _event_of(read: dict[str, Any]) -> Event:

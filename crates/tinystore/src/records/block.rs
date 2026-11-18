@@ -37,6 +37,7 @@
 
 use std::collections::BTreeSet;
 
+use super::condition::{Matching, among};
 use super::event::{Fields, Kept, Level, SpanId, TraceId};
 use super::head::{self, Codec, ROW_EVENTS, Row};
 use super::ints::{put_ints, read_ints};
@@ -249,9 +250,9 @@ impl<'b> Opened<'b> {
     }
 
     /// Which values of a column, one a time of `times`, are written as `json`.
-    fn equal(&self, column: usize, times: &[i64], decoder: &mut Decoder<'_>, json: &str) -> Result<Vec<bool>> {
+    fn equal(&self, column: usize, times: &[i64], decoder: &mut Decoder<'_>, jsons: &[String]) -> Result<Vec<bool>> {
         let mut reader = Reader::new(self.columns[column]);
-        let equal = values_equal(&mut reader, times, decoder, json);
+        let equal = values_equal(&mut reader, times, decoder, jsons);
         reader.finish()?;
         if equal.len() == times.len() { Ok(equal) } else { Err(Error::corrupt("a block's values")) }
     }
@@ -435,8 +436,8 @@ pub(super) struct Wanted<'q> {
     pub(super) names: &'q [String],
     pub(super) min_level: Option<Level>,
     pub(super) trace: Option<TraceId>,
-    /// Each a key and the JSON a field or the context holds it with.
-    pub(super) filters: &'q [(String, String)],
+    /// Each a key and what a field or the context holds it with.
+    pub(super) filters: &'q [(String, Matching)],
 }
 
 /// The events of the block `block` a read may keep, each with its arrival.
@@ -488,10 +489,13 @@ fn kept(schema: &Schema, opened: &Opened<'_>, codec: &mut Codec, wanted: &Wanted
             shapes.iter().map(|shape| shape.has(HAS_TRACE) && traces.next() == Some(trace.0)).collect::<Vec<_>>(),
         );
     }
-    if !wanted.filters.is_empty() {
+    // a `Not` or a prefix narrows nothing here: the read checks what it keeps whole
+    let lists = wanted.filters.iter().filter_map(|(key, matching)| Some((key.as_str(), matching.one_of()?)));
+    let lists: Vec<(&str, &[String])> = lists.collect();
+    if !lists.is_empty() {
         let contexts = opened.ints(CONTEXTS, with(HAS_CONTEXT), "a block's contexts")?;
         let mut decoder = Decoder { codec, left: BLOCK_TEXT };
-        for filter in wanted.filters {
+        for filter in lists {
             let column = Column { opened, schema, shapes: &shapes, times: &times };
             both(&mut keep, column.holding(&contexts, filter, &mut decoder)?);
         }
@@ -508,8 +512,9 @@ struct Column<'a, 'b> {
 }
 
 impl Column<'_, '_> {
-    /// Which events hold `key` with the value `json`: in a field or in their
-    /// context, or maybe in fields kept whole, which the read checks whole.
+    /// Which events hold `key` with one of the values `jsons`, each sorted:
+    /// in a field or in their context, or maybe in fields kept whole, which
+    /// the read checks whole.
     /// A key written twice is held by its last value, as a read gives it.
     ///
     /// A column is a key's place in the shapes that have it, so one column
@@ -519,7 +524,7 @@ impl Column<'_, '_> {
     fn holding(
         &self,
         contexts: &[i64],
-        (key, json): &(String, String),
+        (key, jsons): (&str, &[String]),
         decoder: &mut Decoder<'_>,
     ) -> Result<Vec<bool>> {
         let mut context_ids = contexts.iter();
@@ -530,7 +535,8 @@ impl Column<'_, '_> {
             .iter()
             .map(|shape| {
                 let in_context = shape.has(HAS_CONTEXT)
-                    && context(context_ids.next()).is_some_and(|fields| fields.json(key) == Some(json.as_str()));
+                    && context(context_ids.next())
+                        .is_some_and(|fields| fields.json(key).is_some_and(|json| among(jsons, json)));
                 shape.has(WHOLE_FIELDS) || in_context
             })
             .collect();
@@ -542,7 +548,7 @@ impl Column<'_, '_> {
             let places: Vec<usize> =
                 (0..self.shapes.len()).filter(|place| self.shapes[*place].columns.contains(&column)).collect();
             let at: Vec<i64> = places.iter().map(|place| self.times[*place]).collect();
-            let equal = self.opened.equal(FIXED + column, &at, decoder, json)?;
+            let equal = self.opened.equal(FIXED + column, &at, decoder, jsons)?;
             for (place, equal) in places.into_iter().zip(equal) {
                 holds[place] |= equal && last_column(self.shapes[place]) == Some(column);
             }

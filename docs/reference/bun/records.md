@@ -107,7 +107,12 @@ interface Query {
     /** this level and worse; an event without a level is not found */
     minLevel?: EventLevel
     traceId?: string
-    /** each key with this value, by the JSON it was written as, in fields or in context */
+    /**
+     * each key, in fields or in context, with this value by the JSON it was
+     * written as; one of a list, `[7, 12]`; none of them with `{ not }`, the
+     * key absent too; or a text that starts with `{ prefix }`. A list or an
+     * object as the value itself goes inside a list: `[['a', 'b']]`.
+     */
     where?: Record<string, unknown>
     /** this text in the message, the name or a value, its case ignored */
     search?: string

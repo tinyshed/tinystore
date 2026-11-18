@@ -17,6 +17,7 @@ mod block;
 mod bloom;
 mod buffer;
 mod carried;
+mod condition;
 mod count;
 mod engine;
 mod event;
@@ -48,7 +49,9 @@ mod text;
 mod tx;
 mod values;
 
+pub use crate::{Not, Prefix};
 pub use carried::{FieldInfo, Kind, NameCount, StreamFields};
+pub use condition::Condition;
 pub use count::{Aggregate, Number, Row, Stats, StreamInfo, Top};
 pub use event::{Event, Fields, Level, NewEvent, SpanId, TraceId};
 pub use events::{AllEvents, EventCall, Events, EventsBuilder};

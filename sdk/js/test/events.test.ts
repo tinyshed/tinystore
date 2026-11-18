@@ -123,6 +123,33 @@ for (const way of ways) {
 			).toHaveLength(30)
 		})
 
+		test('a where list is one of, { not } finds an absent key, { prefix } a text', async () => {
+			// contract: REC-18
+			const calls = store.events('calls')
+			await calls.append([
+				{ name: 'call', fields: { userId: 1, op: 'review.list' } },
+				{ name: 'call', fields: { userId: 2, op: 'drafts.get' } },
+				{ name: 'call', fields: { userId: 3, op: 'courses.list', env: 'test' } },
+				{ name: 'call', fields: { userId: 4, tags: ['a', 'b'] } },
+			])
+			const users = async (where: Record<string, unknown>) =>
+				(await calls.list({ where })).events.map(event => event.fields.userId)
+			expect(await users({ op: ['review.list', 'drafts.get'] })).toEqual([1, 2])
+			expect(await users({ userId: [1, 3, 99] })).toEqual([1, 3])
+			expect(await users({ env: { not: 'test' } })).toEqual([1, 2, 4])
+			expect(await users({ op: { not: ['review.list', 'drafts.get'] } })).toEqual([3, 4])
+			expect(await users({ op: { prefix: 'courses.' } })).toEqual([3])
+			expect(await users({ tags: [['a', 'b']] })).toEqual([4])
+			const rows = await calls.aggregate({
+				by: ['op'],
+				where: { op: ['review.list', 'drafts.get'] },
+			})
+			expect(rows).toHaveLength(2)
+			for (const where of [{ op: [] }, { op: { a: 1 } }, { op: { prefix: '' } }]) {
+				expect(await caught(calls.count({ where }))).toBeInstanceOf(InvalidError)
+			}
+		})
+
 		test('a condition given as undefined is InvalidError, never a condition left out', async () => {
 			const api = store.events('api')
 			expect(await caught(api.list({ traceId: undefined as unknown as string }))).toBeInstanceOf(

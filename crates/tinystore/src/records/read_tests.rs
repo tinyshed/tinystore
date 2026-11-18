@@ -5,7 +5,8 @@ use serde_json::json;
 use super::super::fixture::{Fixture, SECOND, fixture, names};
 use super::*;
 use crate::ErrorKind;
-use crate::records::{Events, NewEvent, SpanId, maintain};
+use crate::records::{Aggregate, Events, NewEvent, SpanId, maintain};
+use crate::{Not, Prefix};
 
 /// `count` events a second apart, named by their place, the last one now.
 fn timeline(fixture: &Fixture, events: &Events, count: u32) {
@@ -235,7 +236,7 @@ fn pages_of_rare_matches_hold_their_limit_but_the_last_and_go_on_without_losing_
     let searches: Vec<String> = (0..30).map(|n| (n * 100).to_string()).collect();
     let paged = |searches: Vec<String>| searches.chunks(4).map(<[String]>::to_vec).collect::<Vec<_>>();
     for when in ["waiting", "packed"] {
-        let list = api.list().filter("path", &"/search").limit(4);
+        let list = api.list().filter("path", "/search").limit(4);
         assert_eq!(pages(&list), paged(searches.clone()), "{when}");
         let backward: Vec<String> = searches.iter().rev().cloned().collect();
         assert_eq!(pages(&list.newest()), paged(backward), "{when}");
@@ -376,12 +377,66 @@ fn a_filter_finds_a_key_in_the_fields_or_the_context_by_the_json_of_its_value() 
     let api = mixed(&fixture);
     let found = |list: List| names(&list.page().unwrap().events).into_iter().map(str::to_owned).collect::<Vec<_>>();
     assert_eq!(found(api.list().filter("user", &42)), ["signup", "role.changed"]);
-    assert_eq!(found(api.list().filter("user", &"42")), ["click"]);
+    assert_eq!(found(api.list().filter("user", "42")), ["click"]);
     assert_eq!(found(api.list().filter("x", &42.0)), ["click"]);
     assert!(found(api.list().filter("x", &42)).is_empty());
-    assert_eq!(found(api.list().filter("user", &42).filter("plan", &"pro")), ["signup"]);
+    assert_eq!(found(api.list().filter("user", &42).filter("plan", "pro")), ["signup"]);
     // a key is the top's own: nothing looks into a value for it
     assert!(found(api.list().filter("cause", &["ECONNRESET"])).is_empty());
+}
+
+// contract: REC-18
+#[test]
+fn a_list_finds_any_of_its_values_not_finds_an_absent_key_and_a_prefix_a_text_waiting_and_packed() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let call = |fields: serde_json::Value| NewEvent::new("call").fields(&fields);
+    api.append_all([
+        call(json!({ "op": "review.list", "userId": 1 })),
+        call(json!({ "op": "drafts.get", "userId": 2 })),
+        call(json!({ "op": "courses.list", "userId": 3, "env": "test" })),
+        call(json!({ "userId": 4 })).context(&json!({ "env": "prod" })),
+        call(json!({ "tags": ["a", "b"] })),
+        call(json!({ "op": 42 })),
+    ])
+    .unwrap();
+    let found = |list: List| {
+        let events = list.page().unwrap().events;
+        events.iter().map(|event| event.fields.json("userId").unwrap_or("-").to_owned()).collect::<Vec<_>>()
+    };
+    let finds = || {
+        assert_eq!(found(api.list().filter("op", &["review.list", "drafts.get"])), ["1", "2"]);
+        assert_eq!(found(api.list().filter("userId", &[1, 3, 99])), ["1", "3"]);
+        assert_eq!(found(api.list().filter("op", Not(["review.list", "nothing"]))), ["2", "3", "4", "-", "-"]);
+        // an absent key, and a context's value, meet a `Not`
+        assert_eq!(found(api.list().filter("env", Not("test"))), ["1", "2", "4", "-", "-"]);
+        assert_eq!(found(api.list().filter("op", Prefix("courses."))), ["3"]);
+        // a prefix is of a text, never of a number's digits
+        assert!(found(api.list().filter("op", Prefix("4"))).is_empty());
+        // a list as the value itself goes inside a list; items keep the exact JSON
+        assert_eq!(api.list().filter("tags", &[["a", "b"]]).page().unwrap().events.len(), 1);
+        assert_eq!(api.list().filter("op", &json!([42, "42"])).page().unwrap().events.len(), 1);
+        assert!(api.list().filter("op", &[42.0]).page().unwrap().events.is_empty());
+        let by_op = api.list().filter("op", &["review.list", "drafts.get"]).aggregate(&Aggregate::new().by(["op"]));
+        assert_eq!(by_op.unwrap().len(), 2, "the issue's aggregate");
+    };
+    finds();
+    fixture.pass(Duration::from_secs(60 * 60));
+    maintain(&fixture.store).unwrap();
+    assert_eq!(fixture.rows("heads"), 0, "packed");
+    finds();
+    let refused = |list: List| list.page().unwrap_err();
+    for error in [
+        refused(api.list().filter("op", &Vec::<String>::new())),
+        refused(api.list().filter("op", &json!({ "not": "x" }))),
+        refused(api.list().filter("op", Prefix(""))),
+        refused(api.list().filter("op", &(0..1001).collect::<Vec<_>>())),
+        refused(api.list().filter("op", Not(json!({ "a": 1 })))),
+    ] {
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+        assert!(error.to_string().starts_with("events api: where \"op\": "), "{error}");
+    }
+    assert_eq!(api.list().filter("op", &json!({ "a": 1 })).count().unwrap_err().kind(), ErrorKind::Invalid);
 }
 
 // contract: REC-12
@@ -401,10 +456,10 @@ fn a_key_written_twice_is_found_by_its_last_value_waiting_and_packed() {
     .unwrap();
     let found = |list: List| names(&list.page().unwrap().events).into_iter().map(str::to_owned).collect::<Vec<_>>();
     let finds = || {
-        assert_eq!(found(api.list().filter("component", &"access")), ["log"]);
-        assert_eq!(found(api.list().filter("component", &"http")), ["click"]);
-        assert_eq!(found(api.list().filter("tag", &"b")), ["log"]);
-        assert_eq!(found(api.list().filter("tag", &"a")), ["click"]);
+        assert_eq!(found(api.list().filter("component", "access")), ["log"]);
+        assert_eq!(found(api.list().filter("component", "http")), ["click"]);
+        assert_eq!(found(api.list().filter("tag", "b")), ["log"]);
+        assert_eq!(found(api.list().filter("tag", "a")), ["click"]);
     };
     finds();
     fixture.pass(Duration::from_secs(60 * 60));
@@ -487,9 +542,9 @@ fn three_reads_of_a_packed_corpus() {
     let done = super::super::maintain::maintain(&fixture.store).unwrap();
     println!("rust packed {} events into {} segments", done.packed, done.segments);
     let read = |name: &str| match name {
-        "exact" => api.list().names(["request"]).filter("route", &"/route/7").filter("status", &500),
+        "exact" => api.list().names(["request"]).filter("route", "/route/7").filter("status", &500),
         "trace" => api.list().trace_id(trace.unwrap()),
-        _ => api.list().filter("host", &"nowhere"),
+        _ => api.list().filter("host", "nowhere"),
     };
     for name in ["exact", "trace", "absent"] {
         let run = || read(name).limit(10_000).all().map(Result::unwrap).count();
@@ -537,15 +592,15 @@ fn a_read_passes_a_block_whose_segment_or_filters_say_it_holds_nothing_asked() {
     };
     assert!(may_find(api.list().trace_id(traced)));
     assert!(!may_find(api.list().trace_id(TraceId([8; 16]))));
-    assert!(may_find(api.list().filter("request", &"r-005")));
-    assert!(!may_find(api.list().filter("request", &"r-999")));
+    assert!(may_find(api.list().filter("request", "r-005")));
+    assert!(!may_find(api.list().filter("request", "r-999")));
     assert!(!may_find(api.list().names(["missing"])));
     assert!(!may_find(api.list().filter("tenant", &7)));
     // a context holds no filter of its own, so a value it may hold passes no block
-    assert!(may_find(api.list().filter("host", &"nowhere")));
+    assert!(may_find(api.list().filter("host", "nowhere")));
     // nor does a field whose key a context has too
-    assert!(may_find(api.list().filter("user", &"from-context")));
-    assert!(may_find(api.list().names(["missing", "request"]).filter("request", &"r-031")));
+    assert!(may_find(api.list().filter("user", "from-context")));
+    assert!(may_find(api.list().names(["missing", "request"]).filter("request", "r-031")));
 }
 
 #[test]

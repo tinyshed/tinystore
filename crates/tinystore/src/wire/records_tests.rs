@@ -3,10 +3,10 @@ use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::Message;
 use crate::wire::frame::{Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCount, RecordsDamage,
-    RecordsDamages, RecordsDropped, RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsNames, RecordsNewEvent,
-    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRows, RecordsStreamFields,
-    RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops, method,
+    Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCondition, RecordsCount,
+    RecordsDamage, RecordsDamages, RecordsDropped, RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsNames,
+    RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRows,
+    RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops, method,
 };
 use crate::{Options, Store};
 
@@ -116,6 +116,43 @@ fn a_query_reads_by_what_events_hold_and_counts_and_aggregates_them() {
     assert_eq!((a.count, a.by["route"].as_str()), (3, r#""/a""#));
     let ms = &a.stats["ms"];
     assert_eq!((ms.samples, ms.sum.as_str(), ms.min.as_str(), ms.max.as_str(), ms.avg), (3, "60", "0", "40", 20.0));
+}
+
+// contract: REC-18
+#[test]
+fn where_finds_a_value_itself_and_conditions_a_list_none_of_one_or_a_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let api = open(&mut client, "api");
+    let calls = [r#"{"op":"review.list"}"#, r#"{"op":"drafts.get"}"#, r#"{"op":["review.list","drafts.get"]}"#, "{}"];
+    append(&mut client, api, calls.iter().map(|fields| event("call", fields)).collect());
+    let mut count = |r#where: &[(&str, &str)], conditions: &[(&str, RecordsCondition)]| {
+        let query = RecordsQuery {
+            handle: Some(api),
+            r#where: r#where.iter().map(|(key, json)| (key.to_string(), json.to_string())).collect(),
+            conditions: conditions.iter().map(|(key, condition)| (key.to_string(), condition.clone())).collect(),
+            ..RecordsQuery::default()
+        };
+        client.call::<RecordsCount>(method::RECORDS_COUNT, &query).map(|count| count.count)
+    };
+    let listed = |values: &[&str], not: bool| RecordsCondition {
+        values: values.iter().map(|value| value.to_string()).collect(),
+        not,
+        prefix: None,
+    };
+    // where keeps the meaning an older client gave it: the list itself
+    assert_eq!(count(&[("op", r#"["review.list","drafts.get"]"#)], &[]).unwrap(), 1);
+    assert_eq!(count(&[], &[("op", listed(&[r#""review.list""#, r#""drafts.get""#], false))]).unwrap(), 2);
+    assert_eq!(count(&[], &[("op", listed(&[r#""drafts.get""#], true))]).unwrap(), 3);
+    let prefix = RecordsCondition { prefix: Some("drafts.".to_owned()), ..RecordsCondition::default() };
+    assert_eq!(count(&[], &[("op", prefix.clone())]).unwrap(), 1);
+    for refused in [
+        count(&[("op", r#""drafts.get""#)], &[("op", listed(&[r#""x""#], false))]),
+        count(&[], &[("op", listed(&[], false))]),
+        count(&[], &[("op", RecordsCondition { not: true, ..prefix })]),
+    ] {
+        assert_eq!(refused.unwrap_err().code, "invalid");
+    }
 }
 
 #[test]

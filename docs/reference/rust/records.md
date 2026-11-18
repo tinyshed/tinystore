@@ -77,6 +77,23 @@ pub fn all_events(&self) -> Result<AllEvents>
 Every stream's events, to read. The first opens the records engine,
 a plain call made once at start, since it may migrate records.db.
 
+## Not
+
+```rust
+pub struct Not<T>(pub T)
+```
+
+A value equal to none of these, or absent: `Not("dev")`, `Not(["dev",
+"test"])`.
+
+## Prefix
+
+```rust
+pub struct Prefix<T>(pub T)
+```
+
+A text that starts with this one: `Prefix("api-")`.
+
 ## FieldInfo
 
 ```rust
@@ -135,6 +152,16 @@ pub struct StreamFields {
 ```
 
 What a stream's events carry, by name.
+
+## Condition
+
+```rust
+pub struct Condition(_)
+```
+
+What a key's value must be for a read to find an event: one of some JSON
+values, none of them, or a text that starts with a prefix. A value, a
+`Not` or a `Prefix` converts into one.
 
 ## Aggregate
 
@@ -1111,13 +1138,17 @@ pub fn trace_id(self, trace_id: TraceId) -> Self
 ### List.filter
 
 ```rust
-pub fn filter(self, key: &str, value: &impl Serialize) -> Self
+pub fn filter(self, key: &str, condition: impl Into<Condition>) -> Self
 ```
 
-`key` with this value, at the top of an event's fields or of its
-context, by the JSON the value is written as: `42` finds `42`, and
-neither `"42"` nor `42.0`. A key written twice is found by its last
-value, the one `Fields::get` reads.
+`key` at the top of an event's fields or of its context with a value
+the condition takes: a value by the JSON it is written as, so that
+`&42` finds `42`, and neither `"42"` nor `42.0`; a list, one of its
+items, `&[7, 12, 31]`, and a list or an object as the value itself
+inside one, `&[["a", "b"]]`; [`Not`](crate::Not), none of them or no
+such key; [`Prefix`](crate::Prefix), a text that starts with it. A key
+written twice is found by its last value, the one `Fields::get`
+reads. An empty list or another object is refused, `invalid`.
 
 ### List.search
 
@@ -1880,11 +1911,12 @@ pub fn trace_id(self, trace_id: TraceId) -> Self
 ### aio::records::List.filter
 
 ```rust
-pub fn filter(self, key: &str, value: &impl Serialize) -> Self
+pub fn filter(self, key: &str, condition: impl Into<Condition>) -> Self
 ```
 
-`key` with this value, at the top of an event's fields or of its
-context, by the JSON the value is written as.
+`key` at the top of an event's fields or of its context with a value
+the condition takes, as `crate::records::List::filter` reads it: a
+value, a list of them, a [`Not`](crate::Not) or a [`Prefix`](crate::Prefix).
 
 ### aio::records::List.search
 

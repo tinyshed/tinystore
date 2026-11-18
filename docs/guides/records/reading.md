@@ -101,7 +101,7 @@ as, a number as a number.
 | `names`      | any of these names: `['log']` is the lines                        |
 | `minLevel`   | this level and worse; an event without a level is not found       |
 | `traceId`    | one trace's events, every stream                                  |
-| `where`      | each key with this value, in `fields` or in `context`             |
+| `where`      | each key with a value, one of a list, `{ not }` or `{ prefix }`   |
 | `search`     | this text in the message, the name or any value, its case ignored |
 | `newest`     | newest first; oldest first without it                             |
 | `limit`      | the events of a page: 1,000, and 10,000 at most                   |
@@ -114,6 +114,8 @@ as, a number as a number.
   value was written as: `42` finds `42`, and neither `'42'` nor `42.0`. A
   key written twice, as another program's line may write it, is found by
   its last value, the one the event reads back with.
+- A list in `where` means any of its values, `{ not }` none of them, and
+  `{ prefix }` a text that starts with it: [A where](#a-where).
 - `search` finds a phrase in the message, the name, and a value at any depth.
   It does not look at keys; `fieldNames` lists those.
 - A condition given as `undefined` is `invalid`, never left out: a trace id
@@ -125,6 +127,63 @@ rarely repeats, a request's id, skip the blocks that cannot match, as
 match](../../handbook/inside/how-logs-and-metrics-pack.md#reading-only-what-can-match)
 explains. `search` reads every event the rest of the query leaves, so give it
 a range.
+
+## A where
+
+```ts
+await api.aggregate({ names: ['call'], since: '1d', by: ['op'], where: { op: ['grading.works', 'drafts.get'] } })
+await api.list({ since: '1d', where: { userId: [7, 12, 31], route: { prefix: '/admin' }, env: { not: 'test' } } })
+await api.list({ since: '1d', where: { tags: [['a', 'b']] } }) // the list ['a', 'b'] itself
+```
+
+```python
+await api.aggregate(names=["call"], since="1d", by=["op"], where={"op": ["grading.works", "drafts.get"]})
+await api.list(since="1d", where={"userId": [7, 12, 31], "route": {"prefix": "/admin"}, "env": {"not": "test"}})
+await api.list(since="1d", where={"tags": [["a", "b"]]})  # the list ["a", "b"] itself
+```
+
+```go
+api.Aggregate(ctx, records.Query{Names: []string{"call"}, Since: 24 * time.Hour, By: []string{"op"},
+	Where: records.Where{"op": records.OneOf("grading.works", "drafts.get")}})
+api.List(ctx, records.Query{Since: 24 * time.Hour,
+	Where: records.Where{"userId": []int{7, 12, 31}, "route": records.Prefix("/admin"), "env": records.Not("test")}})
+api.List(ctx, records.Query{Since: 24 * time.Hour, Where: records.Where{"tags": [][]string{{"a", "b"}}}})
+```
+
+```rust
+use tinystore::{Not, Prefix};
+let day = Duration::from_hours(24);
+api.list().since(day).filter("op", &["grading.works", "drafts.get"]).aggregate(&Aggregate::new().by(["op"]))?;
+api.list().since(day).filter("userId", &[7, 12, 31]).filter("route", Prefix("/admin")).filter("env", Not("test")).page()?;
+api.list().since(day).filter("tags", &[["a", "b"]]).page()?; // the list ["a", "b"] itself
+```
+
+| A key's condition        | Finds an event whose value there is                       |
+|--------------------------|-----------------------------------------------------------|
+| a value: `'drafts.get'`  | that value, by the JSON it was written as                 |
+| a list: `[7, 12, 31]`    | any of them, 1 to 1,000 values                            |
+| `{ not: 'test' }`        | none of them, a value or a list, or an event without key  |
+| `{ prefix: '/admin' }`   | a text that starts with it; a number or a bool never does |
+| a list in a list: `[[…]]` | that list, or that object, itself                         |
+
+- Go writes `records.OneOf(…)`, `records.Not(…)` and `records.Prefix(…)`,
+  and a bare slice means the same as `OneOf`. Rust writes `&[…]` for a list
+  and `tinystore::Not(…)` and `tinystore::Prefix(…)`, the words metrics'
+  conditions use.
+- Each item matches by its exact JSON, as a single value does: `[42, '42']`
+  finds `42` and `'42'`, and not `42.0`.
+- An empty list, a prefix of nothing, and any other object are `invalid`.
+  A list or an object as the value itself goes inside a list.
+- Each value of a list, and a prefix, is at most 4 KiB.
+- `{ not }` reads more than the other conditions, since a block without the
+  key may hold what it finds: give it a range or another condition.
+
+> [!NOTE]
+> **What a list meant before**
+> A list in `where` was compared as the value itself, so `{ op: ['a', 'b'] }`
+> found only an event whose `op` was that list. Write `{ op: [['a', 'b']] }`
+> for that. A server of a release before conditions refuses a list,
+> `{ not }` and `{ prefix }` as `unimplemented`, rather than match nothing.
 
 ## Pages
 

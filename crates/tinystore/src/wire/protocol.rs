@@ -9324,7 +9324,69 @@ impl Message for RecordsEvent {
     }
 }
 
-/// What a read finds: each condition given holds.
+/// What a key's value must be: one of values, each the JSON it is written
+/// as; none of them with not, the key absent too; or a text that starts with
+/// prefix.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsCondition {
+    pub(crate) values: Vec<String>,
+    pub(crate) not: bool,
+    pub(crate) prefix: Option<String>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsCondition {
+    const NAME: &'static str = "records.Condition";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.values = codec::list(r, "values", codec::str)?,
+                2 => message.not = codec::bool(r, "not")?,
+                3 => message.prefix = Some(codec::str(r, "prefix")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.values.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.values, codec::write_str);
+        }
+        if self.not {
+            map.field(out, 2);
+            codec::write_bool(out, &self.not);
+        }
+        if let Some(prefix) = &self.prefix {
+            map.field(out, 3);
+            codec::write_str(out, prefix);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.values, |item| 5 + item.len())
+            + 2
+            + self.prefix.as_ref().map_or(0, |prefix| 1 + 5 + prefix.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.values.is_empty()
+            && !self.not
+            && self.prefix.is_none()
+    }
+}
+
+/// What a read finds: each condition given holds. A key of where is found
+/// by its value itself, as a client older than conditions meant it; a key of
+/// conditions by its condition, and a key is in one of them at most.
 #[cfg(feature = "records")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RecordsQuery {
@@ -9340,7 +9402,7 @@ pub(crate) struct RecordsQuery {
     pub(crate) names: Vec<String>,
     pub(crate) min_level: Option<i64>,
     pub(crate) trace_id: Option<Vec<u8>>,
-    /// Each key with this value, in fields or in context.
+    /// Each key with this value itself, in fields or in context.
     pub(crate) r#where: BTreeMap<String, String>,
     pub(crate) search: Option<String>,
     pub(crate) newest: bool,
@@ -9348,6 +9410,7 @@ pub(crate) struct RecordsQuery {
     pub(crate) limit: Option<u64>,
     /// A page's next.
     pub(crate) after: Option<String>,
+    pub(crate) conditions: BTreeMap<String, RecordsCondition>,
 }
 
 #[cfg(feature = "records")]
@@ -9372,6 +9435,7 @@ impl Message for RecordsQuery {
                 11 => message.newest = codec::bool(r, "newest")?,
                 12 => message.limit = Some(codec::uint(r, "limit")?),
                 13 => message.after = Some(codec::str(r, "after")?),
+                14 => message.conditions = codec::names(r, "conditions", codec::message::<RecordsCondition>)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -9432,6 +9496,10 @@ impl Message for RecordsQuery {
             map.field(out, 13);
             codec::write_str(out, after);
         }
+        if !self.conditions.is_empty() {
+            map.field(out, 14);
+            codec::write_names(out, &self.conditions, codec::write_message);
+        }
         map.close(out);
     }
 
@@ -9450,6 +9518,7 @@ impl Message for RecordsQuery {
             + 2
             + self.limit.map_or(0, |_| 10)
             + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
+            + 1 + codec::names_size(&self.conditions, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -9466,6 +9535,7 @@ impl Message for RecordsQuery {
             && !self.newest
             && self.limit.is_none()
             && self.after.is_none()
+            && self.conditions.is_empty()
     }
 }
 
@@ -14032,6 +14102,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.Appended" => RecordsAppended::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Event" => RecordsEvent::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Condition" => RecordsCondition::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Query" => RecordsQuery::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]

@@ -287,8 +287,8 @@ fn a_read_rebuilds_only_the_events_its_columns_leave_and_no_other_column_when_no
     let mut codec = Codec::default();
     let events = mixed();
     let (schema, row) = block_of(&events, &mut codec);
-    let pair = |key: &str, json: &str| (key.to_owned(), json.to_owned());
-    let wanted = |names: &[String], filters: &[(String, String)]| {
+    let pair = |key: &str, json: &str| (key.to_owned(), Matching::OneOf(vec![json.to_owned()]));
+    let wanted = |names: &[String], filters: &[(String, Matching)]| {
         let kept = Wanted { first: 0, last: i64::MAX, names, min_level: None, trace: None, filters };
         parse_wanted(&schema, (1, &row.body), &mut Codec::default(), &kept).unwrap()
     };
@@ -303,6 +303,10 @@ fn a_read_rebuilds_only_the_events_its_columns_leave_and_no_other_column_when_no
     // a key written twice by its last value alone
     assert_eq!(places(wanted(&[], &[pair("n", "null")])), [23]);
     assert!(places(wanted(&[], &[pair("n", "-0")])).is_empty());
+    // a list by any of its values, a `Not` by none: the read checks what it keeps whole
+    let listed = |values: &[&str]| values.iter().map(|value| value.to_string()).collect();
+    assert_eq!(places(wanted(&[], &[("ms".to_owned(), Matching::OneOf(listed(&["1203", "1207", "99"])))])), [3, 7]);
+    assert_eq!(wanted(&[], &[("ms".to_owned(), Matching::NoneOf(listed(&["1203"])))]).len(), events.len());
     let grave =
         Wanted { first: 0, last: i64::MAX, names: &[], min_level: Some(Level::ERROR), trace: None, filters: &[] };
     assert_eq!(places(parse_wanted(&schema, (1, &row.body), &mut codec, &grave).unwrap()), [2, 5, 8, 11, 14, 17, 24]);

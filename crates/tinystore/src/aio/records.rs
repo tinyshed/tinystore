@@ -394,10 +394,11 @@ impl List {
         self.with(|list| list.trace_id(trace_id))
     }
 
-    /// `key` with this value, at the top of an event's fields or of its
-    /// context, by the JSON the value is written as.
-    pub fn filter(self, key: &str, value: &impl Serialize) -> Self {
-        self.with(|list| list.filter(key, value))
+    /// `key` at the top of an event's fields or of its context with a value
+    /// the condition takes, as [`crate::records::List::filter`] reads it: a
+    /// value, a list of them, a [`Not`](crate::Not) or a [`Prefix`](crate::Prefix).
+    pub fn filter(self, key: &str, condition: impl Into<crate::records::Condition>) -> Self {
+        self.with(|list| list.filter(key, condition))
     }
 
     /// This text as a phrase, its case ignored.

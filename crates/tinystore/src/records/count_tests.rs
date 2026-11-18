@@ -41,7 +41,7 @@ fn a_count_finds_what_a_list_finds_packed_and_waiting() {
     let (api, _) = api(&fixture);
     assert_eq!(api.list().count().unwrap(), 61);
     assert_eq!(api.list().min_level(Level::ERROR).count().unwrap(), 7);
-    assert_eq!(api.list().filter("route", &"/notes").count().unwrap(), 21);
+    assert_eq!(api.list().filter("route", "/notes").count().unwrap(), 21);
     assert_eq!(api.list().since(MINUTE).count().unwrap(), 1);
     for refused in [api.list().newest(), api.list().limit(5), api.list().after("1~2")] {
         let refused = refused.count().unwrap_err();

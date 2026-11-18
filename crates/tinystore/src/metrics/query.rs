@@ -32,7 +32,7 @@ use super::labels::{MOST_LABELS, MOST_NAME_BYTES, MOST_VALUE_BYTES, NAME};
 use super::latest::Latest;
 use super::page::{AggregatePage, Cursor, MOST, Paging, SeriesPage, Start};
 use crate::calendar::Calendar;
-use crate::{Error, Result, unix_millis};
+use crate::{Error, Not, Prefix, Result, unix_millis};
 
 /// The values a list of a condition holds at most.
 const MOST_VALUES: usize = 1000;
@@ -48,15 +48,6 @@ pub enum Condition {
     /// A value that starts with this text.
     Prefix(String),
 }
-
-/// A label equal to none of these values, or absent: `Not("dev")`,
-/// `Not(["dev", "test"])`.
-#[derive(Clone, Copy, Debug)]
-pub struct Not<T>(pub T);
-
-/// A label that starts with this text: `Prefix("api-")`.
-#[derive(Clone, Copy, Debug)]
-pub struct Prefix<T>(pub T);
 
 /// The values a condition lists: text, or a number or a boolean as its text,
 /// as a label keeps them.

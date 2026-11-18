@@ -30,7 +30,10 @@ import (
 type Fields map[string]any
 
 // Where is what a query finds in an event's fields or context: each key with
-// this value, by the JSON it was written as.
+// this value, by the JSON it was written as; one of a slice's items, or of a
+// OneOf; none of them, the key absent too, with Not; or a text that starts
+// with a Prefix. A slice or an object as the value itself goes inside a
+// slice: [][]string{{"a", "b"}}.
 type Where map[string]any
 
 // Event is an event: what AppendMany writes and what a read gives back. A

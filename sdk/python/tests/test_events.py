@@ -108,6 +108,34 @@ async def test_a_query_finds_by_what_events_hold_a_page_at_a_time(store: tinysto
     assert len((await store.events().list(streams=["api"], names=["request"])).events) == 30
 
 
+# contract: REC-18
+async def test_a_where_list_is_one_of_not_finds_an_absent_key_and_prefix_a_text(store: tinystore.Store) -> None:
+    calls = store.events("calls")
+    await calls.append(
+        [
+            Event("call", {"userId": 1, "op": "review.list"}),
+            Event("call", {"userId": 2, "op": "drafts.get"}),
+            Event("call", {"userId": 3, "op": "courses.list", "env": "test"}),
+            Event("call", {"userId": 4, "tags": ["a", "b"]}),
+        ]
+    )
+
+    async def users(**where: object) -> list[object]:
+        return [event.fields["userId"] for event in (await calls.list(where=where)).events]
+
+    assert await users(op=["review.list", "drafts.get"]) == [1, 2]
+    assert await users(userId=(1, 3, 99)) == [1, 3]
+    assert await users(env={"not": "test"}) == [1, 2, 4]
+    assert await users(op={"not": ["review.list", "drafts.get"]}) == [3, 4]
+    assert await users(op={"prefix": "courses."}) == [3]
+    assert await users(tags=[["a", "b"]]) == [4]
+    assert len(await calls.aggregate(by=["op"], where={"op": ["review.list", "drafts.get"]})) == 2
+    wrong: list[dict[str, object]] = [{"op": []}, {"op": {"a": 1}}, {"op": {"prefix": ""}}]
+    for where in wrong:
+        with pytest.raises(tinystore.InvalidError):
+            await calls.count(where=where)
+
+
 async def test_a_condition_given_as_none_is_invalid_never_a_condition_left_out(store: tinystore.Store) -> None:
     api = store.events("api")
     with pytest.raises(tinystore.InvalidError):

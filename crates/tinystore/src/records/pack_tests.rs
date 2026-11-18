@@ -118,7 +118,7 @@ fn what_a_read_looks_for_is_found_in_a_block_as_in_a_head() {
     assert_eq!(lie(&fixture), (0, 1, 1));
     assert_eq!(names(&api.list().min_level(Level::WARN).page().unwrap().events), ["log"]);
     assert_eq!(names(&api.list().names(["click"]).page().unwrap().events), ["click"]);
-    assert_eq!(names(&api.list().filter("route", &"/notes").page().unwrap().events), ["log"]);
+    assert_eq!(names(&api.list().filter("route", "/notes").page().unwrap().events), ["log"]);
     assert_eq!(names(&api.list().search("SLOW").page().unwrap().events), ["log"]);
     assert!(api.list().min_level(Level::ERROR).page().unwrap().events.is_empty());
 }

@@ -27,11 +27,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use rusqlite::{Connection, OptionalExtension, Rows, ToSql, params};
-use serde::Serialize;
-
 use super::block::{self, Wanted};
 use super::bloom::may_hold;
+use super::condition::{Condition, Matching};
 use super::engine::{Records, Stream, nanos};
 use super::event::{Event, Fields, Kept, Level, TraceId};
 use super::head::{self, Codec};
@@ -42,6 +40,7 @@ use super::tail::Tail;
 use crate::limits::Limit;
 use crate::sqlite::sql_error;
 use crate::{Error, Result, unix_nanos};
+use rusqlite::{Connection, OptionalExtension, Rows, ToSql, params};
 
 /// The events of a page unless its `limit` says.
 pub const PAGE_EVENTS: usize = 1000;
@@ -72,8 +71,8 @@ pub(super) struct Query {
     names: Vec<String>,
     min_level: Option<Level>,
     trace_id: Option<TraceId>,
-    /// Each a key and the JSON its value is written as.
-    filters: Vec<(String, String)>,
+    /// Each a key and what its value must be.
+    filters: Vec<(String, Matching)>,
     /// In lower case.
     search: Option<String>,
     newest: bool,
@@ -89,7 +88,7 @@ impl Query {
         let named = self.names.is_empty() || self.names.contains(&event.name);
         let grave = self.min_level.is_none_or(|least| event.level.is_some_and(|level| level >= least));
         let traced = self.trace_id.is_none_or(|trace| event.trace_id == Some(trace));
-        let holds = |(key, json): &(String, String)| has(&event.fields, key, json) || has(&event.context, key, json);
+        let holds = |(key, matching): &(String, Matching)| matching.finds(key, &event.fields, &event.context);
         let said = self.search.as_ref().is_none_or(|text| says(event, text));
         named && grave && traced && self.filters.iter().all(holds) && said
     }
@@ -103,12 +102,6 @@ impl Query {
     pub(super) fn page_events(&self) -> usize {
         self.limit.unwrap_or(PAGE_EVENTS)
     }
-}
-
-/// Whether `fields` have `key` at their top with a value written as `json`:
-/// the last of a key written twice, the value a read gives for it.
-fn has(fields: &Fields, key: &str, json: &str) -> bool {
-    fields.json(key) == Some(json)
 }
 
 /// Whether an event holds `text`, which is in lower case: in its message, in
@@ -197,14 +190,18 @@ impl List {
         self
     }
 
-    /// `key` with this value, at the top of an event's fields or of its
-    /// context, by the JSON the value is written as: `42` finds `42`, and
-    /// neither `"42"` nor `42.0`. A key written twice is found by its last
-    /// value, the one [`Fields::get`] reads.
-    pub fn filter(mut self, key: &str, value: &impl Serialize) -> Self {
-        match serde_json::to_string(value) {
-            Ok(json) => self.query.filters.push((key.to_owned(), json)),
-            Err(error) => self.query.refused = Some(format!("the value of {key:?}, which JSON cannot write: {error}")),
+    /// `key` at the top of an event's fields or of its context with a value
+    /// the condition takes: a value by the JSON it is written as, so that
+    /// `&42` finds `42`, and neither `"42"` nor `42.0`; a list, one of its
+    /// items, `&[7, 12, 31]`, and a list or an object as the value itself
+    /// inside one, `&[["a", "b"]]`; [`Not`](crate::Not), none of them or no
+    /// such key; [`Prefix`](crate::Prefix), a text that starts with it. A key
+    /// written twice is found by its last value, the one [`Fields::get`]
+    /// reads. An empty list or another object is refused, `invalid`.
+    pub fn filter(mut self, key: &str, condition: impl Into<Condition>) -> Self {
+        match condition.into().checked(key) {
+            Ok(matching) => self.query.filters.push((key.to_owned(), matching)),
+            Err(why) => self.query.refused = self.query.refused.take().or(Some(why)),
         }
         self
     }
@@ -750,11 +747,10 @@ impl Passing<'_> {
         {
             return Ok(false);
         }
-        for (key, json) in &query.filters {
+        for (key, values) in query.filters.iter().filter_map(|(key, matching)| Some((key, matching.one_of()?))) {
             let bloom = self.bloom(FIELD_BLOOM, params![block.id, key])?;
-            if bloom.is_some_and(|bloom| !may_hold(&bloom, json.as_bytes()))
-                && !self.has(block.segment, CONTEXT_KEY, key)?
-            {
+            let passed = |bloom: Vec<u8>| !values.iter().any(|json| may_hold(&bloom, json.as_bytes()));
+            if bloom.is_some_and(passed) && !self.has(block.segment, CONTEXT_KEY, key)? {
                 return Ok(false);
             }
         }
@@ -769,7 +765,7 @@ impl Passing<'_> {
         if !named {
             return Ok(false);
         }
-        for (key, _) in &self.query.filters {
+        for (key, _) in self.query.filters.iter().filter(|(_, matching)| matching.needs_key()) {
             if !self.has(segment, FIELD_KEY, key)? && !self.has(segment, CONTEXT_KEY, key)? {
                 return Ok(false);
             }

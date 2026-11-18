@@ -84,6 +84,7 @@ mod values;
 use std::fmt;
 use std::sync::Arc;
 
+pub use crate::{Not, Prefix};
 pub use aggregate::{Aggregate, Bucket, Op, Value};
 pub use buckets::{Buckets, exponential_buckets};
 pub use damage::Damage;
@@ -99,7 +100,7 @@ pub use own::SelfMetrics;
 pub(crate) use own::measure_the_store;
 pub use page::{AggregatePage, All, SeriesPage};
 pub use prometheus::Prometheus;
-pub use query::{Condition, Not, Prefix, Query, Values};
+pub use query::{Condition, Query, Values};
 pub use recorder::Recorder;
 #[cfg(feature = "wire")]
 pub(crate) use remote::{Ack, Batch, Change, Declared, Remote, Set};

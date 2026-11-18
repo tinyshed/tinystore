@@ -32,6 +32,23 @@ pub fn metrics(&self) -> Result<Metrics>
 The store's metrics, as `crate::Store::metrics` gives them: a plain
 call, the first of which opens the engine and migrates `metrics.db`.
 
+## Not
+
+```rust
+pub struct Not<T>(pub T)
+```
+
+A value equal to none of these, or absent: `Not("dev")`, `Not(["dev",
+"test"])`.
+
+## Prefix
+
+```rust
+pub struct Prefix<T>(pub T)
+```
+
+A text that starts with this one: `Prefix("api-")`.
+
 ## Aggregate
 
 ```rust
@@ -882,23 +899,6 @@ pub enum Condition {
 ```
 
 What a label's value must be for a query to take a series.
-
-## Not
-
-```rust
-pub struct Not<T>(pub T)
-```
-
-A label equal to none of these values, or absent: `Not("dev")`,
-`Not(["dev", "test"])`.
-
-## Prefix
-
-```rust
-pub struct Prefix<T>(pub T)
-```
-
-A label that starts with this text: `Prefix("api-")`.
 
 ## Query
 

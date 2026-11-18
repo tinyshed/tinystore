@@ -88,10 +88,10 @@ async fn awaited_appends_and_reads_answer_as_the_blocking_calls_do_on_the_same_s
     assert_eq!(spawnable(list.aggregate(&per_minute)).await.unwrap(), blocking.aggregate(&per_minute).unwrap());
     assert_eq!(list.field_names().await.unwrap(), blocking.field_names().unwrap());
     assert_eq!(list.field_names_prefix("r").await.unwrap(), ["request", "route"]);
-    let filtered = list.clone().filter("route", &"/login").names(["request"]);
+    let filtered = list.clone().filter("route", "/login").names(["request"]);
     assert_eq!(
         filtered.count().await.unwrap(),
-        blocking.clone().filter("route", &"/login").names(["request"]).count().unwrap()
+        blocking.clone().filter("route", "/login").names(["request"]).count().unwrap()
     );
 
     let mut walked = Vec::new();

@@ -148,15 +148,17 @@ pub(super) fn read_bytes(
     read_column(reader, count, decoder, (keep, |value: &[u8]| Some(value.to_vec())))
 }
 
-/// Which of a column's `count` texts are `target`: a dictionary's distinct
-/// values are compared once, and none is copied to be compared.
+/// Which of a column's `count` texts are one of `targets`, which are sorted:
+/// a dictionary's distinct values are compared once, and none is copied to
+/// be compared.
 pub(super) fn texts_equal(
     reader: &mut Reader<'_>,
     count: usize,
     decoder: &mut Decoder<'_>,
-    target: &[u8],
+    targets: &[&str],
 ) -> Vec<bool> {
-    read_column(reader, count, decoder, (None, |value: &[u8]| Some(value == target)))
+    let among = |value: &[u8]| Some(targets.binary_search_by(|target| target.as_bytes().cmp(value)).is_ok());
+    read_column(reader, count, decoder, (None, among))
 }
 
 /// Which values of a column a read builds: every one, or those it says, the

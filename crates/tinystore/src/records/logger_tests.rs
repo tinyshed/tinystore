@@ -189,8 +189,8 @@ fn a_key_an_inner_span_gives_again_replaces_the_outer_ones_where_it_prints_is_ke
     let api = f.events("api");
     let events = api.list().page().unwrap().events;
     assert_eq!(events[0].context.iter().collect::<Vec<_>>(), [("component", r#""access""#), ("user", "7")]);
-    assert_eq!(api.list().filter("component", &"access").page().unwrap().events.len(), 1);
-    assert!(api.list().filter("component", &"http").page().unwrap().events.is_empty());
+    assert_eq!(api.list().filter("component", "access").page().unwrap().events.len(), 1);
+    assert!(api.list().filter("component", "http").page().unwrap().events.is_empty());
 }
 
 // contract: LOG-02

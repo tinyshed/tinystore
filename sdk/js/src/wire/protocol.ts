@@ -9817,7 +9817,76 @@ export const RecordsEvent = message(
 )
 
 /**
- * What a read finds: each condition given holds.
+ * What a key's value must be: one of values, each the JSON it is written
+ * as; none of them with not, the key absent too; or a text that starts with
+ * prefix.
+ */
+export const RecordsCondition = message(
+	'records.Condition',
+	{
+		values: [1, list(str)],
+		not: [2, bool],
+		prefix: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.values !== undefined) {
+				w.field(1)
+				w.array(v.values.length)
+				for (const item0 of v.values) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.not !== undefined) {
+				w.field(2)
+				w.bool(v.not)
+				n++
+			}
+			if (v.prefix !== undefined) {
+				w.field(3)
+				w.str(v.prefix)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $values: string[] | undefined
+			let $not: boolean | undefined
+			let $prefix: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$values = items0
+						break
+					}
+					case 2:
+						$not = r.bool()
+						break
+					case 3:
+						$prefix = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { values: $values, not: $not, prefix: $prefix }
+		},
+	},
+)
+
+/**
+ * What a read finds: each condition given holds. A key of where is found
+ * by its value itself, as a client older than conditions meant it; a key of
+ * conditions by its condition, and a key is in one of them at most.
  */
 export const RecordsQuery = message(
 	'records.Query',
@@ -9832,7 +9901,7 @@ export const RecordsQuery = message(
 		names: [6, list(str)],
 		minLevel: [7, int],
 		traceId: [8, bin],
-		/** each key with this value, in fields or in context */
+		/** each key with this value itself, in fields or in context */
 		where: [9, names(str)],
 		search: [10, str],
 		newest: [11, bool],
@@ -9840,6 +9909,7 @@ export const RecordsQuery = message(
 		limit: [12, uint],
 		/** a page's next */
 		after: [13, str],
+		conditions: [14, names(RecordsCondition)],
 	},
 	{
 		write(w, v) {
@@ -9916,6 +9986,11 @@ export const RecordsQuery = message(
 				w.str(v.after)
 				n++
 			}
+			if (v.conditions !== undefined) {
+				w.field(14)
+				writeNames(w, v.conditions, RecordsCondition.write)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -9932,6 +10007,7 @@ export const RecordsQuery = message(
 			let $newest: boolean | undefined
 			let $limit: number | undefined
 			let $after: string | undefined
+			let $conditions: Record<string, Read<typeof RecordsCondition.fields>> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -9985,6 +10061,9 @@ export const RecordsQuery = message(
 					case 13:
 						$after = r.str()
 						break
+					case 14:
+						$conditions = readNames(r, RecordsCondition.read)
+						break
 					default:
 						r.skip()
 				}
@@ -10004,6 +10083,7 @@ export const RecordsQuery = message(
 				newest: $newest,
 				limit: $limit,
 				after: $after,
+				conditions: $conditions,
 			}
 		},
 	},

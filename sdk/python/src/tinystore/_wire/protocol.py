@@ -7989,6 +7989,60 @@ RecordsEvent = Message(
 )
 
 
+def _write_records_condition(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("values")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("not")) is not None:
+        w.uint(2)
+        w.bool(x)
+        n += 1
+    if (x := v.get("prefix")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_condition(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["values"] = items0
+            case 2:
+                read["not"] = r.bool()
+            case 3:
+                read["prefix"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# What a key's value must be: one of values, each the JSON it is written
+# as; none of them with not, the key absent too; or a text that starts with
+# prefix.
+RecordsCondition = Message(
+    "records.Condition",
+    {
+        "values": (1, list_(str_)),
+        "not": (2, bool_),
+        "prefix": (3, str_),
+    },
+    _write_records_condition,
+    _read_records_condition,
+)
+
+
 def _write_records_query(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -8051,6 +8105,13 @@ def _write_records_query(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(13)
         w.str(x)
         n += 1
+    if (x := v.get("conditions")) is not None:
+        w.uint(14)
+        w.map(len(x))
+        for name0 in sorted(x):
+            w.str(name0)
+            RecordsCondition.write(w, x[name0])
+        n += 1
     w.close_map(head, n)
 
 
@@ -8095,13 +8156,23 @@ def _read_records_query(r: Reader) -> dict[str, Any]:
                 read["limit"] = r.uint()
             case 13:
                 read["after"] = r.str()
+            case 14:
+                named0: dict[str, Any] = {}
+                names0: set[str] = set()
+                for _ in range(r.map()):
+                    name0 = r.name(names0)
+                    named0[name0] = RecordsCondition.read(r)
+                r.leave()
+                read["conditions"] = named0
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# What a read finds: each condition given holds.
+# What a read finds: each condition given holds. A key of where is found
+# by its value itself, as a client older than conditions meant it; a key of
+# conditions by its condition, and a key is in one of them at most.
 RecordsQuery = Message(
     "records.Query",
     {
@@ -8115,7 +8186,7 @@ RecordsQuery = Message(
         "names": (6, list_(str_)),
         "min_level": (7, int_),
         "trace_id": (8, bin_),
-        # each key with this value, in fields or in context
+        # each key with this value itself, in fields or in context
         "where": (9, names(str_)),
         "search": (10, str_),
         "newest": (11, bool_),
@@ -8123,6 +8194,7 @@ RecordsQuery = Message(
         "limit": (12, uint),
         # a page's next
         "after": (13, str_),
+        "conditions": (14, names(RecordsCondition)),
     },
     _write_records_query,
     _read_records_query,
@@ -11702,6 +11774,7 @@ messages: dict[str, Message] = {
     "records.Append": RecordsAppend,
     "records.Appended": RecordsAppended,
     "records.Event": RecordsEvent,
+    "records.Condition": RecordsCondition,
     "records.Query": RecordsQuery,
     "records.Page": RecordsPage,
     "records.Count": RecordsCount,

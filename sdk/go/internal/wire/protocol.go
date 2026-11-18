@@ -577,6 +577,8 @@ func NewMessage(name string) Message {
 		return &RecordsAppended{}
 	case "records.Event":
 		return &RecordsEvent{}
+	case "records.Condition":
+		return &RecordsCondition{}
 	case "records.Query":
 		return &RecordsQuery{}
 	case "records.Page":
@@ -10627,9 +10629,78 @@ func (m RecordsEvent) IsZero() bool {
 		m.Id == nil
 }
 
+// RecordsCondition is the schema's records.Condition.
+//
+// What a key's value must be: one of values, each the JSON it is written
+// as; none of them with not, the key absent too; or a text that starts with
+// prefix.
+type RecordsCondition struct {
+	Values []string `wire:"1,values"`
+	Not    bool     `wire:"2,not"`
+	Prefix *string  `wire:"3,prefix"`
+}
+
+func (m RecordsCondition) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Values) > 0 {
+		w.Uint(1)
+		w.Array(len(m.Values))
+		for _, item0 := range m.Values {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Not {
+		w.Uint(2)
+		w.Bool(m.Not)
+		n++
+	}
+	if m.Prefix != nil {
+		w.Uint(3)
+		w.Str(*m.Prefix)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsCondition) Read(r *Reader) {
+	*m = RecordsCondition{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Values = v
+		case 2:
+			m.Not = r.Bool()
+		case 3:
+			v := r.Str()
+			m.Prefix = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsCondition writes as no field at all.
+func (m RecordsCondition) IsZero() bool {
+	return len(m.Values) == 0 &&
+		!m.Not &&
+		m.Prefix == nil
+}
+
 // RecordsQuery is the schema's records.Query.
 //
-// What a read finds: each condition given holds.
+// What a read finds: each condition given holds. A key of where is found
+// by its value itself, as a client older than conditions meant it; a key of
+// conditions by its condition, and a key is in one of them at most.
 type RecordsQuery struct {
 	// the stream opened as it; every stream without one
 	Handle *uint64 `wire:"1,handle"`
@@ -10641,14 +10712,15 @@ type RecordsQuery struct {
 	Names    []string `wire:"6,names"`
 	MinLevel *int64   `wire:"7,minLevel"`
 	TraceId  *[]byte  `wire:"8,traceId"`
-	// each key with this value, in fields or in context
+	// each key with this value itself, in fields or in context
 	Where  map[string]string `wire:"9,where"`
 	Search *string           `wire:"10,search"`
 	Newest bool              `wire:"11,newest"`
 	// a page's events, top's values, fieldNames' keys
 	Limit *uint64 `wire:"12,limit"`
 	// a page's next
-	After *string `wire:"13,after"`
+	After      *string                     `wire:"13,after"`
+	Conditions map[string]RecordsCondition `wire:"14,conditions"`
 }
 
 func (m RecordsQuery) Write(w *Writer) {
@@ -10729,6 +10801,15 @@ func (m RecordsQuery) Write(w *Writer) {
 		w.Str(*m.After)
 		n++
 	}
+	if len(m.Conditions) > 0 {
+		w.Uint(14)
+		w.Map(len(m.Conditions))
+		for _, name0 := range SortedNames(m.Conditions) {
+			w.Str(name0)
+			m.Conditions[name0].Write(w)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -10792,6 +10873,17 @@ func (m *RecordsQuery) Read(r *Reader) {
 		case 13:
 			v := r.Str()
 			m.After = &v
+		case 14:
+			v := map[string]RecordsCondition{}
+			seen0 := map[string]struct{}{}
+			for k0 := r.Map(); k0 > 0; k0-- {
+				name0 := r.Name(seen0)
+				var item0 RecordsCondition
+				item0.Read(r)
+				v[name0] = item0
+			}
+			r.Leave()
+			m.Conditions = v
 		default:
 			r.Skip()
 		}
@@ -10813,7 +10905,8 @@ func (m RecordsQuery) IsZero() bool {
 		m.Search == nil &&
 		!m.Newest &&
 		m.Limit == nil &&
-		m.After == nil
+		m.After == nil &&
+		len(m.Conditions) == 0
 }
 
 // RecordsPage is the schema's records.Page.
