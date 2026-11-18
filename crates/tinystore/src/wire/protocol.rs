@@ -11527,6 +11527,8 @@ pub(crate) struct SearchQuery {
     pub(crate) matches: Option<String>,
     /// The least cosine a document's vector has for the vector to find it.
     pub(crate) min_similarity: Option<f64>,
+    /// What where's {"statement": n} names, by its place.
+    pub(crate) statements: Vec<SearchStatement>,
 }
 
 #[cfg(feature = "search")]
@@ -11550,6 +11552,7 @@ impl Message for SearchQuery {
                 10 => message.prefix_every = codec::bool(r, "prefixEvery")?,
                 11 => message.matches = Some(codec::str(r, "matches")?),
                 12 => message.min_similarity = Some(codec::float(r, "minSimilarity")?),
+                13 => message.statements = codec::list(r, "statements", codec::message::<SearchStatement>)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11606,6 +11609,10 @@ impl Message for SearchQuery {
             map.field(out, 12);
             codec::write_float(out, min_similarity);
         }
+        if !self.statements.is_empty() {
+            map.field(out, 13);
+            codec::write_list(out, &self.statements, codec::write_message);
+        }
         map.close(out);
     }
 
@@ -11623,6 +11630,7 @@ impl Message for SearchQuery {
             + 2
             + self.matches.as_ref().map_or(0, |matches| 1 + 5 + matches.len())
             + self.min_similarity.map_or(0, |_| 10)
+            + 1 + codec::list_size(&self.statements, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -11638,6 +11646,58 @@ impl Message for SearchQuery {
             && !self.prefix_every
             && self.matches.is_none()
             && self.min_similarity.is_none()
+            && self.statements.is_empty()
+    }
+}
+
+/// A statement of a table's index's database whose rows give one column, as
+/// sql.Statement's text and values: a where keeps to the values it gives.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchStatement {
+    pub(crate) text: String,
+    pub(crate) values: Vec<Cell>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchStatement {
+    const NAME: &'static str = "search.Statement";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.text = codec::str(r, "text")?,
+                2 => message.values = codec::list(r, "values", codec::cell)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.text.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.text);
+        }
+        if !self.values.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.values, codec::write_cell);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.text.len()
+            + 1 + codec::list_size(&self.values, codec::cell_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.text.is_empty()
+            && self.values.is_empty()
     }
 }
 
@@ -14293,6 +14353,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "search.Got" => SearchGot::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Query" => SearchQuery::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Statement" => SearchStatement::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Hit" => SearchHit::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]

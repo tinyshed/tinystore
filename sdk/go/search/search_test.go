@@ -349,6 +349,40 @@ func TestATablesIndexFindsItsRowsEachHitItsRowAndFollowsEveryWriteToTheTable(t *
 	})
 }
 
+type person struct {
+	ID   int    `db:"id"`
+	Name string `db:"name"`
+	Role string `db:"role"`
+}
+
+// contract: SRCH-17
+func TestATablesIndexKeepsASearchToTheValuesAStatementOfItsDatabaseGives(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := ways.Must(sqldb.Open(ctx, store, "school", sqldb.Migrations(fstest.MapFS{"0001_people.sql": {Data: []byte(
+			"create table people (id integer primary key, name text not null, role text not null);" +
+				"create table members (course integer not null, person integer not null)")}})))
+		ways.Must(db.Exec(ctx, "insert into people values (1, 'Ivanov', 'student'), (2, 'Ivanov', 'teacher'), (3, 'Ivanov', 'x')"))
+		ways.Must(db.Exec(ctx, "insert into members values (7, 1), (7, 2), (8, 3)"))
+		people := ways.Must(search.OpenIndex[person](db, "people_search", search.Table("people"), search.FieldNames("name"),
+			search.Filters("role")))
+		ways.Must(0, people.Ready(ctx))
+		mine := sqldb.SQL("select person from members where course = ?", 7)
+		if got := ids(ways.Must(people.Search(ctx, "ivanov", search.Where{"id": mine}))); !reflect.DeepEqual(got, []string{"1", "2"}) {
+			t.Fatalf("mine %v", got)
+		}
+		roles := sqldb.SQL("select role from people where id = ?", 1)
+		both := ways.Must(people.Search(ctx, "ivanov", search.Where{"id": mine, "role": roles}))
+		if got := ids(both); !reflect.DeepEqual(got, []string{"1"}) {
+			t.Fatalf("both %v", got)
+		}
+		notes := ways.Must(search.OpenIndex[string](store, "notes_statement"))
+		_, err := notes.Search(ctx, "x", search.Where{"id": mine})
+		is(t, err, tinystore.ErrInvalid)
+		ways.Must(search.Drop(ctx, db, "people_search"))
+	})
+}
+
 func TestAnIndexIsListedAndDroppedWithEveryDocumentItHolds(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

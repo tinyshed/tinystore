@@ -9,37 +9,37 @@
 # connection opens an index only as it is. With a database, the index
 # follows a table of it: its fields and filters are columns.
 message search.Open {
-  1 name: str               # [a-z0-9][a-z0-9_-]{0,63}
-  2 fields: [search.Field]  # in order; none for a document that is its own text
-  3 filters: [str]          # the fields a search may filter by
-  4 typoTolerance: bool?    # on when absent
-  5 dimensions: uint?       # the vectors' dimensions; none for an index without vectors
-  6 recall: float?          # above 0 and below 1; exact when absent
-  7 vectorWeight: float?    # 0.5 when absent
+  1 name: str                        # [a-z0-9][a-z0-9_-]{0,63}
+  2 fields: [search.Field]           # in order; none for a document that is its own text
+  3 filters: [str]                   # the fields a search may filter by
+  4 typoTolerance: bool?             # on when absent
+  5 dimensions: uint?                # the vectors' dimensions; none for an index without vectors
+  6 recall: float?                   # above 0 and below 1; exact when absent
+  7 vectorWeight: float?             # 0.5 when absent
   8 rerank: bool
-  9 manual: bool            # a change that needs reading again waits for reindex
-  10 reindex: bool          # reads the index again beside itself
-  11 database: uint?        # a database's handle: the index follows a table in its file
-  12 table: str?            # the table a database's index follows
-  13 key: str?              # the table's column of unique values; its primary key when absent
-  14 vectorColumn: str?     # the column of each row's vector, a blob of little-endian floats
-  15 layouts: [str]         # the keyboard layouts its readers type with: ru and en, or none
+  9 manual: bool                     # a change that needs reading again waits for reindex
+  10 reindex: bool                   # reads the index again beside itself
+  11 database: uint?                 # a database's handle: the index follows a table in its file
+  12 table: str?                     # the table a database's index follows
+  13 key: str?                       # the table's column of unique values; its primary key when absent
+  14 vectorColumn: str?              # the column of each row's vector, a blob of little-endian floats
+  15 layouts: [str]                  # the keyboard layouts its readers type with: ru and en, or none
 }
 
 # A field a search reads, by its path into the document, and what a word
 # found there weighs.
 message search.Field {
   1 path: str
-  2 weight: float           # above 0, at most 1000
+  2 weight: float                    # above 0, at most 1000
 }
 
 # A document set by its id, replacing it whole.
 message search.Set {
   1 handle: uint
-  2 id: str                 # 1 to 1024 bytes
-  3 value: json             # 1 MiB at most
-  4 vector: bin?            # four bytes a dimension, little-endian floats
-  5 noVector: bool          # the document has no vector, on an index with vectors
+  2 id: str                          # 1 to 1024 bytes
+  3 value: json                      # 1 MiB at most
+  4 vector: bin?                     # four bytes a dimension, little-endian floats
+  5 noVector: bool                   # the document has no vector, on an index with vectors
 }
 
 # Documents set in one commit, all of them or none: 1,000 at most, and no more
@@ -75,15 +75,23 @@ message search.Query {
   1 handle: uint
   2 text: str
   3 vector: bin?
-  4 vectorWeight: float?    # this search's, in place of the index's
+  4 vectorWeight: float?             # this search's, in place of the index's
   5 rerank: bool
-  6 where: json?            # the conditions, as docs/wire.md's "search's where" writes them
+  6 where: json?                     # the conditions, as docs/wire.md's "search's where" writes them
   7 offset: uint
-  8 limit: uint?            # 10 when absent; offset and limit together 1000 at most
-  9 prefix: bool            # the last word read as the start of a word too, as a search box types
-  10 prefixEvery: bool      # every word read so, a document holding a word for each first; in place of prefix
-  11 matches: str?          # utf8, utf16 or chars: each hit says where it matched, counted in that unit
-  12 minSimilarity: float?  # the least cosine a document's vector has for the vector to find it
+  8 limit: uint?                     # 10 when absent; offset and limit together 1000 at most
+  9 prefix: bool                     # the last word read as the start of a word too, as a search box types
+  10 prefixEvery: bool               # every word read so, a document holding a word for each first; in place of prefix
+  11 matches: str?                   # utf8, utf16 or chars: each hit says where it matched, counted in that unit
+  12 minSimilarity: float?           # the least cosine a document's vector has for the vector to find it
+  13 statements: [search.Statement]  # what where's {"statement": n} names, by its place
+}
+
+# A statement of a table's index's database whose rows give one column, as
+# sql.Statement's text and values: a where keeps to the values it gives.
+message search.Statement {
+  1 text: str
+  2 values: [cell]
 }
 
 # A hit: a document and its value, or a table's row, a value a column of
@@ -91,12 +99,12 @@ message search.Query {
 # matched it when the query asked, and what each half of the search gave it.
 message search.Hit {
   1 id: str
-  2 value: json             # null for a table's row
+  2 value: json                      # null for a table's row
   3 score: float
   4 row: [cell]?
   5 matches: [search.Match]?
-  6 textScore: float?       # its words' score, where they found it among their best
-  7 similarity: float?      # its vector's cosine with the search's, where both have one
+  6 textScore: float?                # its words' score, where they found it among their best
+  7 similarity: float?               # its vector's cosine with the search's, where both have one
 }
 
 # Where a search's word matched a hit: a range of a field's text, or of a
@@ -105,29 +113,29 @@ message search.Hit {
 # found as written, by its stem or once corrected; the letters typed for a
 # word a prefix began.
 message search.Match {
-  1 field: str              # the field's path or the table's column; empty for a document that is its own text
-  2 item: uint?             # the string's place in a field that holds a list
+  1 field: str                       # the field's path or the table's column; empty for a document that is its own text
+  2 item: uint?                      # the string's place in a field that holds a list
   3 start: uint
   4 end: uint
-  5 word: str               # the query's word, as its text wrote it
+  5 word: str                        # the query's word, as its text wrote it
 }
 
 message search.Found {
   1 hits: [search.Hit]
-  2 corrected: str?         # the text the search read in fact, when a word was read as another
-  3 columns: [str]?         # the columns of a table's index's rows
+  2 corrected: str?                  # the text the search read in fact, when a word was read as another
+  3 columns: [str]?                  # the columns of a table's index's rows
 }
 
 # Where an index stands: ready, rebuilding and how far, or failed and why.
 message search.Status {
-  1 state: str              # ready, rebuilding or failed
-  2 done: float             # the share a rebuild has read
-  3 error: str              # why a rebuild failed
+  1 state: str                       # ready, rebuilding or failed
+  2 done: float                      # the share a rebuild has read
+  3 error: str                       # why a rebuild failed
 }
 
 message search.Name {
   1 name: str
-  2 database: uint?         # a database's handle, for a table's index
+  2 database: uint?                  # a database's handle, for a table's index
 }
 
 message search.Dropped {
@@ -139,7 +147,7 @@ message search.Index {
   1 name: str
   2 documents: uint
   3 vectors: uint
-  4 opened: time?           # when a program last opened it
+  4 opened: time?                    # when a program last opened it
   5 state: str
   6 done: float
   7 error: str

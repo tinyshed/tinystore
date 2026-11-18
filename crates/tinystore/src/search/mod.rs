@@ -73,7 +73,7 @@ mod write;
 #[cfg(feature = "async")]
 pub(crate) use awaited::Encoded;
 pub use engine::Maintenance;
-pub use filter::{Condition, and, eq, is_in, missing, or, range};
+pub use filter::{Condition, Listing, Values, and, eq, is_in, missing, or, range};
 #[cfg(feature = "client")]
 pub(crate) use held::held;
 pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall};

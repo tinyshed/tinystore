@@ -9,13 +9,18 @@ import (
 
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/wire"
+	"tinyshed.org/tinystore/sqldb"
 )
 
 // Where keeps a search's hits to the documents whose filters pass, as
 // sqldb's where reads a map: each field equal to its value, one of a slice,
 // within a Range, or nil for none, every field named passing. Or and And
 // group them. A search's Where holds 8 conditions and 100 values in its
-// slices at most.
+// slices at most. For a table's index, a value may be a statement of its
+// database, sqldb.SQL("select user_id from members where course_id = ?", id):
+// one of the values its rows give, read in the search's snapshot, 100,000 at
+// most, counting toward no bound on values; on the table's key no filter is
+// needed.
 //
 //	search.Where{"category": []string{"shoes", "boots"}, "price": search.Range{Gte: 10, Lt: 100}}
 type Where map[string]any
@@ -37,8 +42,15 @@ func Or(parts ...Where) Group { return Group{"or", parts} }
 // And is conditions every one of which passes.
 func And(parts ...Where) Group { return Group{"and", parts} }
 
-func (w Where) search(q *wire.SearchQuery) { q.Where = whereText(w.conditions()) }
-func (g Group) search(q *wire.SearchQuery) { q.Where = whereText(g.conditions()) }
+func (w Where) search(q *wire.SearchQuery) {
+	q.Statements = nil
+	q.Where = whereText(w.conditions(&q.Statements))
+}
+
+func (g Group) search(q *wire.SearchQuery) {
+	q.Statements = nil
+	q.Where = whereText(g.conditions(&q.Statements))
+}
 
 // whereText is conditions as the wire takes them, a JSON list joined by and;
 // "" for one that does not write, which the search refuses.
@@ -55,10 +67,10 @@ func whereText(conditions []any, err error) *string {
 	return &text
 }
 
-func (g Group) conditions() ([]any, error) {
+func (g Group) conditions(statements *[]wire.SearchStatement) ([]any, error) {
 	parts := make([]any, len(g.parts))
 	for i, part := range g.parts {
-		inner, err := part.conditions()
+		inner, err := part.conditions(statements)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +82,9 @@ func (g Group) conditions() ([]any, error) {
 // conditions are the fields' conditions, in the order of their names.
 //
 //	{"eq":[path,value]}  {"in":[path,[values]]}  {"missing":path}  {"range":[path,{"gte":n}]}
-func (w Where) conditions() ([]any, error) {
+//
+// and a statement {"in":[path,{"statement":n}]}, the nth of statements.
+func (w Where) conditions(statements *[]wire.SearchStatement) ([]any, error) {
 	paths := make([]string, 0, len(w))
 	for path := range w {
 		paths = append(paths, path)
@@ -78,7 +92,7 @@ func (w Where) conditions() ([]any, error) {
 	sort.Strings(paths)
 	out := make([]any, 0, len(paths))
 	for _, path := range paths {
-		condition, err := conditionOf(path, w[path])
+		condition, err := conditionOf(path, w[path], statements)
 		if err != nil {
 			return nil, err
 		}
@@ -87,8 +101,15 @@ func (w Where) conditions() ([]any, error) {
 	return out, nil
 }
 
-func conditionOf(path string, value any) (any, error) {
+func conditionOf(path string, value any, statements *[]wire.SearchStatement) (any, error) {
 	switch v := value.(type) {
+	case sqldb.Piece:
+		text, values, err := sqldb.CoreStatement(v)
+		if err != nil {
+			return nil, err
+		}
+		*statements = append(*statements, wire.SearchStatement{Text: text, Values: values})
+		return map[string]any{"in": []any{path, map[string]any{"statement": len(*statements) - 1}}}, nil
 	case nil:
 		return map[string]any{"missing": path}, nil
 	case Range:

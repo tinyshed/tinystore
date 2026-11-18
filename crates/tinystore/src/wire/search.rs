@@ -14,7 +14,7 @@ use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, SearchDeleted, SearchDocument, SearchDropped, SearchFound, SearchGot, SearchHit,
     SearchIndex, SearchKey, SearchListed, SearchMatch, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany,
-    SearchStatus, method,
+    SearchStatement, SearchStatus, method,
 };
 use crate::engine::SharedFile;
 use crate::search::{self, Document, Index, Match, Rebuild, SearchCall, Status, Unit};
@@ -291,11 +291,24 @@ fn query<'i>(
         call = call.matches_in(unit(named)?);
     }
     if let Some(conditions) = &asked.r#where {
-        for condition in search::conditions(conditions)? {
+        let statements = asked.statements.iter().map(statement).collect::<Result<Vec<_>, _>>()?;
+        for condition in search::conditions(conditions, &statements)? {
             call = call.filter(condition);
         }
     }
     Ok(call)
+}
+
+/// A statement of a table's index's `where`, which its database runs.
+#[cfg(feature = "sql")]
+fn statement(asked: &SearchStatement) -> Result<search::Listing, Failure> {
+    let statement = super::sql::statement(asked.text.clone(), asked.values.clone())?;
+    Ok(search::Values::listing(statement))
+}
+
+#[cfg(not(feature = "sql"))]
+fn statement(_: &SearchStatement) -> Result<search::Listing, Failure> {
+    Err(Failure::invalid("a where by a statement is a table index's, and this server keeps no databases"))
 }
 
 /// A table's index's hits, each with its row's cells, and the rows' columns

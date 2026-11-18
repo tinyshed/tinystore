@@ -147,6 +147,25 @@ impl Database {
     }
 }
 
+/// A statement's rows as a table's index's `where` holds them, as SQL's `in
+/// (select …)` does: `search::is_in("id", sql!("select user_id from members
+/// where course_id = ?", course))`, read in the search's snapshot.
+#[cfg(feature = "search")]
+impl crate::search::Values for crate::sql::Sql {
+    fn listing(self) -> crate::search::Listing {
+        let described = self.describe();
+        let read = move |connection: &rusqlite::Connection, most: usize| crate::sql::column_on(connection, &self, most);
+        crate::search::Listing::rows(described, std::sync::Arc::new(read))
+    }
+}
+
+#[cfg(feature = "search")]
+impl crate::search::Values for &crate::sql::Sql {
+    fn listing(self) -> crate::search::Listing {
+        self.clone().listing()
+    }
+}
+
 #[cfg(feature = "records")]
 impl Database {
     /// The store's stream of events `stream`, opened through this database:

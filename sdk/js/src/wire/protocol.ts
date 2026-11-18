@@ -11851,167 +11851,57 @@ export const SearchGot = message(
 )
 
 /**
- * A search: by `text`'s words, `vector`, or both, kept to what `where` passes.
+ * A statement of a table's index's database whose rows give one column, as
+ * sql.Statement's text and values: a where keeps to the values it gives.
  */
-export const SearchQuery = message(
-	'search.Query',
+export const SearchStatement = message(
+	'search.Statement',
 	{
-		handle: [1, uint],
-		text: [2, str],
-		vector: [3, bin],
-		/** this search's, in place of the index's */
-		vectorWeight: [4, float],
-		rerank: [5, bool],
-		/** the conditions, as docs/wire.md's "search's where" writes them */
-		where: [6, str],
-		offset: [7, uint],
-		/** 10 when absent; offset and limit together 1000 at most */
-		limit: [8, uint],
-		/** the last word read as the start of a word too, as a search box types */
-		prefix: [9, bool],
-		/** every word read so, a document holding a word for each first; in place of prefix */
-		prefixEvery: [10, bool],
-		/** utf8, utf16 or chars: each hit says where it matched, counted in that unit */
-		matches: [11, str],
-		/** the least cosine a document's vector has for the vector to find it */
-		minSimilarity: [12, float],
+		text: [1, str],
+		values: [2, list(sqlValue)],
 	},
 	{
 		write(w, v) {
 			const head = w.openMap()
 			let n = 0
-			if (v.handle !== undefined) {
-				w.field(1)
-				w.uint(v.handle)
-				n++
-			}
 			if (v.text !== undefined) {
-				w.field(2)
+				w.field(1)
 				w.str(v.text)
 				n++
 			}
-			if (v.vector !== undefined) {
-				w.field(3)
-				w.bin(v.vector)
-				n++
-			}
-			if (v.vectorWeight !== undefined) {
-				w.field(4)
-				w.float(v.vectorWeight)
-				n++
-			}
-			if (v.rerank !== undefined) {
-				w.field(5)
-				w.bool(v.rerank)
-				n++
-			}
-			if (v.where !== undefined) {
-				w.field(6)
-				w.str(v.where)
-				n++
-			}
-			if (v.offset !== undefined) {
-				w.field(7)
-				w.uint(v.offset)
-				n++
-			}
-			if (v.limit !== undefined) {
-				w.field(8)
-				w.uint(v.limit)
-				n++
-			}
-			if (v.prefix !== undefined) {
-				w.field(9)
-				w.bool(v.prefix)
-				n++
-			}
-			if (v.prefixEvery !== undefined) {
-				w.field(10)
-				w.bool(v.prefixEvery)
-				n++
-			}
-			if (v.matches !== undefined) {
-				w.field(11)
-				w.str(v.matches)
-				n++
-			}
-			if (v.minSimilarity !== undefined) {
-				w.field(12)
-				w.float(v.minSimilarity)
+			if (v.values !== undefined) {
+				w.field(2)
+				w.array(v.values.length)
+				for (const item0 of v.values) {
+					sqlValue.write(w, item0)
+				}
 				n++
 			}
 			w.closeMap(head, n)
 		},
 		read(r) {
-			let $handle: number | undefined
 			let $text: string | undefined
-			let $vector: Uint8Array | undefined
-			let $vectorWeight: number | undefined
-			let $rerank: boolean | undefined
-			let $where: string | undefined
-			let $offset: number | undefined
-			let $limit: number | undefined
-			let $prefix: boolean | undefined
-			let $prefixEvery: boolean | undefined
-			let $matches: string | undefined
-			let $minSimilarity: number | undefined
+			let $values: (SqlValue | boolean)[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
-						$handle = r.uint()
-						break
-					case 2:
 						$text = r.str()
 						break
-					case 3:
-						$vector = r.bytes()
+					case 2: {
+						const items0: (SqlValue | boolean)[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(sqlValue.read(r))
+						}
+						r.leave()
+						$values = items0
 						break
-					case 4:
-						$vectorWeight = r.float()
-						break
-					case 5:
-						$rerank = r.bool()
-						break
-					case 6:
-						$where = r.str()
-						break
-					case 7:
-						$offset = r.uint()
-						break
-					case 8:
-						$limit = r.uint()
-						break
-					case 9:
-						$prefix = r.bool()
-						break
-					case 10:
-						$prefixEvery = r.bool()
-						break
-					case 11:
-						$matches = r.str()
-						break
-					case 12:
-						$minSimilarity = r.float()
-						break
+					}
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return {
-				handle: $handle,
-				text: $text,
-				vector: $vector,
-				vectorWeight: $vectorWeight,
-				rerank: $rerank,
-				where: $where,
-				offset: $offset,
-				limit: $limit,
-				prefix: $prefix,
-				prefixEvery: $prefixEvery,
-				matches: $matches,
-				minSimilarity: $minSimilarity,
-			}
+			return { text: $text, values: $values }
 		},
 	},
 )
@@ -13993,6 +13883,193 @@ export const SearchSetMany = message(
 			}
 			r.leave()
 			return { handle: $handle, documents: $documents }
+		},
+	},
+)
+
+/**
+ * A search: by `text`'s words, `vector`, or both, kept to what `where` passes.
+ */
+export const SearchQuery = message(
+	'search.Query',
+	{
+		handle: [1, uint],
+		text: [2, str],
+		vector: [3, bin],
+		/** this search's, in place of the index's */
+		vectorWeight: [4, float],
+		rerank: [5, bool],
+		/** the conditions, as docs/wire.md's "search's where" writes them */
+		where: [6, str],
+		offset: [7, uint],
+		/** 10 when absent; offset and limit together 1000 at most */
+		limit: [8, uint],
+		/** the last word read as the start of a word too, as a search box types */
+		prefix: [9, bool],
+		/** every word read so, a document holding a word for each first; in place of prefix */
+		prefixEvery: [10, bool],
+		/** utf8, utf16 or chars: each hit says where it matched, counted in that unit */
+		matches: [11, str],
+		/** the least cosine a document's vector has for the vector to find it */
+		minSimilarity: [12, float],
+		/** what where's {"statement": n} names, by its place */
+		statements: [13, list(SearchStatement)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.text !== undefined) {
+				w.field(2)
+				w.str(v.text)
+				n++
+			}
+			if (v.vector !== undefined) {
+				w.field(3)
+				w.bin(v.vector)
+				n++
+			}
+			if (v.vectorWeight !== undefined) {
+				w.field(4)
+				w.float(v.vectorWeight)
+				n++
+			}
+			if (v.rerank !== undefined) {
+				w.field(5)
+				w.bool(v.rerank)
+				n++
+			}
+			if (v.where !== undefined) {
+				w.field(6)
+				w.str(v.where)
+				n++
+			}
+			if (v.offset !== undefined) {
+				w.field(7)
+				w.uint(v.offset)
+				n++
+			}
+			if (v.limit !== undefined) {
+				w.field(8)
+				w.uint(v.limit)
+				n++
+			}
+			if (v.prefix !== undefined) {
+				w.field(9)
+				w.bool(v.prefix)
+				n++
+			}
+			if (v.prefixEvery !== undefined) {
+				w.field(10)
+				w.bool(v.prefixEvery)
+				n++
+			}
+			if (v.matches !== undefined) {
+				w.field(11)
+				w.str(v.matches)
+				n++
+			}
+			if (v.minSimilarity !== undefined) {
+				w.field(12)
+				w.float(v.minSimilarity)
+				n++
+			}
+			if (v.statements !== undefined) {
+				w.field(13)
+				w.array(v.statements.length)
+				for (const item0 of v.statements) {
+					SearchStatement.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $text: string | undefined
+			let $vector: Uint8Array | undefined
+			let $vectorWeight: number | undefined
+			let $rerank: boolean | undefined
+			let $where: string | undefined
+			let $offset: number | undefined
+			let $limit: number | undefined
+			let $prefix: boolean | undefined
+			let $prefixEvery: boolean | undefined
+			let $matches: string | undefined
+			let $minSimilarity: number | undefined
+			let $statements: Read<typeof SearchStatement.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$text = r.str()
+						break
+					case 3:
+						$vector = r.bytes()
+						break
+					case 4:
+						$vectorWeight = r.float()
+						break
+					case 5:
+						$rerank = r.bool()
+						break
+					case 6:
+						$where = r.str()
+						break
+					case 7:
+						$offset = r.uint()
+						break
+					case 8:
+						$limit = r.uint()
+						break
+					case 9:
+						$prefix = r.bool()
+						break
+					case 10:
+						$prefixEvery = r.bool()
+						break
+					case 11:
+						$matches = r.str()
+						break
+					case 12:
+						$minSimilarity = r.float()
+						break
+					case 13: {
+						const items0: Read<typeof SearchStatement.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchStatement.read(r))
+						}
+						r.leave()
+						$statements = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				handle: $handle,
+				text: $text,
+				vector: $vector,
+				vectorWeight: $vectorWeight,
+				rerank: $rerank,
+				where: $where,
+				offset: $offset,
+				limit: $limit,
+				prefix: $prefix,
+				prefixEvery: $prefixEvery,
+				matches: $matches,
+				minSimilarity: $minSimilarity,
+				statements: $statements,
+			}
 		},
 	},
 )

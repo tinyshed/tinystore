@@ -85,7 +85,7 @@ of repeating them.
 | a vector           | 4,096 dimensions                                                              |
 | `limit` + `offset` | 1,000; `limit` is 10                                                          |
 | a field's weight   | above 0, at most 1,000                                                        |
-| a filter           | 8 conditions, 100 values                                                      |
+| a filter           | 8 conditions, 100 values; a statement's rows, 100,000                         |
 | `vectorWeight`     | 0.5                                                                           |
 | a table's index    | the rows of one search's hits, 64 MiB together, as one `all`                  |
 
@@ -230,6 +230,7 @@ Each constant has the name below in its language's case:
 | `SEARCH_TEXT`        | `search text`            | 1 KiB     | a search's text                                                    |
 | `FILTER_CONDITIONS`  | `filter conditions`      | 8         | the conditions of one search's filter                              |
 | `FILTER_VALUES`      | `filter values`          | 100       | the values in the lists of one search's conditions                 |
+| `FILTER_ROWS`        | `filter rows`            | 100,000   | the rows a statement of a table's index's `where` gives            |
 | `FILTER_TEXT`        | `filter text`            | 256 bytes | a text that a filter keeps or asks for                             |
 | `VECTOR_DIMENSIONS`  | `vector dimensions`      | 4,096     | a vector                                                           |
 | `REQUEST_BYTES`      | `request bytes`          | 2 MiB     | one request from an SDK                                            |

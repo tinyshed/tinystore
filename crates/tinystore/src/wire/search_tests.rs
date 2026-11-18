@@ -7,7 +7,7 @@ use crate::wire::protocol::{
     SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, method,
 };
 #[cfg(feature = "sql")]
-use crate::wire::protocol::{SqlDone, SqlMigration, SqlOpen, SqlStatement};
+use crate::wire::protocol::{SearchStatement, SqlDone, SqlMigration, SqlOpen, SqlStatement};
 use crate::{Options, Store};
 
 fn open(client: &mut Client, name: &str) -> u64 {
@@ -230,6 +230,16 @@ fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
     assert_eq!(found.columns.as_deref(), Some(&["id".to_owned(), "title".to_owned(), "done".to_owned()][..]));
     let row = [Cell::Int(7), Cell::Str("rye bread".to_owned()), Cell::Int(1)];
     assert_eq!(found.hits[0].row.as_deref(), Some(&row[..]));
+    let picked = SearchStatement { text: "select ? union select ?".to_owned(), values: vec![Cell::Int(7), Cell::Nil] };
+    let kept = SearchQuery {
+        r#where: Some(r#"[{"in":["id",{"statement":0}]}]"#.to_owned()),
+        statements: vec![picked],
+        ..query(handle, "bread")
+    };
+    assert_eq!(ids(&client.call::<SearchFound>(method::SEARCH_SEARCH, &kept).unwrap()), ["7"]);
+    let unknown = SearchQuery { statements: Vec::new(), ..kept };
+    let refused = client.call::<SearchFound>(method::SEARCH_SEARCH, &unknown).unwrap_err();
+    assert!(refused.message.contains("statement 0, of 0"), "{}", refused.message);
     let matched: SearchFound =
         client.call(method::SEARCH_SEARCH, &SearchQuery { matches: Some("chars".to_owned()), ..filtered }).unwrap();
     let only = &matched.hits[0].matches.as_ref().unwrap()[0];

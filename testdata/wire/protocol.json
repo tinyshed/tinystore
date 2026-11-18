@@ -6354,6 +6354,24 @@
         "rerank": {
           "bool": true
         },
+        "statements": {
+          "list": [
+            {
+              "fields": {
+                "text": {
+                  "str": "text"
+                },
+                "values": {
+                  "list": [
+                    {
+                      "str": "values"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
         "text": {
           "str": "text"
         },
@@ -6367,7 +6385,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8c016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d6174636865730ccb3ff8000000000000",
+      "hex": "8d016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d6174636865730ccb3ff80000000000000d918201a4746578740291a676616c756573",
       "message": "search.Query",
       "name": "search.Query with every field"
     },
@@ -6376,6 +6394,29 @@
       "hex": "80",
       "message": "search.Query",
       "name": "search.Query with no field"
+    },
+    {
+      "fields": {
+        "text": {
+          "str": "text"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "values"
+            }
+          ]
+        }
+      },
+      "hex": "8201a4746578740291a676616c756573",
+      "message": "search.Statement",
+      "name": "search.Statement with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Statement",
+      "name": "search.Statement with no field"
     },
     {
       "fields": {

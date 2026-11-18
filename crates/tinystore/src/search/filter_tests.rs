@@ -22,7 +22,7 @@ fn a_value_is_a_term_by_its_type() {
     assert_eq!(terms(&missing("c")).unwrap(), ["n:"]);
     assert_eq!(terms(&eq("c", &4.5)).unwrap(), [precise(0, sortable(4.5))]);
     assert_eq!(terms(&is_in("c", &["b", "a"])).unwrap(), ["t:b", "t:a"]);
-    assert!(terms(&is_in::<&str>("c", &[])).unwrap().is_empty());
+    assert!(terms(&is_in("c", &[] as &[&str])).unwrap().is_empty());
     let kind = |condition: Condition| terms(&condition).unwrap_err().kind();
     assert_eq!(kind(eq("c", &json!({ "a": 1 }))), crate::ErrorKind::Invalid);
     assert_eq!(kind(eq("c", &["a", "b"])), crate::ErrorKind::Invalid, "eq takes one value");

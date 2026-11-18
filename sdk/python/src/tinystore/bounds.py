@@ -85,6 +85,8 @@ FILTER_CONDITIONS = Limit("filter conditions", 8)
 """The conditions of one search's filter."""
 FILTER_VALUES = Limit("filter values", 100)
 """The values the lists of one search's conditions hold together."""
+FILTER_ROWS = Limit("filter rows", 100_000)
+"""The rows a statement of a table's index's where gives."""
 FILTER_TEXT = Limit("filter text", 256)
 """A text a filter keeps or asks for, in bytes."""
 VECTOR_DIMENSIONS = Limit("vector dimensions", 4096)

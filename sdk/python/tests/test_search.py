@@ -259,6 +259,38 @@ async def test_a_tables_index_finds_its_rows_each_hit_its_row_and_follows_every_
         await articles.search("bread")
 
 
+@dataclass
+class Person:
+    id: int
+    name: str
+    role: str
+
+
+# contract: SRCH-17
+async def test_a_tables_index_keeps_a_search_to_the_values_a_statement_of_its_database_gives(
+    store: tinystore.Store,
+) -> None:
+    db = await store.database(
+        "school",
+        migrations={
+            "0001_people.sql": "create table people (id integer primary key, name text not null, role text not null);"
+            "create table members (course integer not null, person integer not null)"
+        },
+    )
+    await db.exec("insert into people values (1, 'Ivanov', 'student'), (2, 'Ivanov', 'teacher'), (3, 'Ivanov', 'x')")
+    await db.exec("insert into members values (7, 1), (7, 2), (8, 3)")
+    people = db.search_index("people_search", Person, table="people", fields=["name"], filters=["role"])
+    await people.ready()
+    mine = tinystore.sql("select person from members where course = ?", 7)
+    assert ids(await people.search("ivanov", where={"id": mine})) == ["1", "2"]
+    roles = tinystore.sql("select role from people where id = ?", 1)
+    assert ids(await people.search("ivanov", where={"id": mine, "role": roles})) == ["1"]
+    notes = store.index("notes_statement", str)
+    with pytest.raises(tinystore.InvalidError):
+        await notes.search("x", where={"id": mine})
+    assert await db.drop_search_index("people_search")
+
+
 async def test_an_index_is_listed_and_dropped_with_every_document_it_holds(store: tinystore.Store) -> None:
     posts = store.index("posts", str)
     await posts.set("p", "hello")
@@ -281,3 +313,6 @@ def test_a_where_is_written_as_the_wire_takes_it() -> None:
     )
     with pytest.raises(tinystore.InvalidError):
         search.where_json({"a": float("nan")})
+    statements: list[dict[str, Any]] = []
+    assert search.where_json({"id": tinystore.sql("select ?", 1)}, statements) == '[{"in":["id",{"statement":0}]}]'
+    assert statements == [{"text": "select ?", "values": [1]}]

@@ -110,6 +110,34 @@ fn answered<A: Answer>(
     Ok(rows)
 }
 
+/// The values of the one column `statement` gives, for a table's index's
+/// `where`, on the connection of the search's snapshot: `most` and one more
+/// at most, so that the search can say its bound was passed. It runs as a
+/// read of the database runs, under the authorizer; one that writes, or
+/// gives other than one column, is `invalid`.
+#[cfg(feature = "search")]
+pub(crate) fn column_on(connection: &Connection, statement: &Sql, most: usize) -> Result<Vec<SqlValue>> {
+    given(statement.text(), || {
+        let mut prepared = connection.prepare_cached(statement.text()).map_err(|error| failure("its text", error))?;
+        if !prepared.readonly() {
+            return Err(Error::invalid("a where's statement reads, and this one writes"));
+        }
+        let columns = prepared.column_count();
+        if columns != 1 {
+            return Err(Error::invalid(format!("a where's statement gives one column, and this one gives {columns}")));
+        }
+        statement.check(prepared.parameter_count())?;
+        let failed = |error| failure("its rows", error);
+        let mut rows = prepared.query(params_from_iter(statement.values())).map_err(failed)?;
+        let mut values = Vec::new();
+        while values.len() <= most {
+            let Some(row) = rows.next().map_err(failed)? else { break };
+            values.push(row.get::<_, SqlValue>(0).map_err(failed)?);
+        }
+        Ok(values)
+    })
+}
+
 /// The rows of a table's search index's hits as `T`s, each the one row
 /// `select` gives with its hit's key, or none: in the search's snapshot, and
 /// within the store's memory and one call's bound together, as `db.all`

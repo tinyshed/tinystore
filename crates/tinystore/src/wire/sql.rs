@@ -1010,7 +1010,7 @@ fn write_of(text: SqlText, lend: Lend<'_>) -> Result<Write, Failure> {
 }
 
 /// A statement from its text and the cells of its `?`s.
-fn statement(text: String, values: Vec<Cell>) -> Result<Sql, Failure> {
+pub(super) fn statement(text: String, values: Vec<Cell>) -> Result<Sql, Failure> {
     let values = values.into_iter().map(value_of).collect::<Result<Vec<_>, _>>()?;
     Ok(Sql::with_values(text, values))
 }

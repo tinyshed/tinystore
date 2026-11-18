@@ -18,6 +18,14 @@ func Columns[T any](ctx context.Context, db *DB, text string, args ...any) (T, e
 
 Columns is what All gives, by its columns: T is a struct whose fields are slices, one a column, by the column's name; a nil pointer where a row holds NULL. For rows by the thousand, a chart's points: they come faster, and nobody turns rows into columns after.
 
+## CoreStatement
+
+```go
+func CoreStatement(p Piece) (text string, values []any, err error)
+```
+
+CoreStatement is a piece's text and values, or why it could not be made, as this module's packages send it: a table's index's Where; a program has no use for it.
+
 ## Each
 
 ```go

@@ -80,7 +80,7 @@ pub(crate) use {
 #[cfg(all(feature = "search", feature = "wire"))]
 pub(crate) use run::cells_on;
 #[cfg(feature = "search")]
-pub(crate) use run::rows_on;
+pub(crate) use run::{column_on, rows_on};
 
 #[cfg(test)]
 #[path = "database_tests.rs"]

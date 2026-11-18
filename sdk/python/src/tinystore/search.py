@@ -163,7 +163,11 @@ Where = Mapping[str, Any] | Group
 
 Each field equal to its value, one of a list, within a range, ``{"gte": 10,
 "lt": 100}``, or None for none, every field named passing; or_ and and_ group them.
-A search's where holds 8 conditions and 100 values in its lists at most.
+A search's where holds 8 conditions and 100 values in its lists at most. For
+a table's index, a value may be a statement of its database, ``sql("select
+user_id from members where course_id = ?", course)``: one of the values its
+rows give, read in the search's snapshot, 100,000 at most, counting toward
+no bound on values; on the table's key no filter is needed.
 """
 
 
@@ -228,10 +232,12 @@ class _Searchable[T]:
         """
         if prefix not in (True, False, "every"):
             raise InvalidError(f"a prefix of {prefix!r}: True, False or 'every'")
+        statements: list[dict[str, Any]] = []
         body = _query(
             text,
             vector_bytes=None if vector is None else _vector_bytes(vector),
-            where=None if where is None else where_json(where),
+            where=None if where is None else where_json(where, statements),
+            statements=statements,
             hybrid=hybrid,
             min_similarity=min_similarity,
             prefix=prefix,
@@ -442,6 +448,7 @@ def _query(
     *,
     vector_bytes: bytes | None,
     where: str | None,
+    statements: list[dict[str, Any]],
     hybrid: Hybrid | None,
     min_similarity: float | None,
     prefix: bool | Literal["every"],
@@ -465,6 +472,7 @@ def _query(
             # Python slices a str by its code points
             matches="chars" if matches else None,
             where=where,
+            statements=statements,
             offset=offset,
             limit=limit,
         )
@@ -506,22 +514,29 @@ def _vector_bytes(vector: Vector) -> bytes:
         raise InvalidError(f"a vector of {len(floats)} values that are not all floats: {err}") from None
 
 
-def where_json(where: Where) -> str:
+def where_json(where: Where, statements: list[dict[str, Any]] | None = None) -> str:
     """A where as the wire takes it, a JSON list of conditions joined by and.
 
     ``{"eq":[path,value]}``, ``{"in":[path,[values]]}``, ``{"missing":path}``,
-    ``{"range":[path,{"gt"|"gte"|"lt"|"lte":n}]}``, ``{"or":[…]}``, ``{"and":[…]}``.
+    ``{"range":[path,{"gt"|"gte"|"lt"|"lte":n}]}``, ``{"or":[…]}``, ``{"and":[…]}``;
+    a statement is ``{"in":[path,{"statement":n}]}``, the nth of ``statements``.
     """
-    return json.dumps(_conditions(where), separators=(",", ":"), ensure_ascii=False)
+    held = [] if statements is None else statements
+    return json.dumps(_conditions(where, held), separators=(",", ":"), ensure_ascii=False)
 
 
-def _conditions(where: Where) -> list[Any]:
+def _conditions(where: Where, statements: list[dict[str, Any]]) -> list[Any]:
     if isinstance(where, Group):
-        return [{where.join: [{"and": _conditions(part)} for part in where.parts]}]
-    return [_condition(path, value) for path, value in where.items()]
+        return [{where.join: [{"and": _conditions(part, statements)} for part in where.parts]}]
+    return [_condition(path, value, statements) for path, value in where.items()]
 
 
-def _condition(path: str, value: Any) -> dict[str, Any]:
+def _condition(path: str, value: Any, statements: list[dict[str, Any]]) -> dict[str, Any]:
+    from .sql import Sql  # sql imports this module as it loads
+
+    if isinstance(value, Sql):
+        statements.append({"text": value.text, "values": list(value.values)})
+        return {"in": [path, {"statement": len(statements) - 1}]}
     if value is None:
         return {"missing": path}
     if isinstance(value, list | tuple):

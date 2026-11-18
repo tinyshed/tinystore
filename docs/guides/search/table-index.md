@@ -82,7 +82,9 @@ let found = articles.search("хлеба").filter(eq("author_id", &7)).filter(eq(
 | `vectors` | the column of vectors your program fills, and their dimensions                       |
 
 A hit's `value` is its row as `db.all` reads it, every column. The index
-lives in the database's file, `sql/blog.db`, beside the table.
+lives in the database's file, `sql/blog.db`, beside the table. A `where` can
+also hold a statement of the database in a list's place, to keep a search
+to the rows it gives: [The rows of a statement](filters.md#the-rows-of-a-statement).
 
 The rows of one search count together, as the rows of one `db.all` do. If
 they pass 64 MiB, or more than the store's memory has free, the search fails

@@ -1021,6 +1021,14 @@ pub const FILTER_VALUES: Limit
 
 The values the lists of one search's conditions hold together.
 
+## FILTER_ROWS
+
+```rust
+pub const FILTER_ROWS: Limit
+```
+
+The rows a statement of a table's index's `where` gives.
+
 ## FILTER_TEXT
 
 ```rust

@@ -755,6 +755,8 @@ const limits: Readonly<{
     filterConditions: Limit
     /** The values the lists of one search's conditions hold together. */
     filterValues: Limit
+    /** The rows a statement of a table's index's `where` gives. */
+    filterRows: Limit
     /** A text a filter keeps or asks for, in bytes. */
     filterText: Limit
     /** A vector's dimensions. */

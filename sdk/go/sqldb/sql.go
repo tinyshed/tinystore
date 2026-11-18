@@ -35,6 +35,16 @@ func CoreLent(write core.Lent) Statement {
 	return Piece{lent: &write, err: refused}
 }
 
+// CoreStatement is a piece's text and values, or why it could not be made,
+// as this module's packages send it: a table's index's Where; a program has
+// no use for it.
+func CoreStatement(p Piece) (text string, values []any, err error) {
+	if p.lent != nil {
+		return "", nil, p.err
+	}
+	return p.text, p.values, p.err
+}
+
 // Condition is a condition a query keeps to: equal values by column, Eq, or
 // a piece of SQL.
 type Condition interface{ condition() Piece }

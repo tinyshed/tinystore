@@ -54,7 +54,7 @@ A vector the program's own model gave, of the index's dimensions.
 ## WhereValue
 
 ```ts
-type WhereValue = string | number | bigint | boolean | null | readonly (string | number | bigint | boolean)[] | {
+type WhereValue = Sql | string | number | bigint | boolean | null | readonly (string | number | bigint | boolean)[] | {
     gt?: number | bigint
     gte?: number | bigint
     lt?: number | bigint
@@ -62,7 +62,9 @@ type WhereValue = string | number | bigint | boolean | null | readonly (string |
 }
 ```
 
-A value a `where` matches: text, a number, a boolean, one of a list, a range, or `null` for none.
+A value a `where` matches: text, a number, a boolean, one of a list, a
+range, `null` for none, or, for a table's index, one of the values a
+statement of its database gives: ``sql`select user_id from members where course_id = ${id}` ``.
 
 ## Where
 
@@ -74,6 +76,8 @@ What a search keeps its hits to, as sqldb's `where` reads an object: each
 field equal to its value, one of a list, within a range, or `null` for
 none, every field named passing; `search.or` and `search.and` group them.
 A search's where holds 8 conditions and 100 values in its lists at most.
+A statement's rows, read in the search's snapshot, count toward no bound
+on values: 100,000 at most, and on the table's key no filter is needed.
 
 ## Query
 

@@ -925,3 +925,10 @@ document passes, as the Bun SDK writes its `where` object:
 A value is text, a number or a boolean: the text "50" never passes for the
 number 50, and an integer past 2⁵³ is written as its digits and matched
 exactly. A path the index was not opened with is `invalid`.
+
+For a table's index, a list's place may hold `{"statement": n}` instead,
+`{"in": [path, {"statement": 0}]}`: the values the `n`th of the query's
+`statements` gives, a statement of the index's database of one column, run
+in the search's snapshot. On the table's key column it needs no filter. An
+index of documents refuses it as `invalid`, and so does a server before it,
+as a condition it does not read.

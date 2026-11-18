@@ -653,6 +653,8 @@ func NewMessage(name string) Message {
 		return &SearchGot{}
 	case "search.Query":
 		return &SearchQuery{}
+	case "search.Statement":
+		return &SearchStatement{}
 	case "search.Hit":
 		return &SearchHit{}
 	case "search.Match":
@@ -13023,6 +13025,8 @@ type SearchQuery struct {
 	Matches *string `wire:"11,matches"`
 	// the least cosine a document's vector has for the vector to find it
 	MinSimilarity *float64 `wire:"12,minSimilarity"`
+	// what where's {"statement": n} names, by its place
+	Statements []SearchStatement `wire:"13,statements"`
 }
 
 func (m SearchQuery) Write(w *Writer) {
@@ -13088,6 +13092,14 @@ func (m SearchQuery) Write(w *Writer) {
 		w.Float(*m.MinSimilarity)
 		n++
 	}
+	if len(m.Statements) > 0 {
+		w.Uint(13)
+		w.Array(len(m.Statements))
+		for _, item0 := range m.Statements {
+			item0.Write(w)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -13126,6 +13138,15 @@ func (m *SearchQuery) Read(r *Reader) {
 		case 12:
 			v := r.Float()
 			m.MinSimilarity = &v
+		case 13:
+			v := []SearchStatement{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SearchStatement
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Statements = v
 		default:
 			r.Skip()
 		}
@@ -13146,7 +13167,64 @@ func (m SearchQuery) IsZero() bool {
 		!m.Prefix &&
 		!m.PrefixEvery &&
 		m.Matches == nil &&
-		m.MinSimilarity == nil
+		m.MinSimilarity == nil &&
+		len(m.Statements) == 0
+}
+
+// SearchStatement is the schema's search.Statement.
+//
+// A statement of a table's index's database whose rows give one column, as
+// sql.Statement's text and values: a where keeps to the values it gives.
+type SearchStatement struct {
+	Text   string `wire:"1,text"`
+	Values []Cell `wire:"2,values"`
+}
+
+func (m SearchStatement) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Text != "" {
+		w.Uint(1)
+		w.Str(m.Text)
+		n++
+	}
+	if len(m.Values) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Values))
+		for _, item0 := range m.Values {
+			w.Cell(item0)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchStatement) Read(r *Reader) {
+	*m = SearchStatement{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Text = r.Str()
+		case 2:
+			v := []Cell{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Cell()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Values = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchStatement writes as no field at all.
+func (m SearchStatement) IsZero() bool {
+	return m.Text == "" &&
+		len(m.Values) == 0
 }
 
 // SearchHit is the schema's search.Hit.

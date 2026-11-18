@@ -13,6 +13,7 @@ import {
 	type SearchMatch,
 	type Store,
 	search,
+	sql,
 } from '../src/index.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
@@ -323,6 +324,35 @@ for (const way of ways) {
 			expect(await db.scalar<number>`select count(*) from articles where id = 3`).toBe(0)
 			expect(await db.dropSearchIndex('articles_search')).toBe(true)
 			expect(await caught(articles.search('bread'))).toBeInstanceOf(InvalidError)
+		})
+
+		// contract: SRCH-17
+		test("a table's index keeps a search to the values a statement of its database gives", async () => {
+			const db = await store.database('school', {
+				migrations: {
+					'0001_people.sql':
+						'create table people (id integer primary key, name text not null, role text not null);' +
+						'create table members (course integer not null, person integer not null)',
+				},
+			})
+			await db.exec`insert into people (id, name, role) values (1, 'Ivanov', 'student'), (2, 'Ivanov', 'teacher'), (3, 'Ivanov', 'student')`
+			await db.exec`insert into members (course, person) values (7, 1), (7, 2), (8, 3)`
+			const people = db.searchIndex<{ id: number; name: string }>('people_search', {
+				table: 'people',
+				fields: ['name'],
+				filters: ['role'],
+			})
+			await people.ready()
+			const mine = sql`select person from members where course = ${7}`
+			expect(ids(await people.search({ text: 'ivanov', where: { id: mine } }))).toEqual(['1', '2'])
+			const roles = sql`select role from people where id = ${3}`
+			const both = await people.search({ text: 'ivanov', where: { id: mine, role: roles } })
+			expect(ids(both)).toEqual(['1'])
+			const notes = store.index<string>('notes_statement')
+			expect(await caught(notes.search({ text: 'x', where: { id: mine } }))).toBeInstanceOf(
+				InvalidError,
+			)
+			expect(await db.dropSearchIndex('people_search')).toBe(true)
 		})
 
 		test('an index is listed, and dropped with every document it holds', async () => {

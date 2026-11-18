@@ -77,6 +77,8 @@ var (
 	FilterConditions = Limit{"filter conditions", 8}
 	// FilterValues is the values the lists of one search's conditions hold together.
 	FilterValues = Limit{"filter values", 100}
+	// FilterRows is the rows a statement of a table's index's Where gives.
+	FilterRows = Limit{"filter rows", 100_000}
 	// FilterText is a text a filter keeps or asks for, in bytes.
 	FilterText = Limit{"filter text", 256}
 	// VectorDimensions is a vector's dimensions.
@@ -93,6 +95,6 @@ var all = []Limit{
 	ValueBytes, SettingBytes, ConfigBytes, LockWaiters, Subscriptions, JobBytes, ProgressBytes, RowsBytes,
 	EventBytes, AppendBytes, AggregateRows, CountBytes, IngestSamples, IngestBytes, TextSamples, TextBytes,
 	QuerySeries, QueryBytes, QuerySamples, QueryAnswer, SetManyDocuments, SetManyBytes, DocumentBytes,
-	SearchHits, SearchText, FilterConditions, FilterValues, FilterText, VectorDimensions, RequestBytes,
+	SearchHits, SearchText, FilterConditions, FilterValues, FilterRows, FilterText, VectorDimensions, RequestBytes,
 	AnswerBytes,
 }

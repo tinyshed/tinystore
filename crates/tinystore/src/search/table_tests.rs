@@ -670,3 +670,47 @@ fn a_table_a_migration_rebuilt_is_read_again_when_its_index_opens() {
     db.exec(sql!("insert into articles (id, title) values (4, 'after')")).unwrap();
     assert_eq!(ids(&articles.search("after").run().unwrap()), ["4"], "the triggers are back");
 }
+
+// contract: SRCH-17
+#[test]
+fn a_where_by_a_statement_answers_as_the_list_of_its_values_read_in_the_search_s_snapshot() {
+    let f = fixture();
+    let articles = f.articles();
+    f.db.exec("create table picks (article integer, category text)").unwrap();
+    for (id, category) in [(1, "news"), (2, "news"), (3, "sport"), (4, "news"), (5, "sport")] {
+        let insert = sql!("insert into articles (id, title, category) values (?, 'bread', ?)", id, category);
+        f.db.exec(insert).unwrap();
+    }
+    f.db.exec("insert into picks values (2, 'sport'), (4, null), (4, null), (9, 'news'), (null, null)").unwrap();
+    let found = |condition| ids(&articles.search("bread").filter(condition).limit(20).run().unwrap()).join(",");
+    let picked = sql!("select article from picks where article < ?", 100);
+    assert_eq!(found(search::is_in("id", picked.clone())), "2,4", "on the key, which no filter names");
+    assert_eq!(found(search::is_in("id", &picked)), "2,4", "a key of no row passes none, and a null none");
+    let categories = sql!("select category from picks");
+    assert_eq!(found(search::is_in("category", categories)), found(search::is_in("category", &["sport", "news"])));
+    assert_eq!(found(search::is_in("id", sql!("select article from picks where 0"))), "", "no rows pass none");
+    let both = search::and([search::is_in("id", sql!("select article from picks")), eq("category", "news")]);
+    assert_eq!(found(both), "2,4");
+    let inside =
+        f.db.tx(|tx| -> crate::Result<String> {
+            tx.exec("insert into picks values (5, null)")?;
+            let found = tx.with(&articles).search("bread").filter(search::is_in("id", &picked)).limit(20).run()?;
+            Ok(ids(&found).join(","))
+        })
+        .unwrap();
+    assert_eq!(inside, "2,4,5", "inside a transaction, its own writes");
+    let refused = |rows: sql::Sql| articles.search("bread").filter(search::is_in("id", rows)).run().unwrap_err();
+    let writes = refused(sql!("delete from picks returning article"));
+    assert!(writes.to_string().contains("this one writes"), "{writes}");
+    assert!(refused(sql!("select article, category from picks")).to_string().contains("gives 2"));
+    assert_eq!(refused(sql!("select article from picks where article = ?")).kind(), ErrorKind::Invalid);
+    assert_eq!(refused(sql!("pragma journal_mode = delete")).kind(), ErrorKind::Invalid);
+    let blob = articles.search("bread").filter(search::is_in("category", sql!("select x'00'"))).run().unwrap_err();
+    assert_eq!(blob.kind(), ErrorKind::Invalid, "a blob is no filter's value");
+    let many = sql!("with recursive n(i) as (select 1 union all select i + 1 from n limit 100001) select i from n");
+    let limit = refused(many);
+    assert_eq!(limit.kind(), ErrorKind::Limit, "{limit}");
+    let documents = f.store.index::<Value>("notes").field("title", 1.0).open().unwrap();
+    let elsewhere = documents.search("bread").filter(search::is_in("id", sql!("select 1"))).run().unwrap_err();
+    assert!(elsewhere.to_string().contains("an index of documents has no tables"), "{elsewhere}");
+}

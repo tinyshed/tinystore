@@ -93,6 +93,49 @@ let found = products
     .run()?;
 ```
 
+## The rows of a statement
+
+A [table's index](table-index.md) can keep a search to the values a statement
+of its database gives, as SQL's `in (select …)` does: "find a student by
+name among this teacher's students", when a teacher has thousands. Put the
+statement where a list goes:
+
+```ts
+const mine = sql`select user_id from course_members where course_id = ${courseId}`
+const found = await users.search({ text: 'ива', prefix: true, where: { id: mine }, limit: 20 })
+```
+
+```python
+mine = sql("select user_id from course_members where course_id = ?", course_id)
+found = await users.search("ива", prefix=True, where={"id": mine}, limit=20)
+```
+
+```go
+mine := sqldb.SQL("select user_id from course_members where course_id = ?", courseID)
+found, err := users.Search(ctx, "ива", search.Prefix(), search.Where{"id": mine}, search.Limit(20))
+```
+
+```rust
+let mine = sql!("select user_id from course_members where course_id = ?", course_id);
+let found = users.search("ива").prefix().filter(is_in("id", mine)).limit(20).run()?;
+```
+
+A search with the statement answers what the same search with its values
+as a list answers (contract SRCH-17), with no list to send:
+
+- The statement runs in the same snapshot as the search, so the two see the
+  same moment. Inside a Rust transaction, `tx.with(&index)`, it sees the
+  transaction's writes.
+- It gives one column, and only reads. A statement that writes, or gives
+  two columns, is `invalid`.
+- On the table's key column it needs no filter: the rows are found by their
+  keys. On any other column, the column is one of the index's `filters`.
+- A `null` row passes nothing, and no rows pass nothing.
+- Up to 100,000 rows. Past that the search fails with a limit error, never
+  a shorter set. Its rows don't count toward the 100 values of a `where`.
+- An index of documents has no tables, so it refuses a statement as
+  `invalid`.
+
 ## What matches
 
 | Document holds          | `where`              | Passes?                                        |
@@ -140,6 +183,7 @@ empty page whenever other documents win; this one does not.
 |-------------------------|--------------------------------------------|
 | conditions in a `where` | 8                                          |
 | values in a `where`     | 100, every list counted                    |
+| a statement's rows      | 100,000, a table's index only              |
 | a filter's value        | 256 bytes                                  |
 | what a filter keeps     | text, numbers, booleans, and lists of them |
 | `not`                   | none yet: write the values you keep        |

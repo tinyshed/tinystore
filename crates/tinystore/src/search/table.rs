@@ -362,7 +362,7 @@ fn next_keys(tx: &Tx<'_>, table: &Table, through: &SqlValue) -> Result<Vec<SqlVa
 }
 
 /// The id a document of the row keyed `key` has: its key as text.
-fn key_id(key: &SqlValue) -> Result<String> {
+pub(crate) fn key_id(key: &SqlValue) -> Result<String> {
     match key {
         SqlValue::Integer(number) => Ok(number.to_string()),
         SqlValue::Text(text) if !text.is_empty() => Ok(text.clone()),

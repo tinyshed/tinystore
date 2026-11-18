@@ -10,8 +10,8 @@ import { InvalidError } from './errors.ts'
 import { checkName, type Open, type Via, viaLink } from './handles.ts'
 import { parseJson } from './json.ts'
 import { keyText } from './kv.ts'
-import { rowsOf } from './sql.ts'
-import type { Key, SqlValue } from './wire/codec.ts'
+import { rowsOf, Sql } from './sql.ts'
+import type { Key, SqlArg, SqlValue } from './wire/codec.ts'
 import {
 	Empty,
 	Handle,
@@ -58,8 +58,13 @@ export type KeyboardLayout = 'ru' | 'en'
 /** A vector the program's own model gave, of the index's dimensions. */
 export type Vector = readonly number[] | Float32Array
 
-/** A value a `where` matches: text, a number, a boolean, one of a list, a range, or `null` for none. */
+/**
+ * A value a `where` matches: text, a number, a boolean, one of a list, a
+ * range, `null` for none, or, for a table's index, one of the values a
+ * statement of its database gives: ``sql`select user_id from members where course_id = ${id}` ``.
+ */
 export type WhereValue =
+	| Sql
 	| string
 	| number
 	| bigint
@@ -73,6 +78,8 @@ export type WhereValue =
  * field equal to its value, one of a list, within a range, or `null` for
  * none, every field named passing; `search.or` and `search.and` group them.
  * A search's where holds 8 conditions and 100 values in its lists at most.
+ * A statement's rows, read in the search's snapshot, count toward no bound
+ * on values: 100,000 at most, and on the table's key no filter is needed.
  */
 export type Where = Readonly<Record<string, WhereValue>> | Group
 
@@ -237,7 +244,8 @@ abstract class Searchable<T> {
 	async search(query: string | Query): Promise<Found<T>> {
 		const asked = typeof query === 'string' ? { text: query } : query
 		const vector = asked.vector === undefined ? undefined : vectorBytes(asked.vector)
-		const where = asked.where === undefined ? undefined : whereJson(asked.where)
+		const statements: SearchStatementOf[] = []
+		const where = asked.where === undefined ? undefined : whereJson(asked.where, statements)
 		const body = (handle: number) =>
 			SearchQuery.encode({
 				handle,
@@ -252,6 +260,7 @@ abstract class Searchable<T> {
 				// JavaScript slices a string by its UTF-16 units
 				matches: asked.matches === true ? 'utf16' : undefined,
 				where,
+				statements,
 				offset: asked.offset,
 				limit: asked.limit,
 			})
@@ -528,25 +537,37 @@ function vectorBytes(vector: Vector): Uint8Array {
 	return bytes
 }
 
+/** A statement of a `where`, as the query carries it beside the conditions. */
+type SearchStatementOf = { text: string; values: SqlArg[] }
+
 /**
  * A `where` as the wire takes it, a JSON list of conditions joined by and:
  * `{"eq":[path,value]}`, `{"in":[path,[values]]}`, `{"missing":path}`,
- * `{"range":[path,{"gt"|"gte"|"lt"|"lte":n}]}`, `{"or":[…]}`, `{"and":[…]}`.
+ * `{"range":[path,{"gt"|"gte"|"lt"|"lte":n}]}`, `{"or":[…]}`, `{"and":[…]}`;
+ * a statement is `{"in":[path,{"statement":n}]}`, the `n`th of `statements`.
  */
-export function whereJson(where: Where): string {
-	return `[${conditions(where).join(',')}]`
+export function whereJson(where: Where, statements: SearchStatementOf[] = []): string {
+	return `[${conditions(where, statements).join(',')}]`
 }
 
-function conditions(where: Where): string[] {
+function conditions(where: Where, statements: SearchStatementOf[]): string[] {
 	if (where instanceof Group) {
-		const parts = where.parts.map(part => `{"and":[${conditions(part).join(',')}]}`)
+		const parts = where.parts.map(part => `{"and":[${conditions(part, statements).join(',')}]}`)
 		return [`{"${where.join}":[${parts.join(',')}]}`]
 	}
-	return Object.entries(where).map(([path, value]) => condition(path, value))
+	return Object.entries(where).map(([path, value]) => condition(path, value, statements))
 }
 
-function condition(path: string, value: WhereValue | undefined): string {
+function condition(
+	path: string,
+	value: WhereValue | undefined,
+	statements: SearchStatementOf[],
+): string {
 	const at = JSON.stringify(path)
+	if (value instanceof Sql) {
+		statements.push({ text: value.text, values: [...value.values] })
+		return `{"in":[${at},{"statement":${statements.length - 1}}]}`
+	}
 	if (value === undefined) {
 		throw new InvalidError(
 			`a where of ${path}: undefined; leave ${path} out to ask nothing of it, or null for no value`,

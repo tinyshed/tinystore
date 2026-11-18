@@ -74,6 +74,15 @@ pub struct Condition(_)
 
 A condition of a search, given to [`SearchCall::filter`](super::SearchCall::filter).
 
+## Values
+
+```rust
+pub trait Values
+```
+
+What `is_in` keeps a filter to: a list of values, `&["shoes", "boots"]`
+or `&ids`, or for a table's index a statement of its database, `sql!(…)`.
+
 ## and
 
 ```rust
@@ -97,12 +106,18 @@ never asks for documents without one; `missing` asks for those.
 ## is_in
 
 ```rust
-pub fn is_in<T: Serialize>(path: &str, values: &[T]) -> Condition
+pub fn is_in(path: &str, values: impl Values) -> Condition
 ```
 
 A filter holding one of `values`, as SQL's `in (…)`; an empty list passes
 nothing. A search's filter holds 8 conditions and 100 values in its lists
 at most.
+
+For a table's index, `values` may be a statement of its database that
+gives one column, as SQL's `in (select …)`: `is_in("id", sql!("select
+user_id from members where course_id = ?", course))`. Its rows are read
+in the snapshot the search reads, 100,000 at most, and count toward no
+bound on values; on the table's key the column needs no filter.
 
 ## missing
 

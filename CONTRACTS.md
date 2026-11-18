@@ -264,6 +264,7 @@ These contracts are what does not.
 - **SRCH-14** A search with `matches` MUST say in each hit where each of its words matched, by the keys it found documents by: ranges, in the unit its client slices strings in, that slice the text the document or the row holds to a word found as written, by its stem or once corrected, whole, and to the letters typed of a word its prefix began, the query's word as its text wrote it beside each, overlapping ranges joined; a text whose letters cannot be placed MUST answer no range rather than a wrong one.
 - **SRCH-15** Each hit of a search MUST carry its vector's cosine with the search's where both have one, and the score its words gave it where they found it, as a search by its words alone scores it; with `minSimilarity`, a search MUST find by its vector no document whose cosine is under it.
 - **SRCH-16** A maintenance pass of an index that keeps failing MUST be told by its `status()`, beside `ready` or `rebuilding`, from its first failure until a pass of it passes; `ready()` MUST NOT fail for it where it waited before.
+- **SRCH-17** A table's index's search kept to the rows of a statement of its database MUST answer what the same search with those rows' values as a list answers, the statement read in the snapshot the search reads.
 
 ## 5. Replication
 

@@ -30,8 +30,10 @@
 
 use std::collections::HashSet;
 use std::ops::{Bound, RangeBounds};
+use std::sync::Arc;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
+use rusqlite::types::Value as SqlValue;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -40,12 +42,19 @@ use super::merge;
 use super::score::Part;
 use super::segments;
 use super::settings::Settings;
-use crate::limits::{FILTER_CONDITIONS, FILTER_TEXT, FILTER_VALUES};
+use super::table::key_id;
+use crate::limits::{FILTER_CONDITIONS, FILTER_ROWS, FILTER_TEXT, FILTER_VALUES};
 use crate::sqlite::sql_error;
 use crate::typos::meant;
 use crate::{Error, Result};
 
-const FIND_KEY: &str = "select id from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
+/// The keys of a filter's terms, a JSON list of them, in one statement.
+const FIND_KEYS: &str = "select id from _tinystore_search_keys
+    where index_id = ?1 and part = ?2 and term in (select value from json_each(?3))";
+/// The documents of a table's index whose rows' keys, as text, are a JSON
+/// list's.
+const FIND_IDS: &str = "select doc from _tinystore_search_docs
+    where index_id = ?1 and id in (select value from json_each(?2))";
 
 /// The longest text a filter keeps as a value.
 pub(crate) const MOST_VALUE: usize = FILTER_TEXT.bound as usize;
@@ -54,6 +63,9 @@ pub(crate) const MOST_VALUE: usize = FILTER_TEXT.bound as usize;
 pub(crate) const MOST_CONDITIONS: usize = FILTER_CONDITIONS.bound as usize;
 /// The values the lists of a search's conditions hold at most.
 pub(crate) const MOST_VALUES: usize = FILTER_VALUES.bound as usize;
+/// The rows a statement of a condition gives at most.
+const MOST_ROWS: usize = FILTER_ROWS.bound as usize;
+const DOCUMENTS_HAVE_NO_TABLES: &str = "a where by a statement is a table index's: an index of documents has no tables";
 /// The term of no value.
 const NONE: &str = "n:";
 /// A number's precisions, each 8 bits coarser than the one before.
@@ -71,6 +83,11 @@ enum Node {
         path: String,
         values: std::result::Result<Value, String>,
         list: bool,
+    },
+    /// One of the values a statement's rows give.
+    Rows {
+        path: String,
+        rows: Rows,
     },
     /// No value.
     Missing {
@@ -98,9 +115,89 @@ pub fn eq<T: Serialize + ?Sized>(path: &str, value: &T) -> Condition {
 /// A filter holding one of `values`, as SQL's `in (…)`; an empty list passes
 /// nothing. A search's filter holds 8 conditions and 100 values in its lists
 /// at most.
-pub fn is_in<T: Serialize>(path: &str, values: &[T]) -> Condition {
-    let values = serde_json::to_value(values).map_err(|error| error.to_string());
-    Condition(Node::Values { path: path.to_owned(), values, list: true })
+///
+/// For a table's index, `values` may be a statement of its database that
+/// gives one column, as SQL's `in (select …)`: `is_in("id", sql!("select
+/// user_id from members where course_id = ?", course))`. Its rows are read
+/// in the snapshot the search reads, 100,000 at most, and count toward no
+/// bound on values; on the table's key the column needs no filter.
+pub fn is_in(path: &str, values: impl Values) -> Condition {
+    let path = path.to_owned();
+    Condition(match values.listing().0 {
+        Listed::Values(values) => Node::Values { path, values, list: true },
+        Listed::Rows(rows) => Node::Rows { path, rows },
+    })
+}
+
+/// What [`is_in`] keeps a filter to: a list of values, `&["shoes", "boots"]`
+/// or `&ids`, or for a table's index a statement of its database, `sql!(…)`.
+pub trait Values {
+    #[doc(hidden)]
+    fn listing(self) -> Listing;
+}
+
+/// A list of values or a statement's rows, as [`is_in`] holds them.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct Listing(Listed);
+
+#[derive(Clone, Debug)]
+enum Listed {
+    Values(std::result::Result<Value, String>),
+    #[cfg_attr(not(feature = "sql"), expect(dead_code, reason = "only a statement of a database makes one"))]
+    Rows(Rows),
+}
+
+impl<T: Serialize> Values for &[T] {
+    fn listing(self) -> Listing {
+        Listing(Listed::Values(serde_json::to_value(self).map_err(|error| error.to_string())))
+    }
+}
+
+impl<T: Serialize, const N: usize> Values for &[T; N] {
+    fn listing(self) -> Listing {
+        self.as_slice().listing()
+    }
+}
+
+impl<T: Serialize> Values for &Vec<T> {
+    fn listing(self) -> Listing {
+        self.as_slice().listing()
+    }
+}
+
+/// How a statement's rows are read on the connection of the snapshot a
+/// search reads: `most` of them and one more at most, so that the search can
+/// say its bound was passed. The database lends it, since a statement runs
+/// as its reads run.
+pub(crate) type ReadColumn = Arc<dyn Fn(&Connection, usize) -> Result<Vec<SqlValue>> + Send + Sync>;
+
+/// A statement whose one column's values a condition holds: how an error
+/// names it, and how its rows are read.
+#[derive(Clone)]
+pub(crate) struct Rows {
+    described: String,
+    read: ReadColumn,
+}
+
+impl std::fmt::Debug for Rows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.described)
+    }
+}
+
+impl Values for Listing {
+    fn listing(self) -> Listing {
+        self
+    }
+}
+
+impl Listing {
+    /// The rows of the statement `described`, which `read` reads.
+    #[cfg(feature = "sql")]
+    pub(crate) fn rows(described: String, read: ReadColumn) -> Listing {
+        Listing(Listed::Rows(Rows { described, read }))
+    }
 }
 
 /// A filter holding a number within `bounds`, any of Rust's ranges:
@@ -138,13 +235,15 @@ pub fn and(conditions: impl IntoIterator<Item = Condition>) -> Condition {
 /// ```text
 /// {"eq": [path, value]}   {"in": [path, [values]]}   {"missing": path}
 /// {"range": [path, {"gt" | "gte" | "lt" | "lte": number, …}]}
-/// {"or": [conditions]}    {"and": [conditions]}
+/// {"or": [conditions]}    {"and": [conditions]}       {"in": [path, {"statement": n}]}
 /// ```
 ///
-/// a list of them joined by and, as the Bun SDK writes its `where` object.
+/// a list of them joined by and, as the Bun SDK writes its `where` object;
+/// `{"statement": n}` is the `n`th of `statements`, in a list's place.
 #[cfg(feature = "wire")]
-pub(crate) fn from_json(text: &str) -> Result<Vec<Condition>> {
+pub(crate) fn from_json(text: &str, statements: &[Listing]) -> Result<Vec<Condition>> {
     let value: Value = serde_json::from_str(text).map_err(|error| Error::invalid(format!("a where: {error}")))?;
+    let condition_of = |value: &Value| condition_of(value, statements);
     match value {
         Value::Array(items) => items.iter().map(condition_of).collect(),
         one => Ok(vec![condition_of(&one)?]),
@@ -152,7 +251,7 @@ pub(crate) fn from_json(text: &str) -> Result<Vec<Condition>> {
 }
 
 #[cfg(feature = "wire")]
-fn condition_of(value: &Value) -> Result<Condition> {
+fn condition_of(value: &Value, statements: &[Listing]) -> Result<Condition> {
     let refused = || Error::invalid(format!("a where's condition {value}"));
     let Some((kind, given)) = value.as_object().filter(|object| object.len() == 1).and_then(|o| o.iter().next()) else {
         return Err(refused());
@@ -167,6 +266,13 @@ fn condition_of(value: &Value) -> Result<Condition> {
         "eq" => path_and(given).map(|(path, operand)| eq(&path, &operand)),
         "in" => match path_and(given)? {
             (path, Value::Array(values)) => Ok(is_in(&path, &values)),
+            (path, Value::Object(named)) if named.len() == 1 => {
+                let at = named.get("statement").and_then(Value::as_u64).ok_or_else(refused)?;
+                let statement = usize::try_from(at).ok().and_then(|at| statements.get(at)).ok_or_else(|| {
+                    Error::invalid(format!("a where's statement {at}, of {} the query holds", statements.len()))
+                })?;
+                Ok(is_in(&path, statement.clone()))
+            }
             _ => Err(refused()),
         },
         "missing" => given.as_str().map(missing).ok_or_else(refused),
@@ -180,8 +286,8 @@ fn condition_of(value: &Value) -> Result<Condition> {
             Ok(Condition(Node::Range { path, low: bound("gt", "gte"), high: bound("lt", "lte") }))
         }
         "or" | "and" => {
-            let parts: Vec<Condition> =
-                given.as_array().ok_or_else(refused)?.iter().map(condition_of).collect::<Result<_>>()?;
+            let parts = given.as_array().ok_or_else(refused)?.iter().map(|part| condition_of(part, statements));
+            let parts: Vec<Condition> = parts.collect::<Result<_>>()?;
             Ok(if kind == "or" { or(parts) } else { and(parts) })
         }
         _ => Err(refused()),
@@ -192,7 +298,15 @@ fn condition_of(value: &Value) -> Result<Condition> {
 /// document holds, or its parts joined.
 #[derive(Clone, Debug)]
 pub(crate) enum Asked {
-    Terms { path: String, terms: Vec<String> },
+    Terms {
+        path: String,
+        terms: Vec<String>,
+    },
+    /// The values a statement's rows give, read in the search's snapshot.
+    Rows {
+        path: String,
+        rows: Rows,
+    },
     Or(Vec<Asked>),
     And(Vec<Asked>),
 }
@@ -242,6 +356,10 @@ impl Condition {
             Node::Missing { path } => {
                 counted.conditions += 1;
                 Ok(Asked::Terms { path: path.clone(), terms: vec![NONE.to_owned()] })
+            }
+            Node::Rows { path, rows } => {
+                counted.conditions += 1;
+                Ok(Asked::Rows { path: path.clone(), rows: rows.clone() })
             }
             Node::Or(conditions) => Ok(Asked::Or(conditions.iter().map(|c| c.asked(counted)).collect::<Result<_>>()?)),
             Node::And(conditions) => {
@@ -396,6 +514,7 @@ impl Reader<'_> {
     pub(crate) fn passing(&self, asked: &Asked) -> Result<Docs> {
         match asked {
             Asked::Terms { path, terms } => self.holding(path, terms).map(Docs::Only),
+            Asked::Rows { path, rows } => self.among(path, rows).map(Docs::Only),
             Asked::Or(parts) => {
                 let mut passing = Docs::Only(Vec::new());
                 for part in parts {
@@ -433,15 +552,47 @@ impl Reader<'_> {
         };
         let segments = segments::of_index(self.connection, self.index)?;
         let mut holding = Vec::new();
-        for term in terms {
-            if let Some(key) = self.find(Part::filter(filter.number), self.as_kept(term))? {
-                holding.extend(self.docs_of(key, &segments)?);
-            }
+        for key in self.keys(Part::filter(filter.number), terms)? {
+            holding.extend(self.docs_of(key, &segments)?);
         }
-        holding.sort_unstable();
-        holding.dedup();
-        holding.retain(|doc| !self.gone.contains(doc));
-        Ok(holding)
+        Ok(self.sorted(holding))
+    }
+
+    /// The documents whose `path` holds one of the values a statement's rows
+    /// give, read in this snapshot: on the table's key by the rows' ids in
+    /// one statement, and on a filter as a list's values are.
+    fn among(&self, path: &str, rows: &Rows) -> Result<Vec<u32>> {
+        let Some(table) = &self.settings.table else { return Err(Error::invalid(DOCUMENTS_HAVE_NO_TABLES)) };
+        let within = |error: Error| error.within(format!("filter {path}: {}", rows.described));
+        let values = (rows.read)(self.connection, MOST_ROWS).map_err(within)?;
+        if values.len() > MOST_ROWS {
+            let refused = format!("filter {path}: a statement of more than {MOST_ROWS} rows");
+            return Err(FILTER_ROWS.refuse(values.len() as u64, refused));
+        }
+        if table.key == path {
+            return self.keyed(&values);
+        }
+        let values = values.into_iter().filter_map(|value| value_of(value, path).transpose());
+        let terms = values.map(|value| term(&value?, path)).collect::<Result<Vec<_>>>()?;
+        self.holding(path, &terms)
+    }
+
+    /// The documents of the rows keyed by `keys`; a key of no row passes none.
+    fn keyed(&self, keys: &[SqlValue]) -> Result<Vec<u32>> {
+        let ids: Vec<String> = keys.iter().filter_map(|key| key_id(key).ok()).collect();
+        let ids = Value::from(ids).to_string();
+        let failed = |error| sql_error("find the rows of a where's statement", error);
+        let mut select = self.connection.prepare_cached(FIND_IDS).map_err(failed)?;
+        let docs = select.query_map((self.index, ids), |row| row.get(0));
+        Ok(self.sorted(docs.and_then(Iterator::collect).map_err(failed)?))
+    }
+
+    /// Documents in their order, each once, those gone left out.
+    fn sorted(&self, mut docs: Vec<u32>) -> Vec<u32> {
+        docs.sort_unstable();
+        docs.dedup();
+        docs.retain(|doc| !self.gone.contains(doc));
+        docs
     }
 
     /// A term as the index keeps it: a table's rows hold a boolean as SQLite
@@ -454,10 +605,13 @@ impl Reader<'_> {
         }
     }
 
-    fn find(&self, part: Part, term: &str) -> Result<Option<i64>> {
-        let failed = |error| sql_error("find a filter's value", error);
-        let mut select = self.connection.prepare_cached(FIND_KEY).map_err(failed)?;
-        select.query_row((self.index, part.0, term), |row| row.get(0)).optional().map_err(failed)
+    /// The keys of `part` the index holds of `terms`, in one statement.
+    fn keys(&self, part: Part, terms: &[String]) -> Result<Vec<i64>> {
+        let kept: Vec<&str> = terms.iter().map(|term| self.as_kept(term)).collect();
+        let failed = |error| sql_error("find a filter's values", error);
+        let mut select = self.connection.prepare_cached(FIND_KEYS).map_err(failed)?;
+        let keys = select.query_map((self.index, part.0, Value::from(kept).to_string()), |row| row.get(0));
+        keys.and_then(Iterator::collect).map_err(failed)
     }
 
     /// Every document a key's postings hold, gone ones too, in order: a list
@@ -474,6 +628,20 @@ impl Reader<'_> {
             return Err(Error::corrupt(format!("key {key}'s documents are out of their order")));
         }
         Ok(docs)
+    }
+}
+
+/// A value a statement's row gives as a filter's term reads it: none for a
+/// null, which passes nothing, as `in (select …)` passes nothing for one.
+fn value_of(value: SqlValue, path: &str) -> Result<Option<Value>> {
+    match value {
+        SqlValue::Null => Ok(None),
+        SqlValue::Integer(number) => Ok(Some(Value::from(number))),
+        SqlValue::Real(number) => Ok(Some(Value::from(number))),
+        SqlValue::Text(text) => Ok(Some(Value::String(text))),
+        SqlValue::Blob(_) => {
+            Err(Error::invalid(format!("filter {path} holds a blob: a filter keeps text, numbers and booleans")))
+        }
     }
 }
 

@@ -9728,121 +9728,49 @@ SearchGot = Message(
 )
 
 
-def _write_search_query(w: Writer, v: Mapping[str, Any]) -> None:
+def _write_search_statement(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
-    if (x := v.get("handle")) is not None:
-        w.uint(1)
-        w.uint(x)
-        n += 1
     if (x := v.get("text")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("values")) is not None:
         w.uint(2)
-        w.str(x)
-        n += 1
-    if (x := v.get("vector")) is not None:
-        w.uint(3)
-        w.bin(x)
-        n += 1
-    if (x := v.get("vector_weight")) is not None:
-        w.uint(4)
-        w.float(x)
-        n += 1
-    if (x := v.get("rerank")) is not None:
-        w.uint(5)
-        w.bool(x)
-        n += 1
-    if (x := v.get("where")) is not None:
-        w.uint(6)
-        w.str(x)
-        n += 1
-    if (x := v.get("offset")) is not None:
-        w.uint(7)
-        w.uint(x)
-        n += 1
-    if (x := v.get("limit")) is not None:
-        w.uint(8)
-        w.uint(x)
-        n += 1
-    if (x := v.get("prefix")) is not None:
-        w.uint(9)
-        w.bool(x)
-        n += 1
-    if (x := v.get("prefix_every")) is not None:
-        w.uint(10)
-        w.bool(x)
-        n += 1
-    if (x := v.get("matches")) is not None:
-        w.uint(11)
-        w.str(x)
-        n += 1
-    if (x := v.get("min_similarity")) is not None:
-        w.uint(12)
-        w.float(x)
+        w.array(len(x))
+        for item0 in x:
+            sql_value.write(w, item0)
         n += 1
     w.close_map(head, n)
 
 
-def _read_search_query(r: Reader) -> dict[str, Any]:
+def _read_search_statement(r: Reader) -> dict[str, Any]:
     read: dict[str, Any] = {}
     seen: set[int] = set()
     for _ in range(r.map()):
         match r.field(seen):
             case 1:
-                read["handle"] = r.uint()
-            case 2:
                 read["text"] = r.str()
-            case 3:
-                read["vector"] = r.bin()
-            case 4:
-                read["vector_weight"] = r.float()
-            case 5:
-                read["rerank"] = r.bool()
-            case 6:
-                read["where"] = r.str()
-            case 7:
-                read["offset"] = r.uint()
-            case 8:
-                read["limit"] = r.uint()
-            case 9:
-                read["prefix"] = r.bool()
-            case 10:
-                read["prefix_every"] = r.bool()
-            case 11:
-                read["matches"] = r.str()
-            case 12:
-                read["min_similarity"] = r.float()
+            case 2:
+                items0 = [sql_value.read(r) for _ in range(r.array())]
+                r.leave()
+                read["values"] = items0
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# A search: by `text`'s words, `vector`, or both, kept to what `where` passes.
-SearchQuery = Message(
-    "search.Query",
+# A statement of a table's index's database whose rows give one column, as
+# sql.Statement's text and values: a where keeps to the values it gives.
+SearchStatement = Message(
+    "search.Statement",
     {
-        "handle": (1, uint),
-        "text": (2, str_),
-        "vector": (3, bin_),
-        # this search's, in place of the index's
-        "vector_weight": (4, float_),
-        "rerank": (5, bool_),
-        # the conditions, as docs/wire.md's "search's where" writes them
-        "where": (6, str_),
-        "offset": (7, uint),
-        # 10 when absent; offset and limit together 1000 at most
-        "limit": (8, uint),
-        # the last word read as the start of a word too, as a search box types
-        "prefix": (9, bool_),
-        # every word read so, a document holding a word for each first; in place of prefix
-        "prefix_every": (10, bool_),
-        # utf8, utf16 or chars: each hit says where it matched, counted in that unit
-        "matches": (11, str_),
-        # the least cosine a document's vector has for the vector to find it
-        "min_similarity": (12, float_),
+        "text": (1, str_),
+        "values": (2, list_(sql_value)),
     },
-    _write_search_query,
-    _read_search_query,
+    _write_search_statement,
+    _read_search_statement,
 )
 
 
@@ -11446,6 +11374,136 @@ SearchSetMany = Message(
 )
 
 
+def _write_search_query(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("handle")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("text")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("vector")) is not None:
+        w.uint(3)
+        w.bin(x)
+        n += 1
+    if (x := v.get("vector_weight")) is not None:
+        w.uint(4)
+        w.float(x)
+        n += 1
+    if (x := v.get("rerank")) is not None:
+        w.uint(5)
+        w.bool(x)
+        n += 1
+    if (x := v.get("where")) is not None:
+        w.uint(6)
+        w.str(x)
+        n += 1
+    if (x := v.get("offset")) is not None:
+        w.uint(7)
+        w.uint(x)
+        n += 1
+    if (x := v.get("limit")) is not None:
+        w.uint(8)
+        w.uint(x)
+        n += 1
+    if (x := v.get("prefix")) is not None:
+        w.uint(9)
+        w.bool(x)
+        n += 1
+    if (x := v.get("prefix_every")) is not None:
+        w.uint(10)
+        w.bool(x)
+        n += 1
+    if (x := v.get("matches")) is not None:
+        w.uint(11)
+        w.str(x)
+        n += 1
+    if (x := v.get("min_similarity")) is not None:
+        w.uint(12)
+        w.float(x)
+        n += 1
+    if (x := v.get("statements")) is not None:
+        w.uint(13)
+        w.array(len(x))
+        for item0 in x:
+            SearchStatement.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_query(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["handle"] = r.uint()
+            case 2:
+                read["text"] = r.str()
+            case 3:
+                read["vector"] = r.bin()
+            case 4:
+                read["vector_weight"] = r.float()
+            case 5:
+                read["rerank"] = r.bool()
+            case 6:
+                read["where"] = r.str()
+            case 7:
+                read["offset"] = r.uint()
+            case 8:
+                read["limit"] = r.uint()
+            case 9:
+                read["prefix"] = r.bool()
+            case 10:
+                read["prefix_every"] = r.bool()
+            case 11:
+                read["matches"] = r.str()
+            case 12:
+                read["min_similarity"] = r.float()
+            case 13:
+                items0 = [SearchStatement.read(r) for _ in range(r.array())]
+                r.leave()
+                read["statements"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A search: by `text`'s words, `vector`, or both, kept to what `where` passes.
+SearchQuery = Message(
+    "search.Query",
+    {
+        "handle": (1, uint),
+        "text": (2, str_),
+        "vector": (3, bin_),
+        # this search's, in place of the index's
+        "vector_weight": (4, float_),
+        "rerank": (5, bool_),
+        # the conditions, as docs/wire.md's "search's where" writes them
+        "where": (6, str_),
+        "offset": (7, uint),
+        # 10 when absent; offset and limit together 1000 at most
+        "limit": (8, uint),
+        # the last word read as the start of a word too, as a search box types
+        "prefix": (9, bool_),
+        # every word read so, a document holding a word for each first; in place of prefix
+        "prefix_every": (10, bool_),
+        # utf8, utf16 or chars: each hit says where it matched, counted in that unit
+        "matches": (11, str_),
+        # the least cosine a document's vector has for the vector to find it
+        "min_similarity": (12, float_),
+        # what where's {"statement": n} names, by its place
+        "statements": (13, list_(SearchStatement)),
+    },
+    _write_search_query,
+    _read_search_query,
+)
+
+
 def _write_search_hit(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -11905,7 +11963,7 @@ messages: dict[str, Message] = {
     "search.Key": SearchKey,
     "search.Deleted": SearchDeleted,
     "search.Got": SearchGot,
-    "search.Query": SearchQuery,
+    "search.Statement": SearchStatement,
     "search.Match": SearchMatch,
     "search.Status": SearchStatus,
     "search.Name": SearchName,
@@ -11934,6 +11992,7 @@ messages: dict[str, Message] = {
     "metrics.Plan": MetricsPlan,
     "search.Open": SearchOpen,
     "search.SetMany": SearchSetMany,
+    "search.Query": SearchQuery,
     "search.Hit": SearchHit,
     "search.Found": SearchFound,
     "config.Line": ConfigLine,

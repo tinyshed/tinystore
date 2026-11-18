@@ -26,6 +26,7 @@
   "search text": 1024,
   "filter conditions": 8,
   "filter values": 100,
+  "filter rows": 100000,
   "filter text": 256,
   "vector dimensions": 4096,
   "request bytes": 2097152,
