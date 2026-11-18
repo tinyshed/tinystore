@@ -875,6 +875,19 @@ pub fn cancel(&self) -> Result<bool>
 
 Removes the schedule's job, until the program opens it again.
 
+### Schedule.run_now
+
+```rust
+pub fn run_now(&self) -> Result<()>
+```
+
+Runs the schedule once as soon as a worker is free, under its own
+rules, and leaves its later times as they were: run at 03:29, a
+schedule of 03:30 runs again at 03:30. A run under way is followed by
+one more right after it, never beside it; a run waiting for a retry
+runs now, its attempts going on. A schedule whose job a cancel took is
+`not_found` until the program opens it again.
+
 ## ScheduleBuilder
 
 ```rust
@@ -1678,6 +1691,16 @@ pub fn cancel(&self) -> impl Future<Output = Result<bool>> + Send + 'static
 
 Removes the schedule's job, until the program opens it again; a write
 queued at jobs.db's writer at the first poll.
+
+### aio::jobs::Schedule.run_now
+
+```rust
+pub fn run_now(&self) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Runs the schedule once as soon as a worker is free, its later times as
+they were, as `jobs::Schedule::run_now` does; a write queued at
+jobs.db's writer at the first poll.
 
 ## aio::jobs::ScheduleBuilder
 

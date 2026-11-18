@@ -13,6 +13,7 @@ import {
 	CancelledError,
 	CorruptError,
 	InvalidError,
+	NotFoundError,
 	type StandardSchemaV1,
 	type Store,
 } from '../src/index.ts'
@@ -259,8 +260,14 @@ for (const way of ways) {
 			await until(async () => (await nightly.get()) !== undefined)
 			const job = await nightly.get()
 			expect([job?.state, job?.repeat]).toEqual(['scheduled', '10 3 * * * Europe/Berlin'])
+			// contract: JOB-21
+			await nightly.runNow()
+			await until(async () => (await nightly.get())?.lastRun !== undefined)
+			const after = await nightly.get()
+			expect([after?.state, after?.at]).toEqual(['scheduled', job?.at]) // its later times as they were
 			await nightly.stop()
 			expect(await nightly.cancel()).toBe(true)
+			expect(await caught(nightly.runNow())).toBeInstanceOf(NotFoundError)
 
 			const user: { timeZone?: string } = {}
 			const zoneless = () =>

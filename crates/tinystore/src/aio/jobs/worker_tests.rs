@@ -385,7 +385,13 @@ async fn a_schedule_runs_reads_and_cancels_as_the_blocking_one_does() {
         .await
         .unwrap();
     assert_eq!((runs, ran.load(Ordering::SeqCst)), (1, 1));
-    assert!(cleanup.get().await.unwrap().unwrap().at > next.at, "it repeats");
+    let repeated = cleanup.get().await.unwrap().unwrap();
+    assert!(repeated.at > next.at, "it repeats");
+    // contract: JOB-21
+    cleanup.run_now().await.unwrap();
+    assert_eq!(cleanup.get().await.unwrap().unwrap().state, State::Waiting);
+    assert_eq!(cleanup.run_due(|_run: Run| async { Ok::<(), String>(()) }).await.unwrap(), 1);
+    assert_eq!(cleanup.get().await.unwrap().unwrap().at, repeated.at, "its later times as they were");
     assert!(cleanup.cancel().await.unwrap());
     assert_eq!(cleanup.get().await.unwrap(), None, "until the program opens it again");
 

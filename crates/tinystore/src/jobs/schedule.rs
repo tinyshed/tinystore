@@ -17,7 +17,7 @@ use super::state::{Kind, QueueState};
 use super::values::{self, Kept};
 use super::work::Worker;
 use crate::engine::Home;
-use crate::{Error, Result, Store};
+use crate::{Error, ErrorKind, Result, Store};
 
 /// A schedule being opened: its name and its repeat.
 #[must_use = "a schedule opens with work() or open()"]
@@ -150,6 +150,16 @@ impl Schedule {
     pub fn cancel(&self) -> Result<bool> {
         self.queue.cancel(&self.queue.state.name)
     }
+
+    /// Runs the schedule once as soon as a worker is free, under its own
+    /// rules, and leaves its later times as they were: run at 03:29, a
+    /// schedule of 03:30 runs again at 03:30. A run under way is followed by
+    /// one more right after it, never beside it; a run waiting for a retry
+    /// runs now, its attempts going on. A schedule whose job a cancel took is
+    /// `not_found` until the program opens it again.
+    pub fn run_now(&self) -> Result<()> {
+        run_now(&self.queue)
+    }
 }
 
 impl fmt::Debug for Schedule {
@@ -186,17 +196,76 @@ where
     let next = repeat.next(now).ok_or_else(|| Error::invalid("the repeat never runs again"))?;
     let (text, value) = (repeat.text(), Kept::of(values::encode(&())?));
     let state = Arc::clone(&queue.state);
-    queue
+    let due = queue
         .jobs
         .file()
         .write(0, move |tx| register(tx, &state, (now, next), &text, &value))
         .map_err(|error| queue.fail(None, error))?;
-    queue.state.alarm.lower(next);
-    queue.state.watchers.changed();
+    queue.state.wake(due);
     Ok(())
 }
 
-fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &str, value: &Kept) -> Result<()> {
+/// Runs a schedule's one job now, as [`Schedule::run_now`] says, once its
+/// write commits.
+pub(crate) fn run_now<V>(queue: &Queue<V>) -> Result<()>
+where
+    V: serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
+{
+    #[cfg(feature = "replication")]
+    if queue.jobs.file().is_copy() {
+        let store = queue.jobs.store().map_err(|error| queue.fail(None, error))?;
+        return super::forward::pass_on_run_now(&store, &queue.state.name).map_err(|error| queue.fail(None, error));
+    }
+    let (now, state) = (queue.jobs.now(), Arc::clone(&queue.state));
+    queue.jobs.file().write(0, move |tx| due_now(tx, &state, now)).map_err(|error| queue.fail(None, error))?;
+    queue.state.wake(now);
+    Ok(())
+}
+
+/// `run_now` without waiting: the write is queued, and `done` is called on
+/// the thread that commits it. A copy passes it to its home on a thread of
+/// its own.
+#[cfg(any(feature = "wire", feature = "async"))]
+pub(crate) fn run_now_then<V>(queue: &Queue<V>, done: impl FnOnce(Result<()>) + Send + 'static)
+where
+    V: serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
+{
+    #[cfg(feature = "replication")]
+    if queue.jobs.file().is_copy() {
+        let queue = queue.clone();
+        std::thread::spawn(move || done(run_now(&queue)));
+        return;
+    }
+    let (now, state, named) = (queue.jobs.now(), Arc::clone(&queue.state), queue.state.describe());
+    let writing = Arc::clone(&state);
+    queue.jobs.file().submit(
+        0,
+        move |tx| due_now(tx, &writing, now),
+        move |written| done(written.map(|()| state.wake(now)).map_err(|error| error.within(named))),
+    );
+}
+
+/// Makes a schedule's job due now: one a run holds asks one run more right
+/// after it, as a set of a running job does, so that the schedule never runs
+/// beside itself (JOB-08); one waiting for its time or for a retry is due.
+fn due_now(c: &Connection, queue: &QueueState, now: i64) -> Result<()> {
+    let key = queue.name.as_str();
+    let Some(there) = rows::job_by_key(c, queue.id, key)? else {
+        let why = "the schedule has no job: a cancel took it, until the program opens the schedule again";
+        return Err(Error::new(ErrorKind::NotFound, why));
+    };
+    if rows::lease_held(c, there.id, now)? {
+        return rows::run_after(c, queue.id, &there, now);
+    }
+    if rows::due_of(there.next) > now {
+        rows::due_now(c, queue.id, key, &there, now)?;
+    }
+    Ok(())
+}
+
+/// Keeps the schedule's job as the code's repeat says, and answers when it
+/// is due.
+fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &str, value: &Kept) -> Result<i64> {
     let key = queue.name.as_str();
     let Some(there) = rows::job_by_key(c, queue.id, key)? else {
         // a job failed for good holds the id, as a set finds it: the schedule starts again in its place
@@ -213,14 +282,18 @@ fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &
             error: None,
             value,
         };
-        return rows::insert(c, &job);
+        return rows::insert(c, &job).map(|()| next);
     };
     if there.repeat.as_deref() == Some(text) {
-        return Ok(());
+        return Ok(rows::due_of(there.next));
     }
-    let change = Change { next, repeat: Some(text), group: None, value };
     if rows::lease_held(c, there.id, now)? {
-        return rows::ask_again(c, queue.id, &there, there.again, &change);
+        let change = Change { next, repeat: Some(text), group: None, value };
+        return rows::ask_again(c, queue.id, &there, there.again, &change).map(|()| next);
     }
-    rows::renew(c, queue.id, key, &there, &change)
+    // a run missed while the program was down stays due, and runs once
+    // before the new repeat takes over
+    let due = if rows::due_of(there.next) <= now { there.next } else { next };
+    rows::renew(c, queue.id, key, &there, &Change { next: due, repeat: Some(text), group: None, value })?;
+    Ok(due)
 }

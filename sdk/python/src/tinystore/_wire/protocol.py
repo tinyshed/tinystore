@@ -67,6 +67,9 @@ methods: dict[str, int] = {
     "jobs.watch": 0x020C,
     "jobs.tx": 0x020D,
     "jobs.counts": 0x020E,
+    # A schedule's one run as soon as a worker is free, its later times as they
+    # were: a schedule's handle alone.
+    "jobs.runNow": 0x0210,
     "kv.bucket.open": 0x0101,
     "kv.get": 0x0102,
     "kv.has": 0x0103,

@@ -67,7 +67,8 @@ let cleanup = store.schedule("cleanup").cron("10 3 * * *", "Europe/Berlin").work
 
 - A repeat moves to its next time after it ran, and never overlaps itself.
 - After a night down, it runs once when the program comes back, not once for
-  every missed time.
+  every missed time. It does so even when the deploy that brought it back
+  changed its repeat: the missed run runs now, then the new repeat takes over.
 - A failed run retries with its backoff, never past the next time, and the
   repeat goes on. So does a run whose handler killed its process on every
   attempt: past its `attempts`, the next time starts with the error kept.
@@ -77,6 +78,46 @@ let cleanup = store.schedule("cleanup").cron("10 3 * * *", "Europe/Berlin").work
 - The code's schedule replaces the one kept each time the program opens it,
   so a schedule changed in the code is the one that runs. `stop`, `get` and
   `runDue` work on a schedule as on a queue.
+
+## Run a schedule now
+
+`runNow` runs a schedule once as soon as a worker is free: after a first
+deploy that should not wait for the night, or when an admin asks.
+
+```ts
+const night = store.schedule('night', { cron: '30 3 * * *', timeZone: 'Europe/Moscow' }, crawl)
+await night.runNow() // one run as soon as a worker is free; 03:30 stays its time
+if (!(await night.get())?.lastRun) await night.runNow() // the first deploy: run once if it never ran
+```
+
+```python
+night = store.schedule("night", crawl, cron="30 3 * * *", time_zone="Europe/Moscow")
+await night.run_now()
+if not (job := await night.get()) or job.last_run is None:
+    await night.run_now()
+```
+
+```go
+night, err := jobs.OpenSchedule(store, "night", jobs.Cron("30 3 * * *", "Europe/Moscow"))
+err = night.RunNow(ctx)
+```
+
+```rust
+let night = store.schedule("night").cron("30 3 * * *", "Europe/Moscow").work(crawl)?;
+night.run_now()?;
+```
+
+- The run follows the schedule's own rules: one at a time, its run recorded
+  in `lastRun`, `run.at` the time you asked for it.
+- Its later times stay as they were. A `runNow` at 03:29 of a schedule at
+  03:30 runs again at 03:30.
+- A schedule that is running runs once more right after the run under way,
+  never beside it. One waiting for a retry runs that retry now, its attempts
+  going on (contract JOB-21).
+- It needs no worker in the same process: whichever worker runs the
+  schedule picks it up.
+- A schedule whose job `cancel` took is `not_found` until the program opens
+  it again. On a queue, run a job now with `update(id, value, { delay: '0s' })`.
 
 ## See also
 

@@ -532,6 +532,14 @@ func (s *Schedule) RunDue(ctx context.Context, handler func(ctx context.Context,
 
 RunDue runs the schedule's job when it is due, as a queue's RunDue does.
 
+### Schedule.RunNow
+
+```go
+func (s *Schedule) RunNow(ctx context.Context) error
+```
+
+RunNow runs the schedule once as soon as a worker is free, under its own rules, and leaves its later times as they were: run at 03:29, a schedule of 03:30 runs again at 03:30. A run under way is followed by one more right after it, never beside it. A schedule whose job a cancel took is tinystore.ErrNotFound until the program opens it again.
+
 ### Schedule.Work
 
 ```go

@@ -81,6 +81,11 @@ export const methods = {
 	'jobs.watch': 0x020c,
 	'jobs.tx': 0x020d,
 	'jobs.counts': 0x020e,
+	/**
+	 * A schedule's one run as soon as a worker is free, its later times as they
+	 * were: a schedule's handle alone.
+	 */
+	'jobs.runNow': 0x0210,
 	'kv.bucket.open': 0x0101,
 	'kv.get': 0x0102,
 	'kv.has': 0x0103,

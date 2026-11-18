@@ -728,6 +728,76 @@ fn a_schedule_keeps_the_codes_repeat_each_time_it_opens() {
     assert_eq!(*runs.lock().unwrap(), [changed.at], "a run knows when it was due");
 }
 
+// contract: JOB-21
+#[test]
+fn run_now_runs_a_schedule_once_and_leaves_its_later_times_as_they_were() {
+    let f = fixture();
+    let nightly = f.store.schedule("nightly").every(HOUR).open().unwrap();
+    let due = nightly.get().unwrap().unwrap().at;
+    nightly.run_now().unwrap();
+    let job = nightly.get().unwrap().unwrap();
+    assert_eq!((job.state, job.at), (State::Waiting, f.now()));
+    let runs = Mutex::new(Vec::new());
+    let ran = nightly.run_due(|run| -> Result<()> {
+        runs.lock().unwrap().push(run.at());
+        Ok(())
+    });
+    assert_eq!(ran.unwrap(), 1);
+    assert_eq!(*runs.lock().unwrap(), [f.now()], "the run is for when it was asked");
+    let after = nightly.get().unwrap().unwrap();
+    assert_eq!((after.state, after.at), (State::Scheduled, due), "its next time is the one it had");
+    assert!(after.last_run.is_some());
+}
+
+// contract: JOB-21
+#[test]
+fn run_now_of_a_running_schedule_runs_once_more_right_after_the_run_under_way() {
+    let f = fixture();
+    let nightly = f.store.schedule("nightly").every(HOUR).open().unwrap();
+    let due = nightly.get().unwrap().unwrap().at;
+    nightly.run_now().unwrap();
+    let (runs, running) = (Mutex::new(0), Mutex::new(false));
+    let ran = nightly.run_due(|_run| -> Result<()> {
+        assert!(!std::mem::replace(&mut *running.lock().unwrap(), true), "never beside a run");
+        let mut runs = runs.lock().unwrap();
+        *runs += 1;
+        if *runs == 1 {
+            nightly.run_now()?;
+        }
+        *running.lock().unwrap() = false;
+        Ok(())
+    });
+    assert_eq!(ran.unwrap(), 2, "one run more, after the one under way");
+    assert_eq!(nightly.get().unwrap().unwrap().at, due);
+}
+
+#[test]
+fn run_now_of_a_schedule_a_cancel_took_is_not_found() {
+    let f = fixture();
+    let nightly = f.store.schedule("nightly").every(HOUR).open().unwrap();
+    assert!(nightly.cancel().unwrap());
+    let error = nightly.run_now().unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::NotFound, "{error}");
+    assert!(error.to_string().contains("jobs schedule nightly"), "{error}");
+}
+
+// contract: JOB-08
+#[test]
+fn a_run_missed_while_the_program_was_down_runs_once_though_the_deploy_changed_its_repeat() {
+    let mut f = fixture();
+    let nightly = f.store.schedule("nightly").every(HOUR).open().unwrap();
+    let due = nightly.get().unwrap().unwrap().at;
+    drop(nightly);
+    f.advance(2 * HOUR);
+    f.reopen();
+    let nightly = f.store.schedule("nightly").every(2 * HOUR).open().unwrap();
+    let missed = nightly.get().unwrap().unwrap();
+    assert_eq!((missed.state, missed.at), (State::Waiting, due), "the missed run stays due");
+    assert!(missed.repeat.as_deref().is_some_and(|repeat| repeat.starts_with("@every 2h")), "{missed:?}");
+    assert_eq!(nightly.run_due(|_run| -> Result<()> { Ok(()) }).unwrap(), 1, "once, not once a missed time");
+    assert!(nightly.get().unwrap().unwrap().at > f.now(), "then by the new repeat");
+}
+
 // contract: JOB-03
 #[test]
 fn a_schedule_whose_job_failed_for_good_starts_again_under_its_one_id() {

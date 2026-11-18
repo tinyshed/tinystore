@@ -151,6 +151,17 @@ impl Schedule {
     pub fn cancel(&self) -> impl Future<Output = Result<bool>> + Send + 'static {
         self.queue.cancel(self.name())
     }
+
+    /// Runs the schedule once as soon as a worker is free, its later times as
+    /// they were, as [`jobs::Schedule::run_now`] does; a write queued at
+    /// jobs.db's writer at the first poll.
+    pub fn run_now(&self) -> impl Future<Output = Result<()>> + Send + 'static {
+        let queue = self.queue.queue.clone();
+        let what = format!("{queue:?}: a run now");
+        crate::aio::run::write(&self.queue.pool, what, move |answer| {
+            jobs::run_now_then(&queue, move |ran| answer.send(ran));
+        })
+    }
 }
 
 impl fmt::Debug for Schedule {

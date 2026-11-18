@@ -93,3 +93,15 @@ func (s *Schedule) Get(ctx context.Context) (Job[struct{}], error) {
 func (s *Schedule) Cancel(ctx context.Context) (bool, error) {
 	return cancel(ctx, &s.source, s.name)
 }
+
+// RunNow runs the schedule once as soon as a worker is free, under its own
+// rules, and leaves its later times as they were: run at 03:29, a schedule of
+// 03:30 runs again at 03:30. A run under way is followed by one more right
+// after it, never beside it. A schedule whose job a cancel took is
+// tinystore.ErrNotFound until the program opens it again.
+func (s *Schedule) RunNow(ctx context.Context) error {
+	_, err := s.call(ctx, wire.MethodJobsRunNow, func(handle uint64) []byte {
+		return wire.Encode(&wire.Handle{Handle: handle})
+	}, core.Writing)
+	return err
+}

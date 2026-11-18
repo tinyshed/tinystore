@@ -495,6 +495,19 @@ async def cancel() -> bool: ...
 
 Removes the schedule's job, until the program opens it again.
 
+### Schedule.run_now
+
+```python
+async def run_now() -> None: ...
+```
+
+Runs the schedule once as soon as a worker is free, its later times as they were.
+
+Run at 03:29, a schedule of 03:30 runs again at 03:30. A run under way
+is followed by one more right after it, never beside it. A schedule
+whose job a cancel took is ``NotFoundError`` until the program opens it
+again.
+
 ## Worker
 
 ```python

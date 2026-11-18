@@ -12953,6 +12953,10 @@ pub(crate) mod method {
     pub(crate) const JOBS_TX: u16 = 0x020d;
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_COUNTS: u16 = 0x020e;
+    /// A schedule's one run as soon as a worker is free, its later times as they
+    /// were: a schedule's handle alone.
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_RUN_NOW: u16 = 0x0210;
     #[cfg(feature = "kv")]
     pub(crate) const KV_BUCKET_OPEN: u16 = 0x0101;
     #[cfg(feature = "kv")]
@@ -13218,6 +13222,8 @@ pub(crate) mod method {
             JOBS_TX => Some(Access::Write),
             #[cfg(feature = "jobs")]
             JOBS_COUNTS => Some(Access::Read),
+            #[cfg(feature = "jobs")]
+            JOBS_RUN_NOW => Some(Access::Write),
             #[cfg(feature = "kv")]
             KV_BUCKET_OPEN => Some(Access::Read),
             #[cfg(feature = "kv")]
@@ -13467,6 +13473,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("jobs.tx", 0x020d, "call"),
     #[cfg(feature = "jobs")]
     ("jobs.counts", 0x020e, "call"),
+    #[cfg(feature = "jobs")]
+    ("jobs.runNow", 0x0210, "call"),
     #[cfg(feature = "kv")]
     ("kv.bucket.open", 0x0101, "call"),
     #[cfg(feature = "kv")]

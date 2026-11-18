@@ -206,3 +206,7 @@ write 0x020b jobs.keep(jobs.Step)                  -> Empty
 read  0x020c jobs.watch(jobs.Id)                   -> download jobs.Job until Empty
 write 0x020d jobs.tx(jobs.Tx)                      -> jobs.TxResults
 read  0x020e jobs.counts(Handle)                   -> jobs.Counts
+
+# A schedule's one run as soon as a worker is free, its later times as they
+# were: a schedule's handle alone.
+write 0x0210 jobs.runNow(Handle) -> Empty

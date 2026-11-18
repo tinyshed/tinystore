@@ -243,8 +243,19 @@ async def test_a_schedule_keeps_its_one_job_and_a_cron_needs_a_time_zone(store: 
             break
         await asyncio.sleep(0.02)
     assert job is not None and (job.state, job.repeat) == ("scheduled", "10 3 * * * Europe/Berlin")
+    # contract: JOB-21
+    await nightly.run_now()
+    after = None
+    for _ in range(500):
+        after = await nightly.get()
+        if after is not None and after.last_run is not None:
+            break
+        await asyncio.sleep(0.02)
+    assert after is not None and (after.state, after.at) == ("scheduled", job.at)  # its later times as they were
     await nightly.stop()
     assert await nightly.cancel()
+    with pytest.raises(tinystore.NotFoundError):
+        await nightly.run_now()
 
     zone: str | None = None
     with pytest.raises(tinystore.InvalidError):

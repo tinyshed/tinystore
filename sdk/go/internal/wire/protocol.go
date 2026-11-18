@@ -58,6 +58,9 @@ const (
 	MethodJobsWatch        = 0x020c
 	MethodJobsTx           = 0x020d
 	MethodJobsCounts       = 0x020e
+	// A schedule's one run as soon as a worker is free, its later times as they
+	// were: a schedule's handle alone.
+	MethodJobsRunNow       = 0x0210
 	MethodKvBucketOpen     = 0x0101
 	MethodKvGet            = 0x0102
 	MethodKvHas            = 0x0103
@@ -199,6 +202,7 @@ var methodNames = []struct {
 	{"jobs.watch", MethodJobsWatch},
 	{"jobs.tx", MethodJobsTx},
 	{"jobs.counts", MethodJobsCounts},
+	{"jobs.runNow", MethodJobsRunNow},
 	{"kv.bucket.open", MethodKvBucketOpen},
 	{"kv.get", MethodKvGet},
 	{"kv.has", MethodKvHas},

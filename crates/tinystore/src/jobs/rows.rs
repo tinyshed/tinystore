@@ -85,6 +85,14 @@ const UPDATE_JOB: &str = "update _tinystore_jobs
 const ASK_AGAIN: &str = "update _tinystore_jobs
     set again = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp)
     where queue = ?1 and next = ?2 and id = ?3";
+/// A run asked of a job that runs, right after the run under way: its
+/// settlement reads `again`.
+const RUN_AFTER: &str = "update _tinystore_jobs set again = min(coalesce(again, ?4), ?4)
+    where queue = ?1 and next = ?2 and id = ?3";
+/// A job due now: one waiting for its time runs for now, and one waiting for
+/// a retry runs that retry, for the time it was for.
+const DUE_NOW: &str = "update _tinystore_jobs set next = ?4, at = case when attempt = 0 then ?4 else at end
+    where queue = ?1 and next = ?2 and id = ?3";
 const DROP_FAILED: &str =
     "delete from _tinystore_jobs_failed where queue = ?1 and key = ?2 returning spill, grp, error";
 const CANCEL_JOB: &str = "delete from _tinystore_jobs where (queue, next, id) in (
@@ -316,6 +324,19 @@ pub(crate) fn ask_again(
     let spill = spill(c, there.id, change.value)?;
     let params = params![queue, there.next, there.id, again, change.value.inline(), spill, change.repeat, change.group];
     execute(c, ASK_AGAIN, params, "a set of a running job").map(drop)
+}
+
+/// Asks one run more of a job that runs, at `at` or as soon as the run under
+/// way ends, its value and repeat as they are.
+pub(crate) fn run_after(c: &Connection, queue: i64, there: &Row, at: i64) -> Result<()> {
+    execute(c, RUN_AFTER, params![queue, there.next, there.id, at], "a run asked of a running job").map(drop)
+}
+
+/// Makes a job that no live lease holds due at `now`, its attempts as they are.
+pub(crate) fn due_now(c: &Connection, queue: i64, key: &str, there: &Row, now: i64) -> Result<()> {
+    end_lease(c, there.id)?;
+    execute(c, DUE_NOW, params![queue, there.next, there.id, now], "a job made due now")?;
+    follow(c, queue, key, there.next, now)
 }
 
 /// Deletes the failed job under a key and its spilled value, and answers

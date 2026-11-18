@@ -1094,6 +1094,19 @@ export class Schedule {
 	cancel(): Promise<boolean> {
 		return cancelJob(this.#source, this.name)
 	}
+
+	/**
+	 * Runs the schedule once as soon as a worker is free, under its own
+	 * rules, and leaves its later times as they were: run at 03:29, a
+	 * schedule of 03:30 runs again at 03:30. A run under way is followed by
+	 * one more right after it, never beside it. A schedule whose job a cancel
+	 * took is `NotFoundError` until the program opens it again.
+	 *
+	 *     if (!(await night.get())?.lastRun) await night.runNow() // the first deploy: run once if it never ran
+	 */
+	async runNow(): Promise<void> {
+		await callOf(this.#source, methods['jobs.runNow'], handle => Handle.encode({ handle }), 'write')
+	}
 }
 
 /** What a queue's open sends, checked before anything leaves. */

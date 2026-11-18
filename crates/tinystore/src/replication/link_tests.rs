@@ -974,6 +974,9 @@ fn a_schedule_a_copy_opens_is_kept_and_run_at_its_home() {
     assert!(job.at > std::time::SystemTime::now(), "due within the next hour");
     let home_report = home.schedule("report").every(hour).open().unwrap();
     assert!(home_report.get().unwrap().is_some(), "its home keeps it");
+    report.run_now().unwrap();
+    let due = home_report.get().unwrap().unwrap();
+    assert_eq!(due.state, crate::jobs::State::Waiting, "the run now reached its home: {due:?}");
     let refused = copy.schedule("report").every(hour).work(|_: &crate::jobs::Run| Ok::<_, String>(())).unwrap_err();
     assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "a copy's worker takes no job: {refused}");
     assert!(report.cancel().unwrap());

@@ -559,6 +559,14 @@ fn a_schedule_opened_over_the_wire_keeps_its_one_job() {
 
     let refused = client.call::<JobsChanged>(method::JOBS_ADD, &job(handle, "extra", "null")).unwrap_err();
     assert_eq!(refused.code, "invalid", "{}", refused.message);
+
+    // contract: JOB-21
+    client.call::<Empty>(method::JOBS_RUN_NOW, &Handle { handle }).unwrap();
+    assert_eq!(get(&mut client, handle, "nightly").state, "waiting", "due now, for a worker");
+    let notes = queue(&mut client, "notes");
+    let refused = client.call::<Empty>(method::JOBS_RUN_NOW, &Handle { handle: notes }).unwrap_err();
+    assert_eq!(refused.code, "invalid", "a queue's job runs now with an update: {}", refused.message);
+
     let zoneless = JobsScheduleOpen { time_zone: None, ..open };
     let failed = client.call::<Handle>(method::JOBS_SCHEDULE_OPEN, &zoneless).unwrap_err();
     assert!(failed.message.contains("needs a time zone"), "{}", failed.message);

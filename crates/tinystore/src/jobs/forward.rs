@@ -4,10 +4,11 @@
 //!
 //! ```text
 //! name         the queue's
-//! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open, 5 schedule, 6 cancel by row
+//! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open, 5 schedule, 6 cancel by row, 8 run now
 //! add, set and update: what was asked, then the job's JSON
 //! cancel:      the id
 //! by row:      the row of a job without an id, as a page's cursor writes it
+//! run now:     nothing more: the schedule is the queue
 //! ```
 
 use serde::Serialize;
@@ -81,6 +82,11 @@ pub(crate) fn pass_on_schedule(store: &Store, name: &str, repeat: &RepeatAsked) 
     answered(store, out).map(drop)
 }
 
+/// Passes a schedule's run now to the home, whose workers run it.
+pub(crate) fn pass_on_run_now(store: &Store, name: &str) -> Result<()> {
+    answered(store, head((name, None), 8)).map(drop)
+}
+
 /// Asks the home to register the queue `name`, which a copy found missing.
 pub(crate) fn pass_on_open(store: &Store, queue: (&str, Option<&str>)) -> Result<()> {
     answered(store, head(queue, 4)).map(drop)
@@ -113,7 +119,7 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
         Some(database) => (Jobs::at(&lenders(&database)?)?, crate::replication::database_file(&database)),
         None => (Jobs::of(store)?, FILE.to_owned()),
     };
-    let kind = if call == 5 { Kind::Schedule } else { Kind::Queue };
+    let kind = if matches!(call, 5 | 8) { Kind::Schedule } else { Kind::Queue };
     let state = jobs.queue_as_open(&name, kind)?;
     let queue: Queue<serde_json::Value> = Queue::of_state(Arc::clone(&jobs), state);
     let changed = match call {
@@ -132,6 +138,10 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
         5 => {
             let repeat = RepeatAsked::read(at.byte()?, &mut at)?;
             super::schedule::keep_repeat(&queue, &repeat.of(&name)?)?;
+            true
+        }
+        8 => {
+            super::schedule::run_now(&queue)?;
             true
         }
         _ => return Err(corrupt("a call")),

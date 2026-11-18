@@ -27,7 +27,8 @@ use crate::clock::from_unix_millis;
 use crate::engine::Home;
 use crate::jobs::{
     Answers, Change, Concurrency, Counts, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder,
-    Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded, kept, read_value, start_remote,
+    Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded, kept, read_value, run_now_then,
+    start_remote,
 };
 use crate::limits::{ANSWER_BYTES, Limit, PROGRESS_BYTES};
 use crate::{Error, ErrorKind, Store, Transaction, unix_millis};
@@ -62,7 +63,9 @@ pub(crate) fn route(called: u16) -> Route {
     match called {
         method::JOBS_WORK => Route::Exchange,
         method::JOBS_WATCH => Route::Watch,
-        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE | method::JOBS_CANCEL => Route::Submit,
+        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE | method::JOBS_CANCEL | method::JOBS_RUN_NOW => {
+            Route::Submit
+        }
         _ => Route::Worker,
     }
 }
@@ -125,6 +128,17 @@ pub(crate) fn call(
 /// that commits it, so that no thread of the session waits for a commit and
 /// the writes in flight share one.
 pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    if called == method::JOBS_RUN_NOW {
+        return match Handle::decode(body).and_then(|asked| handles.opened(asked.handle)) {
+            Ok(Opened { queue, schedule: true }) => {
+                run_now_then(&queue, move |ran| done(ran.map(|()| Empty {}.encode()).map_err(Failure::from)));
+            }
+            Ok(_) => done(Err(Failure::invalid(
+                "a run now is a schedule's; a queue's job runs now with an update of delay 0",
+            ))),
+            Err(failure) => done(Err(failure)),
+        };
+    }
     if called == method::JOBS_CANCEL {
         let asked = JobsId::decode(body).and_then(|id| Ok((handles.opened(id.handle)?.queue, which_of(&id)?)));
         return match asked {

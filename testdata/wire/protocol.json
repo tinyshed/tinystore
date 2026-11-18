@@ -6854,6 +6854,7 @@
     "jobs.keep": 523,
     "jobs.list": 520,
     "jobs.queue.open": 513,
+    "jobs.runNow": 528,
     "jobs.schedule.open": 514,
     "jobs.set": 516,
     "jobs.step": 522,

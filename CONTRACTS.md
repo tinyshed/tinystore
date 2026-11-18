@@ -133,6 +133,7 @@ These contracts are what does not.
 - **JOB-14** A page of jobs in a state MUST hold its `limit` of them unless it is the last, which has no `next`, or their values reach the 4 MiB a page holds.
 - **JOB-15** `cancel` of a listed job MUST remove that job or none, never another.
 - **JOB-16** `counts` MUST read every state of a queue from one snapshot.
+- **JOB-21** `runNow` MUST run its schedule once as soon as a worker is free, never beside a run under way, and MUST leave its later times as they were.
 
 ### SQL
 

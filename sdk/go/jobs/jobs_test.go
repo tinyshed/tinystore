@@ -292,10 +292,19 @@ func TestAScheduleKeepsItsOneJobAndACronNeedsATimeZone(t *testing.T) {
 		if job.State != jobs.StateScheduled || job.Repeat != "10 3 * * * Europe/Berlin" {
 			t.Fatalf("job %+v", job)
 		}
+		// contract: JOB-21
+		ways.Must(0, nightly.RunNow(ctx))
+		ways.Until(t, func() bool { after, err := nightly.Get(ctx); return err == nil && after.LastRun != nil })
+		if after := ways.Must(nightly.Get(ctx)); after.State != jobs.StateScheduled || !after.At.Equal(job.At) {
+			t.Fatalf("its later times as they were: %+v", after)
+		}
 		cancel()
 		ways.Must(0, <-done)
 		if !ways.Must(nightly.Cancel(ctx)) {
 			t.Fatal("cancel removes the schedule's job")
+		}
+		if err := nightly.RunNow(ctx); !errors.Is(err, tinystore.ErrNotFound) {
+			t.Fatalf("a run now of a cancelled schedule: %v", err)
 		}
 		_, err := jobs.OpenSchedule(store, "digest", jobs.Cron("0 20 * * *", ""))
 		if !errors.Is(err, tinystore.ErrInvalid) {

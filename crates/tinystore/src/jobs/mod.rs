@@ -72,6 +72,10 @@ pub(crate) use {
 #[cfg(feature = "wire")]
 pub(crate) use {read::Row, read::named::Which, steps::keep_encoded, watch::Hears};
 
+// A schedule's run now without waiting, which the wire and the async API answer through.
+#[cfg(any(feature = "wire", feature = "async"))]
+pub(crate) use schedule::run_now_then;
+
 // What the async API alone takes: a claim, a settlement and a step's keep
 // that answer through a completion.
 #[cfg(feature = "async")]

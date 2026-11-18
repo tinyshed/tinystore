@@ -851,6 +851,16 @@ class Schedule:
         """Removes the schedule's job, until the program opens it again."""
         return await _cancel(self._source, self.name)
 
+    async def run_now(self) -> None:
+        """Runs the schedule once as soon as a worker is free, its later times as they were.
+
+        Run at 03:29, a schedule of 03:30 runs again at 03:30. A run under way
+        is followed by one more right after it, never beside it. A schedule
+        whose job a cancel took is ``NotFoundError`` until the program opens it
+        again.
+        """
+        await self._source.call("jobs.runNow", lambda h: Handle.encode(handle=h), "write")
+
 
 def _whole(n: int | None, describe: str, what: str) -> int | None:
     if n is not None and (isinstance(n, bool) or not isinstance(n, int) or n < 0):  # pyright: ignore[reportUnnecessaryIsInstance]
