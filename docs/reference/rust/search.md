@@ -101,7 +101,8 @@ pub fn is_in<T: Serialize>(path: &str, values: &[T]) -> Condition
 ```
 
 A filter holding one of `values`, as SQL's `in (…)`; an empty list passes
-nothing.
+nothing. A search's filter holds 8 conditions and 100 values in its lists
+at most.
 
 ## missing
 

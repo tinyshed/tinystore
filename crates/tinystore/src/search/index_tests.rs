@@ -1888,6 +1888,7 @@ fn a_filter_keeps_a_search_to_its_documents_and_names_what_it_cannot_read() {
     assert_eq!(found(is_in("category", &["shoes", "boots"])), "a,b");
     assert_eq!(found(crate::search::missing("category")), "c", "missing passes a document with no value");
     assert_eq!(found(eq("tags", "new")), "b", "a list passes on any of its values");
+    assert_eq!(found(is_in("tags", &["new", "sale"])), "a,b", "a document holding two of the values is found once");
     assert_eq!(found(range("price", 0..150)), "a");
     assert_eq!(found(range("price", ..=150)), "a,b,c");
     assert_eq!(found(or([eq("category", "boots"), range("price", ..0)])), "b,c");
@@ -1900,6 +1901,12 @@ fn a_filter_keeps_a_search_to_its_documents_and_names_what_it_cannot_read() {
     assert!(said.ends_with("did you mean price?: invalid"), "{said}");
     assert_eq!(kind(eq("price", &serde_json::json!({ "a": 1 }))), ErrorKind::Invalid, "an object is no value");
     assert_eq!(kind(or((0..9).map(|n| eq("price", &n)))), ErrorKind::Limit);
+    let said = |condition| shop.search("red").filter(condition).run().map(drop).unwrap_err().to_string();
+    let values: Vec<i64> = (0..101).collect();
+    assert!(said(is_in("price", &values)).ends_with("a filter of 101 values, past 100: limit"));
+    assert!(said(or((0..9).map(|n| eq("price", &n)))).ends_with("a filter of 9 conditions, past 8: limit"));
+    let many: Vec<i64> = (0..100).collect();
+    assert_eq!(found(is_in("price", &many)), "a", "a list of 100 values joins each value's documents once");
     let refused = shop.id("d").without_vector().set(&Article { tags: vec!["x".repeat(300)], ..article("", "") });
     assert_eq!(refused.unwrap_err().kind(), ErrorKind::Limit);
 }

@@ -73,6 +73,7 @@ type Where = Readonly<Record<string, WhereValue>> | Group
 What a search keeps its hits to, as sqldb's `where` reads an object: each
 field equal to its value, one of a list, within a range, or `null` for
 none, every field named passing; `search.or` and `search.and` group them.
+A search's where holds 8 conditions and 100 values in its lists at most.
 
 ## Query
 

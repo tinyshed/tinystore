@@ -14,7 +14,8 @@ import (
 // Where keeps a search's hits to the documents whose filters pass, as
 // sqldb's where reads a map: each field equal to its value, one of a slice,
 // within a Range, or nil for none, every field named passing. Or and And
-// group them.
+// group them. A search's Where holds 8 conditions and 100 values in its
+// slices at most.
 //
 //	search.Where{"category": []string{"shoes", "boots"}, "price": search.Range{Gte: 10, Lt: 100}}
 type Where map[string]any

@@ -96,7 +96,8 @@ pub fn eq<T: Serialize + ?Sized>(path: &str, value: &T) -> Condition {
 }
 
 /// A filter holding one of `values`, as SQL's `in (…)`; an empty list passes
-/// nothing.
+/// nothing. A search's filter holds 8 conditions and 100 values in its lists
+/// at most.
 pub fn is_in<T: Serialize>(path: &str, values: &[T]) -> Condition {
     let values = serde_json::to_value(values).map_err(|error| error.to_string());
     Condition(Node::Values { path: path.to_owned(), values, list: true })
@@ -207,17 +208,13 @@ struct Counted {
 pub(crate) fn asked(conditions: &[Condition]) -> Result<Asked> {
     let mut counted = Counted::default();
     let asked = conditions.iter().map(|condition| condition.asked(&mut counted)).collect::<Result<Vec<_>>>()?;
-    let refused = || {
-        format!(
-            "a filter of {} conditions and {} values, past {MOST_CONDITIONS} and {MOST_VALUES}",
-            counted.conditions, counted.values
-        )
-    };
     if counted.conditions > MOST_CONDITIONS {
-        return Err(FILTER_CONDITIONS.refuse(counted.conditions as u64, refused()));
+        let refused = format!("a filter of {} conditions, past {MOST_CONDITIONS}", counted.conditions);
+        return Err(FILTER_CONDITIONS.refuse(counted.conditions as u64, refused));
     }
     if counted.values > MOST_VALUES {
-        return Err(FILTER_VALUES.refuse(counted.values as u64, refused()));
+        let refused = format!("a filter of {} values, past {MOST_VALUES}", counted.values);
+        return Err(FILTER_VALUES.refuse(counted.values as u64, refused));
     }
     Ok(Asked::And(asked))
 }
@@ -425,19 +422,25 @@ impl Reader<'_> {
         }
     }
 
-    /// The documents that hold any of `terms` of the filter at `path`.
+    /// The documents that hold any of `terms` of the filter at `path`,
+    /// gathered from every key and then sorted once: joining each key's into
+    /// the running list would copy that list once a value, n² for n values.
     fn holding(&self, path: &str, terms: &[String]) -> Result<Vec<u32>> {
         let Some(filter) = self.settings.filter(path) else {
             let paths = self.settings.filters.iter().map(|filter| filter.path.as_str());
             let meant = meant(path, paths).map(|meant| format!("; did you mean {meant}?")).unwrap_or_default();
             return Err(Error::invalid(format!("a filter on {path}, which the index was not opened with{meant}")));
         };
+        let segments = segments::of_index(self.connection, self.index)?;
         let mut holding = Vec::new();
         for term in terms {
             if let Some(key) = self.find(Part::filter(filter.number), self.as_kept(term))? {
-                holding = union(&holding, &self.docs_of(key)?);
+                holding.extend(self.docs_of(key, &segments)?);
             }
         }
+        holding.sort_unstable();
+        holding.dedup();
+        holding.retain(|doc| !self.gone.contains(doc));
         Ok(holding)
     }
 
@@ -457,20 +460,19 @@ impl Reader<'_> {
         select.query_row((self.index, part.0, term), |row| row.get(0)).optional().map_err(failed)
     }
 
-    /// Every document a key's postings hold, those gone left out, in order:
-    /// a list a release before 0002 wrote, then its pieces.
-    fn docs_of(&self, key: i64) -> Result<Vec<u32>> {
+    /// Every document a key's postings hold, gone ones too, in order: a list
+    /// a release before 0002 wrote, then its pieces in `segments`.
+    fn docs_of(&self, key: i64, segments: &[segments::Segment]) -> Result<Vec<u32>> {
         let within = |error: Error| error.within(format!("key {key}"));
         let mut docs = legacy::documents(self.connection, self.index, key).map_err(within)?;
-        for segment in segments::of_index(self.connection, self.index)? {
-            if let Some((_, piece)) = segments::piece(self.connection, &segment, key).map_err(within)? {
+        for segment in segments {
+            if let Some((_, piece)) = segments::piece(self.connection, segment, key).map_err(within)? {
                 docs.extend(merge::documents(self.connection, &piece).map_err(within)?);
             }
         }
         if !docs.is_sorted_by(|a, b| a < b) {
             return Err(Error::corrupt(format!("key {key}'s documents are out of their order")));
         }
-        docs.retain(|doc| !self.gone.contains(doc));
         Ok(docs)
     }
 }
