@@ -460,6 +460,25 @@ for (const way of ways) {
 			expect(await last(store, 'measured_ms_count')).toEqual({ '{}': 2 })
 		})
 
+		// contract: MET-24
+		test("a read sees what the program's instruments counted, with no flush", async () => {
+			const calls = store.metrics.counter('read_back_total')
+			calls.with({ op: 'a' }).inc()
+			const { groups } = await store.metrics.aggregate({
+				name: 'read_back_total',
+				since: '1h',
+				op: 'increase',
+			})
+			expect(groups[0]?.buckets[0]?.value).toBe(1)
+			calls.with({ op: 'a' }).inc()
+			calls.with({ op: 'a' }).inc()
+			const [newest] = await store.metrics.latest({ name: 'read_back_total', since: '1h' })
+			expect(newest?.value).toBe(3)
+			const took = store.metrics.timer('read_back_ms')
+			took.record('5ms')
+			expect(await last(store, 'read_back_ms_count')).toEqual({ '{}': 1 })
+		})
+
 		test('an instrument the store refuses fails the next flush, writes nothing and keeps no other out', async () => {
 			await store.metrics.ingest({
 				name: 'taken',

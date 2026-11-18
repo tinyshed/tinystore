@@ -426,6 +426,7 @@ class Metrics:
         With limit, a page, which may hold fewer samples than limit and still have next.
         """
         _checked("read", query, _QUERY_FIELDS)
+        await self._counted(query)
         parts = [
             MetricsRead.decode(part)
             for part in await self._download("metrics.read", MetricsQuery.encode(_query_of(query)))
@@ -451,6 +452,7 @@ class Metrics:
     async def latest(self, **query: Unpack[SeriesQuery]) -> list[Point]:
         """The newest sample of each series the query finds, when it has one in the range."""
         _checked("latest", query, _QUERY_FIELDS)
+        await self._counted(query)
         parts = await self._download("metrics.latest", MetricsQuery.encode(_query_of(query)))
         return [
             Point(
@@ -466,6 +468,7 @@ class Metrics:
         With limit, a page, which ends between two whole buckets of a group.
         """
         _checked("aggregate", query, _AGGREGATE_FIELDS)
+        await self._counted(query)
         if "op" not in query:
             raise InvalidError(
                 "an aggregate takes an op: count, sum, avg, min, max, increase, rate, delta, first, last, p95"
@@ -632,6 +635,14 @@ class Metrics:
         """A timer of numbers that are not durations: a response's size in bytes."""
         declared = self._instruments.declare(name, "histogram", unit=unit, help_=help, keep=keep, buckets=buckets)
         return Histogram(self._instruments, declared, {})
+
+    async def _counted(self, query: Mapping[str, object]) -> None:
+        """What the instruments changed sent and applied before a read's first page, which the totals then hold.
+
+        A page after it keeps the first page's clock, which what came since lies past.
+        """
+        if query.get("after") is None:
+            await self._instruments.sent()
 
     async def _read(self, method: str, body: bytes) -> bytes:
         return await self._link.run("read", lambda c: c.session.call(methods[method], body))

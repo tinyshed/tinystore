@@ -65,9 +65,10 @@ fn a_counter_counts_into_one_total_written_with_its_runs_zero() {
     requests.with(&[("route", "/empty")]).add(0.0);
     let _never = requests.with(&[("route", "/never")]);
     let notes_labels = [("route", "/notes"), ("status", "200")];
-    assert!(samples(&f, "http_requests_total", &notes_labels).is_empty(), "a call writes nothing");
-    stats.flush().unwrap();
+    // a read writes the totals first, so it sees what the calls counted (MET-24);
     // the run's zero at the store's start, a millisecond before its count, which is of the same millisecond
+    assert_eq!(samples(&f, "http_requests_total", &notes_labels), [(-1, 0.0), (0, 10.0)]);
+    stats.flush().unwrap();
     assert_eq!(samples(&f, "http_requests_total", &notes_labels), [(-1, 0.0), (0, 10.0)]);
     assert_eq!(
         samples(&f, "http_requests_total", &[("route", "/empty")]),
@@ -175,6 +176,45 @@ fn instruments_of_two_connections_add_into_one_total() {
     f.pass(15 * SECOND);
     stats.flush().unwrap();
     assert_eq!(samples(&f, "queue_depth", &[("queue", "mail")]).last(), Some(&(ms(30 * SECOND), 4.0)));
+}
+
+// contract: MET-24
+#[test]
+fn a_read_sees_what_the_instruments_counted_without_a_flush() {
+    let f = fixture();
+    let stats = f.metrics();
+    let calls = stats.counter("calls").open().unwrap();
+    calls.with(&[("op", "a")]).inc();
+    let increase = |query: crate::metrics::Query| {
+        let groups = query.since(HOUR).aggregate(Op::Increase).unwrap().groups;
+        groups.first().map_or(0.0, |group| group.buckets[0].value.exact().unwrap())
+    };
+    assert_eq!(increase(stats.query().name("calls")), 1.0, "an aggregate");
+    calls.with(&[("op", "a")]).inc();
+    assert_eq!(stats.query().name("calls").since(HOUR).latest().unwrap()[0].value, 2.0, "the newest samples");
+    calls.with(&[("op", "a")]).inc();
+    assert_eq!(increase(stats.query().filter("op", "a")), 3.0, "a query of labels alone finds every instrument");
+    // a timer's own name finds the series it writes, and one of them finds the timer
+    let took = stats.timer("took").open().unwrap();
+    took.record(Duration::from_millis(5));
+    let counted = stats.query().name("took").since(HOUR).aggregate(Op::Count).unwrap().groups;
+    assert_eq!(counted[0].buckets[0].value.exact(), Some(1.0));
+    took.record(Duration::from_millis(5));
+    assert_eq!(increase(stats.query().name("took_count")), 2.0);
+    // a read of what nothing changed writes nothing: a write would have made the series of op b
+    calls.with(&[("op", "b")]).inc();
+    assert_eq!(stats.query().name("took").since(HOUR).read().unwrap().series.len(), 3, "count, sum and longest");
+    assert_eq!(f.rows("series"), 4, "the read of took wrote no series of calls");
+    // explain decodes nothing and writes nothing
+    stats.query().name("calls").since(HOUR).explain(Op::Increase).unwrap();
+    assert_eq!(f.rows("series"), 4);
+    // a page after the first keeps the first page's clock, which a write's samples lie past
+    let first = stats.query().name("calls").by(&["op"]).since(HOUR).limit(1).aggregate(Op::Increase).unwrap();
+    assert_eq!(f.rows("series"), 5, "the first page wrote what changed");
+    calls.with(&[("op", "b")]).inc();
+    let next = first.next.as_deref().unwrap();
+    let after = stats.query().name("calls").by(&["op"]).since(HOUR).limit(1).after(next).aggregate(Op::Increase);
+    assert_eq!(after.unwrap().groups[0].buckets[0].value.exact(), Some(1.0), "the page after writes nothing");
 }
 
 // contract: MET-11

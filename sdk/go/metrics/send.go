@@ -112,6 +112,9 @@ type instruments struct {
 	stopped    bool
 	quit       chan struct{}
 	unreported error
+	// quiet are the reads' waiters, which wait for their batch alone: what
+	// the store refused stays for the next flush
+	quiet map[chan error]bool
 }
 
 func newInstruments(store *core.Store) *instruments {
@@ -120,7 +123,7 @@ func newInstruments(store *core.Store) *instruments {
 	return &instruments{
 		store: store, session: session, failures: core.FailureLog{Work: "metrics instruments"},
 		declared: map[string]*declared{}, byID: map[uint64]*declared{}, pending: map[*set]*change{},
-		next: 1, quit: make(chan struct{}),
+		next: 1, quit: make(chan struct{}), quiet: map[chan error]bool{},
 	}
 }
 
@@ -319,6 +322,35 @@ func (in *instruments) flush(ctx context.Context) (bool, error) {
 	}
 }
 
+// sent sends what changed and waits for the store to apply it, without
+// asking it to write: the store writes its totals before a read that finds
+// an instrument that changed, so a read after it sees what the calls
+// counted. It waits for nothing when nothing is on its way, and fails
+// never, since the read meets what kept the batch from the store.
+func (in *instruments) sent(ctx context.Context) {
+	in.mu.Lock()
+	if in.stopped || len(in.pending) == 0 && len(in.unanswered) == 0 {
+		in.mu.Unlock()
+		return
+	}
+	if len(in.pending) > 0 {
+		in.batches(false)
+	}
+	done := make(chan error, 1)
+	last := in.unanswered[len(in.unanswered)-1]
+	last.waiters = append(last.waiters, done)
+	in.quiet[done] = true
+	in.mu.Unlock()
+	go in.pump()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	in.mu.Lock()
+	delete(in.quiet, done)
+	in.mu.Unlock()
+}
+
 // tick sends what changed every second, reads the gauges' functions every
 // 15, and lets go of the sets nothing changed for an hour.
 func (in *instruments) tick() {
@@ -448,7 +480,11 @@ func (in *instruments) fail(err error) {
 
 // failWith fails the flushes that wait with err, or the next flush when none does. The caller holds mu.
 func (in *instruments) failWith(waiters []chan error, err error) {
-	if len(waiters) == 0 && in.unreported == nil {
+	reported := false
+	for _, waiter := range waiters {
+		reported = reported || !in.quiet[waiter]
+	}
+	if !reported && in.unreported == nil {
 		in.unreported = err
 	}
 	for _, waiter := range waiters {
@@ -626,6 +662,10 @@ func (in *instruments) answer(ack wire.MetricsAck) {
 		done := in.unanswered[0]
 		in.unanswered = in.unanswered[1:]
 		for _, waiter := range done.waiters {
+			if in.quiet[waiter] {
+				waiter <- nil
+				continue
+			}
 			failed := in.unreported
 			in.unreported = nil
 			waiter <- failed

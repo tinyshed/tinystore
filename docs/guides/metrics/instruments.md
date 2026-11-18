@@ -196,7 +196,43 @@ stats.gauge_func("queue_depth", move || sms.depth()).labels(&[("queue", "sms")])
 Keep labels to what a chart groups by: a route, a status, a queue. A user's
 id, a request's id or a URL with ids in it belongs in [records](../records/README.md).
 
-## Flush and tests
+## Reading them back, flush and tests
+
+A read sees what the program's instruments counted before it, with no
+`flush`:
+
+```ts
+calls.inc()
+const { groups } = await store.metrics.aggregate({ name: 'calls', since: '1h', op: 'increase' }) // counts it
+```
+
+```python
+calls.inc()
+groups = (await store.metrics.aggregate(name="calls", since="1h", op="increase")).groups  # counts it
+```
+
+```go
+calls.Inc()
+page, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "calls", Since: time.Hour, Op: metrics.Increase})
+```
+
+```rust
+calls.inc();
+let groups = stats.query().name("calls").since(Duration::from_hours(1)).aggregate(Op::Increase)?.groups;
+```
+
+- Before a `read`, an `aggregate` or a `latest`, an SDK sends what its
+  instruments changed and waits for the store to take it, and the store
+  writes its totals when an instrument the query finds changed since the
+  last write. A query with no `name` finds every instrument.
+- That write is one commit of metrics.db, the same one `flush` makes, and
+  only when something changed: a page read every second while calls keep
+  counting writes a sample a second, where the totals are otherwise written
+  every 15 seconds.
+- A page after the first writes nothing: it keeps the first page's clock.
+  `explain` writes nothing either.
+- Another process's instruments reach the store a second at most after
+  their calls, so a read sees what they had sent by then.
 
 ```ts
 await store.metrics.flush() // written now; before a short program exits
@@ -214,11 +250,10 @@ err = metrics.Flush(ctx, store)
 stats.flush()?;
 ```
 
-The store writes the totals every 15 seconds of real time, at `flush` and
-when it closes, so a test calls `flush` before it reads them. Moving a test
-clock does not write them. A Rust test that opens its store with
-`background: false` has no 15-second write: only `flush`, a backup and
-closing the store write them.
+The store writes the totals every 15 seconds of real time, at `flush`,
+before a read as above, and when it closes. A test reads them back with no
+`flush`. Moving a test clock does not write them, and a Rust test that
+opens its store with `background: false` has no 15-second write.
 
 ## Options
 

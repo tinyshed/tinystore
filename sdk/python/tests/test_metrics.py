@@ -292,6 +292,19 @@ async def test_a_timers_measure_records_whether_its_block_returns_or_raises(stor
     assert await last(store.metrics, "measured_ms_count") == {"{}": 3}
 
 
+# contract: MET-24
+async def test_a_read_sees_what_the_programs_instruments_counted_with_no_flush(store: tinystore.Store) -> None:
+    calls = store.metrics.counter("read_back_total")
+    calls.labels(op="a").inc()
+    groups = (await store.metrics.aggregate(name="read_back_total", since="1h", op="increase")).groups
+    assert groups[0].buckets[0].value == 1
+    calls.labels(op="a").inc()
+    calls.labels(op="a").inc()
+    assert (await store.metrics.latest(name="read_back_total", since="1h"))[0].value == 3
+    store.metrics.timer("read_back_ms").record("5ms")
+    assert await last(store.metrics, "read_back_ms_count") == {"{}": 1}
+
+
 # contract: MET-10
 async def test_an_instrument_the_store_refuses_fails_the_next_flush_and_keeps_no_other_out(
     store: tinystore.Store,

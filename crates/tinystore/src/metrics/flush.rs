@@ -58,7 +58,32 @@ impl Engine {
     /// Writes every live total of the instruments, and what their names say
     /// of themselves.
     pub(super) fn write_totals(&self) -> Result<()> {
+        self.write_totals_when(|| true)
+    }
+
+    /// Writes the totals before a read of `name`, or of every name, when a
+    /// call changed an instrument it finds since the last write, so that a
+    /// read sees what the program counted: the write `flush` makes, of
+    /// every live total at one time, since the totals share one clock. A
+    /// copy's totals are its home's.
+    pub(super) fn write_before_read(&self, name: Option<&str>) -> Result<bool> {
+        if self.file.is_copy() || !self.totals.changed_for(name) {
+            return Ok(false);
+        }
+        // a read beside this one may have written them while this one waited
+        let mut wrote = false;
+        self.write_totals_when(|| {
+            wrote = self.totals.changed_for(name);
+            wrote
+        })?;
+        Ok(wrote)
+    }
+
+    fn write_totals_when(&self, wanted: impl FnOnce() -> bool) -> Result<()> {
         let _one = lock(&self.writing);
+        if !wanted() {
+            return Ok(());
+        }
         self.before_write();
         crate::probe::unmeasured(|| self.write_totals_now())
     }

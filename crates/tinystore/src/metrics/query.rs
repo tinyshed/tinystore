@@ -124,6 +124,15 @@ impl<T: Into<String>> From<Prefix<T>> for Condition {
 /// `explain` gives once its query passed its checks.
 pub(crate) type Checked<T> = Box<dyn FnOnce() -> Result<T> + Send>;
 
+/// Whether a call sees what the instruments counted before it (MET-24).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fresh {
+    /// Their totals are written first, when one changed.
+    Written,
+    /// As the file holds them.
+    AsItIs,
+}
+
 /// A query being asked: its name, conditions and range, and for an
 /// aggregate its buckets and groups.
 #[derive(Clone)]
@@ -307,9 +316,9 @@ impl Query {
     /// absolute start from the store's clock, and the read it gives, which
     /// the async API runs on the store's pool.
     pub(crate) fn checked_read(&self) -> Result<Checked<SeriesPage>> {
-        let checked = self.plain("read").and_then(|()| self.paged(None));
+        let check = |query: &Query| query.plain("read").and_then(|()| query.paged(None));
         let query = self.clone();
-        self.once_checked(checked, move |engine, (asked, paging)| {
+        self.once_checked(Fresh::Written, check, move |engine, (asked, paging)| {
             let (series, place) = engine.read(&asked, paging.as_ref())?;
             let next = place.zip(paging).map(|(place, paging)| Cursor::after(&asked, &paging, Start::Series(place)));
             Ok(SeriesPage::of(series, next.map(|next| next.written()), query))
@@ -335,9 +344,9 @@ impl Query {
 
     /// `aggregate` in its two steps, as [`Query::checked_read`] is `read`.
     pub(crate) fn checked_aggregate(&self, op: Op) -> Result<Checked<AggregatePage>> {
-        let checked = self.shape(op).and_then(|shape| Ok((self.paged(Some(op))?, shape)));
+        let check = move |query: &Query| query.shape(op).and_then(|shape| Ok((query.paged(Some(op))?, shape)));
         let query = self.clone();
-        self.once_checked(checked, move |engine, ((asked, paging), shape)| {
+        self.once_checked(Fresh::Written, check, move |engine, ((asked, paging), shape)| {
             let (groups, place) = engine.aggregate(&asked, &shape, paging.as_ref())?;
             let next = place.zip(paging).map(|(place, paging)| Cursor::after(&asked, &paging, Start::Group(place)));
             Ok(AggregatePage::of(groups, next.map(|next| next.written()), query, op))
@@ -353,8 +362,9 @@ impl Query {
 
     /// `latest` in its two steps, as [`Query::checked_read`] is `read`.
     pub(crate) fn checked_latest(&self) -> Result<Checked<Vec<Latest>>> {
-        let checked = self.plain("latest").and_then(|()| self.unpaged("latest")).and_then(|()| self.asked());
-        self.once_checked(checked, |engine, asked| engine.latest(&asked))
+        let check =
+            |query: &Query| query.plain("latest").and_then(|()| query.unpaged("latest")).and_then(|()| query.asked());
+        self.once_checked(Fresh::Written, check, |engine, asked| engine.latest(&asked))
     }
 
     /// What `read`, or `aggregate` when given its `op`, would spend of each
@@ -378,24 +388,39 @@ impl Query {
 
     /// `explain` in its two steps, as [`Query::checked_read`] is `read`.
     pub(crate) fn checked_explain(&self, op: Option<Op>) -> Result<Checked<Plan>> {
-        let shape = self.unpaged("explain").and_then(|()| match op {
-            Some(op) => self.shape(op).map(Some),
-            None => self.plain("a read").map(|()| None),
-        });
-        let checked = shape.and_then(|shape| Ok((self.asked()?, shape)));
-        self.once_checked(checked, |engine, (asked, shape)| engine.explain(&asked, shape.as_ref()))
+        let check = move |query: &Query| {
+            let shape = query.unpaged("explain").and_then(|()| match op {
+                Some(op) => query.shape(op).map(Some),
+                None => query.plain("a read").map(|()| None),
+            });
+            shape.and_then(|shape| Ok((query.asked()?, shape)))
+        };
+        // it decodes nothing, so it writes nothing
+        self.once_checked(Fresh::AsItIs, check, |engine, (asked, shape)| engine.explain(&asked, shape.as_ref()))
     }
 
-    /// What runs a query once `checked` passed, on the engine, its errors
-    /// and those of the check named as the engine's.
+    /// What runs a query once `check` passed, on the engine, its errors and
+    /// those of the check named as the engine's. A query that sees the
+    /// instruments writes their totals first when it finds one that
+    /// changed, and is checked again after, since its range ends at the
+    /// clock and the write's samples lie at it. A page after the first
+    /// writes nothing: it keeps the first page's clock, which a write's
+    /// samples lie past.
     fn once_checked<C: Send + 'static, T: 'static>(
         &self,
-        checked: Result<C>,
+        fresh: Fresh,
+        check: impl Fn(&Query) -> Result<C> + Send + 'static,
         run: impl FnOnce(&Engine, C) -> Result<T> + Send + 'static,
     ) -> Result<Checked<T>> {
-        let checked = checked.map_err(|error| error.within("metrics"))?;
-        let engine = Arc::clone(&self.engine);
-        Ok(Box::new(move || run(&engine, checked).map_err(|error| error.within("metrics"))))
+        let checked = check(self).map_err(|error| error.within("metrics"))?;
+        let query = self.clone();
+        let call = move || -> Result<T> {
+            let sees = fresh == Fresh::Written && query.after.is_none();
+            let wrote = sees && query.engine.write_before_read(query.name.as_deref())?;
+            let checked = if wrote { check(&query)? } else { checked };
+            run(&query.engine, checked)
+        };
+        Ok(Box::new(move || call().map_err(|error| error.within("metrics"))))
     }
 
     /// An aggregate's buckets and groups, checked.

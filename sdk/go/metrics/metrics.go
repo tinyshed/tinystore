@@ -443,6 +443,7 @@ func Read(ctx context.Context, store *tinystore.Store, q Query) (SeriesPage, err
 	if err != nil {
 		return SeriesPage{}, err
 	}
+	sentBeforeRead(ctx, store, q)
 	parts, err := download(ctx, store, wire.MethodMetricsRead, wire.Encode(&asked))
 	if err != nil {
 		return SeriesPage{}, err
@@ -498,6 +499,15 @@ type Point struct {
 	Value  float64
 }
 
+// sentBeforeRead sends what the instruments changed, applied before a
+// read's first page, which the store's totals then hold: a page after it
+// keeps the first page's clock, which what came since lies past.
+func sentBeforeRead(ctx context.Context, store *tinystore.Store, q Query) {
+	if q.After == "" {
+		instrumentsOf(store).sent(ctx)
+	}
+}
+
 // Latest is the newest sample of each series the query finds, when it has
 // one in the range: a series without one is left out.
 func Latest(ctx context.Context, store *tinystore.Store, q Query) ([]Point, error) {
@@ -505,6 +515,7 @@ func Latest(ctx context.Context, store *tinystore.Store, q Query) ([]Point, erro
 	if err != nil {
 		return nil, err
 	}
+	sentBeforeRead(ctx, store, q)
 	parts, err := download(ctx, store, wire.MethodMetricsLatest, wire.Encode(&asked))
 	if err != nil {
 		return nil, err
@@ -608,6 +619,7 @@ func Aggregate(ctx context.Context, store *tinystore.Store, q Query) (AggregateP
 	if err != nil {
 		return AggregatePage{}, err
 	}
+	sentBeforeRead(ctx, store, q)
 	parts, err := download(ctx, store, wire.MethodMetricsAggregate, wire.Encode(&asked))
 	if err != nil {
 		return AggregatePage{}, err

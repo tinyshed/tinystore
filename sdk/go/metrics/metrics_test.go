@@ -440,6 +440,30 @@ func TestInstrumentsCountIntoTheStoresTotalsASetOfLabelsASeriesEach(t *testing.T
 	})
 }
 
+// contract: MET-24
+func TestAReadSeesWhatTheProgramsInstrumentsCountedWithNoFlush(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		calls := ways.Must(metrics.OpenCounter(store, "read_back_total"))
+		calls.With("op", "a").Inc()
+		query := metrics.Query{Name: "read_back_total", Since: time.Hour, Op: metrics.Increase}
+		groups := ways.Must(metrics.Aggregate(ctx, store, query)).Groups
+		if len(groups) != 1 || *groups[0].Buckets[0].Value != 1 {
+			t.Fatalf("an aggregate after an Inc: %+v", groups)
+		}
+		calls.With("op", "a").Inc()
+		calls.With("op", "a").Inc()
+		newest := ways.Must(metrics.Latest(ctx, store, metrics.Query{Name: "read_back_total", Since: time.Hour}))
+		if len(newest) != 1 || newest[0].Value != 3 {
+			t.Fatalf("the newest after three: %+v", newest)
+		}
+		ways.Must(metrics.OpenTimer(store, "read_back_ms")).Record(5 * time.Millisecond)
+		if got := last(t, store, "read_back_ms_count"); got["null"]+got["{}"] != 1 {
+			t.Fatalf("a timer's count %v", got)
+		}
+	})
+}
+
 func TestATimersTimingRecordsOnceWhenItStops(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

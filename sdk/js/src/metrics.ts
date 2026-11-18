@@ -422,6 +422,7 @@ export class Metrics {
 	 */
 	async read(query: Query): Promise<SeriesPage> {
 		checked('read', query, queryFields)
+		await this.#counted(query)
 		const parts = (await this.#download('metrics.read', MetricsQuery.encode(queryOf(query)))).map(
 			part => MetricsRead.decode(part),
 		)
@@ -462,6 +463,7 @@ export class Metrics {
 	/** The newest sample of each series the query finds, when it has one in the range. */
 	async latest(query: Query): Promise<Newest[]> {
 		checked('latest', query, queryFields)
+		await this.#counted(query)
 		const parts = await this.#download('metrics.latest', MetricsQuery.encode(queryOf(query)))
 		return parts.flatMap(part =>
 			(MetricsLatest.decode(part).series ?? []).map(newest => ({
@@ -479,6 +481,7 @@ export class Metrics {
 	 */
 	async aggregate<O extends Op>(query: AggregateQuery<O>): Promise<AggregatePage<O>> {
 		checked('aggregate', query, aggregateFields)
+		await this.#counted(query)
 		const asked = MetricsAggregateAsked.encode(aggregateOf(query))
 		const parts = (await this.#download('metrics.aggregate', asked)).map(part =>
 			MetricsAggregates.decode(part),
@@ -683,6 +686,17 @@ export class Metrics {
 			this.#instruments.declare(name, 'histogram', options),
 			{},
 		)
+	}
+
+	/**
+	 * What the instruments changed sent and applied before a read's first
+	 * page, which the store's totals then hold: a page after it keeps the
+	 * first page's clock, which what came since lies past.
+	 */
+	async #counted(query: Query): Promise<void> {
+		if (query.after === undefined) {
+			await this.#instruments.sent()
+		}
 	}
 
 	#read(method: keyof typeof methods, body: Uint8Array): Promise<Uint8Array> {

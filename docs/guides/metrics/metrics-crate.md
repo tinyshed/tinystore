@@ -28,8 +28,8 @@ metrics::histogram!("http_request_ms").record(started.elapsed().as_secs_f64() * 
 - A process has one global recorder, which the crate lets be set once: a
   program that opens two stores, as a test may, records into the first.
 - A call never waits and never writes: the recorder's series are written
-  when the instruments' are, as [Flush and
-  tests](instruments.md#flush-and-tests) says.
+  when the instruments' are, as [Reading them back, flush and
+  tests](instruments.md#reading-them-back-flush-and-tests) says.
 
 Name the store's handle something other than `metrics`, `stats` here, so the
 crate's macros and the store's calls read apart.

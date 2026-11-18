@@ -116,6 +116,9 @@ pub(super) struct Slot {
     pending: AtomicU64,
     /// A call since the last write, `add(0)` among them.
     sent: AtomicBool,
+    /// Its instrument's: a call changed one of its slots since a write
+    /// collected them, so that a read writes the totals first.
+    changed: Arc<AtomicBool>,
     /// The last total a program that keeps its own gave.
     absolute: AtomicU64,
     /// The connection that set a gauge last.
@@ -278,7 +281,7 @@ impl Bins {
 }
 
 impl Slot {
-    fn new(kept: Kept, series: Vec<Arc<Written>>, form: Form, buckets: usize) -> Slot {
+    fn new(kept: Kept, series: Vec<Arc<Written>>, form: Form, buckets: usize, changed: Arc<AtomicBool>) -> Slot {
         let measured =
             form.measures().then(|| Mutex::new(Measured { buckets: vec![0; buckets], ..Measured::default() }));
         Slot {
@@ -286,6 +289,7 @@ impl Slot {
             series,
             pending: AtomicU64::new(0.0_f64.to_bits()),
             sent: AtomicBool::new(false),
+            changed,
             absolute: AtomicU64::new(0),
             owner: AtomicU64::new(NOBODY),
             measured,
@@ -297,7 +301,15 @@ impl Slot {
 
     /// A slot no write takes, for labels a call gave that were refused.
     fn detached(kept: Kept) -> Slot {
-        Slot { detached: true, ..Slot::new(kept, Vec::new(), Form::Counter, 0) }
+        Slot { detached: true, ..Slot::new(kept, Vec::new(), Form::Counter, 0, Arc::default()) }
+    }
+
+    /// Marks its instrument changed: loaded first, so that calls on many
+    /// threads share the flag's cache line until a write clears it.
+    fn changed(&self) {
+        if !self.changed.load(Ordering::Acquire) {
+            self.changed.store(true, Ordering::Release);
+        }
     }
 
     fn is_overflow(&self) -> bool {
@@ -309,6 +321,7 @@ impl Slot {
     pub(super) fn add(&self, n: f64) -> bool {
         let added = add_float(&self.pending, n);
         self.sent.store(true, Ordering::Release);
+        self.changed();
         added
     }
 
@@ -323,6 +336,7 @@ impl Slot {
     pub(super) fn set(&self, value: f64, owner: u64) {
         self.pending.store(value.to_bits(), Ordering::Release);
         self.owner.store(owner, Ordering::Release);
+        self.changed();
     }
 
     /// Moves a gauge by `delta`, for `owner`: false when its value would not
@@ -331,6 +345,7 @@ impl Slot {
         let moved = add_float(&self.pending, delta);
         if moved {
             self.owner.store(owner, Ordering::Release);
+            self.changed();
         }
         moved
     }
@@ -347,6 +362,8 @@ impl Slot {
             Some(Bounds::Exponential) => *measured.bins.entry(Bin::of(value, FINEST)).or_default() += 1,
             None => {}
         }
+        drop(measured);
+        self.changed();
     }
 
     /// Adds what a client's timer or histogram measured since its last
@@ -367,6 +384,8 @@ impl Slot {
         for (bin, count) in &measures.bins {
             *measured.bins.entry(*bin).or_default() += count;
         }
+        drop(measured);
+        self.changed();
     }
 
     /// The series of an interval of its grid: its `_bucket`, the interval in
@@ -398,6 +417,8 @@ pub(super) struct Instrument {
     pub(super) form: Form,
     pub(super) bounds: Option<Bounds>,
     sets: Mutex<Sets>,
+    /// A call changed a slot since a write collected them.
+    changed: Arc<AtomicBool>,
     said_overflow: AtomicBool,
     said_labels: AtomicBool,
 }
@@ -419,6 +440,7 @@ impl Instrument {
             form,
             bounds,
             sets: Mutex::default(),
+            changed: Arc::default(),
             said_overflow: AtomicBool::new(false),
             said_labels: AtomicBool::new(false),
         }
@@ -511,7 +533,7 @@ impl Instrument {
                 series.push(Arc::new(Written::of(kept.derived(&name, None)?, kind)));
             }
         }
-        Ok(Slot::new(kept, series, self.form, buckets))
+        Ok(Slot::new(kept, series, self.form, buckets, Arc::clone(&self.changed)))
     }
 
     /// Every slot it holds.
@@ -687,7 +709,8 @@ impl Totals {
             None => registry.claim(name, &[(name.to_owned(), Kind::Gauge)])?,
         }
         let written = vec![Arc::new(Written::of(kept.clone(), Kind::Gauge))];
-        let slot = Arc::new(Slot::new(kept, written, Form::Gauge, 0));
+        // a function's gauge is read at each write, and no call changes it
+        let slot = Arc::new(Slot::new(kept, written, Form::Gauge, 0, Arc::default()));
         let reader = Arc::new(Reader { slot, read, said: Mutex::default() });
         registry.readers.entry(name.to_owned()).or_default().push(reader);
         Ok(())
@@ -748,6 +771,8 @@ impl Totals {
             planned.extend(gauge(&reader.slot));
         }
         for instrument in &instruments {
+            // cleared before its slots are taken: a call meanwhile marks it again
+            instrument.changed.store(false, Ordering::Release);
             let mut ended = Vec::new();
             for slot in instrument.slots() {
                 let plan = match instrument.form {
@@ -784,9 +809,22 @@ impl Totals {
                 Outcome::Failed => {
                     drop(run);
                     give_back(&plan);
+                    // what it carried is still to write, and a read writes it first
+                    plan.slot.changed();
                 }
             }
         }
+    }
+
+    /// Whether a call changed an instrument a query of `name` finds since
+    /// a write collected the totals: the one of that name, or the one that
+    /// writes it, a timer's `_count`; every instrument for a query of none.
+    pub(super) fn changed_for(&self, name: Option<&str>) -> bool {
+        let registry = lock(&self.registry);
+        let changed = |instrument: &Arc<Instrument>| instrument.changed.load(Ordering::Acquire);
+        let Some(name) = name else { return registry.instruments.values().any(changed) };
+        let writer = registry.writers.get(name).map_or(name, String::as_str);
+        registry.instruments.get(writer).is_some_and(changed)
     }
 
     /// How many sets of labels the instrument of `name` holds.

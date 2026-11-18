@@ -284,6 +284,8 @@ class Instruments:
         self._ticking: asyncio.Task[None] | None = None
         self._stopped = False
         self._unreported: BaseException | None = None
+        self._quiet: set[asyncio.Future[None]] = set()
+        """the reads' waiters, which wait for their batch alone: what the store refused stays for the next flush"""
         self._failures = FailureLog("metrics instruments")
         self._tasks: set[asyncio.Task[None]] = set()
 
@@ -388,6 +390,26 @@ class Instruments:
         self._pump()
         await done
         return True
+
+    async def sent(self) -> None:
+        """Sends what changed and waits for the store to apply it, without asking it to write.
+
+        The store writes its totals before a read that finds an instrument
+        that changed, so a read after this sees what the calls counted. It
+        waits for nothing when nothing is on its way, and raises never, since
+        the read meets what kept the batch from the store.
+        """
+        if self._stopped or (not self._pending and not self._unanswered):
+            return
+        if self._pending:
+            self._batches(False)
+        done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._quiet.add(done)
+        done.add_done_callback(self._quiet.discard)
+        self._unanswered[-1].waiters.append(done)
+        self._pump()
+        with contextlib.suppress(Exception):
+            await done
 
     async def stop(self) -> None:
         """Stops the timers, sends what is left, and ends the stream; the store's close calls it."""
@@ -528,7 +550,7 @@ class Instruments:
 
     def _fail_with(self, waiters: list[asyncio.Future[None]], err: BaseException) -> None:
         """Fails the flushes that wait with err, or the next flush when none does."""
-        if not waiters and self._unreported is None:
+        if all(waiter in self._quiet for waiter in waiters) and self._unreported is None:
             self._unreported = err
         for waiter in waiters:
             if not waiter.done():
@@ -636,6 +658,9 @@ class Instruments:
         while self._unanswered and self._unanswered[0].number <= applied:
             done = self._unanswered.pop(0)
             for waiter in done.waiters:
+                if waiter in self._quiet:
+                    waiter.set_result(None)
+                    continue
                 failed, self._unreported = self._unreported, None
                 if waiter.done():
                     continue

@@ -123,6 +123,8 @@ interface Change {
 interface Waiter {
 	resolve: () => void
 	reject: (err: Error) => void
+	/** a read's, which waits for the batch alone: what the store refused stays for the next flush */
+	quiet?: boolean
 }
 
 /** A batch: its number in the session, its changes, and who waits for its answer. */
@@ -280,6 +282,27 @@ export class Instruments {
 		return true
 	}
 
+	/**
+	 * Sends what changed and waits for the store to apply it, without asking
+	 * it to write: the store writes its totals before a read that finds an
+	 * instrument that changed, so a read after this sees what the calls
+	 * counted. It waits for nothing when nothing is on its way, and fails
+	 * never, since the read meets what kept the batch from the store.
+	 */
+	async sent(): Promise<void> {
+		if (this.#stopped || (this.#pending.size === 0 && this.#unanswered.length === 0)) {
+			return
+		}
+		const done = new Promise<void>(resolve => {
+			if (this.#pending.size > 0) {
+				this.#batches(false)
+			}
+			this.#unanswered.at(-1)?.waiters.push({ resolve, reject: () => resolve(), quiet: true })
+		})
+		void this.#pump()
+		await done
+	}
+
 	/** Stops the timers, sends what is left, and ends the stream; the store's close calls it. */
 	async stop(): Promise<void> {
 		if (this.#stopped) {
@@ -416,7 +439,7 @@ export class Instruments {
 
 	/** Fails the flushes that wait with err, or the next flush when none does. */
 	#failWith(waiters: Waiter[], err: Error): void {
-		if (waiters.length === 0) {
+		if (waiters.every(waiter => waiter.quiet === true)) {
 			this.#unreported ??= err
 		}
 		for (const waiter of waiters.splice(0)) {
@@ -554,6 +577,10 @@ export class Instruments {
 		while ((this.#unanswered[0]?.number ?? Infinity) <= applied) {
 			const done = this.#unanswered.shift()
 			for (const waiter of done?.waiters ?? []) {
+				if (waiter.quiet === true) {
+					waiter.resolve()
+					continue
+				}
 				const failed = this.#unreported
 				this.#unreported = undefined
 				if (failed === undefined) {
