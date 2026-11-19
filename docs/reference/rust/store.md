@@ -23,6 +23,24 @@ pub fn as_str(self) -> &'static str
 
 The unit as the wire and every SDK spell it: `day`, `week`, `month`.
 
+## LocalDate
+
+```rust
+pub struct LocalDate(_)
+```
+
+The local date a calendar's span begins on, as ISO 8601 writes it:
+`2026-11-19` for a day, its Monday for a week, its first for a month.
+Text held in place, so that a bucket that carries one stays `Copy`.
+
+### LocalDate.as_str
+
+```rust
+pub fn as_str(&self) -> &str
+```
+
+The date as text: `2026-11-19`.
+
 ## CancellationToken
 
 ```rust
@@ -906,7 +924,8 @@ The different values one `top` or `distinct` holds, as JSON.
 pub const INGEST_SAMPLES: Limit
 ```
 
-The samples of one `ingest`.
+The samples of one `ingest`, written in one write: what one exporter's
+text takes.
 
 ## INGEST_BYTES
 
@@ -915,6 +934,23 @@ pub const INGEST_BYTES: Limit
 ```
 
 The bytes of one `ingest`'s samples, each with its labels.
+
+## REPLACE_SAMPLES
+
+```rust
+pub const REPLACE_SAMPLES: Limit
+```
+
+The samples of one gauge's `replace`, which decodes and cuts the blocks
+its range reaches.
+
+## REPLACE_BYTES
+
+```rust
+pub const REPLACE_BYTES: Limit
+```
+
+The bytes of one `replace`'s samples, with the series' labels.
 
 ## TEXT_SAMPLES
 

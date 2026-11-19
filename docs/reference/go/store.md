@@ -432,10 +432,15 @@ var (
 	AggregateRows = Limit{"aggregate rows", 10_000}
 	// CountBytes is the different values one Top or Distinct holds, as JSON.
 	CountBytes = Limit{"count bytes", 64 << 20}
-	// IngestSamples is the samples of one Ingest.
-	IngestSamples = Limit{"ingest samples", 10_000}
+	// IngestSamples is the samples of one Ingest, written in one write: what
+	// one exporter's text takes.
+	IngestSamples = Limit{"ingest samples", 100_000}
 	// IngestBytes is the bytes of one Ingest's samples, each with its labels.
-	IngestBytes = Limit{"ingest bytes", 4 << 20}
+	IngestBytes = Limit{"ingest bytes", 32 << 20}
+	// ReplaceSamples is the samples of one gauge's Replace.
+	ReplaceSamples = Limit{"replace samples", 10_000}
+	// ReplaceBytes is the bytes of one Replace's samples, with the series' labels.
+	ReplaceBytes = Limit{"replace bytes", 4 << 20}
 	// TextSamples is the samples of one exporter's text.
 	TextSamples = Limit{"text samples", 100_000}
 	// TextBytes is one exporter's text, and the bytes of its samples.

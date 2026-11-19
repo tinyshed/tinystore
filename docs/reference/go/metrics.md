@@ -40,7 +40,7 @@ Flush sends what every instrument changed and has the store write its totals now
 func Ingest(ctx context.Context, store *tinystore.Store, series ...Series) error
 ```
 
-Ingest writes series and their samples, every one or none: a refused series names itself by its labels. It returns once they are written.
+Ingest writes series and their samples in one write, every one or none: a refused series names itself by its labels. It returns once they are written. One call takes 100,000 samples, as one exporter's text does; one past a message goes up in pieces.
 
 ## IngestPrometheus
 
@@ -103,7 +103,7 @@ Aggregate is the buckets of each group of the series the query finds, each one e
 func (p AggregatePage) All(ctx context.Context) iter.Seq2[Group, error]
 ```
 
-All is the page's groups, then those of each page after it, read one page at a time as the walk reaches the end of the one it holds.
+All is the page's groups, then those of each page after it, read one page at a time as the walk reaches the end of the one it holds. A group a page cut comes once, whole, its parts joined.
 
 ## Bucket
 
@@ -128,6 +128,9 @@ type Bucket struct {
 	// Gap says its first step began before the bucket before it: a whole
 	// bucket between had no samples.
 	Gap bool
+	// Date is a calendar's bucket's local date, "2026-11-19": a week's
+	// Monday, a month's first; empty for buckets of Every.
+	Date string
 }
 ```
 
@@ -327,7 +330,7 @@ type Group struct {
 }
 ```
 
-Group is the buckets of a group of series: a bucket without samples is left out, and so is one of NaN alone.
+Group is the buckets of a group of series: a bucket without samples is left out, and so is one of NaN alone, unless the query gave Fill.
 
 ## Histogram
 
@@ -511,6 +514,14 @@ func Keep(d time.Duration) Option
 
 Keep is how long the name's samples stay, kept in the file with it: 30 days unless a name was given one.
 
+### MaxSeries
+
+```go
+func MaxSeries(sets int) Option
+```
+
+MaxSeries is the sets of labels an instrument holds at once, 1 to 2000, 2000 unless given: a new set past them counts into its series of \_\_overflow, said once in TinyStore's lines. A timer's set is one, whatever series it writes.
+
 ### Unit
 
 ```go
@@ -622,6 +633,10 @@ type Query struct {
 	// SkipNaN passes a NaN sample over, counted in its bucket's Skipped
 	// rather than refusing the aggregate; an infinity is still refused.
 	SkipNaN bool
+	// Fill answers every bucket of the range retention keeps, an empty one
+	// with Samples 0 and Value nil, which is no zero; it takes Since or
+	// From, and no Limit.
+	Fill bool
 }
 ```
 

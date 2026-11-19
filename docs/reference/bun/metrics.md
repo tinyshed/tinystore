@@ -138,7 +138,7 @@ What a bucket answers: count … last, or a percentile; rate is a second's incre
 ## AggregateQuery
 
 ```ts
-interface AggregateQuery<O extends Op = Op> extends Query {
+interface AggregateQuery<O extends Op = Op, F extends boolean = boolean> extends Query {
     /** the buckets' span, counted from 1970 in UTC; the range is one bucket without it */
     every?: Duration | undefined
     /** buckets of a calendar in timeZone, in place of every: 'day' begins each at a local midnight */
@@ -154,6 +154,8 @@ interface AggregateQuery<O extends Op = Op> extends Query {
     estimate?: boolean | undefined
     /** a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused */
     skipNaN?: boolean | undefined
+    /** every bucket of the range retention keeps, one without samples with samples 0 and no value; with since or from, not limit */
+    fill?: F | undefined
 }
 ```
 
@@ -185,23 +187,33 @@ A bucket of a percentile: a gauge's sample at the rank, as value, or a
 timer's bucket of its spread that holds it, from lower to upper, and with
 estimate asked a point between them.
 
+## Filled
+
+```ts
+type Filled<B extends Spanned> = Omit<B, 'value'> & {
+    value?: number
+}
+```
+
+A bucket an aggregate given fill may answer empty: samples 0 and no value, which is no zero.
+
 ## Bucket
 
 ```ts
-type Bucket<O extends Op = Op> = O extends Percentile ? PercentileBucket : ValueBucket
+type Bucket<O extends Op = Op, F extends boolean = false> = true extends F ? Filled<Answered<O>> : Answered<O>
 ```
 
-A bucket of an aggregate of op: a value, or what a percentile gives.
+A bucket of an aggregate of op: a value, or what a percentile gives; one of fill may be empty.
 
 ## Aggregate
 
 ```ts
-interface Aggregate<O extends Op = Op> {
+interface Aggregate<O extends Op = Op, F extends boolean = false> {
     name: string
     /** the labels by kept or without left */
     labels: Labels
-    /** a bucket without samples is left out, and so is one of NaN alone */
-    buckets: Bucket<O>[]
+    /** a bucket without samples is left out, and so is one of NaN alone, unless the query gave fill */
+    buckets: Bucket<O, F>[]
     /** a page cut the group here: the page its next reads begins with the rest of its buckets */
     more: boolean
 }
@@ -210,8 +222,8 @@ interface Aggregate<O extends Op = Op> {
 ## AggregatePage
 
 ```ts
-interface AggregatePage<O extends Op = Op> extends AsyncIterable<Aggregate<O>> {
-    groups: Aggregate<O>[]
+interface AggregatePage<O extends Op = Op, F extends boolean = false> extends AsyncIterable<Aggregate<O, F>> {
+    groups: Aggregate<O, F>[]
     /** where the page after it begins; absent on the last */
     next?: string
 }
@@ -349,7 +361,9 @@ what the store holds of them, and the program's instruments.
 ingest(series: SeriesInput | readonly SeriesInput[]): Promise<void>
 ```
 
-Writes series and their samples, every one or none: a refused series names itself.
+Writes series and their samples in one write, every one or none: a
+refused series names itself. One call takes 100,000 samples, as one
+exporter's text does; one past a message goes up in pieces.
 
 ### Metrics.replace
 
@@ -406,7 +420,7 @@ The newest sample of each series the query finds, when it has one in the range.
 ### Metrics.aggregate
 
 ```ts
-aggregate<O extends Op>(query: AggregateQuery<O>): Promise<AggregatePage<O>>
+aggregate<O extends Op, F extends boolean = false>(query: AggregateQuery<O, F>): Promise<AggregatePage<O, F>>
 ```
 
 The buckets of each group of the series the query finds, each one exact
@@ -565,6 +579,8 @@ interface InstrumentOptions {
     help?: string | undefined
     /** how long its name's samples stay, as ingest takes it */
     keep?: Duration | undefined
+    /** the sets of labels it holds at once, 1 to 2000, 2000 unless given; past them, its series of __overflow, said once */
+    maxSeries?: number | undefined
 }
 ```
 
@@ -584,6 +600,8 @@ A timer's or a histogram's upper bounds, ascending, or the store's grid.
 interface TimerOptions {
     help?: string | undefined
     keep?: Duration | undefined
+    /** the sets of labels it holds at once, 1 to 2000, 2000 unless given; a timer's set is one, whatever it writes */
+    maxSeries?: number | undefined
     /** the upper bounds of its spread, to which the store adds +Inf, or 'exponential' */
     buckets?: Buckets | undefined
 }
@@ -600,7 +618,7 @@ interface HistogramOptions extends InstrumentOptions {
 ## GaugeFuncOptions
 
 ```ts
-interface GaugeFuncOptions extends InstrumentOptions {
+interface GaugeFuncOptions extends Omit<InstrumentOptions, 'maxSeries'> {
     /** the set of labels its function reads; another set of the name takes a function of its own */
     labels?: InstrumentLabels | undefined
 }
@@ -680,6 +698,18 @@ the store cannot be reached for fails as a call does, and what it
 carried goes once the store can be. What the store refused since the
 flush before, and what a store that started again may have lost, fail
 it, each once.
+
+### Instruments.sent
+
+```ts
+sent(): Promise<void>
+```
+
+Sends what changed and waits for the store to apply it, without asking
+it to write: the store writes its totals before a read that finds an
+instrument that changed, so a read after this sees what the calls
+counted. It waits for nothing when nothing is on its way, and fails
+never, since the read meets what kept the batch from the store.
 
 ### Instruments.stop
 

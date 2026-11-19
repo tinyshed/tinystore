@@ -29,6 +29,7 @@ class AggregateQuery(SeriesQuery, total=False):
     without: Sequence[str]  # the labels a group leaves out, keeping every other; [] keeps every series apart
     estimate: bool  # a timer's percentile also gives a point between its bounds, interpolated: an estimate
     skip_nan: bool  # a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused
+    fill: bool  # every bucket of the range retention keeps, an empty one with samples 0 and no value; with since or from_
 ```
 
 An aggregate: a query cut into buckets of every, each one exact value of op, by groups.
@@ -71,6 +72,7 @@ class AggregateBucket:
     upper: float | None = None  # infinity past the last bound
     estimate: float | None = None
     skipped: int = 0  # the NaN samples it passed over, with skip_nan
+    date: _date | None = None  # a calendar's bucket's local date: a week's Monday, a month's first; none for every
 ```
 
 A bucket of an aggregate.
@@ -86,7 +88,7 @@ to upper, and with estimate asked a point between them.
 class Aggregate:
     name: str
     labels: dict[str, str]  # the labels by kept or without left
-    buckets: list[AggregateBucket]  # a bucket without samples is left out, and so is one of NaN alone
+    buckets: list[AggregateBucket]  # a bucket without samples is left out, and so is one of NaN alone, unless the query gave fill
     more: bool = False  # a page cut the group here: the page its next reads begins with the rest of its buckets
 ```
 
@@ -169,7 +171,9 @@ A store's metrics: series by name and labels, their reads and aggregates, and th
 async def ingest(series: Series | Sequence[Series]) -> None: ...
 ```
 
-Writes series and their samples, every one or none: a refused series names itself.
+Writes series and their samples in one write, every one or none: a refused series names itself.
+
+One call takes 100,000 samples, as one exporter's text does; one past a message goes up in pieces.
 
 ### Metrics.replace
 
@@ -342,10 +346,14 @@ def counter(
     unit: str | None = None,
     help: str | None = None,
     keep: Duration | None = None,
+    max_series: int | None = None,
 ) -> Counter: ...
 ```
 
 A total that only goes up, which the store keeps: processes counting into one series count into one total.
+
+``max_series`` is the sets of labels it holds at once, 1 to 2000, 2000 unless given: a new one past them
+counts into its series of ``__overflow``, said once in TinyStore's lines.
 
 ### Metrics.gauge
 
@@ -356,6 +364,7 @@ def gauge(
     unit: str | None = None,
     help: str | None = None,
     keep: Duration | None = None,
+    max_series: int | None = None,
 ) -> Gauge: ...
 ```
 
@@ -393,6 +402,7 @@ def timer(
     buckets: Sequence[float] | Literal['exponential'] | None = None,
     help: str | None = None,
     keep: Duration | None = None,
+    max_series: int | None = None,
 ) -> Timer: ...
 ```
 
@@ -408,6 +418,7 @@ def histogram(
     unit: str | None = None,
     help: str | None = None,
     keep: Duration | None = None,
+    max_series: int | None = None,
 ) -> Histogram: ...
 ```
 
@@ -441,6 +452,7 @@ def declare(
     help_: str | None = None,
     keep: Duration | None = None,
     buckets: Sequence[float] | Literal['exponential'] | None = None,
+    max_series: int | None = None,
     read: bool = False,
 ) -> _Declared: ...
 ```
@@ -494,6 +506,19 @@ One the store cannot be reached for fails as a call does, and what it
 carried goes once the store can be. What the store refused since the
 flush before, and what a store that started again may have lost, fail
 it, each once.
+
+### Instruments.sent
+
+```python
+async def sent() -> None: ...
+```
+
+Sends what changed and waits for the store to apply it, without asking it to write.
+
+The store writes its totals before a read that finds an instrument
+that changed, so a read after this sees what the calls counted. It
+waits for nothing when nothing is on its way, and raises never, since
+the read meets what kept the batch from the store.
 
 ### Instruments.stop
 

@@ -74,6 +74,7 @@ pub struct Bucket {
     pub skipped: u64,
     pub gap: bool,
     pub partial: bool,
+    pub date: Option<LocalDate>,
 }
 ```
 
@@ -105,6 +106,7 @@ What a bucket's value is of its samples.
 pub enum Value {
     Exact(f64),
     Between { lower: f64, upper: f64, estimate: Option<f64> },
+    Empty,
 }
 ```
 
@@ -411,6 +413,54 @@ pub fn buckets(self, buckets: impl Into<Buckets>) -> Self
 Its buckets: the upper bounds of its spread, ascending, each a
 number of 0 or more, to which the store adds `+Inf`, or
 `Buckets::Exponential`, a grid the store keeps.
+
+### Builder.max_series
+
+```rust
+pub fn max_series(self, sets: usize) -> Self
+```
+
+The sets of labels it holds at once, 1 to 2000, 2000 unless
+given: a new set past them counts into its series of
+`__overflow`, said once, so that a label that takes a value a
+user stays bounded and its groups still add up. A timer's set
+is one, whatever series it writes.
+
+### Builder.max_series
+
+```rust
+pub fn max_series(self, sets: usize) -> Self
+```
+
+The sets of labels it holds at once, 1 to 2000, 2000 unless
+given: a new set past them counts into its series of
+`__overflow`, said once, so that a label that takes a value a
+user stays bounded and its groups still add up. A timer's set
+is one, whatever series it writes.
+
+### Builder.max_series
+
+```rust
+pub fn max_series(self, sets: usize) -> Self
+```
+
+The sets of labels it holds at once, 1 to 2000, 2000 unless
+given: a new set past them counts into its series of
+`__overflow`, said once, so that a label that takes a value a
+user stays bounded and its groups still add up. A timer's set
+is one, whatever series it writes.
+
+### Builder.max_series
+
+```rust
+pub fn max_series(self, sets: usize) -> Self
+```
+
+The sets of labels it holds at once, 1 to 2000, 2000 unless
+given: a new set past them counts into its series of
+`__overflow`, said once, so that a label that takes a value a
+user stays bounded and its groups still add up. A timer's set
+is one, whatever series it writes.
 
 ### Builder.open
 
@@ -801,7 +851,9 @@ pub fn all(self) -> All<Aggregate>
 ```
 
 The page's groups, then those of each page after it, read one page at
-a time as the walk reaches the end of the one it holds.
+a time as the walk reaches the end of the one it holds. A group a page
+cut comes once, whole, its parts joined: the walk holds its buckets
+until the page that ends it.
 
 ## All
 
@@ -832,7 +884,8 @@ pub fn all(self) -> All<Series>
 ```
 
 The page's series, then those of each page after it, read one page at
-a time as the walk reaches the end of the one it holds.
+a time as the walk reaches the end of the one it holds. A series a
+page cut comes in its parts, since a series is what pages bound.
 
 ## Prometheus
 
@@ -1011,6 +1064,27 @@ An aggregate passes a NaN sample over rather than refuse it: the
 sample counts in no value, and its bucket's `skipped` says how many
 it passed over. A bucket of NaN alone is left out, as one without
 samples is. An infinity is still refused, since it is a value.
+
+### Query.fill
+
+```rust
+pub fn fill(self) -> Self
+```
+
+An aggregate gives every bucket of the range that retention keeps, a
+bucket without samples [`Value::Empty`](super::Value::Empty), with
+no samples and `partial` as its span gives it: a chart draws every
+hour of a day, an empty one as it chooses. A group without a sample
+is still left out, since nothing names it. It takes `since` or
+`from`, and no `limit`; past 100,000 buckets a group it is `limit`,
+before anything is read.
+
+```rust
+use tinystore::metrics::Op;
+let day = stats.query().name("errors_total").since(Duration::from_hours(24)).every(Duration::from_hours(1));
+let hours = day.fill().aggregate(Op::Increase)?.groups;
+let drawn: Vec<f64> = hours[0].buckets.iter().map(|hour| hour.value.exact().unwrap_or(0.0)).collect();
+```
 
 ### Query.limit
 
@@ -1491,7 +1565,8 @@ more.
 pub fn all(self) -> All<Aggregate>
 ```
 
-The page's groups, then those of each page after it, as a stream.
+The page's groups, then those of each page after it, as a stream: a
+group a page cut comes once, whole, its parts joined.
 
 ## aio::metrics::All
 
@@ -1851,6 +1926,15 @@ pub fn skip_nan(self) -> Self
 
 An aggregate passes a NaN sample over, counted in its bucket's
 `skipped`, as `crate::metrics::Query::skip_nan` does.
+
+### aio::metrics::Query.fill
+
+```rust
+pub fn fill(self) -> Self
+```
+
+An aggregate gives every bucket of the range that retention keeps,
+as `crate::metrics::Query::fill` does.
 
 ### aio::metrics::Query.read
 
