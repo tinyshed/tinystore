@@ -2276,3 +2276,58 @@ fn a_drop_leaves_working_the_index_an_open_made_after_the_drop_committed() {
         assert_eq!(ids(&search(&reopened, "flour")), ["b"], "and holds nothing of the dropped one's");
     }
 }
+
+// contract: SRCH-18
+#[test]
+fn a_total_counts_every_document_a_search_finds_under_its_filter_whatever_its_page() {
+    let fixture = fixture();
+    let notes = fixture.store.index::<Article>("notes").field("title", 1.0).filters(["category"]).open().unwrap();
+    let note = |n: usize| Article {
+        category: Some(if n.is_multiple_of(2) { "even" } else { "odd" }.to_owned()),
+        ..article(&format!("bread {} {n}", if n.is_multiple_of(3) { "rye" } else { "wheat" }), "")
+    };
+    for (round, first) in [0, 1000, 2000].into_iter().enumerate() {
+        let notes_of: Vec<(String, Article)> = (first..first + 1000).map(|n| (format!("n{n}"), note(n))).collect();
+        notes.set_many(notes_of.iter().map(|(id, note)| (id.as_str(), note))).unwrap();
+        if round == 1 {
+            maintain(&fixture.store).unwrap();
+        }
+    }
+    for n in [0, 3, 4, 2999] {
+        notes.delete(format!("n{n}")).unwrap();
+    }
+    let gone = |n: usize| [0, 3, 4, 2999].contains(&n);
+    let every = |keep: &dyn Fn(usize) -> bool| (0..3000).filter(|n| !gone(*n) && keep(*n)).count() as u64;
+    let total = |call: SearchCall<'_, Article>| call.total().run().unwrap().total.unwrap();
+    let exactly = |count| Total { count, at_least: false };
+    assert_eq!(total(notes.search("bread").limit(1)), exactly(2996), "whatever the page");
+    assert_eq!(total(notes.search("rye").offset(990).limit(10)), exactly(every(&|n| n.is_multiple_of(3))));
+    assert_eq!(total(notes.search("rye wheat")), exactly(2996), "a document holding both is counted once");
+    let even = || crate::search::eq("category", "even");
+    assert_eq!(total(notes.search("rye").filter(even())), exactly(every(&|n| n.is_multiple_of(6))), "under its filter");
+    assert_eq!(total(notes.search("wheet")), exactly(every(&|n| !n.is_multiple_of(3))), "as its corrected word finds");
+    assert_eq!(total(notes.search("whe").prefix()), exactly(every(&|n| !n.is_multiple_of(3))), "as its prefix finds");
+    assert_eq!(total(notes.search("rye 1500").prefix_every()), exactly(every(&|n| n.is_multiple_of(3) || n == 1500)));
+    assert_eq!(total(notes.search("nothing")), exactly(0));
+    let page = notes.search("rye").filter(even()).limit(1000).total().run().unwrap();
+    assert_eq!(page.total.unwrap().count, page.hits.len() as u64, "what a page of every hit holds");
+    assert_eq!(notes.search("rye").run().unwrap().total, None, "none unless asked");
+    let vectors = fixture.store.index::<Article>("vectors").field("title", 1.0).vectors(2).open().unwrap();
+    let refused = vectors.search_vector(&[1.0, 0.0]).total().run().unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid, "a vector finds every document that has one");
+}
+
+// contract: SRCH-18
+#[test]
+fn a_total_past_ten_thousand_says_at_least_ten_thousand_and_one_of_ten_thousand_is_exact() {
+    let fixture = fixture();
+    let notes = fixture.store.index::<String>("notes").open().unwrap();
+    let bread = "bread".to_owned();
+    for first in (0..10_000).step_by(1000) {
+        notes.set_many((first..first + 1000).map(|n| (format!("n{n}"), &bread))).unwrap();
+    }
+    let total = || notes.search("bread").total().run().unwrap().total.unwrap();
+    assert_eq!(total(), Total { count: 10_000, at_least: false });
+    notes.set("n10000", &bread).unwrap();
+    assert_eq!(total(), Total { count: 10_000, at_least: true }, "never an estimate");
+}

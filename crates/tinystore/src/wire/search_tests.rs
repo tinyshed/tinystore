@@ -7,7 +7,7 @@ use crate::wire::protocol::{
     SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, method,
 };
 #[cfg(feature = "sql")]
-use crate::wire::protocol::{SearchStatement, SqlDone, SqlMigration, SqlOpen, SqlStatement};
+use crate::wire::protocol::{SearchStatement, SearchTotal, SqlDone, SqlMigration, SqlOpen, SqlStatement};
 use crate::{Options, Store};
 
 fn open(client: &mut Client, name: &str) -> u64 {
@@ -237,6 +237,10 @@ fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
         ..query(handle, "bread")
     };
     assert_eq!(ids(&client.call::<SearchFound>(method::SEARCH_SEARCH, &kept).unwrap()), ["7"]);
+    let counted: SearchFound =
+        client.call(method::SEARCH_SEARCH, &SearchQuery { total: true, ..kept.clone() }).unwrap();
+    assert_eq!(counted.total, Some(SearchTotal { count: 1, at_least: false }));
+    assert_eq!(client.call::<SearchFound>(method::SEARCH_SEARCH, &kept).unwrap().total, None, "unless asked");
     let unknown = SearchQuery { statements: Vec::new(), ..kept };
     let refused = client.call::<SearchFound>(method::SEARCH_SEARCH, &unknown).unwrap_err();
     assert!(refused.message.contains("statement 0, of 0"), "{}", refused.message);

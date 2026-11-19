@@ -278,6 +278,7 @@ impl<T: DeserializeOwned> Index<T> {
             prefix: Prefix::Whole,
             matches: None,
             filter: Vec::new(),
+            total: false,
             offset: 0,
             limit: LIMIT,
         }
@@ -293,13 +294,13 @@ impl<T: DeserializeOwned> Index<T> {
     /// The hits of `query`, each with its document as its value, and where
     /// it matched when the search asked, read from it after the search.
     pub(super) fn found(&self, query: Query) -> Result<Found<T>> {
-        let Answer { hits, corrected, sought, .. } = self.search.search(&self.open, query)?;
+        let Answer { hits, corrected, sought, total, .. } = self.search.search(&self.open, query)?;
         let hits = hits.into_iter().map(|Ranked { id, value, score, text_score, similarity }| {
             let matches = sought.as_ref().map(|sought| sought.matches_in(&value)).unwrap_or_default();
             let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
             Ok(Hit { id, value, score, matches, text_score, similarity })
         });
-        Ok(Found { hits: hits.collect::<Result<_>>()?, corrected })
+        Ok(Found { hits: hits.collect::<Result<_>>()?, corrected, total })
     }
 }
 
@@ -501,6 +502,7 @@ pub struct SearchCall<'i, T> {
     /// What a hit's matches count, when the search asks where it matched.
     matches: Option<Unit>,
     filter: Vec<Condition>,
+    total: bool,
     offset: usize,
     limit: usize,
 }
@@ -511,12 +513,25 @@ impl<T> std::fmt::Debug for SearchCall<'_, T> {
     }
 }
 
-/// What a search found, the best first, and the text it read in fact when
-/// it read a misspelt word as the index's nearest.
+/// What a search found, the best first, the text it read in fact when it
+/// read a misspelt word as the index's nearest, and how many it finds in all
+/// when it asked with [`total`](SearchCall::total).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Found<T> {
     pub hits: Vec<Hit<T>>,
     pub corrected: Option<String>,
+    pub total: Option<Total>,
+}
+
+/// How many documents a search finds, under its filters and whatever its
+/// `limit` and `offset`: exactly up to 10,000, and past it 10,000 with
+/// `at_least`, never an estimate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Total {
+    pub count: u64,
+    /// Whether counting stopped at 10,000, more being there.
+    pub at_least: bool,
 }
 
 /// A document a search found, and the score that ordered it: a score orders
@@ -632,6 +647,16 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
         self
     }
 
+    /// Counts the documents it finds as well, in [`Found::total`]: each one
+    /// its words find, as it read them, that its filters pass, exactly up to
+    /// 10,000, and past it 10,000 with `at_least`. Counting reads every
+    /// posting of its words, most of which a search alone skips. `invalid`
+    /// beside a vector, which finds every document that has one.
+    pub fn total(mut self) -> Self {
+        self.total = true;
+        self
+    }
+
     /// The search run inside `tx`, a transaction of a table's database.
     #[cfg(feature = "sql")]
     pub(crate) fn in_tx(mut self, tx: &'i Transaction<'i>) -> Self {
@@ -685,6 +710,9 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
             let refused = format!("a search reaches its {MOST_HITS}th hit at most, offset and limit together");
             return Err(SEARCH_HITS.refuse(reached as u64, refused));
         }
+        if self.total && self.vector.is_some() {
+            return Err(Error::invalid("a total of a search by a vector, which finds every document that has one"));
+        }
         let normal = analyzer::normalize(&self.text);
         let words = words_read(&normal);
         Ok(Query {
@@ -697,6 +725,7 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
             min_similarity: self.min_similarity,
             prefix: self.prefix,
             filter: if self.filter.is_empty() { None } else { Some(filter::asked(&self.filter)?) },
+            total: self.total,
             offset: self.offset,
             limit: self.limit,
         })

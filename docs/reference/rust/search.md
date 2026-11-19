@@ -205,11 +205,13 @@ vector; the next search sees it.
 pub struct Found<T> {
     pub hits: Vec<Hit<T>>,
     pub corrected: Option<String>,
+    pub total: Option<Total>,
 }
 ```
 
-What a search found, the best first, and the text it read in fact when
-it read a misspelt word as the index's nearest.
+What a search found, the best first, the text it read in fact when it
+read a misspelt word as the index's nearest, and how many it finds in all
+when it asked with [`total`](SearchCall::total).
 
 ## Hit
 
@@ -591,6 +593,18 @@ every earlier one passes: `.filter(search::eq("owner_id", &42))`,
 the best of those, scored by the words of the whole index, never the
 best of all with the others taken out after.
 
+### SearchCall.total
+
+```rust
+pub fn total(self) -> Self
+```
+
+Counts the documents it finds as well, in `Found::total`: each one
+its words find, as it read them, that its filters pass, exactly up to
+10,000, and past it 10,000 with `at_least`. Counting reads every
+posting of its words, most of which a search alone skips. `invalid`
+beside a vector, which finds every document that has one.
+
 ### SearchCall.limit
 
 ```rust
@@ -612,6 +626,19 @@ The hits it passes before the first it answers.
 ```rust
 pub fn run(self) -> Result<Found<T>>
 ```
+
+## Total
+
+```rust
+pub struct Total {
+    pub count: u64,
+    pub at_least: bool,
+}
+```
+
+How many documents a search finds, under its filters and whatever its
+`limit` and `offset`: exactly up to 10,000, and past it 10,000 with
+`at_least`, never an estimate.
 
 ## Match
 
@@ -1214,6 +1241,14 @@ pub fn matches(self) -> Self
 ```
 
 As `crate::search::SearchCall::matches`.
+
+### aio::search::SearchCall.total
+
+```rust
+pub fn total(self) -> Self
+```
+
+As `crate::search::SearchCall::total`.
 
 ### aio::search::SearchCall.filter
 

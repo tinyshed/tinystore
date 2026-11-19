@@ -113,7 +113,7 @@ from .records import (
     Top,
     TxEvents,
 )
-from .search import Hit, Hybrid, IndexInfo, IndexStatus, Match, Result, SearchIndex, TableIndex, Vectors
+from .search import Hit, Hybrid, IndexInfo, IndexStatus, Match, Result, SearchIndex, TableIndex, Total, Vectors
 from .sql import Database, Done, Sql, SqlTx, TxQueue, sql
 from .store import SelfMetrics, Status, Store, connect, open
 from .trace import trace
@@ -240,6 +240,7 @@ __all__ = [
     "TooNewError",
     "TooOldError",
     "Top",
+    "Total",
     "Trim",
     "Tx",
     "TxBucket",

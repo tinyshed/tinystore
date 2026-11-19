@@ -124,6 +124,17 @@ class Result[T]:
 
     hits: list[Hit[T]]
     corrected: str | None = None
+    total: Total | None = None
+    """how many it finds, when the search asked with total"""
+
+
+@dataclass(frozen=True, slots=True)
+class Total:
+    """How many documents a search finds: exactly, or past 10,000, 10,000 and at_least, never an estimate."""
+
+    count: int
+    at_least: bool
+    """whether counting stopped at 10,000, more being there"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +219,7 @@ class _Searchable[T]:
         min_similarity: float | None = None,
         prefix: bool | Literal["every"] = False,
         matches: bool = False,
+        total: bool = False,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Result[T]:
@@ -229,6 +241,10 @@ class _Searchable[T]:
         the least cosine a document's vector has with the search's for the
         vector to find it: a search by its vector alone leaves out the hits
         under it, and one by words too adds nothing for them to the sum.
+        With total, the result counts the documents it finds as well, under
+        its where and whatever its limit and offset: exactly up to 10,000,
+        and past it 10,000 with at_least; it reads every posting of its
+        words, which a search alone skips most of; invalid beside a vector.
         """
         if prefix not in (True, False, "every"):
             raise InvalidError(f"a prefix of {prefix!r}: True, False or 'every'")
@@ -242,6 +258,7 @@ class _Searchable[T]:
             min_similarity=min_similarity,
             prefix=prefix,
             matches=matches,
+            total=total,
             limit=limit,
             offset=offset,
         )
@@ -263,6 +280,7 @@ class _Searchable[T]:
                 for hit in found.get("hits", [])
             ],
             found.get("corrected"),
+            _total_of(found.get("total")),
         )
 
     async def status(self) -> IndexStatus:
@@ -453,6 +471,7 @@ def _query(
     min_similarity: float | None,
     prefix: bool | Literal["every"],
     matches: bool,
+    total: bool,
     limit: int | None,
     offset: int | None,
 ) -> Callable[[int], bytes]:
@@ -473,11 +492,18 @@ def _query(
             matches="chars" if matches else None,
             where=where,
             statements=statements,
+            total=total,
             offset=offset,
             limit=limit,
         )
 
     return body
+
+
+def _total_of(total: dict[str, Any] | None) -> Total | None:
+    if total is None:
+        return None
+    return Total(total.get("count", 0), total.get("at_least", False))
 
 
 def _matches_of(found: list[dict[str, Any]] | None) -> list[Match] | None:

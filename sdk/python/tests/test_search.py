@@ -260,6 +260,23 @@ async def test_a_tables_index_finds_its_rows_each_hit_its_row_and_follows_every_
 
 
 @dataclass
+class Staff:
+    name: str
+    role: str
+
+
+# contract: SRCH-18
+async def test_a_total_counts_what_a_search_finds_under_its_where_whatever_its_page(store: tinystore.Store) -> None:
+    people = store.index("people_total", Staff, fields=["name"], filters=["role"])
+    roles = ["teacher", "student", "student"]
+    await people.set_many([(f"p{n}", Staff(f"Ivanov {n}", roles[n % 3])) for n in range(30)])
+    found = await people.search("ivanov", where={"role": "teacher"}, limit=2, total=True)
+    assert len(found.hits) == 2
+    assert found.total == tinystore.Total(count=10, at_least=False)
+    assert (await people.search("ivanov")).total is None
+
+
+@dataclass
 class Person:
     id: int
     name: str

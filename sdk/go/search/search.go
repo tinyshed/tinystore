@@ -368,11 +368,31 @@ type Match struct {
 }
 
 // Result is what a search found, the best first, and the text it read in
-// fact when a word was misspelt: "" when none was.
+// fact when a word was misspelt: "" when none was. Total is how many it
+// finds, when the search asked with Total, and nil otherwise.
 type Result[T any] struct {
 	Hits      []Hit[T]
 	Corrected string
+	Total     *Counted
 }
+
+// Counted is how many documents a search finds: exactly, or past 10,000,
+// 10,000 and AtLeast, never an estimate.
+type Counted struct {
+	Count int
+	// AtLeast says counting stopped at 10,000, more being there.
+	AtLeast bool
+}
+
+type total struct{}
+
+// Total has the search count the documents it finds as well, in
+// Result.Total, under its Where and whatever its Limit and Offset: exactly
+// up to 10,000, and past it 10,000 with AtLeast. It reads every posting of
+// its words, which a search alone skips most of; invalid beside a Vector.
+func Total() QueryOption { return total{} }
+
+func (total) search(q *wire.SearchQuery) { q.Total = true }
 
 type prefix struct{}
 
@@ -464,6 +484,9 @@ func (x *Index[T]) result(found wire.SearchFound) (Result[T], error) {
 	out := Result[T]{Hits: make([]Hit[T], len(found.Hits))}
 	if found.Corrected != nil {
 		out.Corrected = *found.Corrected
+	}
+	if found.Total != nil {
+		out.Total = &Counted{Count: int(found.Total.Count), AtLeast: found.Total.AtLeast}
 	}
 	var columns []string
 	if found.Columns != nil {

@@ -732,6 +732,38 @@ impl Run<'_> {
     }
 }
 
+/// How many documents the lists hold together, of those `passing` holds when
+/// a filter gives them: their cursors walked in document order, each
+/// document counted once, and none read past the `most + 1`th, which says
+/// there are more than `most`.
+pub(crate) fn count(lists: &mut [List], source: &mut dyn Fetch, passing: Option<&[u32]>, most: usize) -> Result<usize> {
+    let mut heads = BinaryHeap::with_capacity(lists.len());
+    for (at, list) in lists.iter_mut().enumerate() {
+        let doc = list.doc(source)?;
+        if doc != END {
+            heads.push(Reverse((doc, at)));
+        }
+    }
+    let passes = |doc: u32| passing.is_none_or(|docs| docs.binary_search(&doc).is_ok());
+    let (mut counted, mut last) = (0, None);
+    while let Some(Reverse((doc, at))) = heads.pop() {
+        if last != Some(doc) && passes(doc) {
+            counted += 1;
+            if counted > most {
+                break;
+            }
+        }
+        last = Some(doc);
+        let list = &mut lists[at];
+        list.next();
+        let next = list.doc(source)?;
+        if next != END {
+            heads.push(Reverse((next, at)));
+        }
+    }
+    Ok(counted)
+}
+
 /// The best `k` by every posting of every list, of those `passing` holds
 /// when a filter gives them: what [`best`] and [`best_of`] must answer.
 #[cfg(test)]

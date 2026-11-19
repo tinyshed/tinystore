@@ -661,6 +661,8 @@ func NewMessage(name string) Message {
 		return &SearchMatch{}
 	case "search.Found":
 		return &SearchFound{}
+	case "search.Total":
+		return &SearchTotal{}
 	case "search.Status":
 		return &SearchStatus{}
 	case "search.Name":
@@ -13027,6 +13029,8 @@ type SearchQuery struct {
 	MinSimilarity *float64 `wire:"12,minSimilarity"`
 	// what where's {"statement": n} names, by its place
 	Statements []SearchStatement `wire:"13,statements"`
+	// counts what it finds as well, exactly up to 10,000; invalid beside a vector
+	Total bool `wire:"14,total"`
 }
 
 func (m SearchQuery) Write(w *Writer) {
@@ -13100,6 +13104,11 @@ func (m SearchQuery) Write(w *Writer) {
 		}
 		n++
 	}
+	if m.Total {
+		w.Uint(14)
+		w.Bool(m.Total)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -13147,6 +13156,8 @@ func (m *SearchQuery) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Statements = v
+		case 14:
+			m.Total = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -13168,7 +13179,8 @@ func (m SearchQuery) IsZero() bool {
 		!m.PrefixEvery &&
 		m.Matches == nil &&
 		m.MinSimilarity == nil &&
-		len(m.Statements) == 0
+		len(m.Statements) == 0 &&
+		!m.Total
 }
 
 // SearchStatement is the schema's search.Statement.
@@ -13432,6 +13444,8 @@ type SearchFound struct {
 	Corrected *string `wire:"2,corrected"`
 	// the columns of a table's index's rows
 	Columns *[]string `wire:"3,columns"`
+	// how many it finds, when the query asked
+	Total *SearchTotal `wire:"4,total"`
 }
 
 func (m SearchFound) Write(w *Writer) {
@@ -13456,6 +13470,11 @@ func (m SearchFound) Write(w *Writer) {
 		for _, item0 := range *m.Columns {
 			w.Str(item0)
 		}
+		n++
+	}
+	if m.Total != nil {
+		w.Uint(4)
+		m.Total.Write(w)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -13486,6 +13505,10 @@ func (m *SearchFound) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Columns = &v
+		case 4:
+			var v SearchTotal
+			v.Read(r)
+			m.Total = &v
 		default:
 			r.Skip()
 		}
@@ -13497,7 +13520,55 @@ func (m *SearchFound) Read(r *Reader) {
 func (m SearchFound) IsZero() bool {
 	return len(m.Hits) == 0 &&
 		m.Corrected == nil &&
-		m.Columns == nil
+		m.Columns == nil &&
+		m.Total == nil
+}
+
+// SearchTotal is the schema's search.Total.
+//
+// How many documents a search finds, under its where and whatever its offset
+// and limit: exactly up to 10,000, and past it 10,000 and atLeast.
+type SearchTotal struct {
+	Count   uint64 `wire:"1,count"`
+	AtLeast bool   `wire:"2,atLeast"`
+}
+
+func (m SearchTotal) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Count != 0 {
+		w.Uint(1)
+		w.Uint(m.Count)
+		n++
+	}
+	if m.AtLeast {
+		w.Uint(2)
+		w.Bool(m.AtLeast)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchTotal) Read(r *Reader) {
+	*m = SearchTotal{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Count = r.Uint()
+		case 2:
+			m.AtLeast = r.Bool()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchTotal writes as no field at all.
+func (m SearchTotal) IsZero() bool {
+	return m.Count == 0 &&
+		!m.AtLeast
 }
 
 // SearchStatus is the schema's search.Status.

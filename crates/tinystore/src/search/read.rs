@@ -21,9 +21,10 @@ use rusqlite::{Connection, MAIN_DB, OptionalExtension};
 use super::analyzer::{self, Word};
 use super::clusters::{self, Phase, Probe};
 use super::correct::Corrector;
-use super::execute::{Fetch, List, best, best_of, held_by_all};
+use super::execute::{Fetch, List, best, best_of, count, held_by_all};
 use super::filter::{self, Docs, Reader};
 use super::hybrid::{self, HALF};
+use super::index::Total;
 use super::kept::{Chunk, Gone, Kept, KeptPiece, Listed, Moment, NORMS};
 use super::layouts;
 use super::legacy;
@@ -78,6 +79,9 @@ const MOST_PREFIXES: usize = 8;
 /// and 1 in 8 (`where_a_filter_is_scored_alone_takes` in `search::index`).
 const NARROW_WORDS: u64 = 32;
 const NARROW_VECTORS: u64 = 4;
+/// The documents a total counts exactly: past it a total says only that
+/// there are more, as Lucene's stops at a thousand, and the walk stops.
+const MOST_COUNTED: usize = 10_000;
 
 /// A search's text as the analyzer normalized it, its words found in it,
 /// its vector, how it combines the two if it says, and the hits it asks for.
@@ -98,6 +102,8 @@ pub(crate) struct Query {
     /// matched.
     pub(crate) matches: Option<Ask>,
     pub(crate) filter: Option<filter::Asked>,
+    /// Whether it counts what it finds too, as [`total`] counts.
+    pub(crate) total: bool,
     pub(crate) offset: usize,
     pub(crate) limit: usize,
 }
@@ -137,6 +143,8 @@ pub(crate) struct Answer {
     /// What the hits' matches are read against after the read, when the
     /// search asks where they matched and found them by its words.
     pub(crate) sought: Option<Sought>,
+    /// How many it finds, when it asked.
+    pub(crate) total: Option<Total>,
 }
 
 /// A document a search answers: its id, value as JSON and score, the score
@@ -232,7 +240,8 @@ pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<An
         Some(ask) if !matches!(mode, Mode::Vector) => Some(sought(connection, &asked, ask)?),
         _ => None,
     };
-    Ok(Answer { hits, corrected, behind, sought })
+    let total = asked.query.total.then(|| total(connection, &asked, held)).transpose()?;
+    Ok(Answer { hits, corrected, behind, sought, total })
 }
 
 /// The keys the search's words found documents by, each with the place of
@@ -340,14 +349,8 @@ thread_local! {
 
 /// The best `k` by the search's words, with their scores.
 fn by_words(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize) -> Result<Vec<(f64, u32)>> {
-    let Held { moment, documents, .. } = held;
-    let stats = Stats {
-        documents,
-        tokens: tokens(connection, asked.index)?,
-        gone: asked.kept.gone(connection, moment)?,
-        segments: segments::of_index(connection, asked.index)?,
-    };
-    let mut source = Source::new(connection, asked, moment, &stats);
+    let stats = stats(connection, asked, held)?;
+    let mut source = Source::new(connection, asked, held.moment, &stats);
     let Lists { mut lists, words } = lists(connection, asked, &stats, &mut source)?;
     let found = match asked.query.prefix {
         Prefix::Every => holding_every_word_first((&mut lists, &words), &mut source, held, k)?,
@@ -356,6 +359,27 @@ fn by_words(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize
     #[cfg(test)]
     check(connection, asked, (&stats, held), (&found, k))?;
     Ok(found.into_iter().map(|(points, doc)| (score(points), doc)).collect())
+}
+
+/// How many documents the search's words find, of those its filter passes:
+/// every list walked in document order, and none read past the
+/// [`MOST_COUNTED`]th, past which it says only that there are more.
+fn total(connection: &Connection, asked: &Asked<'_>, held: Held<'_>) -> Result<Total> {
+    let stats = stats(connection, asked, held)?;
+    let mut source = Source::new(connection, asked, held.moment, &stats);
+    let Lists { mut lists, .. } = lists(connection, asked, &stats, &mut source)?;
+    let counted = count(&mut lists, &mut source, held.passing, MOST_COUNTED)?;
+    Ok(Total { count: counted.min(MOST_COUNTED) as u64, at_least: counted > MOST_COUNTED })
+}
+
+/// What scores the snapshot `held`'s postings.
+fn stats(connection: &Connection, asked: &Asked<'_>, held: Held<'_>) -> Result<Stats> {
+    Ok(Stats {
+        documents: held.documents,
+        tokens: tokens(connection, asked.index)?,
+        gone: asked.kept.gone(connection, held.moment)?,
+        segments: segments::of_index(connection, asked.index)?,
+    })
 }
 
 /// The best `k` by the lists' points, of the documents a filter passes

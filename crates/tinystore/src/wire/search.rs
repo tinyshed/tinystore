@@ -14,7 +14,7 @@ use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, SearchDeleted, SearchDocument, SearchDropped, SearchFound, SearchGot, SearchHit,
     SearchIndex, SearchKey, SearchListed, SearchMatch, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany,
-    SearchStatement, SearchStatus, method,
+    SearchStatement, SearchStatus, SearchTotal, method,
 };
 use crate::engine::SharedFile;
 use crate::search::{self, Document, Index, Match, Rebuild, SearchCall, Status, Unit};
@@ -235,7 +235,12 @@ fn searched(handles: &Handles, asked: SearchQuery) -> Answered {
         text_score: hit.text_score,
         similarity: hit.similarity,
     });
-    Ok(SearchFound { hits: hits.collect(), corrected: found.corrected, columns: None }.encode())
+    let total = found.total.map(total);
+    Ok(SearchFound { hits: hits.collect(), corrected: found.corrected, columns: None, total }.encode())
+}
+
+fn total(total: search::Total) -> SearchTotal {
+    SearchTotal { count: total.count, at_least: total.at_least }
 }
 
 /// The unit a query counts its hits' matches in, as the wire names it.
@@ -287,6 +292,9 @@ fn query<'i>(
     } else if asked.prefix {
         call = call.prefix();
     }
+    if asked.total {
+        call = call.total();
+    }
     if let Some(named) = &asked.matches {
         call = call.matches_in(unit(named)?);
     }
@@ -326,7 +334,8 @@ fn rows_found(call: SearchCall<'_, Value>, asked_matches: bool) -> Answered {
         text_score: hit.text_score,
         similarity: hit.similarity,
     });
-    Ok(SearchFound { hits: hits.collect(), corrected: found.corrected, columns: Some(columns) }.encode())
+    let total = found.total.map(total);
+    Ok(SearchFound { hits: hits.collect(), corrected: found.corrected, columns: Some(columns), total }.encode())
 }
 
 #[cfg(not(feature = "sql"))]

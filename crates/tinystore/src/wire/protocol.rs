@@ -11529,6 +11529,8 @@ pub(crate) struct SearchQuery {
     pub(crate) min_similarity: Option<f64>,
     /// What where's {"statement": n} names, by its place.
     pub(crate) statements: Vec<SearchStatement>,
+    /// Counts what it finds as well, exactly up to 10,000; invalid beside a vector.
+    pub(crate) total: bool,
 }
 
 #[cfg(feature = "search")]
@@ -11553,6 +11555,7 @@ impl Message for SearchQuery {
                 11 => message.matches = Some(codec::str(r, "matches")?),
                 12 => message.min_similarity = Some(codec::float(r, "minSimilarity")?),
                 13 => message.statements = codec::list(r, "statements", codec::message::<SearchStatement>)?,
+                14 => message.total = codec::bool(r, "total")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11613,6 +11616,10 @@ impl Message for SearchQuery {
             map.field(out, 13);
             codec::write_list(out, &self.statements, codec::write_message);
         }
+        if self.total {
+            map.field(out, 14);
+            codec::write_bool(out, &self.total);
+        }
         map.close(out);
     }
 
@@ -11631,6 +11638,7 @@ impl Message for SearchQuery {
             + self.matches.as_ref().map_or(0, |matches| 1 + 5 + matches.len())
             + self.min_similarity.map_or(0, |_| 10)
             + 1 + codec::list_size(&self.statements, codec::message_size)
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -11647,6 +11655,7 @@ impl Message for SearchQuery {
             && self.matches.is_none()
             && self.min_similarity.is_none()
             && self.statements.is_empty()
+            && !self.total
     }
 }
 
@@ -11885,6 +11894,8 @@ pub(crate) struct SearchFound {
     pub(crate) corrected: Option<String>,
     /// The columns of a table's index's rows.
     pub(crate) columns: Option<Vec<String>>,
+    /// How many it finds, when the query asked.
+    pub(crate) total: Option<SearchTotal>,
 }
 
 #[cfg(feature = "search")]
@@ -11899,6 +11910,7 @@ impl Message for SearchFound {
                 1 => message.hits = codec::list(r, "hits", codec::message::<SearchHit>)?,
                 2 => message.corrected = Some(codec::str(r, "corrected")?),
                 3 => message.columns = Some(codec::list(r, "columns", codec::str)?),
+                4 => message.total = Some(SearchTotal::read(r)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11919,6 +11931,10 @@ impl Message for SearchFound {
             map.field(out, 3);
             codec::write_list(out, columns, codec::write_str);
         }
+        if let Some(total) = &self.total {
+            map.field(out, 4);
+            codec::write_message(out, total);
+        }
         map.close(out);
     }
 
@@ -11927,12 +11943,65 @@ impl Message for SearchFound {
             + 1 + codec::list_size(&self.hits, codec::message_size)
             + self.corrected.as_ref().map_or(0, |corrected| 1 + 5 + corrected.len())
             + self.columns.as_ref().map_or(0, |columns| 1 + codec::list_size(columns, |item| 5 + item.len()))
+            + self.total.as_ref().map_or(0, |total| 1 + total.size())
     }
 
     fn is_zero(&self) -> bool {
         self.hits.is_empty()
             && self.corrected.is_none()
             && self.columns.is_none()
+            && self.total.is_none()
+    }
+}
+
+/// How many documents a search finds, under its where and whatever its offset
+/// and limit: exactly up to 10,000, and past it 10,000 and atLeast.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchTotal {
+    pub(crate) count: u64,
+    pub(crate) at_least: bool,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchTotal {
+    const NAME: &'static str = "search.Total";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.count = codec::uint(r, "count")?,
+                2 => message.at_least = codec::bool(r, "atLeast")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.count != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.count);
+        }
+        if self.at_least {
+            map.field(out, 2);
+            codec::write_bool(out, &self.at_least);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.count == 0
+            && !self.at_least
     }
 }
 
@@ -14361,6 +14430,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "search.Match" => SearchMatch::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Found" => SearchFound::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Total" => SearchTotal::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Status" => SearchStatus::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]

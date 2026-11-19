@@ -63,9 +63,21 @@ A document a search found, and the score that ordered it among this search's hit
 class Result[T]:
     hits: list[Hit[T]]
     corrected: str | None = None
+    total: Total | None = None  # how many it finds, when the search asked with total
 ```
 
 What a search found, the best first, and the text it read in fact when a word was misspelt.
+
+## Total
+
+```python
+@dataclass(frozen=True, slots=True)
+class Total:
+    count: int
+    at_least: bool  # whether counting stopped at 10,000, more being there
+```
+
+How many documents a search finds: exactly, or past 10,000, 10,000 and at_least, never an estimate.
 
 ## IndexStatus
 

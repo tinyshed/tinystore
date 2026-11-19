@@ -26,6 +26,18 @@ func Vector(v []float32) vector
 
 Vector is a document's vector on a set, or a search's on a search, of the index's dimensions, as the program's own model gave it.
 
+## Counted
+
+```go
+type Counted struct {
+	Count int
+	// AtLeast says counting stopped at 10,000, more being there.
+	AtLeast bool
+}
+```
+
+Counted is how many documents a search finds: exactly, or past 10,000, 10,000 and AtLeast, never an estimate.
+
 ## Doc
 
 ```go
@@ -349,6 +361,14 @@ func PrefixEvery() QueryOption
 
 PrefixEvery reads every word as the start of a word too, as people shorten each word of a name: "лин алг" finds "Линейная алгебра". Each word of two letters or more is read so, the first eight, whatever follows it; a document that holds a word for each word of the text comes first, its score raised above the rest. In place of Prefix.
 
+### Total
+
+```go
+func Total() QueryOption
+```
+
+Total has the search count the documents it finds as well, in Result.Total, under its Where and whatever its Limit and Offset: exactly up to 10,000, and past it 10,000 with AtLeast. It reads every posting of its words, which a search alone skips most of; invalid beside a Vector.
+
 ## Range
 
 ```go
@@ -384,10 +404,11 @@ Manual waits for Reindex to read the documents again; Automatic, the default, re
 type Result[T any] struct {
 	Hits      []Hit[T]
 	Corrected string
+	Total     *Counted
 }
 ```
 
-Result is what a search found, the best first, and the text it read in fact when a word was misspelt: "" when none was.
+Result is what a search found, the best first, and the text it read in fact when a word was misspelt: "" when none was. Total is how many it finds, when the search asked with Total, and nil otherwise.
 
 ## SetOption
 

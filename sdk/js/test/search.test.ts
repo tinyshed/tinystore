@@ -73,6 +73,30 @@ for (const way of ways) {
 		})
 
 		// contract: SRCH-11
+		// contract: SRCH-18
+		test('a total counts what a search finds under its where, whatever its page', async () => {
+			const people = store.index<{ name: string; role: string }>('people_total', {
+				fields: ['name'],
+				filters: ['role'],
+			})
+			const roles = ['teacher', 'student', 'student']
+			await people.setMany(
+				Array.from({ length: 30 }, (_, n) => ({
+					id: `p${n}`,
+					value: { name: `Ivanov ${n}`, role: roles[n % 3]! },
+				})),
+			)
+			const found = await people.search({
+				text: 'ivanov',
+				where: { role: 'teacher' },
+				limit: 2,
+				total: true,
+			})
+			expect(found.hits).toHaveLength(2)
+			expect(found.total).toEqual({ count: 10, atLeast: false })
+			expect((await people.search('ivanov')).total).toBeUndefined()
+		})
+
 		test('a word typed halfway finds the words it begins with prefix, and nothing without', async () => {
 			const courses = store.index<{ name: string }>('courses', { fields: { name: 1 } })
 			await courses.setMany([

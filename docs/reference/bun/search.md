@@ -114,6 +114,13 @@ interface Query {
      * once corrected whole, and a word a prefix began by the letters typed
      */
     matches?: boolean | undefined
+    /**
+     * counts the documents it finds as well, in `total`, under its `where`
+     * and whatever its `limit` and `offset`: exactly up to 10,000, and past
+     * it 10,000 with `atLeast`; it reads every posting of its words, which a
+     * search alone skips most of; invalid beside a vector
+     */
+    total?: boolean | undefined
     /** 10 unless said; offset and limit together 1000 at most */
     limit?: number | undefined
     offset?: number | undefined
@@ -164,10 +171,24 @@ A document a search found, and the score that ordered it among this search's hit
 interface Found<T> {
     hits: Hit<T>[]
     corrected?: string | undefined
+    /** how many it finds, when the search asked with `total` */
+    total?: Total | undefined
 }
 ```
 
 What a search found, the best first, and the text it read in fact when a word was misspelt.
+
+## Total
+
+```ts
+interface Total {
+    count: number
+    /** whether counting stopped at 10,000, more being there */
+    atLeast: boolean
+}
+```
+
+How many documents a search finds: exactly, or past 10,000, 10,000 and `atLeast`, never an estimate.
 
 ## IndexStatus
 

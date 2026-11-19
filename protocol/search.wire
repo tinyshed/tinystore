@@ -85,6 +85,7 @@ message search.Query {
   11 matches: str?                   # utf8, utf16 or chars: each hit says where it matched, counted in that unit
   12 minSimilarity: float?           # the least cosine a document's vector has for the vector to find it
   13 statements: [search.Statement]  # what where's {"statement": n} names, by its place
+  14 total: bool                     # counts what it finds as well, exactly up to 10,000; invalid beside a vector
 }
 
 # A statement of a table's index's database whose rows give one column, as
@@ -124,6 +125,14 @@ message search.Found {
   1 hits: [search.Hit]
   2 corrected: str?                  # the text the search read in fact, when a word was read as another
   3 columns: [str]?                  # the columns of a table's index's rows
+  4 total: search.Total?             # how many it finds, when the query asked
+}
+
+# How many documents a search finds, under its where and whatever its offset
+# and limit: exactly up to 10,000, and past it 10,000 and atLeast.
+message search.Total {
+  1 count: uint
+  2 atLeast: bool
 }
 
 # Where an index stands: ready, rebuilding and how far, or failed and why.

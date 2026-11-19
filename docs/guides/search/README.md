@@ -51,6 +51,8 @@ let result = articles.search("хлеба").filter(eq("author_id", &42)).run()?;
   it, and that search never returns it (contract SRCH-07).
 - A misspelt word is read as its nearest, and `corrected` says so; a word
   that matches is never changed (contract SRCH-09).
+- A `total` is exact up to 10,000, and past it says "at least 10,000",
+  never an estimate (contract SRCH-18).
 
 ## Listing what it holds
 
@@ -98,6 +100,50 @@ documents from somewhere else, a bucket by the same ids, or never lists them;
 a bucket and an index commit apart, as [two
 files](../../handbook/start/directory.md#two-engines-in-one-file) do. See [A
 table's index](table-index.md).
+
+## How many it finds
+
+Ask for `total` to know how many documents a search finds under its
+`where`, whatever its `limit` and `offset`: "teachers named Ivanov: 340" on
+a chip, and whether a next page exists.
+
+```ts
+const found = await people.search({ text: 'иванов', where: { role: 'teacher' }, limit: 20, total: true })
+found.total // { count: 340, atLeast: false }
+```
+
+```python
+found = await people.search("иванов", where={"role": "teacher"}, limit=20, total=True)
+found.total  # Total(count=340, at_least=False)
+```
+
+```go
+found, err := people.Search(ctx, "иванов", search.Where{"role": "teacher"}, search.Limit(20), search.Total())
+found.Total // &search.Counted{Count: 340, AtLeast: false}; nil without search.Total()
+```
+
+```rust
+let found = people.search("иванов").filter(eq("role", "teacher")).limit(20).total().run()?;
+found.total // Some(Total { count: 340, at_least: false })
+```
+
+- `count` is exact up to 10,000. Past that the search stops counting and
+  answers 10,000 with `atLeast`: at least that many, never an estimate
+  (contract SRCH-18).
+- It counts each document the search's words find, as the search read them,
+  a corrected word and the other keyboard layout included, that its `where`
+  passes. A search still can't page past its 1000th hit, but `total` says
+  how many there are.
+- A next page exists when `atLeast` is set, or when `offset` plus the hits
+  given is less than `count`.
+- Counting reads every document the words' lists hold, which a search alone
+  mostly skips, so it costs more. Without `total` a search costs what it
+  did.
+- A search by a vector with `total` is `invalid`: a vector finds every
+  document that has one.
+- In a table's index, a row SQLite removed for a `replace` without telling
+  any trigger stays counted until a search meets it or maintenance takes it
+  out.
 
 ## Async Rust
 

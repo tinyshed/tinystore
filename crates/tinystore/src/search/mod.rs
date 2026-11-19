@@ -76,7 +76,7 @@ pub use engine::Maintenance;
 pub use filter::{Condition, Listing, Values, and, eq, is_in, missing, or, range};
 #[cfg(feature = "client")]
 pub(crate) use held::held;
-pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall};
+pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall, Total};
 pub use matches::Match;
 #[cfg(feature = "wire")]
 pub(crate) use matches::Unit;

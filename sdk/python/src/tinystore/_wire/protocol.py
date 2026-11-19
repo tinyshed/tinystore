@@ -9843,6 +9843,48 @@ SearchMatch = Message(
 )
 
 
+def _write_search_total(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("count")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("at_least")) is not None:
+        w.uint(2)
+        w.bool(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_total(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["count"] = r.uint()
+            case 2:
+                read["at_least"] = r.bool()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# How many documents a search finds, under its where and whatever its offset
+# and limit: exactly up to 10,000, and past it 10,000 and atLeast.
+SearchTotal = Message(
+    "search.Total",
+    {
+        "count": (1, uint),
+        "at_least": (2, bool_),
+    },
+    _write_search_total,
+    _read_search_total,
+)
+
+
 def _write_search_status(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -11431,6 +11473,10 @@ def _write_search_query(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             SearchStatement.write(w, item0)
         n += 1
+    if (x := v.get("total")) is not None:
+        w.uint(14)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -11467,6 +11513,8 @@ def _read_search_query(r: Reader) -> dict[str, Any]:
                 items0 = [SearchStatement.read(r) for _ in range(r.array())]
                 r.leave()
                 read["statements"] = items0
+            case 14:
+                read["total"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -11498,6 +11546,8 @@ SearchQuery = Message(
         "min_similarity": (12, float_),
         # what where's {"statement": n} names, by its place
         "statements": (13, list_(SearchStatement)),
+        # counts what it finds as well, exactly up to 10,000; invalid beside a vector
+        "total": (14, bool_),
     },
     _write_search_query,
     _read_search_query,
@@ -11612,6 +11662,10 @@ def _write_search_found(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             w.str(item0)
         n += 1
+    if (x := v.get("total")) is not None:
+        w.uint(4)
+        SearchTotal.write(w, x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -11630,6 +11684,8 @@ def _read_search_found(r: Reader) -> dict[str, Any]:
                 items0 = [r.str() for _ in range(r.array())]
                 r.leave()
                 read["columns"] = items0
+            case 4:
+                read["total"] = SearchTotal.read(r)
             case _:
                 r.skip()
     r.leave()
@@ -11644,6 +11700,8 @@ SearchFound = Message(
         "corrected": (2, str_),
         # the columns of a table's index's rows
         "columns": (3, list_(str_)),
+        # how many it finds, when the query asked
+        "total": (4, SearchTotal),
     },
     _write_search_found,
     _read_search_found,
@@ -11965,6 +12023,7 @@ messages: dict[str, Message] = {
     "search.Got": SearchGot,
     "search.Statement": SearchStatement,
     "search.Match": SearchMatch,
+    "search.Total": SearchTotal,
     "search.Status": SearchStatus,
     "search.Name": SearchName,
     "search.Dropped": SearchDropped,

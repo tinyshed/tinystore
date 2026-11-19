@@ -6375,6 +6375,9 @@
         "text": {
           "str": "text"
         },
+        "total": {
+          "bool": true
+        },
         "vector": {
           "bin": "01ff"
         },
@@ -6385,7 +6388,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8d016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d6174636865730ccb3ff80000000000000d918201a4746578740291a676616c756573",
+      "hex": "8e016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d6174636865730ccb3ff80000000000000d918201a4746578740291a676616c7565730ec3",
       "message": "search.Query",
       "name": "search.Query with every field"
     },
@@ -6568,9 +6571,19 @@
               }
             }
           ]
+        },
+        "total": {
+          "fields": {
+            "atLeast": {
+              "bool": true
+            },
+            "count": {
+              "uint": "107"
+            }
+          }
         }
       },
-      "hex": "8301918701a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726406cb3ff800000000000007cb3ff800000000000002a9636f727265637465640391a7636f6c756d6e73",
+      "hex": "8401918701a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726406cb3ff800000000000007cb3ff800000000000002a9636f727265637465640391a7636f6c756d6e730482016b02c3",
       "message": "search.Found",
       "name": "search.Found with every field"
     },
@@ -6579,6 +6592,25 @@
       "hex": "80",
       "message": "search.Found",
       "name": "search.Found with no field"
+    },
+    {
+      "fields": {
+        "atLeast": {
+          "bool": true
+        },
+        "count": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b02c3",
+      "message": "search.Total",
+      "name": "search.Total with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Total",
+      "name": "search.Total with no field"
     },
     {
       "fields": {

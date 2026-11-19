@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"testing"
@@ -346,6 +347,27 @@ func TestATablesIndexFindsItsRowsEachHitItsRowAndFollowsEveryWriteToTheTable(t *
 		}
 		_, err = articles.Search(ctx, "bread")
 		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
+// contract: SRCH-18
+func TestATotalCountsWhatASearchFindsUnderItsWhereWhateverItsPage(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		people := ways.Must(search.OpenIndex[map[string]string](store, "people_total", search.FieldNames("name"), search.Filters("role")))
+		roles := []string{"teacher", "student", "student"}
+		documents := make([]search.Doc[map[string]string], 30)
+		for n := range documents {
+			documents[n] = search.Doc[map[string]string]{ID: fmt.Sprintf("p%d", n), Value: map[string]string{"name": fmt.Sprintf("Ivanov %d", n), "role": roles[n%3]}}
+		}
+		ways.Must(0, people.SetMany(ctx, documents))
+		found := ways.Must(people.Search(ctx, "ivanov", search.Where{"role": "teacher"}, search.Limit(2), search.Total()))
+		if len(found.Hits) != 2 || found.Total == nil || *found.Total != (search.Counted{Count: 10}) {
+			t.Fatalf("found %+v, total %+v", found.Hits, found.Total)
+		}
+		if ways.Must(people.Search(ctx, "ivanov")).Total != nil {
+			t.Fatal("a total unless asked")
+		}
 	})
 }
 

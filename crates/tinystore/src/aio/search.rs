@@ -400,6 +400,11 @@ impl<'i, T: DeserializeOwned + Send + 'static> SearchCall<'i, T> {
         self.changed(crate::search::SearchCall::matches)
     }
 
+    /// As [`crate::search::SearchCall::total`].
+    pub fn total(self) -> Self {
+        self.changed(crate::search::SearchCall::total)
+    }
+
     /// As [`crate::search::SearchCall::filter`].
     pub fn filter(self, condition: Condition) -> Self {
         self.changed(|call| call.filter(condition))

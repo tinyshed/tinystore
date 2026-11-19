@@ -213,6 +213,7 @@ export {
 	search,
 	TableIndex,
 	type TableIndexOptions,
+	type Total as SearchTotal,
 	type Vector,
 	type Where,
 	type WhereValue,

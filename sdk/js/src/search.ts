@@ -125,6 +125,13 @@ export interface Query {
 	 * once corrected whole, and a word a prefix began by the letters typed
 	 */
 	matches?: boolean | undefined
+	/**
+	 * counts the documents it finds as well, in `total`, under its `where`
+	 * and whatever its `limit` and `offset`: exactly up to 10,000, and past
+	 * it 10,000 with `atLeast`; it reads every posting of its words, which a
+	 * search alone skips most of; invalid beside a vector
+	 */
+	total?: boolean | undefined
 	/** 10 unless said; offset and limit together 1000 at most */
 	limit?: number | undefined
 	offset?: number | undefined
@@ -162,6 +169,15 @@ export interface Hit<T> {
 export interface Found<T> {
 	hits: Hit<T>[]
 	corrected?: string | undefined
+	/** how many it finds, when the search asked with `total` */
+	total?: Total | undefined
+}
+
+/** How many documents a search finds: exactly, or past 10,000, 10,000 and `atLeast`, never an estimate. */
+export interface Total {
+	count: number
+	/** whether counting stopped at 10,000, more being there */
+	atLeast: boolean
 }
 
 /**
@@ -261,6 +277,7 @@ abstract class Searchable<T> {
 				matches: asked.matches === true ? 'utf16' : undefined,
 				where,
 				statements,
+				total: asked.total,
 				offset: asked.offset,
 				limit: asked.limit,
 			})
@@ -284,7 +301,12 @@ abstract class Searchable<T> {
 			}
 			return read
 		})
-		return found.corrected === undefined ? { hits } : { hits, corrected: found.corrected }
+		const read: Found<T> =
+			found.corrected === undefined ? { hits } : { hits, corrected: found.corrected }
+		if (found.total !== undefined) {
+			read.total = { count: Number(found.total.count ?? 0), atLeast: found.total.atLeast ?? false }
+		}
+		return read
 	}
 
 	/** Where the index stands; a search never waits, and answers by the settings it serves. */

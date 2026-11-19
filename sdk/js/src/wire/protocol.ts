@@ -11990,6 +11990,53 @@ export const SearchMatch = message(
 )
 
 /**
+ * How many documents a search finds, under its where and whatever its offset
+ * and limit: exactly up to 10,000, and past it 10,000 and atLeast.
+ */
+export const SearchTotal = message(
+	'search.Total',
+	{
+		count: [1, uint],
+		atLeast: [2, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.count !== undefined) {
+				w.field(1)
+				w.uint(v.count)
+				n++
+			}
+			if (v.atLeast !== undefined) {
+				w.field(2)
+				w.bool(v.atLeast)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $count: number | undefined
+			let $atLeast: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$count = r.uint()
+						break
+					case 2:
+						$atLeast = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { count: $count, atLeast: $atLeast }
+		},
+	},
+)
+
+/**
  * Where an index stands: ready, rebuilding and how far, or failed and why.
  */
 export const SearchStatus = message(
@@ -13914,6 +13961,8 @@ export const SearchQuery = message(
 		minSimilarity: [12, float],
 		/** what where's {"statement": n} names, by its place */
 		statements: [13, list(SearchStatement)],
+		/** counts what it finds as well, exactly up to 10,000; invalid beside a vector */
+		total: [14, bool],
 	},
 	{
 		write(w, v) {
@@ -13987,6 +14036,11 @@ export const SearchQuery = message(
 				}
 				n++
 			}
+			if (v.total !== undefined) {
+				w.field(14)
+				w.bool(v.total)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -14003,6 +14057,7 @@ export const SearchQuery = message(
 			let $matches: string | undefined
 			let $minSimilarity: number | undefined
 			let $statements: Read<typeof SearchStatement.fields>[] | undefined
+			let $total: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -14050,6 +14105,9 @@ export const SearchQuery = message(
 						$statements = items0
 						break
 					}
+					case 14:
+						$total = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -14069,6 +14127,7 @@ export const SearchQuery = message(
 				matches: $matches,
 				minSimilarity: $minSimilarity,
 				statements: $statements,
+				total: $total,
 			}
 		},
 	},
@@ -14209,6 +14268,8 @@ export const SearchFound = message(
 		corrected: [2, str],
 		/** the columns of a table's index's rows */
 		columns: [3, list(str)],
+		/** how many it finds, when the query asked */
+		total: [4, SearchTotal],
 	},
 	{
 		write(w, v) {
@@ -14235,12 +14296,18 @@ export const SearchFound = message(
 				}
 				n++
 			}
+			if (v.total !== undefined) {
+				w.field(4)
+				SearchTotal.write(w, v.total)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $hits: Read<typeof SearchHit.fields>[] | undefined
 			let $corrected: string | undefined
 			let $columns: string[] | undefined
+			let $total: Read<typeof SearchTotal.fields> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1: {
@@ -14264,12 +14331,15 @@ export const SearchFound = message(
 						$columns = items0
 						break
 					}
+					case 4:
+						$total = SearchTotal.read(r)
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { hits: $hits, corrected: $corrected, columns: $columns }
+			return { hits: $hits, corrected: $corrected, columns: $columns, total: $total }
 		},
 	},
 )
