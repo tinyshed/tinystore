@@ -91,12 +91,20 @@ pub const AGGREGATE_ROWS: Limit = Limit { name: "aggregate rows", bound: 10_000 
 #[cfg(feature = "records")]
 pub const COUNT_BYTES: Limit = Limit { name: "count bytes", bound: 64 << 20 };
 
-/// The samples of one `ingest`.
+/// The samples of one `ingest`, written in one write: what one exporter's
+/// text takes.
 #[cfg(feature = "metrics")]
-pub const INGEST_SAMPLES: Limit = Limit { name: "ingest samples", bound: 10_000 };
+pub const INGEST_SAMPLES: Limit = Limit { name: "ingest samples", bound: 100_000 };
 /// The bytes of one `ingest`'s samples, each with its labels.
 #[cfg(feature = "metrics")]
-pub const INGEST_BYTES: Limit = Limit { name: "ingest bytes", bound: 4 << 20 };
+pub const INGEST_BYTES: Limit = Limit { name: "ingest bytes", bound: 32 << 20 };
+/// The samples of one gauge's `replace`, which decodes and cuts the blocks
+/// its range reaches.
+#[cfg(feature = "metrics")]
+pub const REPLACE_SAMPLES: Limit = Limit { name: "replace samples", bound: 10_000 };
+/// The bytes of one `replace`'s samples, with the series' labels.
+#[cfg(feature = "metrics")]
+pub const REPLACE_BYTES: Limit = Limit { name: "replace bytes", bound: 4 << 20 };
 /// The samples of one exporter's text.
 #[cfg(feature = "metrics")]
 pub const TEXT_SAMPLES: Limit = Limit { name: "text samples", bound: 100_000 };
@@ -184,6 +192,8 @@ const ALL: &[Limit] = &[
     COUNT_BYTES,
     INGEST_SAMPLES,
     INGEST_BYTES,
+    REPLACE_SAMPLES,
+    REPLACE_BYTES,
     TEXT_SAMPLES,
     TEXT_BYTES,
     QUERY_SERIES,

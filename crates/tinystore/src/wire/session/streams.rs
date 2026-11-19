@@ -243,9 +243,9 @@ impl Shared {
     /// worker once the RESPONSE has gone: its refusal, a final frame, never
     /// leaves before it.
     #[cfg(feature = "metrics")]
-    pub(super) fn gather(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+    pub(super) fn gather(self: &Arc<Self>, input: &Input, (stream, called): (u32, u16), body: &[u8]) {
         let link = self.stream_link(input, stream);
-        match guarded(|| metrics::gather(&self.store, &self.metrics, stream, body, link)) {
+        match guarded(|| metrics::gather(&self.store, &self.metrics, (stream, called), body, link)) {
             Ok(gathering) => {
                 self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
                 gathering.begin();

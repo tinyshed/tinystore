@@ -291,6 +291,47 @@ func TestATextPastOneMessageGoesInPiecesAndIsWrittenWhole(t *testing.T) {
 	})
 }
 
+// contract: MET-30
+func TestAnIngestPastOneMessageIsOneCallWrittenWhole(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		at := time.Now().Add(-20 * time.Hour).Truncate(time.Millisecond)
+		samples := make([]metrics.Sample, 14_000)
+		for i := range samples {
+			samples[i] = metrics.Sample{At: at.Add(time.Duration(i) * 5 * time.Second), Value: float64(i)}
+		}
+		var hosts []metrics.Series
+		for _, host := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+			hosts = append(hosts, metrics.Series{Name: "seeded", Kind: metrics.KindGauge, Labels: metrics.Labels{"host": host}, Samples: samples})
+		}
+		ways.Must(0, metrics.Ingest(ctx, store, hosts...))
+		read := 0
+		page := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: "seeded", Since: 24 * time.Hour, Limit: 100_000}))
+		for series, err := range page.All(ctx) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			read += len(series.Samples)
+		}
+		if read != 98_000 {
+			t.Fatalf("read %d samples", read)
+		}
+		past := append(hosts, metrics.Series{Name: "seeded", Kind: metrics.KindGauge, Labels: metrics.Labels{"host": "h"}, Samples: samples})
+		is(t, metrics.Ingest(ctx, store, past...), tinystore.ErrLimit)
+		// 600 series of a 4,000-byte label pass one message, and go up in pieces
+		wide := strings.Repeat("w", 4000)
+		many := make([]metrics.Series, 600)
+		for n := range many {
+			many[n] = metrics.Series{Name: "seeded_wide", Kind: metrics.KindGauge, Labels: metrics.Labels{"n": strconv.Itoa(n) + wide},
+				Samples: []metrics.Sample{{At: time.Now().Add(-time.Minute), Value: 1}}}
+		}
+		ways.Must(0, metrics.Ingest(ctx, store, many...))
+		if read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: "seeded_wide", Since: time.Hour})).Series; len(read) != 600 {
+			t.Fatalf("read %d wide series", len(read))
+		}
+	})
+}
+
 func TestACalendarsBucketsBeginAtTheLocalMidnightOfTheirTimeZone(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

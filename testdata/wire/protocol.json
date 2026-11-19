@@ -4067,6 +4067,22 @@
     },
     {
       "fields": {
+        "size": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "metrics.IngestUpload",
+      "name": "metrics.IngestUpload with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.IngestUpload",
+      "name": "metrics.IngestUpload with no field"
+    },
+    {
+      "fields": {
         "bytes": {
           "bin": "01ff"
         }
@@ -7371,6 +7387,7 @@
     "metrics.names": 1541,
     "metrics.read": 1537,
     "metrics.replace": 1553,
+    "metrics.upload": 1554,
     "metrics.uploadPrometheus": 1552,
     "records.aggregate": 1286,
     "records.append": 1282,

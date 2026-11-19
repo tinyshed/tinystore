@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use crate::clock::from_unix_millis;
-use crate::limits::INGEST_SAMPLES;
+use crate::limits::REPLACE_SAMPLES;
 use crate::metrics::directory::Row;
 use crate::metrics::fixture::{DAY, Fixture, HOUR, MINUTE, SECOND, bits, fixture};
 use crate::metrics::publish::read_group;
@@ -342,12 +342,12 @@ fn a_replace_is_bounded_and_its_stretch_lies_inside_what_the_name_keeps() {
     eleven_days(&f);
     let range = midnight(&f, 3)..midnight(&f, 0);
     let mut many = revenue();
-    let most = INGEST_SAMPLES.bound;
+    let most = REPLACE_SAMPLES.bound;
     many.extend((0..=most).map(|index| (range.start + Duration::from_millis(index), 1.0)));
     let error = f.metrics().replace(&many, range.clone()).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
     let facts = (error.fact("limit"), error.fact("wanted"), error.fact("bound"));
-    assert_eq!(facts, (Some("ingest samples"), Some("10001"), Some("10000")));
+    assert_eq!(facts, (Some("replace samples"), Some("10001"), Some("10000")));
     let refused = [
         (revenue().sample(midnight(&f, 0), 1.0), range.clone(), ErrorKind::Invalid, "outside the range"),
         (revenue(), midnight(&f, 0)..midnight(&f, 3), ErrorKind::Invalid, "ends where it begins"),

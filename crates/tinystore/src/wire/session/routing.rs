@@ -116,7 +116,7 @@ impl Shared {
             #[cfg(feature = "metrics")]
             Route::Instruments => self.instruments(input, stream, &body),
             #[cfg(feature = "metrics")]
-            Route::Gather => self.gather(input, stream, &body),
+            Route::Gather => self.gather(input, (stream, method), &body),
             #[cfg(feature = "config")]
             Route::Follow => self.follow(input, stream, &body),
             #[cfg(feature = "backup")]

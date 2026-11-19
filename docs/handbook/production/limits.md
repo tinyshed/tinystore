@@ -215,8 +215,10 @@ Each constant has the name below in its language's case:
 | `APPEND_BYTES`       | `append bytes`           | 4 MiB     | the events of one append                                           |
 | `AGGREGATE_ROWS`     | `aggregate rows`         | 10,000    | the rows of one `aggregate` of events                              |
 | `COUNT_BYTES`        | `count bytes`            | 64 MiB    | the different values one `top` or `distinct` holds                 |
-| `INGEST_SAMPLES`     | `ingest samples`         | 10,000    | the samples of one `ingest`                                        |
-| `INGEST_BYTES`       | `ingest bytes`           | 4 MiB     | the samples of one `ingest` with their labels                      |
+| `INGEST_SAMPLES`     | `ingest samples`         | 100,000   | the samples of one `ingest`, in one write                          |
+| `INGEST_BYTES`       | `ingest bytes`           | 32 MiB    | the samples of one `ingest` with their labels                      |
+| `REPLACE_SAMPLES`    | `replace samples`        | 10,000    | the samples of one gauge's `replace`                               |
+| `REPLACE_BYTES`      | `replace bytes`          | 4 MiB     | the samples of one `replace` with the series' labels               |
 | `TEXT_SAMPLES`       | `text samples`           | 100,000   | the samples of one exporter's text                                 |
 | `TEXT_BYTES`         | `text bytes`             | 32 MiB    | one exporter's text                                                |
 | `QUERY_SERIES`       | `series`                 | 1,000     | the series one metrics query finds                                 |

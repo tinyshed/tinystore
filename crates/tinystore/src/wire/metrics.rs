@@ -21,10 +21,10 @@ use super::codec::Message;
 use super::protocol::{
     Empty, Failure, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsBucket,
     MetricsCondition, MetricsDamage, MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExceeds,
-    MetricsExposition, MetricsGroup, MetricsIngest, MetricsLatest, MetricsName, MetricsNameAsked, MetricsNamePage,
-    MetricsNewSeries, MetricsNewest, MetricsPageAsked, MetricsPiece, MetricsPlan, MetricsQuery, MetricsRead,
-    MetricsRefused, MetricsReplace, MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage, MetricsUpload,
-    method,
+    MetricsExposition, MetricsGroup, MetricsIngest, MetricsIngestUpload, MetricsLatest, MetricsName, MetricsNameAsked,
+    MetricsNamePage, MetricsNewSeries, MetricsNewest, MetricsPageAsked, MetricsPiece, MetricsPlan, MetricsQuery,
+    MetricsRead, MetricsRefused, MetricsReplace, MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage,
+    MetricsUpload, method,
 };
 use super::{Link, Route};
 use crate::clock::from_unix_millis;
@@ -62,7 +62,7 @@ pub(crate) fn route(called: u16) -> Route {
     match called {
         method::METRICS_READ | method::METRICS_LATEST | method::METRICS_AGGREGATE => Route::Parts,
         method::METRICS_INSTRUMENTS => Route::Instruments,
-        method::METRICS_UPLOAD_PROMETHEUS => Route::Gather,
+        method::METRICS_UPLOAD_PROMETHEUS | method::METRICS_UPLOAD => Route::Gather,
         _ => Route::Worker,
     }
 }
@@ -795,22 +795,28 @@ fn batch_of(batch: MetricsBatch) -> Result<Batch, Failure> {
     })
 }
 
-/// Begins a text that comes in pieces: what reads it, and its size, a size
-/// past what an upload gathers refused before any of it comes. The store's
-/// memory for it is reserved by [`Gathering::begin`], once the RESPONSE went.
+/// Begins a text that comes in pieces, an exporter's or an ingest's message:
+/// what writes it, and its size, a size past what an upload gathers refused
+/// before any of it comes. The store's memory for it is reserved by
+/// [`Gathering::begin`], once the RESPONSE went.
 pub(crate) fn gather(
     store: &Store,
     handles: &Handles,
-    stream: u32,
+    (stream, called): (u32, u16),
     body: &[u8],
     link: Link,
 ) -> Result<Arc<Gathering>, Failure> {
-    let asked = MetricsUpload::decode(body)?;
-    let size = usize::try_from(asked.size).ok().filter(|size| *size <= TEXT_MOST).ok_or_else(|| past(asked.size))?;
+    let (size, writes) = if called == method::METRICS_UPLOAD {
+        (MetricsIngestUpload::decode(body)?.size, Writes::Ingest(store.metrics()?))
+    } else {
+        let asked = MetricsUpload::decode(body)?;
+        (asked.size, Writes::Text(prometheus(&store.metrics()?, asked.labels, asked.at, asked.keep)))
+    };
+    let size = usize::try_from(size).ok().filter(|most| *most <= TEXT_MOST).ok_or_else(|| past(size))?;
     let gathering = Arc::new(Gathering {
         stream,
         size,
-        prometheus: prometheus(&store.metrics()?, asked.labels, asked.at, asked.keep),
+        writes,
         memory: Arc::clone(store.memory()),
         // busy until `begin`'s worker has the memory: a piece before it waits
         state: Mutex::new(Gathered { busy: true, ..Gathered::default() }),
@@ -833,7 +839,7 @@ fn past(size: u64) -> Failure {
 pub(crate) struct Gathering {
     stream: u32,
     size: usize,
-    prometheus: Prometheus,
+    writes: Writes,
     memory: Arc<Memory>,
     state: Mutex<Gathered>,
     link: Link,
@@ -853,6 +859,14 @@ struct Gathered {
     /// answers, so that `cancelled` means nothing of it is held.
     cancelled: bool,
     ended: bool,
+}
+
+/// What an upload's bytes are once they all came.
+enum Writes {
+    /// An exporter's text, read with the labels, the time and the keep given.
+    Text(Prometheus),
+    /// An ingest's message, which one message could not carry.
+    Ingest(Metrics),
 }
 
 /// A text's bytes, and the store's memory held for all of them.
@@ -952,7 +966,10 @@ impl Gathering {
         if came != size {
             return Err(Failure::invalid(format!("{UPLOADED}: pieces of {came} bytes, short of the {size} it said")));
         }
-        self.prometheus.ingest(&text.bytes)?;
+        match &self.writes {
+            Writes::Text(prometheus) => prometheus.ingest(&text.bytes)?,
+            Writes::Ingest(metrics) => return ingest(metrics, MetricsIngest::decode(&text.bytes)?),
+        }
         Ok(Empty {}.encode())
     }
 

@@ -7837,6 +7837,50 @@ impl Message for MetricsUpload {
     }
 }
 
+/// An ingest past what one message holds: the bytes of its metrics.Ingest,
+/// whose pieces follow as the client's DATA, a metrics.Piece each.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsIngestUpload {
+    /// The bytes of its metrics.Ingest, 32 MiB at most: pieces that come to more or fewer are refused.
+    pub(crate) size: u64,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsIngestUpload {
+    const NAME: &'static str = "metrics.IngestUpload";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.size = codec::uint(r, "size")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.size != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.size);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.size == 0
+    }
+}
+
 /// A piece of an uploaded text, cut anywhere.
 #[cfg(feature = "metrics")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -13528,6 +13572,10 @@ pub(crate) mod method {
     /// is, never half; the same samples sent again write nothing.
     #[cfg(feature = "metrics")]
     pub(crate) const METRICS_REPLACE: u16 = 0x0611;
+    /// An ingest's message in pieces, as uploadPrometheus takes a text: written
+    /// once the last piece came, every series or none.
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_UPLOAD: u16 = 0x0612;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_OPEN: u16 = 0x0501;
     #[cfg(feature = "records")]
@@ -13790,6 +13838,8 @@ pub(crate) mod method {
             METRICS_UPLOAD_PROMETHEUS => Some(Access::Write),
             #[cfg(feature = "metrics")]
             METRICS_REPLACE => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_UPLOAD => Some(Access::Write),
             #[cfg(feature = "records")]
             RECORDS_OPEN => Some(Access::Read),
             #[cfg(feature = "records")]
@@ -14045,6 +14095,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("metrics.uploadPrometheus", 0x0610, "exchange"),
     #[cfg(feature = "metrics")]
     ("metrics.replace", 0x0611, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.upload", 0x0612, "exchange"),
     #[cfg(feature = "records")]
     ("records.open", 0x0501, "call"),
     #[cfg(feature = "records")]
@@ -14338,6 +14390,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "metrics.Exposition" => MetricsExposition::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Upload" => MetricsUpload::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.IngestUpload" => MetricsIngestUpload::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Piece" => MetricsPiece::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]

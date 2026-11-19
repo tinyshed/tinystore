@@ -32,7 +32,7 @@ use super::retention::expires;
 use super::series::{Kind, Labels, Series};
 use super::timestamp::rfc3339;
 use crate::compress::frame::Zstd;
-use crate::limits::{INGEST_BYTES, INGEST_SAMPLES, Limit, TEXT_BYTES, TEXT_SAMPLES};
+use crate::limits::{INGEST_BYTES, INGEST_SAMPLES, Limit, REPLACE_BYTES, REPLACE_SAMPLES, TEXT_BYTES, TEXT_SAMPLES};
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, ErrorKind, Reservation, Result, unix_millis};
 
@@ -43,8 +43,13 @@ pub(super) struct Bound {
     bytes: Limit,
 }
 
-/// One `ingest`'s series.
+/// One `ingest`'s series, what one exposition's text takes, in one write
+/// (MET-30): a day of a sample a second is one call, never parts a failure
+/// could leave half written.
 pub(super) const ONE_INGEST: Bound = Bound { samples: INGEST_SAMPLES, bytes: INGEST_BYTES };
+/// One gauge's `replace`, which decodes and cuts the blocks its range
+/// reaches and so takes fewer.
+pub(super) const ONE_REPLACE: Bound = Bound { samples: REPLACE_SAMPLES, bytes: REPLACE_BYTES };
 /// One exposition's text, which a scrape gives whole and which is written
 /// whole: a large exporter's text, kube-state-metrics' or cadvisor's, goes in
 /// one write rather than in parts a failure could leave half written.

@@ -61,8 +61,10 @@ type Series struct {
 	More bool
 }
 
-// Ingest writes series and their samples, every one or none: a refused
-// series names itself by its labels. It returns once they are written.
+// Ingest writes series and their samples in one write, every one or none: a
+// refused series names itself by its labels. It returns once they are
+// written. One call takes 100,000 samples, as one exporter's text does; one
+// past a message goes up in pieces.
 func Ingest(ctx context.Context, store *tinystore.Store, series ...Series) error {
 	message := wire.MetricsIngest{Series: make([]wire.MetricsNewSeries, len(series))}
 	for i, each := range series {
@@ -72,8 +74,20 @@ func Ingest(ctx context.Context, store *tinystore.Store, series ...Series) error
 		}
 		message.Series[i] = written
 	}
-	_, err := linkOf(store).Call(ctx, core.Writing, wire.MethodMetricsIngest, wire.Encode(&message))
-	return err
+	body := wire.Encode(&message)
+	return linkOf(store).Run(ctx, core.Writing, func(c *core.Connection) error {
+		if agreed := c.Session.Agreed(); agreed != nil && uint64(len(body)) <= agreed.MaxBody {
+			_, err := c.Session.Call(ctx, wire.MethodMetricsIngest, body)
+			return err
+		}
+		// past one message: its bytes go up in pieces, written whole once the last came
+		asked := wire.MetricsIngestUpload{Size: uint64(len(body))}
+		stream, err := c.Session.Open(ctx, wire.MethodMetricsUpload, wire.Encode(&asked), false)
+		if err != nil {
+			return err
+		}
+		return uploaded(ctx, stream, body, core.Piece(c))
+	})
 }
 
 // Replace replaces a gauge's samples from from to to, to excluded, with the
@@ -153,10 +167,11 @@ func oneMessage(c *core.Connection, text []byte, given wire.MetricsUpload) []byt
 	return body
 }
 
-// uploaded sends a text's pieces as DATA within the stream's credit, the last
-// ending them, and waits for the store to write it. A connection lost before
-// that last DATA left nothing written, so the text goes again on the next
-// one; lost after it, whether the text was written is unknown.
+// uploaded sends an upload's pieces, a text's or an ingest's, as DATA within
+// the stream's credit, the last ending them, and waits for the store to write
+// it. A connection lost before that last DATA left nothing written, so the
+// upload goes again on the next one; lost after it, whether it was written is
+// unknown.
 func uploaded(ctx context.Context, stream *core.Stream, text []byte, piece int) error {
 	ending := false
 	fail := func(err error) error {
@@ -167,7 +182,7 @@ func uploaded(ctx context.Context, stream *core.Stream, text []byte, piece int) 
 		}
 		stream.Cancel()
 		if lost {
-			return core.Wrap(core.OutcomeUnknown, err, "the connection was lost as the text was written")
+			return core.Wrap(core.OutcomeUnknown, err, "the connection was lost as the upload was written")
 		}
 		return err
 	}

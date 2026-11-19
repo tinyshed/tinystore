@@ -255,8 +255,14 @@ impl<S: Read + Write> Client<S> {
     /// Writes the series, every one or none, as `Metrics::ingest` does.
     #[cfg(feature = "metrics")]
     pub fn ingest(&mut self, series: &[crate::metrics::Series]) -> Result<()> {
-        let series = series.iter().map(new_series).collect();
-        self.call(method::METRICS_INGEST, &wire::MetricsIngest { series }).map(drop)
+        let ingest = wire::MetricsIngest { series: series.iter().map(new_series).collect() };
+        let body = ingest.encode();
+        if body.len() > self.max_body {
+            // past one message: its bytes go up in pieces, written whole once the last came
+            let upload = wire::MetricsIngestUpload { size: body.len() as u64 };
+            return self.upload(method::METRICS_UPLOAD, &upload, &body);
+        }
+        self.call(method::METRICS_INGEST, &ingest).map(drop)
     }
 
     /// Writes the series of a text an exporter serves, every one or none, as
@@ -275,12 +281,19 @@ impl<S: Read + Write> Client<S> {
         let fields: usize = labels.iter().map(|(name, value)| name.len() + value.len() + LABEL_FIELDS).sum();
         if text.len() + EXPOSITION_FIELDS + fields > self.max_body {
             let upload = wire::MetricsUpload { size: text.len() as u64, labels: labels.clone(), at, keep };
-            let mut pieces = text.chunks(PIECE);
-            let mut next = || Ok(pieces.next().map(|piece| wire::MetricsPiece { bytes: piece.to_vec() }.encode()));
-            return self.exchange(method::METRICS_UPLOAD_PROMETHEUS, &upload, &mut next).map(drop);
+            return self.upload(method::METRICS_UPLOAD_PROMETHEUS, &upload, text);
         }
         let exposition = wire::MetricsExposition { text: text.to_vec(), labels: labels.clone(), at, keep };
         self.call(method::METRICS_INGEST_PROMETHEUS, &exposition).map(drop)
+    }
+
+    /// Sends `bytes` in pieces after the upload that says their size, and
+    /// waits for the store to write them.
+    #[cfg(feature = "metrics")]
+    fn upload(&mut self, called: u16, upload: &impl Message, bytes: &[u8]) -> Result<()> {
+        let mut pieces = bytes.chunks(PIECE);
+        let mut next = || Ok(pieces.next().map(|piece| wire::MetricsPiece { bytes: piece.to_vec() }.encode()));
+        self.exchange(called, upload, &mut next).map(drop)
     }
 
     /// Gives `name` the unit and the help described, as `Metrics::describe`

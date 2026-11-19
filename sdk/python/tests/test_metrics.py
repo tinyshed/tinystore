@@ -165,6 +165,31 @@ async def test_a_text_past_one_message_goes_in_pieces_and_is_written_whole(store
         await store.metrics.ingest_prometheus(b"#" * ((32 << 20) + 1))
 
 
+# contract: MET-30
+async def test_an_ingest_of_98000_samples_past_one_message_is_one_call_written_whole(store: tinystore.Store) -> None:
+    at = now_ms() - 20 * 3_600_000
+    times = [at + index * 5000 for index in range(14_000)]
+    values = array("d", (float(index) for index in range(14_000)))
+    hosts = [
+        Series(name="seeded", kind="gauge", labels={"host": host}, times=times, values=values) for host in "abcdefg"
+    ]
+    await store.metrics.ingest(hosts)
+    page = await store.metrics.read(name="seeded", since="1d", limit=100_000)
+    assert sum([len(series.times or []) async for series in page]) == 98_000
+    # 600 series of a 4,000-byte label pass one message, and go up in pieces
+    wide = "w" * 4000
+    many = [
+        Series(name="seeded_wide", kind="gauge", labels={"n": f"{n}{wide}"}, samples=[(now_ms(), 1.0)])
+        for n in range(600)
+    ]
+    await store.metrics.ingest(many)
+    assert len((await store.metrics.read(name="seeded_wide", since="1h")).series) == 600
+    with pytest.raises(tinystore.LimitError):
+        await store.metrics.ingest(
+            [*hosts, Series(name="seeded", kind="gauge", labels={"host": "h"}, times=times, values=values)]
+        )
+
+
 # contract: MET-04
 async def test_a_calendars_buckets_begin_at_the_local_midnight_of_their_time_zone(store: tinystore.Store) -> None:
     # a Moscow day ten days ago, a sample an hour after its midnight and one an hour before its end

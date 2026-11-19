@@ -55,10 +55,14 @@ AGGREGATE_ROWS = Limit("aggregate rows", 10_000)
 """The rows one ``aggregate`` answers."""
 COUNT_BYTES = Limit("count bytes", 64 << 20)
 """The different values one ``top`` or ``distinct`` holds, as JSON."""
-INGEST_SAMPLES = Limit("ingest samples", 10_000)
-"""The samples of one ``ingest``."""
-INGEST_BYTES = Limit("ingest bytes", 4 << 20)
+INGEST_SAMPLES = Limit("ingest samples", 100_000)
+"""The samples of one ``ingest``, written in one write: what one exporter's text takes."""
+INGEST_BYTES = Limit("ingest bytes", 32 << 20)
 """The bytes of one ``ingest``'s samples, each with its labels."""
+REPLACE_SAMPLES = Limit("replace samples", 10_000)
+"""The samples of one gauge's ``replace``."""
+REPLACE_BYTES = Limit("replace bytes", 4 << 20)
+"""The bytes of one ``replace``'s samples, with the series' labels."""
 TEXT_SAMPLES = Limit("text samples", 100_000)
 """The samples of one exporter's text."""
 TEXT_BYTES = Limit("text bytes", 32 << 20)

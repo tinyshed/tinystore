@@ -7,10 +7,10 @@ use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
     Empty, Hello, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsChange, MetricsCondition,
-    MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExposition, MetricsIngest, MetricsInstrument,
-    MetricsLatest, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsPiece, MetricsQuery,
-    MetricsRead, MetricsReplace, MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, MetricsUpload,
-    method,
+    MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExposition, MetricsIngest, MetricsIngestUpload,
+    MetricsInstrument, MetricsLatest, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked,
+    MetricsPiece, MetricsQuery, MetricsRead, MetricsReplace, MetricsSeriesNamed, MetricsSession, MetricsSet,
+    MetricsTextPage, MetricsUpload, method,
 };
 use crate::{Options, Store, unix_millis};
 
@@ -498,8 +498,20 @@ fn wide_text(series: usize, width: usize) -> Vec<u8> {
 
 /// Uploads `text` in pieces of `piece` bytes within the server's `credit`,
 /// and the stream's last frame.
-fn upload(client: &mut Client, asked: &MetricsUpload, text: &[u8], piece: usize, mut credit: u64) -> Frame {
-    let stream = client.open_stream(method::METRICS_UPLOAD_PROMETHEUS, asked);
+fn upload(client: &mut Client, asked: &MetricsUpload, text: &[u8], piece: usize, credit: u64) -> Frame {
+    upload_to(client, (method::METRICS_UPLOAD_PROMETHEUS, asked), text, piece, credit)
+}
+
+/// Uploads `bytes` as [`upload`] does, to the method `called` asked.
+fn upload_to(
+    client: &mut Client,
+    (called, asked): (u16, &impl Message),
+    bytes: &[u8],
+    piece: usize,
+    mut credit: u64,
+) -> Frame {
+    let stream = client.open_stream(called, asked);
+    let text = bytes;
     let pieces: Vec<&[u8]> = text.chunks(piece).collect();
     for (n, bytes) in pieces.iter().enumerate() {
         let data = Frame::new(Kind::Data, stream, MetricsPiece { bytes: bytes.to_vec() }.encode());
@@ -531,6 +543,35 @@ fn memory_until(store: &Store, held: impl Fn(u64) -> bool) {
         assert!(Instant::now() < deadline, "the store's memory holds {} bytes, still", store.memory().used());
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+// contract: MET-30
+#[test]
+fn an_ingest_past_one_message_comes_in_pieces_and_is_written_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let (mut client, credit) = greeted(&store, 64 << 10);
+    let at = now() - 600_000;
+    let hosts = ["a", "b", "c", "d", "e", "f", "g"];
+    let samples: Vec<(i64, f64)> = (0..14_000).map(|n| (at + n * 40, n as f64)).collect();
+    let many = hosts.iter().map(|host| series("many", "gauge", &[("host", host)], &samples)).collect();
+    let body = MetricsIngest { series: many }.encode();
+    assert!(body.len() > 1 << 20, "past what one message carries: {} bytes", body.len());
+    let asked = MetricsIngestUpload { size: body.len() as u64 };
+    let last = upload_to(&mut client, (method::METRICS_UPLOAD, &asked), &body, 60 << 10, credit);
+    assert_eq!((last.kind, last.flags & frame::END), (Kind::Data, frame::END));
+    answered::<Empty>(&last).unwrap();
+    assert_eq!(series_counts(&mut client), written(&[("many", 7)]), "every series, in one write");
+    // a message past one text's 32 MiB is refused before a byte of it comes
+    let huge = MetricsIngestUpload { size: (32 << 20) + 1 };
+    let stream = client.open_stream(method::METRICS_UPLOAD, &huge);
+    let refused = answered::<Empty>(&client.next_on(stream)).unwrap_err();
+    assert_eq!(refused.code, "limit", "{refused:?}");
+    // pieces that are no ingest's message write nothing
+    let asked = MetricsIngestUpload { size: 4 };
+    let last = upload_to(&mut client, (method::METRICS_UPLOAD, &asked), &[0xc1; 4], 4, credit);
+    assert!(answered::<Empty>(&last).is_err());
+    assert_eq!(series_counts(&mut client), written(&[("many", 7)]));
 }
 
 // contract: MET-15

@@ -164,16 +164,24 @@ fn an_ingest_refused_inside_its_write_makes_no_name_and_moves_no_keep() {
     assert!(f.engine().names.get("fresh").is_none());
 }
 
-// contract: ERR-05, MET-07
+// contract: ERR-05, MET-07, MET-30
 #[test]
-fn an_ingest_past_its_bound_is_a_limit() {
+fn an_ingest_takes_what_one_text_takes_in_one_write_and_past_it_is_a_limit() {
     let f = fixture();
-    let many = f.gauge("many", 10_001, Duration::from_millis(10), |index| index as f64);
+    let many = f.gauge("many", 100_001, Duration::from_millis(10), |index| index as f64);
     let error = f.metrics().ingest(&[many]).unwrap_err();
     let facts = (error.fact("limit"), error.fact("wanted"), error.fact("bound"));
-    assert_eq!((error.kind(), facts), (ErrorKind::Limit, (Some("ingest samples"), Some("10001"), Some("10000"))));
-    let fits = f.gauge("many", 10_000, Duration::from_millis(10), |index| index as f64);
-    f.metrics().ingest(&[fits]).unwrap();
+    assert_eq!((error.kind(), facts), (ErrorKind::Limit, (Some("ingest samples"), Some("100001"), Some("100000"))));
+    assert_eq!(f.rows("series"), 0, "nothing of a refused ingest");
+    // seven hosts' 19 hours of a sample each 5 seconds, 98,000 samples, are one call and one write
+    let hosts: Vec<Series> =
+        (0..7).map(|host| f.gauge("many", 14_000, 5 * SECOND, |index| index as f64).label("host", host)).collect();
+    f.metrics().ingest(&hosts).unwrap();
+    let read = f.metrics().query().name("many").since(DAY).limit(100_000).read().unwrap();
+    assert_eq!(read.all().map(|series| series.unwrap().samples().len()).sum::<usize>(), 98_000);
+    // one series takes what its head holds before packing, 16,384 samples, whatever the call's bound
+    let one = f.gauge("one", 16_385, SECOND, |index| index as f64);
+    assert_eq!(f.metrics().ingest(&[one]).unwrap_err().kind(), ErrorKind::Limit);
 }
 
 // contract: ERR-05, MET-07

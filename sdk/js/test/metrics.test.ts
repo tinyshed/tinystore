@@ -275,6 +275,47 @@ for (const way of ways) {
 			expect(past).toBeInstanceOf(LimitError)
 		})
 
+		// contract: MET-30
+		test('an ingest of 98,000 samples is one call, and one past a message goes up in pieces', async () => {
+			const at = Date.now() - 20 * 3_600_000
+			const times = Float64Array.from({ length: 14_000 }, (_, i) => at + i * 5000)
+			const values = Float64Array.from({ length: 14_000 }, (_, i) => i)
+			const hosts = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(host => ({
+				name: 'seeded',
+				kind: 'gauge' as const,
+				labels: { host },
+				times: Array.from(times),
+				values,
+			}))
+			await store.metrics.ingest(hosts)
+			let samples = 0
+			for await (const series of await store.metrics.read({
+				name: 'seeded',
+				since: '1d',
+				limit: 100_000,
+			})) {
+				samples += series.times.length
+			}
+			expect(samples).toBe(98_000)
+			// 600 series of a 4,000-byte label pass one message, and go up in pieces
+			const wide = 'w'.repeat(4000)
+			const recent = Date.now() - 60_000
+			await store.metrics.ingest(
+				Array.from({ length: 600 }, (_, n) => ({
+					name: 'seeded_wide',
+					kind: 'gauge' as const,
+					labels: { n: `${n}${wide}` },
+					samples: [[recent, 1]] as const,
+				})),
+			)
+			const { series: widened } = await store.metrics.read({ name: 'seeded_wide', since: '1h' })
+			expect(widened.length).toBe(600)
+			const past = await caught(
+				store.metrics.ingest([...hosts, { ...hosts[0]!, labels: { host: 'h' } }]),
+			)
+			expect(past).toBeInstanceOf(LimitError)
+		})
+
 		test("a calendar's buckets begin at the local midnight of their time zone", async () => {
 			// a Moscow day ten days ago, a sample an hour after its midnight and one an hour before its end
 			const midnight =

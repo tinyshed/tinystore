@@ -156,6 +156,11 @@ export const methods = {
 	 * is, never half; the same samples sent again write nothing.
 	 */
 	'metrics.replace': 0x0611,
+	/**
+	 * An ingest's message in pieces, as uploadPrometheus takes a text: written
+	 * once the last piece came, every series or none.
+	 */
+	'metrics.upload': 0x0612,
 	'records.open': 0x0501,
 	'records.append': 0x0502,
 	'records.list': 0x0503,
@@ -8212,6 +8217,44 @@ export const MetricsUpload = message(
 			}
 			r.leave()
 			return { size: $size, labels: $labels, at: $at, keep: $keep }
+		},
+	},
+)
+
+/**
+ * An ingest past what one message holds: the bytes of its metrics.Ingest,
+ * whose pieces follow as the client's DATA, a metrics.Piece each.
+ */
+export const MetricsIngestUpload = message(
+	'metrics.IngestUpload',
+	{
+		/** the bytes of its metrics.Ingest, 32 MiB at most: pieces that come to more or fewer are refused */
+		size: [1, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.size !== undefined) {
+				w.field(1)
+				w.uint(v.size)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $size: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$size = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { size: $size }
 		},
 	},
 )

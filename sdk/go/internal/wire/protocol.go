@@ -120,7 +120,10 @@ const (
 	MethodMetricsUploadPrometheus = 0x0610
 	// A gauge's range replaced in one write: a read sees it as it was or as it
 	// is, never half; the same samples sent again write nothing.
-	MethodMetricsReplace    = 0x0611
+	MethodMetricsReplace = 0x0611
+	// An ingest's message in pieces, as uploadPrometheus takes a text: written
+	// once the last piece came, every series or none.
+	MethodMetricsUpload     = 0x0612
 	MethodRecordsOpen       = 0x0501
 	MethodRecordsAppend     = 0x0502
 	MethodRecordsList       = 0x0503
@@ -256,6 +259,7 @@ var methodNames = []struct {
 	{"metrics.ingestPrometheus", MethodMetricsIngestPrometheus},
 	{"metrics.uploadPrometheus", MethodMetricsUploadPrometheus},
 	{"metrics.replace", MethodMetricsReplace},
+	{"metrics.upload", MethodMetricsUpload},
 	{"records.open", MethodRecordsOpen},
 	{"records.append", MethodRecordsAppend},
 	{"records.list", MethodRecordsList},
@@ -533,6 +537,8 @@ func NewMessage(name string) Message {
 		return &MetricsExposition{}
 	case "metrics.Upload":
 		return &MetricsUpload{}
+	case "metrics.IngestUpload":
+		return &MetricsIngestUpload{}
 	case "metrics.Piece":
 		return &MetricsPiece{}
 	case "metrics.PageAsked":
@@ -9039,6 +9045,45 @@ func (m MetricsUpload) IsZero() bool {
 		len(m.Labels) == 0 &&
 		m.At == nil &&
 		m.Keep == nil
+}
+
+// MetricsIngestUpload is the schema's metrics.IngestUpload.
+//
+// An ingest past what one message holds: the bytes of its metrics.Ingest,
+// whose pieces follow as the client's DATA, a metrics.Piece each.
+type MetricsIngestUpload struct {
+	// the bytes of its metrics.Ingest, 32 MiB at most: pieces that come to more or fewer are refused
+	Size uint64 `wire:"1,size"`
+}
+
+func (m MetricsIngestUpload) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Size != 0 {
+		w.Uint(1)
+		w.Uint(m.Size)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsIngestUpload) Read(r *Reader) {
+	*m = MetricsIngestUpload{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Size = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsIngestUpload writes as no field at all.
+func (m MetricsIngestUpload) IsZero() bool {
+	return m.Size == 0
 }
 
 // MetricsPiece is the schema's metrics.Piece.

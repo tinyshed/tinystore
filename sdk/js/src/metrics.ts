@@ -40,6 +40,7 @@ import {
 	MetricsDescription,
 	MetricsExposition,
 	MetricsIngest,
+	MetricsIngestUpload,
 	MetricsLatest,
 	MetricsNameAsked,
 	MetricsNamePage,
@@ -354,15 +355,25 @@ export class Metrics {
 		this.#instruments = instruments
 	}
 
-	/** Writes series and their samples, every one or none: a refused series names itself. */
+	/**
+	 * Writes series and their samples in one write, every one or none: a
+	 * refused series names itself. One call takes 100,000 samples, as one
+	 * exporter's text does; one past a message goes up in pieces.
+	 */
 	async ingest(series: SeriesInput | readonly SeriesInput[]): Promise<void> {
 		const given = Array.isArray(series)
 			? (series as readonly SeriesInput[])
 			: [series as SeriesInput]
 		const body = MetricsIngest.encode({ series: given.map(newSeries) })
-		await this.#link.run('write', connection =>
-			connection.session.call(methods['metrics.ingest'], body),
-		)
+		await this.#link.run('write', async connection => {
+			if (body.length <= (connection.session.agreed?.maxBody ?? 0)) {
+				await connection.session.call(methods['metrics.ingest'], body)
+				return
+			}
+			const asked = MetricsIngestUpload.encode({ size: body.length })
+			const stream = await connection.session.open(methods['metrics.upload'], asked, false)
+			await uploaded(stream, body, pieceOf(connection))
+		})
 	}
 
 	/**
@@ -956,10 +967,11 @@ function oneMessage(
 }
 
 /**
- * Sends a text's pieces as DATA within the stream's credit, the last ending
- * them, and waits for the store to write it. A connection lost before that
- * last DATA left nothing written, so the text goes again on the next one;
- * lost after it, whether the text was written is unknown.
+ * Sends an upload's pieces, a text's or an ingest's, as DATA within the
+ * stream's credit, the last ending them, and waits for the store to write
+ * it. A connection lost before that last DATA left nothing written, so the
+ * upload goes again on the next one; lost after it, whether it was written
+ * is unknown.
  */
 async function uploaded(stream: Stream, text: Uint8Array, piece: number): Promise<void> {
 	let ending = false
@@ -979,7 +991,7 @@ async function uploaded(stream: Stream, text: Uint8Array, piece: number): Promis
 		stream.cancel()
 		if (err instanceof ConnectionLostError) {
 			throw new OutcomeUnknownError(
-				`the connection was lost as the text was written: ${err.message}`,
+				`the connection was lost as the upload was written: ${err.message}`,
 			)
 		}
 		throw err

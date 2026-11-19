@@ -130,6 +130,9 @@ methods: dict[str, int] = {
     # A gauge's range replaced in one write: a read sees it as it was or as it
     # is, never half; the same samples sent again write nothing.
     "metrics.replace": 0x0611,
+    # An ingest's message in pieces, as uploadPrometheus takes a text: written
+    # once the last piece came, every series or none.
+    "metrics.upload": 0x0612,
     "records.open": 0x0501,
     "records.append": 0x0502,
     "records.list": 0x0503,
@@ -6677,6 +6680,42 @@ MetricsUpload = Message(
 )
 
 
+def _write_metrics_ingest_upload(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("size")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_ingest_upload(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["size"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# An ingest past what one message holds: the bytes of its metrics.Ingest,
+# whose pieces follow as the client's DATA, a metrics.Piece each.
+MetricsIngestUpload = Message(
+    "metrics.IngestUpload",
+    {
+        # the bytes of its metrics.Ingest, 32 MiB at most: pieces that come to more or fewer are refused
+        "size": (1, uint),
+    },
+    _write_metrics_ingest_upload,
+    _read_metrics_ingest_upload,
+)
+
+
 def _write_metrics_piece(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -12001,6 +12040,7 @@ messages: dict[str, Message] = {
     "metrics.Replace": MetricsReplace,
     "metrics.Exposition": MetricsExposition,
     "metrics.Upload": MetricsUpload,
+    "metrics.IngestUpload": MetricsIngestUpload,
     "metrics.Piece": MetricsPiece,
     "metrics.PageAsked": MetricsPageAsked,
     "metrics.Name": MetricsName,

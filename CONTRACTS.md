@@ -251,6 +251,7 @@ These contracts are what does not.
 - **MET-27** A bucket of a calendar MUST carry the local date its span begins on, in the aggregate's time zone; a bucket of `every` none.
 - **MET-28** A walk of an aggregate's pages MUST yield each group once, its buckets whole and in order, its parts from the pages it spans joined; a page read by hand keeps `more`.
 - **MET-29** An instrument given `maxSeries` MUST count a new set of labels past it into `__overflow`, and the first overflow MUST be said once where the program's TinyStore lines go, in every SDK; another `maxSeries` for an instrument the store holds MUST be refused `invalid`.
+- **MET-30** An ingest of up to 100,000 samples and 32 MiB MUST be one write, applied whole, through every way a store is reached, a message past one body going up in pieces; past either bound it MUST be `limit`, writing nothing.
 
 ### Search
 

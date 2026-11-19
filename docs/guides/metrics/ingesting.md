@@ -37,8 +37,15 @@ let stats = store.metrics()?;
 stats.ingest(&[Series::gauge("cpu").label("host", "web-1").sample(at, 0.42).sample(later, 0.47)])?;
 ```
 
-- One call is written whole or not at all. A refused series names itself by
-  its labels, so the call can be sent again without it.
+- One call is written whole or not at all, in one write. A refused series
+  names itself by its labels, so the call can be sent again without it.
+- One call takes 100,000 samples, what one exporter's text takes: six
+  hosts' 20 hours of a sample every five seconds is one call. From Bun, Node,
+  Python or Go, a call past one message goes up in pieces, and is still one
+  write. A series takes 16,384 samples a call that its series has not packed
+  yet, so a long history of one series is sent in calls of a few hours. Past
+  either bound the call fails with a limit error, writing nothing; sent
+  again, a split call's samples change nothing.
 - `ingest` returns once the samples are written, and a read finds them at
   once. A crash of the program loses none. A power loss may take the last
   ones, as [the durability of
@@ -184,7 +191,8 @@ stats.replace(&revenue, day(3)..day(0))?; // the next run reads the same: nothin
 - The range must start inside what the name keeps and end at most ten minutes
   ahead of the store's clock. Otherwise the call fails with a too old or too
   new error.
-- One call takes as many samples as one `ingest`, 10,000. What the range
+- One call takes 10,000 samples, fewer than an `ingest`, since it decodes
+  and cuts the blocks its range reaches. What the range
   already holds is bounded as a [query](reading.md) is. Past either bound,
   the call fails with a limit error, so replace a long range in several
   calls.
@@ -297,7 +305,7 @@ of it.
 
 | What              | Limit                                                                      |
 |-------------------|----------------------------------------------------------------------------|
-| one `ingest`      | 10,000 samples or 4 MiB                                                    |
+| one `ingest`      | 100,000 samples or 32 MiB, one write; 16,384 a series not packed yet       |
 | one `replace`     | 10,000 samples or 4 MiB, and its range read within a query's bounds        |
 | one text          | 100,000 samples or 32 MiB, and 32 MiB of text from Bun, Node, Python or Go |
 | a series          | 128 labels with its name, 16 KiB; a label's value 4 KiB                    |

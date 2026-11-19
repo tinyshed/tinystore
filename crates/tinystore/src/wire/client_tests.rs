@@ -164,20 +164,35 @@ fn a_text_past_one_message_goes_up_in_pieces_and_is_written_whole() {
     assert!(refused.to_string().contains("line 30001"), "{refused}");
 }
 
+// contract: MET-30
+#[test]
+fn an_ingest_past_the_body_agreed_goes_up_in_pieces_and_is_written_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let (mut client, _) = welcomed(&store);
+    // 600 series of a 4,000-byte label pass the 2 MiB one message holds
+    let wide = "w".repeat(4000);
+    let at = SystemTime::now();
+    let series: Vec<Series> =
+        (0..600).map(|n| Series::gauge("wide").label("n", format!("{n}{wide}")).sample(at, 1.0)).collect();
+    client.ingest(&series).unwrap();
+    assert_eq!(samples_of(&store, "wide"), 600);
+}
+
 // contract: ERR-05
 #[test]
 fn a_request_past_the_body_agreed_names_its_call_its_bytes_and_the_body() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options::default()).unwrap();
     let (mut client, _) = welcomed(&store);
-    let wide = "w".repeat(4000);
-    let at = SystemTime::now();
-    let series: Vec<Series> =
-        (0..600).map(|n| Series::gauge("wide").label("n", format!("{n}{wide}")).sample(at, 1.0)).collect();
-    let refused = client.ingest(&series).unwrap_err();
+    // a replace goes in one message, which 140,000 samples pass
+    let at = SystemTime::now() - Duration::from_hours(1);
+    let mut wide = Series::gauge("wide");
+    wide.extend((0..140_000_u32).map(|n| (at + Duration::from_millis(u64::from(n)), 1.0)));
+    let refused = client.replace(&wide, at..at + Duration::from_mins(10)).unwrap_err();
     let wanted: u64 = refused.fact("wanted").unwrap().parse().unwrap();
     assert!(wanted > 2 << 20, "{refused}");
-    let said = format!("metrics.ingest: a request of {wanted} bytes, past the 2097152 a body holds: limit");
+    let said = format!("metrics.replace: a request of {wanted} bytes, past the 2097152 a body holds: limit");
     assert_eq!((refused.kind(), refused.to_string()), (ErrorKind::Limit, said));
     assert_eq!((refused.fact("limit"), refused.fact("bound")), (Some("request bytes"), Some("2097152")));
     assert_eq!(samples_of(&store, "wide"), 0, "nothing was sent");

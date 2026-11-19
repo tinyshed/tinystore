@@ -36,6 +36,7 @@ from ._wire.protocol import (
     MetricsDescription,
     MetricsExposition,
     MetricsIngest,
+    MetricsIngestUpload,
     MetricsLatest,
     MetricsNameAsked,
     MetricsNamePage,
@@ -375,10 +376,23 @@ class Metrics:
         self._instruments = instruments
 
     async def ingest(self, series: Series | Sequence[Series]) -> None:
-        """Writes series and their samples, every one or none: a refused series names itself."""
+        """Writes series and their samples in one write, every one or none: a refused series names itself.
+
+        One call takes 100,000 samples, as one exporter's text does; one past a message goes up in pieces.
+        """
         given = [series] if isinstance(series, Series) else list(series)
         body = MetricsIngest.encode(series=[_new_series(each) for each in given])
-        await self._link.run("write", lambda c: c.session.call(methods["metrics.ingest"], body))
+
+        async def attempt(connection: Connection) -> None:
+            agreed = connection.session.agreed
+            if agreed is not None and len(body) <= agreed.max_body:
+                await connection.session.call(methods["metrics.ingest"], body)
+                return
+            asked = MetricsIngestUpload.encode(size=len(body))
+            stream = await connection.session.open(methods["metrics.upload"], asked, False)
+            await _uploaded(stream, body, piece_of(connection))
+
+        await self._link.run("write", attempt)
 
     async def replace(self, series: Series, *, from_: datetime, to: datetime) -> None:
         """Replaces a gauge's samples from ``from_`` to ``to``, ``to`` excluded, with the series' own.
@@ -806,11 +820,11 @@ def _one_message(connection: Connection, text: bytes, given: Mapping[str, Any]) 
 
 
 async def _uploaded(stream: Stream, text: bytes, piece: int) -> None:
-    """Sends a text's pieces as DATA within the stream's credit, the last ending them, and waits for its write.
+    """Sends an upload's pieces as DATA within the stream's credit, the last ending them, and waits for its write.
 
-    A connection lost before that last DATA left nothing written, so the text
-    goes again on the next one; lost after it, whether the text was written is
-    unknown.
+    A text's or an ingest's. A connection lost before that last DATA left
+    nothing written, so the upload goes again on the next one; lost after it,
+    whether it was written is unknown.
     """
     ending = False
     view = memoryview(text)
@@ -828,7 +842,7 @@ async def _uploaded(stream: Stream, text: bytes, piece: int) -> None:
             # the store let go of what came and wrote nothing, so the whole text goes again
             raise ConnectionLostError(str(err), sent=False) from err
         stream.cancel()
-        raise OutcomeUnknownError(f"the connection was lost as the text was written: {err}") from err
+        raise OutcomeUnknownError(f"the connection was lost as the upload was written: {err}") from err
     except BaseException:
         stream.cancel()
         raise

@@ -41,7 +41,7 @@ use super::directory::{Block, Group, MOST_ENTRIES, Row, entry_len};
 use super::engine::{AHEAD, Engine, execute};
 use super::head::{self, Extent};
 use super::ingest::{
-    Batch, ONE_INGEST, POINT_HOLDS, SAMPLE_BYTES, SERIES_HOLDS, SET_NEWEST, State, VERSIONS, ordered, ready, within,
+    Batch, ONE_REPLACE, POINT_HOLDS, SAMPLE_BYTES, SERIES_HOLDS, SET_NEWEST, State, VERSIONS, ordered, ready, within,
 };
 use super::instruments::refuse_the_stores_own;
 use super::labels::Kept;
@@ -265,7 +265,7 @@ impl Given {
             return Err(Error::invalid(format!("a range from {from} to {to}, which ends where it begins or before")));
         }
         let samples = series.samples.len();
-        within(ONE_INGEST, "a replace", samples, kept.bytes() + SAMPLE_BYTES * samples)?;
+        within(ONE_REPLACE, "a replace", samples, kept.bytes() + SAMPLE_BYTES * samples)?;
         let points = series.samples.iter().map(|sample| Point { at: unix_millis(sample.at), value: sample.value });
         let points = ordered(points.collect());
         if let Some(outside) = points.iter().find(|point| !stretch.holds(point.at)) {
