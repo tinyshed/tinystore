@@ -4009,6 +4009,10 @@ export const JobsCall = message(
 		dedupe: [10, uint],
 		/** this job's own, in the place of dedupe */
 		dedupeCalendar: [11, JobsCalendar],
+		/** it leaves its queue this long after its last write unless written again; not 0 */
+		ttl: [12, uint],
+		/** it leaves its queue then; not beside ttl */
+		expiresAt: [13, int],
 		/** this job's own once it failed for good; 0 not at all */
 		keep: [14, uint],
 	},
@@ -4071,6 +4075,16 @@ export const JobsCall = message(
 				JobsCalendar.write(w, v.dedupeCalendar)
 				n++
 			}
+			if (v.ttl !== undefined) {
+				w.field(12)
+				w.uint(v.ttl)
+				n++
+			}
+			if (v.expiresAt !== undefined) {
+				w.field(13)
+				w.int(v.expiresAt)
+				n++
+			}
 			if (v.keep !== undefined) {
 				w.field(14)
 				w.uint(v.keep)
@@ -4090,6 +4104,8 @@ export const JobsCall = message(
 			let $timeZone: string | undefined
 			let $dedupe: number | undefined
 			let $dedupeCalendar: Read<typeof JobsCalendar.fields> | undefined
+			let $ttl: number | undefined
+			let $expiresAt: number | undefined
 			let $keep: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
@@ -4126,6 +4142,12 @@ export const JobsCall = message(
 					case 11:
 						$dedupeCalendar = JobsCalendar.read(r)
 						break
+					case 12:
+						$ttl = r.uint()
+						break
+					case 13:
+						$expiresAt = r.int()
+						break
 					case 14:
 						$keep = r.uint()
 						break
@@ -4146,6 +4168,8 @@ export const JobsCall = message(
 				timeZone: $timeZone,
 				dedupe: $dedupe,
 				dedupeCalendar: $dedupeCalendar,
+				ttl: $ttl,
+				expiresAt: $expiresAt,
 				keep: $keep,
 			}
 		},
@@ -4274,6 +4298,8 @@ export const JobsJob = message(
 		row: [14, str],
 		/** a walk's: why the job's value no longer reads, the job left out */
 		failure: [15, Failure],
+		/** when it leaves its queue unless written again: its ttl's end, or its expiresAt */
+		expiresAt: [16, int],
 	},
 	{
 		write(w, v) {
@@ -4354,6 +4380,11 @@ export const JobsJob = message(
 				Failure.write(w, v.failure)
 				n++
 			}
+			if (v.expiresAt !== undefined) {
+				w.field(16)
+				w.int(v.expiresAt)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -4372,6 +4403,7 @@ export const JobsJob = message(
 			let $endedAt: number | undefined
 			let $row: string | undefined
 			let $failure: Read<typeof Failure.fields> | undefined
+			let $expiresAt: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -4419,6 +4451,9 @@ export const JobsJob = message(
 					case 15:
 						$failure = Failure.read(r)
 						break
+					case 16:
+						$expiresAt = r.int()
+						break
 					default:
 						r.skip()
 				}
@@ -4440,6 +4475,7 @@ export const JobsJob = message(
 				endedAt: $endedAt,
 				row: $row,
 				failure: $failure,
+				expiresAt: $expiresAt,
 			}
 		},
 	},

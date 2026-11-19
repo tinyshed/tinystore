@@ -565,6 +565,26 @@ func TestUpsertAddsAJobOrBringsTheOneThereToTheCallAndKeepsItsTime(t *testing.T)
 	})
 }
 
+// contract: JOB-19
+func TestAJobsTermShowsAndAJobPastItIsGoneWithItsIDFree(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		polls := ways.Must(jobs.OpenQueue[string](store, "terms"))
+		before := time.Now()
+		ways.Must(polls.Upsert(ctx, "group:1", "241-327", jobs.Every(3*time.Minute), jobs.TTL(14*24*time.Hour)))
+		if job, _ := ways.Must2(polls.Get(ctx, "group:1")); job.ExpiresAt.Sub(before) < 14*24*time.Hour-time.Second {
+			t.Fatalf("its term %+v", job)
+		}
+		ways.Must(polls.Add(ctx, "x", jobs.ID("past"), jobs.ExpiresAt(time.Now().Add(-time.Second))))
+		if _, found := ways.Must2(polls.Get(ctx, "past")); found {
+			t.Fatal("a job past its term is gone")
+		}
+		if !ways.Must(polls.Add(ctx, "x", jobs.ID("past"))) {
+			t.Fatal("its id is free")
+		}
+	})
+}
+
 // contract: JOB-18, JOB-20
 func TestAJobsOwnDedupeHoldsItsIDByALocalCalendarAndItsKeepOfZeroKeepsNothing(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {

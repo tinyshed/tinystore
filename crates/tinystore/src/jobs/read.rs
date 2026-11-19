@@ -60,6 +60,9 @@ pub struct Job<V> {
     /// A repeating job's repeat, as it keeps it.
     pub repeat: Option<String>,
     pub last_run: Option<LastRun>,
+    /// When it leaves its queue unless written again: its `ttl` from its last
+    /// write, or its `expires_at`.
+    pub expires_at: Option<SystemTime>,
     /// Where a job without an id lies, which a cancel of it names.
     pub(crate) row: Option<Row>,
 }
@@ -247,6 +250,7 @@ struct Found {
     ran: Option<i64>,
     took: Option<i64>,
     group: Option<String>,
+    expires: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,7 +267,7 @@ macro_rules! job_columns {
     () => {
         "j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill,
             coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0),
-            j.ran, j.took, j.grp"
+            j.ran, j.took, j.grp, j.expires"
     };
 }
 macro_rules! keyed_columns {
@@ -275,23 +279,30 @@ macro_rules! keyed_columns {
         )
     };
 }
+/// A job past its term that no run holds is gone, though no claim or
+/// maintenance deleted it yet.
+macro_rules! within_term {
+    () => {
+        " and (j.expires is null or j.expires > ?9 or l.id is not null)"
+    };
+}
 macro_rules! failed_columns {
     () => {
         "f.key, f.failed, f.id, f.at, f.attempt, null, 1, null, f.error, f.value, f.spill,
             coalesce(length(f.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = f.spill), 0),
-            f.ran, f.took, f.grp
+            f.ran, f.took, f.grp, null
         from _tinystore_jobs_failed f"
     };
 }
 
-const GET_JOB: &str = concat!("select ", keyed_columns!(), " where k.queue = ?1 and k.key = ?2");
+const GET_JOB: &str = concat!("select ", keyed_columns!(), " where k.queue = ?1 and k.key = ?2", within_term!());
 /// A failed job past a keep of its own is gone, though maintenance has not
 /// deleted it yet.
 const GET_FAILED: &str =
     concat!("select ", failed_columns!(), " where f.queue = ?1 and f.key = ?2 and (f.until is null or f.until > ?3)");
 const GET_DONE: &str = "select d.key, d.until, 0, d.at, d.attempt, null, 2, null, null, d.value, d.spill,
         coalesce(length(d.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = d.spill), 0),
-        d.ran, d.took, d.grp
+        d.ran, d.took, d.grp, null
     from _tinystore_jobs_done d where d.queue = ?1 and d.key = ?2 and d.until > ?3";
 const SPILLED: &str = "select value from _tinystore_jobs_spilled where id = ?1";
 /// The rows before a job in the order the queue runs them, at most ?4.
@@ -303,7 +314,9 @@ const PAGE_BY_KEY: &str = concat!(
     "select * from (
         select ",
     keyed_columns!(),
-    " where k.queue = ?1 and k.key > ?2 and k.key >= ?3 and (?4 is null or k.key < ?4) and ?5 in (0, 1)
+    " where k.queue = ?1 and k.key > ?2 and k.key >= ?3 and (?4 is null or k.key < ?4) and ?5 in (0, 1)",
+    within_term!(),
+    "
         union all
         select ",
     failed_columns!(),
@@ -319,7 +332,9 @@ const PAGE_UNNAMED: &str = concat!(
     "select ",
     job_columns!(),
     " from _tinystore_jobs j left join _tinystore_jobs_leases l on l.id = j.id and l.until > ?9
-    where j.queue = ?1 and j.key is null and (j.next, j.id) > (?7, ?8)
+    where j.queue = ?1 and j.key is null and (j.next, j.id) > (?7, ?8)",
+    within_term!(),
+    "
     order by j.next, j.id limit cast(?6 as integer)"
 );
 /// A page of the failed jobs, the last failed first, before the one that
@@ -622,6 +637,7 @@ fn found(row: &rusqlite::Row<'_>) -> rusqlite::Result<Found> {
         ran: row.get(12)?,
         took: row.get(13)?,
         group: row.get(14)?,
+        expires: row.get(15)?,
     })
 }
 
@@ -672,6 +688,7 @@ fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found
         group: found.group.clone(),
         repeat: found.repeat.clone(),
         last_run,
+        expires_at: found.expires.map(from_unix_millis),
         row: if found.key.is_none() { row_of(found) } else { None },
     })
 }

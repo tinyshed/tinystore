@@ -379,6 +379,12 @@ fn on_job<T>(
     if let Some(keep) = call.keep {
         job = job.keep(span(keep));
     }
+    if let Some(ttl) = call.ttl {
+        job = job.ttl(span(ttl));
+    }
+    if let Some(expires_at) = call.expires_at {
+        job = job.expires_at(from_unix_millis(expires_at));
+    }
     Ok(write(job, value)?)
 }
 
@@ -465,6 +471,7 @@ fn job_of(job: Job<Raw>) -> JobsJob {
         ended_at: job.last_run.map(|run| unix_millis(run.ended_at)),
         row: job.row.map(|row| row.to_string()),
         failure: None,
+        expires_at: job.expires_at.map(unix_millis),
     }
 }
 

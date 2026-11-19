@@ -4777,6 +4777,10 @@ type JobsCall struct {
 	Dedupe *uint64 `wire:"10,dedupe"`
 	// this job's own, in the place of dedupe
 	DedupeCalendar *JobsCalendar `wire:"11,dedupeCalendar"`
+	// it leaves its queue this long after its last write unless written again; not 0
+	Ttl *uint64 `wire:"12,ttl"`
+	// it leaves its queue then; not beside ttl
+	ExpiresAt *int64 `wire:"13,expiresAt"`
 	// this job's own once it failed for good; 0 not at all
 	Keep *uint64 `wire:"14,keep"`
 }
@@ -4839,6 +4843,16 @@ func (m JobsCall) Write(w *Writer) {
 		m.DedupeCalendar.Write(w)
 		n++
 	}
+	if m.Ttl != nil {
+		w.Uint(12)
+		w.Uint(*m.Ttl)
+		n++
+	}
+	if m.ExpiresAt != nil {
+		w.Uint(13)
+		w.Int(*m.ExpiresAt)
+		n++
+	}
 	if m.Keep != nil {
 		w.Uint(14)
 		w.Uint(*m.Keep)
@@ -4884,6 +4898,12 @@ func (m *JobsCall) Read(r *Reader) {
 			var v JobsCalendar
 			v.Read(r)
 			m.DedupeCalendar = &v
+		case 12:
+			v := r.Uint()
+			m.Ttl = &v
+		case 13:
+			v := r.Int()
+			m.ExpiresAt = &v
 		case 14:
 			v := r.Uint()
 			m.Keep = &v
@@ -4907,6 +4927,8 @@ func (m JobsCall) IsZero() bool {
 		m.TimeZone == nil &&
 		m.Dedupe == nil &&
 		m.DedupeCalendar == nil &&
+		m.Ttl == nil &&
+		m.ExpiresAt == nil &&
 		m.Keep == nil
 }
 
@@ -5031,6 +5053,8 @@ type JobsJob struct {
 	Row *string `wire:"14,row"`
 	// a walk's: why the job's value no longer reads, the job left out
 	Failure *Failure `wire:"15,failure"`
+	// when it leaves its queue unless written again: its ttl's end, or its expiresAt
+	ExpiresAt *int64 `wire:"16,expiresAt"`
 }
 
 func (m JobsJob) Write(w *Writer) {
@@ -5111,6 +5135,11 @@ func (m JobsJob) Write(w *Writer) {
 		m.Failure.Write(w)
 		n++
 	}
+	if m.ExpiresAt != nil {
+		w.Uint(16)
+		w.Int(*m.ExpiresAt)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -5161,6 +5190,9 @@ func (m *JobsJob) Read(r *Reader) {
 			var v Failure
 			v.Read(r)
 			m.Failure = &v
+		case 16:
+			v := r.Int()
+			m.ExpiresAt = &v
 		default:
 			r.Skip()
 		}
@@ -5184,7 +5216,8 @@ func (m JobsJob) IsZero() bool {
 		m.StartedAt == nil &&
 		m.EndedAt == nil &&
 		m.Row == nil &&
-		m.Failure == nil
+		m.Failure == nil &&
+		m.ExpiresAt == nil
 }
 
 // JobsList is the schema's jobs.List.

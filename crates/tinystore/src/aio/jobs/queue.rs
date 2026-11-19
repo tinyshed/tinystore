@@ -406,6 +406,17 @@ where
         self.with(|call| call.keep(span))
     }
 
+    /// The job leaves its queue `span` after its last write unless written
+    /// again; see [`jobs::JobCall::ttl`].
+    pub fn ttl(self, span: Duration) -> Self {
+        self.with(|call| call.ttl(span))
+    }
+
+    /// The job leaves its queue at `time`; see [`jobs::JobCall::expires_at`].
+    pub fn expires_at(self, time: SystemTime) -> Self {
+        self.with(|call| call.expires_at(time))
+    }
+
     /// Repeats the job every `span`; see [`jobs::JobCall::every`].
     pub fn every(self, span: Duration) -> Self {
         self.with(|call| call.every(span))

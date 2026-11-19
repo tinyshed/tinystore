@@ -70,15 +70,15 @@ let worker = emails.work(|email: Email, run| -> Result<(), AppError> {
 
 ## In these guides
 
-| Page                                      | Covers                                             |
-|-------------------------------------------|----------------------------------------------------|
-| [Ids](ids.md)                             | `id`, `cancel`, `get`, pages and `counts`          |
-| [Schedules and cron](schedules.md)        | `every`, `cron` with a time zone, `store.schedule` |
-| [Concurrency and rate](concurrency.md)    | limits in all and per group, starts per second     |
-| [Watching a job](watching.md)             | `get`, `watch`, `ahead`, progress                  |
-| [Steps](steps.md)                         | answers kept across attempts                       |
-| [Jobs in your database](your-database.md) | `db.queue` and transactions                        |
-| [Testing](testing.md)                     | `runDue` and a clock you move                      |
+| Page                                      | Covers                                                                              |
+|-------------------------------------------|-------------------------------------------------------------------------------------|
+| [Ids](ids.md)                             | `id`, `upsert`, `dedupe`, `keep`, `cancel`, `get`, pages and `counts`               |
+| [Schedules and cron](schedules.md)        | `every`, `cron` with a time zone, `ttl` and `expiresAt`, `store.schedule`, `runNow` |
+| [Concurrency and rate](concurrency.md)    | limits in all and per group, starts per second                                      |
+| [Watching a job](watching.md)             | `get`, `watch`, `ahead`, progress                                                   |
+| [Steps](steps.md)                         | answers kept across attempts                                                        |
+| [Jobs in your database](your-database.md) | `db.queue` and transactions                                                         |
+| [Testing](testing.md)                     | `runDue` and a clock you move                                                       |
 
 New to Jobs? [Replies in the background](../../handbook/chat/replies.md) in
 the Handbook writes a chat's replies with a queue, steps and a watch, and

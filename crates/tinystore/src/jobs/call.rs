@@ -51,6 +51,7 @@ pub(crate) struct Asked {
     repeat: Option<Repeat>,
     dedupe: Option<Dedupe>,
     keep: Option<Duration>,
+    term: Option<Term>,
     /// A step the chain refused, which its last step reports.
     refused: Option<String>,
 }
@@ -59,6 +60,14 @@ pub(crate) struct Asked {
 enum When {
     At(SystemTime),
     After(Duration),
+}
+
+/// When a job leaves its queue unless written again: a span from its last
+/// write, or a time.
+#[derive(Clone, Copy, Debug)]
+enum Term {
+    Ttl(Duration),
+    At(SystemTime),
 }
 
 impl<'a, V> JobCall<'a, V>
@@ -123,6 +132,20 @@ where
         self
     }
 
+    /// The job leaves its queue `span` after its last write unless written
+    /// again: an `upsert`, a `set` or an `update` that names it renews it,
+    /// as a key's `ttl` does. A job does not start at or after its term; a
+    /// run under way finishes, and a repeat ends there.
+    pub fn ttl(self, span: Duration) -> Self {
+        self.term(Term::Ttl(span))
+    }
+
+    /// The job leaves its queue at `time`, as `ttl` says; one already past
+    /// is gone at once.
+    pub fn expires_at(self, time: SystemTime) -> Self {
+        self.term(Term::At(time))
+    }
+
     /// Adds the job unless its id is taken: by a job scheduled, waiting or
     /// running, or done while the queue's dedupe keeps it. A job failed for
     /// good holds no id, and the new job takes its place. Says whether it
@@ -184,6 +207,14 @@ where
         self.queue.lent(change, self.asked, value)
     }
 
+    fn term(mut self, term: Term) -> Self {
+        if self.asked.term.is_some() {
+            self.asked.refused = Some("a term given twice: ttl or expires_at, not both".to_owned());
+        }
+        self.asked.term = Some(term);
+        self
+    }
+
     fn when(mut self, when: When) -> Self {
         if self.asked.when.is_some() {
             self.asked.refused = Some("a time given twice: at or delay, not both".to_owned());
@@ -203,11 +234,11 @@ impl Asked {
     /// The options of a job's own, as a write passed on carries them after
     /// its JSON, so that a home of a release before refuses the write rather
     /// than drop them: a dedupe, 0 none, 1 a span, 2 a calendar's unit and
-    /// zone; then a keep, 0 none or 1 and its span. Nothing when none is
-    /// given.
+    /// zone; then a keep, 0 none or 1 and its span; then a term, 0 none, 1
+    /// a ttl's span or 2 a time. Nothing when none is given.
     #[cfg(feature = "replication")]
     pub(crate) fn write_own(&self, out: &mut crate::replication::Out) {
-        if self.dedupe.is_none() && self.keep.is_none() {
+        if self.dedupe.is_none() && self.keep.is_none() && self.term.is_none() {
             return;
         }
         match &self.dedupe {
@@ -217,6 +248,11 @@ impl Asked {
         match self.keep {
             None => out.byte(0),
             Some(span) => out.byte(1).span(span),
+        };
+        match self.term {
+            None => out.byte(0),
+            Some(Term::Ttl(span)) => out.byte(1).span(span),
+            Some(Term::At(time)) => out.byte(2).long(unix_millis(time) as u64),
         };
     }
 
@@ -235,6 +271,15 @@ impl Asked {
             0 => None,
             1 => Some(at.span()?),
             _ => return Err(super::forward::corrupt("a job's keep")),
+        };
+        if at.done() {
+            return Ok(());
+        }
+        self.term = match at.byte()? {
+            0 => None,
+            1 => Some(Term::Ttl(at.span()?)),
+            2 => Some(Term::At(crate::clock::from_unix_millis(at.long()? as i64))),
+            _ => return Err(super::forward::corrupt("a job's term")),
         };
         Ok(())
     }
@@ -312,6 +357,17 @@ impl Asked {
         if keep.is_some_and(|keep| keep > LONGEST_SPAN) {
             return Err(Error::invalid("a keep longer than the years 1 to 9999"));
         }
+        let (expires, ttl) = match self.term {
+            None => (None, None),
+            Some(Term::Ttl(span)) if span.is_zero() => {
+                return Err(Error::invalid("a ttl of 0, which ends the job at once"));
+            }
+            Some(Term::Ttl(span)) => (Some(now.saturating_add(millis(span))), Some(millis(span))),
+            Some(Term::At(time)) => (Some(unix_millis(time)), None),
+        };
+        if expires.is_some_and(|expires| !in_years(expires)) {
+            return Err(Error::invalid("a term outside the years 1 to 9999"));
+        }
         Ok(Prepared {
             key: self.id,
             at,
@@ -321,6 +377,8 @@ impl Asked {
             group: self.group,
             dedupe: self.dedupe.map(|dedupe| dedupe.text()),
             keep,
+            expires,
+            ttl,
             value: Kept::of(values::encode(value)?),
             now,
         })

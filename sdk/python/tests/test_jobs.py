@@ -65,6 +65,21 @@ async def test_upsert_adds_a_job_or_brings_the_one_there_to_the_call_and_keeps_i
     assert slower is not None and (slower.repeat or "").startswith("@every 1h")
 
 
+# contract: JOB-19
+async def test_a_jobs_term_shows_and_a_job_past_it_is_gone_with_its_id_free(store: tinystore.Store) -> None:
+    polls = store.queue("terms", dict[str, str])
+    before = datetime.now(UTC)
+    await polls.upsert("group:1", {"group": "241-327"}, every="3m", ttl="14d")
+    job = await polls.get("group:1")
+    assert job is not None and job.expires_at is not None
+    assert job.expires_at - before >= timedelta(days=14, seconds=-1)
+    assert await polls.add({"group": "x"}, id="past", expires_at=datetime.now(UTC) - timedelta(seconds=1))
+    assert await polls.get("past") is None
+    assert await polls.add({"group": "x"}, id="past")
+    with pytest.raises(tinystore.InvalidError):
+        await polls.add({"group": "x"}, id="both", ttl="1h", expires_at=datetime.now(UTC))
+
+
 async def test_a_worker_runs_each_job_as_it_falls_due_the_value_first_and_the_run_second(
     store: tinystore.Store,
 ) -> None:

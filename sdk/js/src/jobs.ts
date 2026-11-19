@@ -94,6 +94,10 @@ export interface JobOptions {
 	dedupe?: Dedupe | undefined
 	/** how long this job is kept once it failed for good, in the place of its queue's: '0s' not at all */
 	keep?: Duration | undefined
+	/** it leaves its queue this long after its last write unless written again: an upsert, a set or an update renews it */
+	ttl?: Duration | undefined
+	/** it leaves its queue at this time; not beside ttl */
+	expiresAt?: Time | undefined
 }
 
 export interface AddOptions extends JobOptions {
@@ -124,6 +128,8 @@ export interface Job<T> {
 	repeat: string | undefined
 	/** when the last run a handler finished started and ended */
 	lastRun: { startedAt: Date; endedAt: Date } | undefined
+	/** when it leaves its queue unless written again: its ttl's end, or its expiresAt */
+	expiresAt: Date | undefined
 }
 
 export interface ListOptions {
@@ -638,6 +644,7 @@ async function jobOf<T>(source: Source<T>, found: Read<typeof JobsJob.fields>): 
 						startedAt: new Date(found.startedAt),
 						endedAt: new Date(found.endedAt ?? found.startedAt),
 					},
+		expiresAt: found.expiresAt === undefined ? undefined : new Date(found.expiresAt),
 	}
 	if (found.row !== undefined) {
 		Object.defineProperty(job, ROW, { value: found.row })
@@ -1257,6 +1264,8 @@ function jobFields(
 		timeZone: options.timeZone,
 		...dedupeOf(options.dedupe),
 		keep: msOf(options.keep),
+		ttl: msOf(options.ttl),
+		expiresAt: options.expiresAt === undefined ? undefined : unixMs(options.expiresAt),
 	}
 }
 

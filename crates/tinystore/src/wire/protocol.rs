@@ -3829,6 +3829,10 @@ pub(crate) struct JobsCall {
     pub(crate) dedupe: Option<u64>,
     /// This job's own, in the place of dedupe.
     pub(crate) dedupe_calendar: Option<JobsCalendar>,
+    /// It leaves its queue this long after its last write unless written again; not 0. Milliseconds.
+    pub(crate) ttl: Option<u64>,
+    /// It leaves its queue then; not beside ttl. Unix milliseconds.
+    pub(crate) expires_at: Option<i64>,
     /// This job's own once it failed for good; 0 not at all. Milliseconds.
     pub(crate) keep: Option<u64>,
 }
@@ -3853,6 +3857,8 @@ impl Message for JobsCall {
                 9 => message.time_zone = Some(codec::str(r, "timeZone")?),
                 10 => message.dedupe = Some(codec::uint(r, "dedupe")?),
                 11 => message.dedupe_calendar = Some(JobsCalendar::read(r)?),
+                12 => message.ttl = Some(codec::uint(r, "ttl")?),
+                13 => message.expires_at = Some(codec::int(r, "expiresAt")?),
                 14 => message.keep = Some(codec::uint(r, "keep")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
@@ -3906,6 +3912,14 @@ impl Message for JobsCall {
             map.field(out, 11);
             codec::write_message(out, dedupe_calendar);
         }
+        if let Some(ttl) = &self.ttl {
+            map.field(out, 12);
+            codec::write_uint(out, ttl);
+        }
+        if let Some(expires_at) = &self.expires_at {
+            map.field(out, 13);
+            codec::write_int(out, expires_at);
+        }
         if let Some(keep) = &self.keep {
             map.field(out, 14);
             codec::write_uint(out, keep);
@@ -3926,6 +3940,8 @@ impl Message for JobsCall {
             + self.time_zone.as_ref().map_or(0, |time_zone| 1 + 5 + time_zone.len())
             + self.dedupe.map_or(0, |_| 10)
             + self.dedupe_calendar.as_ref().map_or(0, |dedupe_calendar| 1 + dedupe_calendar.size())
+            + self.ttl.map_or(0, |_| 10)
+            + self.expires_at.map_or(0, |_| 10)
             + self.keep.map_or(0, |_| 10)
     }
 
@@ -3941,6 +3957,8 @@ impl Message for JobsCall {
             && self.time_zone.is_none()
             && self.dedupe.is_none()
             && self.dedupe_calendar.is_none()
+            && self.ttl.is_none()
+            && self.expires_at.is_none()
             && self.keep.is_none()
     }
 }
@@ -4074,6 +4092,8 @@ pub(crate) struct JobsJob {
     pub(crate) row: Option<String>,
     /// A walk's: why the job's value no longer reads, the job left out.
     pub(crate) failure: Option<Failure>,
+    /// When it leaves its queue unless written again: its ttl's end, or its expiresAt. Unix milliseconds.
+    pub(crate) expires_at: Option<i64>,
 }
 
 #[cfg(feature = "jobs")]
@@ -4100,6 +4120,7 @@ impl Message for JobsJob {
                 13 => message.ended_at = Some(codec::int(r, "endedAt")?),
                 14 => message.row = Some(codec::str(r, "row")?),
                 15 => message.failure = Some(Failure::read(r)?),
+                16 => message.expires_at = Some(codec::int(r, "expiresAt")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -4168,6 +4189,10 @@ impl Message for JobsJob {
             map.field(out, 15);
             codec::write_message(out, failure);
         }
+        if let Some(expires_at) = &self.expires_at {
+            map.field(out, 16);
+            codec::write_int(out, expires_at);
+        }
         map.close(out);
     }
 
@@ -4188,6 +4213,7 @@ impl Message for JobsJob {
             + self.ended_at.map_or(0, |_| 10)
             + self.row.as_ref().map_or(0, |row| 1 + 5 + row.len())
             + self.failure.as_ref().map_or(0, |failure| 1 + failure.size())
+            + self.expires_at.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -4206,6 +4232,7 @@ impl Message for JobsJob {
             && self.ended_at.is_none()
             && self.row.is_none()
             && self.failure.is_none()
+            && self.expires_at.is_none()
     }
 }
 

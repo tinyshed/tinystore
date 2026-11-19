@@ -135,6 +135,7 @@ These contracts are what does not.
 - **JOB-16** `counts` MUST read every state of a queue from one snapshot.
 - **JOB-17** An `upsert` MUST leave a job's time, attempts and steps as they were when the call's value and repeat are the job's, and MUST NOT add a job whose id a done job holds.
 - **JOB-18** A done job's id MUST stay taken until its `dedupe` ends: a span from when it was done, or the end of the local calendar unit it was done in, across daylight saving.
+- **JOB-19** A job MUST NOT start at or after its term, `ttl` or `expiresAt`, and a repeat MUST end at it.
 - **JOB-20** A job that failed for good MUST be gone once its own `keep`, or its queue's, has passed, and at once for a `keep` of zero.
 - **JOB-21** `runNow` MUST run its schedule once as soon as a worker is free, never beside a run under way, and MUST leave its later times as they were.
 

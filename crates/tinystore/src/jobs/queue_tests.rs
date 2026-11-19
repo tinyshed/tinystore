@@ -214,6 +214,99 @@ fn upsert_of_a_running_job_gives_its_next_run_what_differs_and_one_that_ends_wit
     assert!(polls.get("once").unwrap().is_none(), "a job that ended with its run took nothing");
 }
 
+// contract: JOB-19
+#[test]
+fn a_ttl_ends_a_repeat_unless_an_upsert_renews_it() {
+    let f = fixture();
+    let polls = f.store.queue::<Note>("polls").open().unwrap();
+    assert!(polls.id("group:1").every(MINUTE).ttl(HOUR).upsert(&note("241-327")).unwrap());
+    let term = f.now() + HOUR;
+    assert_eq!(polls.get("group:1").unwrap().unwrap().expires_at, Some(term));
+    f.clock.advance(MINUTE);
+    assert!(
+        !polls.id("group:1").every(MINUTE).ttl(HOUR).upsert(&note("241-327")).unwrap(),
+        "a renewal changes nothing"
+    );
+    assert_eq!(
+        polls.get("group:1").unwrap().unwrap().expires_at,
+        Some(term),
+        "nor is written within a thirtieth of it"
+    );
+    f.clock.advance(30 * MINUTE);
+    assert_eq!(ran(&polls), ["241-327"]);
+    assert!(!polls.id("group:1").every(MINUTE).ttl(HOUR).upsert(&note("241-327")).unwrap());
+    let renewed = f.now() + HOUR;
+    assert_eq!(polls.get("group:1").unwrap().unwrap().expires_at, Some(renewed), "a sighting renews the term");
+
+    f.clock.advance(HOUR);
+    assert!(polls.get("group:1").unwrap().is_none(), "past its term it is gone");
+    assert!(ran(&polls).is_empty(), "and never starts");
+    assert_eq!(super::maintain(&f.store).unwrap().expired, 0, "the claim that met it took it");
+    assert!(polls.id("group:1").add(&note("again")).unwrap(), "its id is free");
+}
+
+// contract: JOB-19
+#[test]
+fn a_repeat_ends_at_its_term_and_its_watcher_sees_it_cancelled() {
+    let f = fixture();
+    let reports = f.store.queue::<Note>("reports").dedupe(DAY).open().unwrap();
+    reports.id("report:term").every(HOUR).add(&note("report")).unwrap();
+    let due = reports.get("report:term").unwrap().unwrap().at;
+    reports.id("report:term").expires_at(due + MINUTE).upsert(&note("report")).unwrap();
+    assert_eq!(reports.get("report:term").unwrap().unwrap().at, due, "a term of its own, its time kept");
+    let mut watched = reports.watch("report:term");
+    assert_eq!(watched.next().unwrap().unwrap().state, State::Scheduled);
+    f.clock.advance(due.duration_since(f.now()).unwrap());
+    assert_eq!(ran(&reports), ["report"], "a run before the term runs");
+    let last = watched.last().unwrap().unwrap();
+    assert_eq!(last.state, State::Cancelled, "its next time was past the term");
+    assert!(reports.get("report:term").unwrap().is_none());
+    assert!(reports.id("report:term").add(&note("again")).unwrap(), "its id is free, dedupe or not");
+}
+
+// contract: JOB-19
+#[test]
+fn a_run_under_way_at_its_term_finishes_and_a_retry_past_it_does_not_run() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").attempts(3).backoff(HOUR, HOUR).timeout(2 * HOUR).open().unwrap();
+    pushes.id("push").ttl(30 * MINUTE).add(&note("push")).unwrap();
+    pushes.id("late").ttl(30 * MINUTE).add(&note("late")).unwrap();
+    let finished = Mutex::new(Vec::new());
+    pushes
+        .concurrency(1)
+        .run_due(|value: Note, _run| -> Result<(), String> {
+            if value.text == "late" {
+                f.clock.advance(HOUR); // the term comes while it runs
+                finished.lock().unwrap().push(value.text);
+                return Ok(());
+            }
+            Err("push service 503".into())
+        })
+        .unwrap();
+    assert_eq!(*finished.lock().unwrap(), ["late"], "the run under way finished");
+    assert!(pushes.get("push").unwrap().is_none(), "its retry an hour on was past the term");
+    assert_eq!(pushes.counts().unwrap(), super::Counts::default());
+}
+
+// contract: JOB-19
+#[test]
+fn a_term_past_is_gone_at_once_one_scheduled_past_it_goes_with_maintenance_and_a_wrong_one_is_refused() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").open().unwrap();
+    assert!(pushes.id("past").expires_at(f.now() - SECOND).add(&note("x")).unwrap());
+    assert!(pushes.get("past").unwrap().is_none());
+    assert!(pushes.id("past").add(&note("x")).unwrap(), "its id is free");
+    pushes.delay(2 * HOUR).ttl(HOUR).add(&note("never")).unwrap();
+    f.clock.advance(HOUR);
+    assert_eq!(super::maintain(&f.store).unwrap().expired, 1);
+    assert_eq!(pushes.counts().unwrap().scheduled, 0);
+
+    let zero = pushes.id("z").ttl(Duration::ZERO).add(&note("x")).unwrap_err();
+    assert_eq!(zero.kind(), ErrorKind::Invalid, "{zero}");
+    let both = pushes.id("z").ttl(HOUR).expires_at(f.now()).add(&note("x")).unwrap_err();
+    assert!(both.to_string().contains("not both"), "{both}");
+}
+
 /// Fails every job due, as a handler that always fails does.
 fn fail_due(queue: &Queue<Note>) {
     queue.concurrency(1).run_due(|_: Note, _run| -> Result<(), String> { Err("push service 503".into()) }).unwrap();

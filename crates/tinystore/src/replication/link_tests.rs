@@ -414,6 +414,13 @@ fn a_job_added_on_a_copy_runs_at_its_home() {
     assert!(mail.get("welcome-7").unwrap().is_some(), "the copy holds the job its home added");
     assert!(mail.update("welcome-7", &serde_json::json!({ "to": 8 })).unwrap());
     assert!(mail.add(&serde_json::json!({ "to": 9 })).unwrap());
+    // a job's own options travel with its write: an upsert, its keep and its term
+    let poll = mail.id("poll").every(Duration::from_secs(3600)).keep(Duration::ZERO).ttl(Duration::from_secs(86_400));
+    assert!(poll.upsert(&serde_json::json!({ "to": 10 })).unwrap());
+    assert!(!mail.id("poll").every(Duration::from_secs(3600)).upsert(&serde_json::json!({ "to": 10 })).unwrap());
+    let polled = mail.get("poll").unwrap().expect("the copy holds the job its home upserted");
+    assert!(polled.expires_at.is_some(), "its term reached its home: {polled:?}");
+    assert!(mail.cancel("poll").unwrap());
 
     let home_mail = home.queue::<serde_json::Value>("mail").open().unwrap();
     let seen = std::sync::Mutex::new(Vec::new());

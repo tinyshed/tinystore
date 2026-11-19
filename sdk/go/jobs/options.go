@@ -57,6 +57,8 @@ type jobOptions struct {
 	dedupe   *time.Duration
 	calendar *wire.JobsCalendar
 	keep     *time.Duration
+	ttl      *time.Duration
+	expires  *time.Time
 }
 
 type listOptions struct {
@@ -197,6 +199,25 @@ func Keep(d time.Duration) keep { return keep(d) }
 func (k keep) queue(o *queueOptions) { v := time.Duration(k); o.keep = &v }
 func (k keep) add(o *jobOptions)     { v := time.Duration(k); o.keep = &v }
 func (k keep) set(o *jobOptions)     { k.add(o) }
+
+type ttl time.Duration
+
+// TTL is how long after its last write a job leaves its queue unless written
+// again: an Upsert, a Set or an Update that gives it renews it. A job does
+// not start at or after its term; a run under way finishes, and a repeat ends.
+func TTL(d time.Duration) ttl { return ttl(d) }
+
+func (t ttl) add(o *jobOptions) { v := time.Duration(t); o.ttl, o.expires = &v, nil }
+func (t ttl) set(o *jobOptions) { t.add(o) }
+
+type expiresAt time.Time
+
+// ExpiresAt is when a job leaves its queue, as TTL says; one already past is
+// gone at once.
+func ExpiresAt(t time.Time) expiresAt { return expiresAt(t) }
+
+func (e expiresAt) add(o *jobOptions) { v := time.Time(e); o.expires, o.ttl = &v, nil }
+func (e expiresAt) set(o *jobOptions) { e.add(o) }
 
 type maxWaiting int
 

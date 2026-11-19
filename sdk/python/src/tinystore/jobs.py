@@ -116,6 +116,8 @@ class Job[T]:
     repeat: str | None
     """a repeating job's repeat as it keeps it: '@every 30s +6178ms', '10 3 * * * Europe/Berlin'"""
     last_run: LastRun | None
+    expires_at: datetime | None = None
+    """when it leaves its queue unless written again: its ttl's end, or its expires_at"""
     _row: str | None = field(default=None, repr=False, compare=False)
     """where a job without an id lies, which a cancel names it by"""
 
@@ -375,6 +377,7 @@ def _job_of[T](source: Source[T], found: dict[str, Any]) -> Job[T]:
         group=found.get("group"),
         repeat=found.get("repeat"),
         last_run=None if started is None else LastRun(moment(started), moment(found.get("ended_at", started))),
+        expires_at=None if found.get("expires_at") is None else moment(found["expires_at"]),
         _row=found.get("row"),
     )
 
@@ -468,6 +471,8 @@ def job_fields(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> dict[str, Any]:
     """A job's time, group, repeat and options of its own, as an add, a set and an update take them."""
     return {
@@ -479,6 +484,8 @@ def job_fields(
         "time_zone": time_zone,
         **dedupe_fields(dedupe, "a job's dedupe"),
         "keep": None if keep is None else ms(keep, "a job's keep"),
+        "ttl": None if ttl is None else ms(ttl, "a job's ttl"),
+        "expires_at": None if expires_at is None else unix_ms(expires_at, "a job's term"),
     }
 
 
@@ -525,6 +532,8 @@ class Queue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> bool:
         """Adds a job unless its id is taken, and says whether it added one.
 
@@ -534,7 +543,16 @@ class Queue[T]:
         without an id is always added.
         """
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.add", fields)
@@ -552,6 +570,8 @@ class Queue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> Adding:
         """A job's add for a batch of the database the queue was opened from.
 
@@ -564,7 +584,16 @@ class Queue[T]:
             await db.batch([sql("update notes set body = ? where id = ?", body, id), indexing.adding(Index(id))])
         """
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         return Adding(self.name, self._source, {**timing, "id": id, "value": self._source.encode(value)})
 
@@ -581,6 +610,8 @@ class Queue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> None:
         """Makes the id's job this value at this time, whatever it was.
 
@@ -588,7 +619,16 @@ class Queue[T]:
         runs once more after this run, with this value.
         """
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         await self._source.call("jobs.set", lambda h: JobsCall.encode(fields, handle=h), "write")
@@ -606,10 +646,21 @@ class Queue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> bool:
         """Changes the id's job when it is not running, its old value's steps dropped, and says whether it did."""
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.update", fields)
@@ -627,6 +678,8 @@ class Queue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> bool:
         """Adds the job under id when it is free, or brings the one there to this call.
 
@@ -640,7 +693,16 @@ class Queue[T]:
             changed = await polls.upsert(f"group:{g}", Poll(group=g), every="3m")
         """
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.upsert", fields)
@@ -830,10 +892,21 @@ class StoreTxQueue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> None:
         """Adds a job unless its id is taken, with the commit."""
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         self._write("jobs.add", {**timing, "id": id}, value)
 
@@ -850,10 +923,21 @@ class StoreTxQueue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> None:
         """Makes the id's job this value at this time, whatever it was, with the commit."""
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         self._write("jobs.set", {**timing, "id": id}, value)
 
@@ -870,10 +954,21 @@ class StoreTxQueue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> None:
         """Changes the id's job when it is not running, its old value's steps dropped, with the commit."""
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         self._write("jobs.update", {**timing, "id": id}, value)
 
@@ -890,10 +985,21 @@ class StoreTxQueue[T]:
         time_zone: str | None = None,
         dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
     ) -> None:
         """Adds the job under id, or brings the one there to this call, its time kept, with the commit."""
         timing = job_fields(
-            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+            at=at,
+            delay=delay,
+            group=group,
+            every=every,
+            cron=cron,
+            time_zone=time_zone,
+            dedupe=dedupe,
+            keep=keep,
+            ttl=ttl,
+            expires_at=expires_at,
         )
         self._write("jobs.upsert", {**timing, "id": id}, value)
 

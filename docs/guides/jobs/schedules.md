@@ -79,6 +79,58 @@ let cleanup = store.schedule("cleanup").cron("10 3 * * *", "Europe/Berlin").work
   so a schedule changed in the code is the one that runs. `stop`, `get` and
   `runDue` work on a schedule as on a queue.
 
+## A repeat that ends: ttl and expiresAt
+
+A job can have a term. `ttl` counts from the job's last write: an `upsert`
+renews it, so a job upserted on every sighting stops 14 days after the last
+one. `expiresAt` is a fixed time. These are the words a KV key uses for the
+same thing.
+
+```ts
+await polls.upsert(`group:${g}`, { group: g }, { every: '3m', ttl: '14d' }) // each sighting renews the 14 days
+await reports.add({ term }, { id: `report:${term}`, every: '1d', expiresAt: endOfTerm })
+```
+
+```python
+await polls.upsert(f"group:{g}", Poll(group=g), every="3m", ttl="14d")
+await reports.add(Report(term=term), id=f"report:{term}", every="1d", expires_at=end_of_term)
+```
+
+```go
+_, err = polls.Upsert(ctx, "group:"+g, Poll{Group: g}, jobs.Every(3*time.Minute), jobs.TTL(14*24*time.Hour))
+_, err = reports.Add(ctx, Report{Term: term}, jobs.ID("report:"+term), jobs.Every(24*time.Hour), jobs.ExpiresAt(endOfTerm))
+```
+
+```rust
+polls.id(&format!("group:{g}")).every(Duration::from_mins(3)).ttl(Duration::from_hours(24 * 14)).upsert(&poll)?;
+reports.id(&format!("report:{term}")).every(Duration::from_hours(24)).expires_at(end_of_term).add(&report)?;
+```
+
+- A job doesn't start at or after its term. A run under way when the term
+  comes finishes; then the job ends instead of moving to its next time. A
+  retry past the term doesn't run (contract JOB-19).
+- A job that reaches its term leaves the queue as a cancelled one does: its
+  id is free, `dedupe` or not, and a watcher's last state is `cancelled`.
+- `upsert`, `set` and `update` renew a `ttl` they name. An `add` of a taken
+  id writes nothing and renews nothing, so call `upsert` on every sighting.
+  An `upsert` writes a renewal at most once per thirtieth of the `ttl`, so a
+  hot path doesn't write each time.
+- A term works on a job that doesn't repeat too: a push not sent within the
+  hour is dropped. Neither option needs an id; a repeat always does.
+- A `ttl` of zero, and `ttl` beside `expiresAt`, are `invalid`. An
+  `expiresAt` already past is written, and the job is gone at once.
+- `get` and pages show the term as `expiresAt` (`expires_at` in Python and
+  Rust, `ExpiresAt` in Go). A job past its term is gone for them at once; a
+  claim or the minute's maintenance deletes its row.
+
+A different interval by night is two ids, each with a cron for its hours,
+both upserted with the same `ttl`:
+
+```ts
+await polls.upsert(`group:${g}:day`, { group: g }, { cron: '*/3 7-21 * * *', timeZone: 'Europe/Moscow', ttl: '14d' })
+await polls.upsert(`group:${g}:night`, { group: g }, { cron: '*/30 22-23,0-6 * * *', timeZone: 'Europe/Moscow', ttl: '14d' })
+```
+
 ## Run a schedule now
 
 `runNow` runs a schedule once as soon as a worker is free: after a first

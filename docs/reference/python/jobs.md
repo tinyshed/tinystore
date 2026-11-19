@@ -51,6 +51,7 @@ class Job[T]:
     group: str | None
     repeat: str | None  # a repeating job's repeat as it keeps it: '@every 30s +6178ms', '10 3 * * * Europe/Berlin'
     last_run: LastRun | None
+    expires_at: datetime | None = None  # when it leaves its queue unless written again: its ttl's end, or its expires_at
 ```
 
 A job as its queue holds it.
@@ -200,6 +201,8 @@ async def add(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> bool: ...
 ```
 
@@ -225,6 +228,8 @@ def adding(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> Adding: ...
 ```
 
@@ -253,6 +258,8 @@ async def set(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> None: ...
 ```
 
@@ -276,6 +283,8 @@ async def update(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> bool: ...
 ```
 
@@ -296,6 +305,8 @@ async def upsert(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> bool: ...
 ```
 
@@ -458,6 +469,8 @@ async def add(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> None: ...
 ```
 
@@ -478,6 +491,8 @@ async def set(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> None: ...
 ```
 
@@ -498,6 +513,8 @@ async def update(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> None: ...
 ```
 
@@ -518,6 +535,8 @@ async def upsert(
     time_zone: str | None = None,
     dedupe: Duration | Dedupe | None = None,
     keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
 ) -> None: ...
 ```
 

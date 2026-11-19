@@ -70,6 +70,8 @@ message jobs.Call {
   9 timeZone: str?
   10 dedupe: duration?               # this job's own, in the place of its queue's; not 0
   11 dedupeCalendar: jobs.Calendar?  # this job's own, in the place of dedupe
+  12 ttl: duration?                  # it leaves its queue this long after its last write unless written again; not 0
+  13 expiresAt: time?                # it leaves its queue then; not beside ttl
   14 keep: duration?                 # this job's own once it failed for good; 0 not at all
 }
 
@@ -104,6 +106,7 @@ message jobs.Job {
   13 endedAt: time?
   14 row: str?                       # where a job without an id lies, which a cancel names it by
   15 failure: Failure?               # a walk's: why the job's value no longer reads, the job left out
+  16 expiresAt: time?                # when it leaves its queue unless written again: its ttl's end, or its expiresAt
 }
 
 # A page of a queue's jobs: those whose ids start with a prefix, in the byte

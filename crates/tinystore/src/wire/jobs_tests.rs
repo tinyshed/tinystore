@@ -564,6 +564,22 @@ fn a_client_upserts_a_job_alone_and_in_a_transaction() {
     assert_eq!(refused.code, "invalid", "{}", refused.message);
 }
 
+// contract: JOB-19
+#[test]
+fn a_call_gives_its_job_a_term_which_its_job_shows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "reports");
+    let at = crate::unix_millis(std::time::SystemTime::now()) + 3_600_000;
+    assert!(add(&mut client, &JobsCall { expires_at: Some(at), ..job(handle, "report", "1") }));
+    assert_eq!(get(&mut client, handle, "report").expires_at, Some(at));
+    assert!(add(&mut client, &JobsCall { ttl: Some(60_000), ..job(handle, "push", "2") }));
+    assert!(get(&mut client, handle, "push").expires_at.is_some());
+    let both = JobsCall { ttl: Some(60_000), expires_at: Some(at), ..job(handle, "both", "3") };
+    let refused = client.call::<JobsChanged>(method::JOBS_ADD, &both).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+}
+
 // contract: JOB-18, JOB-20
 #[test]
 fn a_call_gives_its_job_a_dedupe_of_a_calendar_and_a_keep_of_its_own() {

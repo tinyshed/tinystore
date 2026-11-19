@@ -26,7 +26,7 @@ const PARK_AT_MOST: usize = 1000;
 /// A failure as a job keeps it: its text, at most this long.
 const MAX_ERROR: usize = 4096;
 
-const CLAIM_JOBS: &str = "select next, id, key, at, attempt, value, spill, grp
+const CLAIM_JOBS: &str = "select next, id, key, at, attempt, value, spill, grp, expires
     from _tinystore_jobs j
     where queue = ?1 and next <= ?2
         and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
@@ -60,7 +60,7 @@ const EARLIEST_LEASE: &str = "select min(until) from _tinystore_jobs_leases wher
 const DROP_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1 and attempt = ?2 and next = ?3";
 const DROP_ANY_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1";
 const EXTEND_LEASE: &str = "update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2 and next = ?4";
-const JOB_HELD: &str = "select again, repeat, error, attempt, dedupe, keep from _tinystore_jobs
+const JOB_HELD: &str = "select again, repeat, error, attempt, dedupe, keep, expires from _tinystore_jobs
     where queue = ?1 and next = ?2 and id = ?3";
 const JOB_SPILL: &str = "select spill from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
 /// The spill and the dedupe of a job whose end deletes it: one that neither
@@ -243,6 +243,8 @@ pub(crate) struct Claiming<'a> {
 #[derive(Debug, Default)]
 pub(crate) struct Claimed {
     pub(crate) leases: Vec<Lease>,
+    /// The jobs it ended rather than leased: their attempts all spent, or
+    /// their term come.
     pub(crate) abandoned: Vec<i64>,
     /// Of the abandoned, those failed for good: the others repeat, or a set
     /// asked them to run again, and wait for that time.
@@ -392,6 +394,7 @@ struct DueRow {
     value: Option<Vec<u8>>,
     spill: Option<i64>,
     group: Option<String>,
+    expires: Option<i64>,
 }
 
 /// Up to `limit` due jobs no live lease holds, in the order of their time.
@@ -407,6 +410,7 @@ fn due(c: &Connection, claiming: &Claiming<'_>, limit: usize) -> Result<Vec<DueR
             value: row.get(5)?,
             spill: row.get(6)?,
             group: row.get(7)?,
+            expires: row.get(8)?,
         })
     })
 }
@@ -417,6 +421,11 @@ impl Claimed {
     /// place it no longer wants. Says whether it leased.
     fn lease(&mut self, c: &Connection, claiming: &Claiming<'_>, row: DueRow) -> Result<bool> {
         let queue = claiming.queue;
+        if row.expires.is_some_and(|expires| expires <= claiming.now) {
+            end_term(c, queue, (row.next, row.id, row.key.as_deref()))?;
+            self.abandoned.push(row.id);
+            return Ok(false);
+        }
         let lease = params![row.id, queue.id, row.next, row.attempt + 1, claiming.until];
         execute(c, TAKE_LEASE, lease, "a claim: a job's lease")?;
         let attempt: i64 = c
@@ -478,7 +487,7 @@ fn abandon(c: &Connection, claiming: &Claiming<'_>, row: &DueRow, attempts: i64)
     execute(c, DROP_ANY_LEASE, [row.id], "an abandoned job's lease")?;
     let held = held(c, queue, place)?;
     if let Some(next) = next_run(row.at, &held, claiming.now) {
-        run_again(c, queue, place, (next, Some(cause)), (None, None))?;
+        run_again(c, queue, (place, &held), (next, Some(cause)), (None, None))?;
         return Ok(false);
     }
     let ending = Ending { attempts, cause: &cause, ran: (None, None), now: claiming.now };
@@ -629,6 +638,10 @@ fn write(c: &Connection, queue: &QueueState, lease: &Lease, how: &How, now: i64)
         How::Done => done(c, queue, lease, &held, now),
         How::Retry { at, cause } => retry(c, queue, lease, &held, (*at, cause), now),
         How::Fail { cause } => fail(c, queue, lease, &held, cause, now),
+        How::Snooze { at } if past_term(&held, *at) => {
+            end_term(c, queue, lease.place())?;
+            Ok(Settled::default())
+        }
         How::Snooze { at } => {
             let to = Moved { next: *at, at: lease.at, attempt: held.attempt, error: held.error.clone(), ran };
             move_job(c, queue, lease.place(), &to)?;
@@ -667,7 +680,9 @@ fn superseded(
         How::Done | How::Fail { .. } | How::Extend { .. } => return Ok(None),
     };
     match (held.again, next_run(lease.at, held, now)) {
-        (Some(_), Some(next)) => run_again(c, queue, lease.place(), (next, error), lease.last_run(now)).map(Some),
+        (Some(_), Some(next)) => {
+            run_again(c, queue, (lease.place(), held), (next, error), lease.last_run(now)).map(Some)
+        }
         _ => Ok(None),
     }
 }
@@ -703,6 +718,8 @@ struct HeldRow {
     dedupe: Option<String>,
     /// The job's own keep, in milliseconds.
     keep: Option<i64>,
+    /// When it leaves its queue unless written again.
+    expires: Option<i64>,
 }
 
 fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<HeldRow> {
@@ -717,6 +734,7 @@ fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<
                         attempt: row.get(3)?,
                         dedupe: row.get(4)?,
                         keep: row.get(5)?,
+                        expires: row.get(6)?,
                     })
                 })
                 .optional()
@@ -730,7 +748,7 @@ fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<
 /// leaves its value and last run behind with the id.
 fn done(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, now: i64) -> Result<Settled> {
     if let Some(next) = next_run(lease.at, held, now) {
-        return run_again(c, queue, lease.place(), (next, None), lease.last_run(now));
+        return run_again(c, queue, (lease.place(), held), (next, None), lease.last_run(now));
     }
     let dedupe = match &held.dedupe {
         Some(text) => Some(Dedupe::parse(text)?),
@@ -778,6 +796,10 @@ fn retry(
     if let Some(next) = next_run(lease.at, held, now) {
         due = due.min(next);
     }
+    if past_term(held, due) {
+        end_term(c, queue, lease.place())?;
+        return Ok(Settled::default());
+    }
     let to = Moved {
         next: due,
         at: lease.at,
@@ -794,7 +816,7 @@ fn retry(
 fn fail(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, cause: &str, now: i64) -> Result<Settled> {
     let cause = bounded(cause);
     if let Some(next) = next_run(lease.at, held, now) {
-        return run_again(c, queue, lease.place(), (next, Some(cause)), lease.last_run(now));
+        return run_again(c, queue, (lease.place(), held), (next, Some(cause)), lease.last_run(now));
     }
     let ending = Ending { attempts: lease.attempt, cause: &cause, ran: lease.last_run(now), now };
     failed_for_good(c, queue, (lease.place(), held), &ending)?;
@@ -864,16 +886,38 @@ pub(crate) fn backoff(policy: &Policy, attempt: i64, id: i64) -> i64 {
     (wait + jitter).max(1)
 }
 
+/// Whether a job's run at `at` would start at or after its term, which no
+/// run does.
+fn past_term(held: &HeldRow, at: i64) -> bool {
+    held.expires.is_some_and(|expires| at >= expires)
+}
+
+/// Ends a job whose term came before its next run: it leaves its queue as a
+/// cancelled job does, its id free whatever its dedupe, and its watchers
+/// told it was cancelled.
+fn end_term(c: &Connection, queue: &QueueState, (next, id, key): Place<'_>) -> Result<()> {
+    rows::end_job(c, queue.id, (next, id))?;
+    if let Some(key) = key {
+        queue.watchers.cancelled(key, true);
+    }
+    Ok(())
+}
+
 /// Moves a job that repeats to its next run: its steps gone, its attempts
 /// from none, and the error its last run ended with, when it failed; `ran` is
-/// the run it records, none for a run no handler began.
+/// the run it records, none for a run no handler began. A next run at or
+/// after the job's term ends it instead: a repeat ends at its term.
 fn run_again(
     c: &Connection,
     queue: &QueueState,
-    place: Place<'_>,
+    (place, held): (Place<'_>, &HeldRow),
     (next, error): (i64, Option<String>),
     ran: (Option<i64>, Option<i64>),
 ) -> Result<Settled> {
+    if past_term(held, next) {
+        end_term(c, queue, place)?;
+        return Ok(Settled::default());
+    }
     rows::drop_steps(c, place.1)?;
     let to = Moved { next, at: next, attempt: 0, error, ran };
     move_job(c, queue, place, &to)?;

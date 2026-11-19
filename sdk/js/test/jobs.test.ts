@@ -95,6 +95,22 @@ for (const way of ways) {
 			expect((await polls.get('group:2'))?.state).toBe('scheduled')
 		})
 
+		// contract: JOB-19
+		test("a job's term shows, and a job past it is gone with its id free", async () => {
+			const polls = store.queue<{ group: string }>('terms')
+			const before = Date.now()
+			await polls.upsert('group:1', { group: '241-327' }, { every: '3m', ttl: '14d' })
+			const term = (await polls.get('group:1'))?.expiresAt?.getTime() ?? 0
+			expect(term - before).toBeGreaterThanOrEqual(14 * 24 * 3600 * 1000 - 1000)
+			expect(
+				await polls.add({ group: 'x' }, { id: 'past', expiresAt: new Date(Date.now() - 1000) }),
+			).toBe(true)
+			expect(await polls.get('past')).toBeUndefined()
+			expect(await polls.add({ group: 'x' }, { id: 'past' })).toBe(true)
+			const both = polls.add({ group: 'x' }, { id: 'both', ttl: '1h', expiresAt: new Date() })
+			expect(await caught(both)).toBeInstanceOf(InvalidError)
+		})
+
 		test('a worker runs each job as it falls due, the value first and the run second', async () => {
 			const reminders = store.queue<Reminder>('reminders')
 			const ran: [number, string | undefined, number][] = []

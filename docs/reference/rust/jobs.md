@@ -146,6 +146,26 @@ How long this job is kept once it failed for good, in the place of its
 queue's; `Duration::ZERO` keeps it not at all, its watchers still told
 it failed and why.
 
+### JobCall.ttl
+
+```rust
+pub fn ttl(self, span: Duration) -> Self
+```
+
+The job leaves its queue `span` after its last write unless written
+again: an `upsert`, a `set` or an `update` that names it renews it,
+as a key's `ttl` does. A job does not start at or after its term; a
+run under way finishes, and a repeat ends there.
+
+### JobCall.expires_at
+
+```rust
+pub fn expires_at(self, time: SystemTime) -> Self
+```
+
+The job leaves its queue at `time`, as `ttl` says; one already past
+is gone at once.
+
 ### JobCall.add
 
 ```rust
@@ -220,6 +240,7 @@ pub struct Maintenance {
     pub failed: usize,
     pub done: usize,
     pub ids: usize,
+    pub expired: usize,
 }
 ```
 
@@ -712,6 +733,7 @@ pub struct Job<V> {
     pub group: Option<String>,
     pub repeat: Option<String>,
     pub last_run: Option<LastRun>,
+    pub expires_at: Option<SystemTime>,
 }
 ```
 
@@ -1243,6 +1265,23 @@ pub fn keep(self, span: Duration) -> Self
 ```
 
 How long this job is kept once it failed for good; see `jobs::JobCall::keep`.
+
+### aio::jobs::JobCall.ttl
+
+```rust
+pub fn ttl(self, span: Duration) -> Self
+```
+
+The job leaves its queue `span` after its last write unless written
+again; see `jobs::JobCall::ttl`.
+
+### aio::jobs::JobCall.expires_at
+
+```rust
+pub fn expires_at(self, time: SystemTime) -> Self
+```
+
+The job leaves its queue at `time`; see `jobs::JobCall::expires_at`.
 
 ### aio::jobs::JobCall.every
 

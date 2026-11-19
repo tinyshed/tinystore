@@ -37,6 +37,11 @@ pub(crate) struct Prepared {
     pub(crate) dedupe: Option<String>,
     /// How long it is kept once it failed for good, in milliseconds.
     pub(crate) keep: Option<i64>,
+    /// When it leaves its queue unless written again, unix milliseconds.
+    pub(crate) expires: Option<i64>,
+    /// The ttl that term came from, which an upsert renews in steps of a
+    /// thirtieth of it.
+    pub(crate) ttl: Option<i64>,
     pub(crate) value: Kept,
     pub(crate) now: i64,
 }
@@ -64,8 +69,23 @@ impl Prepared {
     }
 
     fn own(&self) -> Own<'_> {
-        Own { dedupe: self.dedupe.as_deref(), keep: self.keep }
+        Own { dedupe: self.dedupe.as_deref(), keep: self.keep, expires: self.expires }
     }
+}
+
+/// The job under the call's id, a live lease's or one before its term: a
+/// job past it that no run holds is gone, and its id free, and the write
+/// that finds it deletes it, as maintenance would.
+fn there(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Option<rows::Row>> {
+    let key = call.key.as_deref().unwrap_or_default();
+    let Some(there) = rows::job_by_key(c, queue.id, key)? else {
+        return Ok(None);
+    };
+    if there.expires.is_none_or(|expires| expires > call.now) || rows::lease_held(c, there.id, call.now)? {
+        return Ok(Some(there));
+    }
+    rows::end_term(c, queue.id, &there)?;
+    Ok(None)
 }
 
 /// Adds a job, to an id that is free; says whether it did. A failed job is
@@ -75,7 +95,7 @@ impl Prepared {
 pub(crate) fn add(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<bool> {
     let mut failed = None;
     if let Some(key) = &call.key {
-        let taken = rows::job_by_key(c, queue.id, key)?.is_some() || rows::done_key(c, queue.id, key, call.now)?;
+        let taken = there(c, queue, call)?.is_some() || rows::done_key(c, queue.id, key, call.now)?;
         if taken {
             return Ok(false);
         }
@@ -96,7 +116,7 @@ pub(crate) struct Set {
 /// an id. A group or a repeat it does not name stays as it was.
 pub(crate) fn set(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Set> {
     let key = call.key.as_deref().unwrap_or_default();
-    if let Some(there) = rows::job_by_key(c, queue.id, key)? {
+    if let Some(there) = there(c, queue, call)? {
         if rows::lease_held(c, there.id, call.now)? {
             let again = again(call, &there);
             rows::ask_again(c, queue.id, &there, again, &call.change(there.next))?;
@@ -133,7 +153,7 @@ fn again(call: &Prepared, there: &rows::Row) -> Option<i64> {
 /// was what the call says, which writes nothing.
 pub(crate) fn upsert(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Option<i64>> {
     let key = call.key.as_deref().unwrap_or_default();
-    let Some(there) = rows::job_by_key(c, queue.id, key)? else {
+    let Some(there) = there(c, queue, call)? else {
         return Ok(add(c, queue, call)?.then_some(call.at));
     };
     let shape = rows::shape(c, queue.id, &there, &call.value)?;
@@ -143,8 +163,15 @@ pub(crate) fn upsert(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
         || repeat_changed
         || differs(call.group.as_deref(), shape.group.as_deref())
         || differs(call.dedupe.as_deref(), shape.dedupe.as_deref())
-        || call.keep.is_some() && call.keep != shape.keep;
+        || call.keep.is_some() && call.keep != shape.keep
+        || call.ttl.is_none() && call.expires.is_some() && call.expires != shape.expires;
     if !changed {
+        // a renewal alone is written once a thirtieth of its ttl, as an idle key's is, and changes nothing
+        if let (Some(ttl), Some(expires)) = (call.ttl, call.expires)
+            && shape.expires.is_none_or(|kept| expires - kept >= ttl / 30)
+        {
+            rows::renew_term(c, queue.id, &there, expires)?;
+        }
         return Ok(None);
     }
     if rows::lease_held(c, there.id, call.now)? {
@@ -168,7 +195,7 @@ pub(crate) fn upsert(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
 /// it is due, none when there is no such job or it runs.
 pub(crate) fn update(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Option<i64>> {
     let key = call.key.as_deref().unwrap_or_default();
-    let Some(there) = rows::job_by_key(c, queue.id, key)? else {
+    let Some(there) = there(c, queue, call)? else {
         return Ok(None);
     };
     if rows::lease_held(c, there.id, call.now)? {

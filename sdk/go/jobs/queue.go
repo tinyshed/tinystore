@@ -60,6 +60,9 @@ type Job[T any] struct {
 	Repeat string
 	// LastRun is when the last run a handler finished started and ended; nil before one.
 	LastRun *LastRun
+	// ExpiresAt is when it leaves its queue unless written again, its TTL's
+	// end or its ExpiresAt; zero for a job without a term.
+	ExpiresAt time.Time
 	// row is where a job without an ID lies, which CancelJob names it by.
 	row string
 }
@@ -339,6 +342,13 @@ func (q *Queue[T]) callOf(value T, o jobOptions) (wire.JobsCall, error) {
 	if call.Keep, err = millis(o.keep, "a job's keep"); err != nil {
 		return call, err
 	}
+	if call.Ttl, err = millis(o.ttl, "a job's ttl"); err != nil {
+		return call, err
+	}
+	if o.expires != nil {
+		at := o.expires.UnixMilli()
+		call.ExpiresAt = &at
+	}
 	call.DedupeCalendar = o.calendar
 	return call, nil
 }
@@ -452,6 +462,9 @@ func jobOf[T any](s *source, found wire.JobsJob) (Job[T], error) {
 			ended = found.EndedAt
 		}
 		job.LastRun = &LastRun{core.Moment(*found.StartedAt), core.Moment(*ended)}
+	}
+	if found.ExpiresAt != nil {
+		job.ExpiresAt = core.Moment(*found.ExpiresAt)
 	}
 	return job, nil
 }

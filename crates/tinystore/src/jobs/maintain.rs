@@ -17,6 +17,12 @@ const EXPIRE_FAILED: &str = "delete from _tinystore_jobs_failed where (queue, id
         select queue, id from _tinystore_jobs_failed where queue = ?1 and failed <= ?2 and until is null
         order by failed limit cast(?3 as integer))
     returning spill";
+/// Jobs past their term that no run holds, in the order of their terms.
+const EXPIRED_JOBS: &str =
+    "select j.queue, j.next, j.id, j.key from _tinystore_jobs j indexed by _tinystore_jobs_expiring
+    where j.expires <= ?1
+        and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?1)
+    order by j.expires limit cast(?2 as integer)";
 /// The failed jobs of every queue kept for a keep of their own.
 const EXPIRE_FAILED_OWN: &str = "delete from _tinystore_jobs_failed where (queue, id) in (
         select queue, id from _tinystore_jobs_failed where until <= ?1 order by until limit cast(?2 as integer))
@@ -42,6 +48,8 @@ pub struct Maintenance {
     pub done: usize,
     /// Ids that jobs gone from the queue left behind.
     pub ids: usize,
+    /// Jobs past their term, `ttl` or `expires_at`, that no run held.
+    pub expired: usize,
 }
 
 /// Removes what the queues this process opened keep no longer, 10,000 rows a
@@ -56,6 +64,10 @@ pub(crate) fn run(jobs: &Jobs) -> Result<Maintenance> {
     let _one_at_a_time = jobs.hold_maintenance();
     let now = jobs.now();
     let mut done = Maintenance::default();
+    done.expired += expire_terms(jobs, now)?;
+    if done.expired > 0 {
+        jobs.open_queues().iter().for_each(|queue| queue.watchers.changed());
+    }
     for queue in jobs.open_queues() {
         let (id, cutoff) = (queue.id, now - millis(queue.policy.keep));
         done.failed += batches(jobs, move |tx| expire(tx, EXPIRE_FAILED, params![id, cutoff, BATCH as i64]))?;
@@ -65,6 +77,28 @@ pub(crate) fn run(jobs: &Jobs) -> Result<Maintenance> {
     done.done += batches(jobs, move |tx| expire(tx, EXPIRE_DONE, params![now, BATCH as i64]))?;
     jobs.file().sweep();
     Ok(done)
+}
+
+/// Deletes the jobs past their term that no run holds, telling the watchers
+/// of a queue this process holds open that each was cancelled.
+fn expire_terms(jobs: &Jobs, now: i64) -> Result<usize> {
+    let queues: std::collections::HashMap<i64, std::sync::Arc<super::state::QueueState>> =
+        jobs.open_queues().into_iter().map(|queue| (queue.id, queue)).collect();
+    let queues = std::sync::Arc::new(queues);
+    batches(jobs, move |tx| {
+        let read = (EXPIRED_JOBS, "maintenance: jobs past their term");
+        let ended: Vec<(i64, i64, i64, Option<String>)> =
+            crate::sqlite::query_cached(tx, read, params![now, BATCH as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?;
+        for (queue, next, id, key) in &ended {
+            rows::end_job(tx, *queue, (*next, *id))?;
+            if let (Some(state), Some(key)) = (queues.get(queue), key) {
+                state.watchers.cancelled(key, true);
+            }
+        }
+        Ok(ended.len())
+    })
 }
 
 /// Runs one batch a transaction until a batch removes fewer than a full one,

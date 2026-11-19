@@ -3263,6 +3263,14 @@ def _write_jobs_call(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(11)
         JobsCalendar.write(w, x)
         n += 1
+    if (x := v.get("ttl")) is not None:
+        w.uint(12)
+        w.uint(x)
+        n += 1
+    if (x := v.get("expires_at")) is not None:
+        w.uint(13)
+        w.int(x)
+        n += 1
     if (x := v.get("keep")) is not None:
         w.uint(14)
         w.uint(x)
@@ -3297,6 +3305,10 @@ def _read_jobs_call(r: Reader) -> dict[str, Any]:
                 read["dedupe"] = r.uint()
             case 11:
                 read["dedupe_calendar"] = JobsCalendar.read(r)
+            case 12:
+                read["ttl"] = r.uint()
+            case 13:
+                read["expires_at"] = r.int()
             case 14:
                 read["keep"] = r.uint()
             case _:
@@ -3325,6 +3337,10 @@ JobsCall = Message(
         "dedupe": (10, uint),
         # this job's own, in the place of dedupe
         "dedupe_calendar": (11, JobsCalendar),
+        # it leaves its queue this long after its last write unless written again; not 0
+        "ttl": (12, uint),
+        # it leaves its queue then; not beside ttl
+        "expires_at": (13, int_),
         # this job's own once it failed for good; 0 not at all
         "keep": (14, uint),
     },
@@ -3480,6 +3496,10 @@ def _write_jobs_job(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(15)
         Failure.write(w, x)
         n += 1
+    if (x := v.get("expires_at")) is not None:
+        w.uint(16)
+        w.int(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -3518,6 +3538,8 @@ def _read_jobs_job(r: Reader) -> dict[str, Any]:
                 read["row"] = r.str()
             case 15:
                 read["failure"] = Failure.read(r)
+            case 16:
+                read["expires_at"] = r.int()
             case _:
                 r.skip()
     r.leave()
@@ -3550,6 +3572,8 @@ JobsJob = Message(
         "row": (14, str_),
         # a walk's: why the job's value no longer reads, the job left out
         "failure": (15, Failure),
+        # when it leaves its queue unless written again: its ttl's end, or its expiresAt
+        "expires_at": (16, int_),
     },
     _write_jobs_job,
     _read_jobs_job,

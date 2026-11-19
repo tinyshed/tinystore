@@ -79,6 +79,14 @@ func Every(d time.Duration) every
 
 Every repeats a job every span, which needs an id; a schedule's repeat too.
 
+## ExpiresAt
+
+```go
+func ExpiresAt(t time.Time) expiresAt
+```
+
+ExpiresAt is when a job leaves its queue, as TTL says; one already past is gone at once.
+
 ## Group
 
 ```go
@@ -150,6 +158,14 @@ func Step[R any](ctx context.Context, run *Run, name string, fn func(ctx context
 ```
 
 Step runs fn once in the job's run and keeps its answer, as JSON, across the job's attempts: the attempt after a retry, a lost worker or a restart gets the answer back without running fn again. A step whose attempt ends before its answer is kept runs again, so what fn does outside the store should bear doing twice. A name is the step's within its job, numbered in a loop: "model:1", "tool:1".
+
+## TTL
+
+```go
+func TTL(d time.Duration) ttl
+```
+
+TTL is how long after its last write a job leaves its queue unless written again: an Upsert, a Set or an Update that gives it renews it. A job does not start at or after its term; a run under way finishes, and a repeat ends.
 
 ## Timeout
 
@@ -228,6 +244,9 @@ type Job[T any] struct {
 	Repeat string
 	// LastRun is when the last run a handler finished started and ended; nil before one.
 	LastRun *LastRun
+	// ExpiresAt is when it leaves its queue unless written again, its TTL's
+	// end or its ExpiresAt; zero for a job without a term.
+	ExpiresAt time.Time
 	// contains filtered or unexported fields
 }
 ```
