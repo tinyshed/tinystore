@@ -17,6 +17,7 @@ import {
 	CancelledError,
 	ClosedError,
 	connect,
+	InUseError,
 	InvalidError,
 	open,
 	type Store,
@@ -279,3 +280,40 @@ test.skipIf(!served)(
 	},
 	30_000,
 )
+
+const library = process.env.TINYSTORE_LIBRARY
+
+// contract: CLI-05, STORE-13
+test.skipIf(library === undefined)(
+	'a store opened embedded with cli takes the command line and names itself in SERVE, which a sidecar open does not attach to',
+	async () => {
+		const dir = scratch('cli')
+		const store = await open(dir, { embedded: true, cli: true, library })
+		const serve = join(dir, 'server', 'SERVE')
+		const published = JSON.parse(readFileSync(serve, 'utf8'))
+		expect([published.embedded, published.sidecar, published.pid]).toEqual([
+			true,
+			undefined,
+			process.pid,
+		])
+		if (served && binary !== undefined) {
+			const set = spawnSync(binary, ['kv', dir, 'set', 'flags', 'crawl', '"now"', '--as', 'json'], {
+				encoding: 'utf8',
+			})
+			expect(set.status, set.stderr).toBe(0)
+			expect(await store.bucket<string>('flags').get('crawl')).toBe('now')
+		}
+		const refused = await caught(open(dir))
+		expect(refused).toBeInstanceOf(InUseError)
+		expect((refused as Error).message).toContain(`inside its own process, pid ${process.pid}`)
+		await store.close()
+		expect(existsSync(serve)).toBe(false)
+		await removed(dir)
+	},
+)
+
+test('cli without embedded is InvalidError, since a sidecar takes the command line already', async () => {
+	const refused = await caught(open(scratch('cli-sidecar'), { cli: true }))
+	expect(refused).toBeInstanceOf(InvalidError)
+	expect((refused as Error).message).toContain('cli is for an embedded store')
+})

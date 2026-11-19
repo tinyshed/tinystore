@@ -41,6 +41,9 @@ func Sidecar(directory string, binary func(context.Context) (string, error), sta
 	return func(ctx context.Context) (*Connection, error) {
 		Waiting(ctx, "the sidecar starts")
 		found := reachServe(ctx, serve)
+		if err := refuseEmbedded(found, serve); err != nil {
+			return nil, err
+		}
 		stopped := ""
 		if found != nil {
 			agreed := found.connection.Session.Agreed()
@@ -164,6 +167,9 @@ func (s *spawned) awaitServe(ctx context.Context, serve, stopped string, deadlin
 	code := -1
 	for time.Now().Before(deadline) {
 		if found := reachServe(ctx, serve); found != nil {
+			if err := refuseEmbedded(found, serve); err != nil {
+				return nil, code, err
+			}
 			if found.instance != stopped {
 				return found.connection, code, nil
 			}
@@ -266,10 +272,26 @@ type served struct {
 	connection *Connection
 	sidecar    bool
 	instance   string
+	// embedded is the pid of the program that opened its store embedded
+	// with CLI, or 0.
+	embedded uint64
+}
+
+// refuseEmbedded refuses a store a program holds embedded, which it opened
+// with CLI: its endpoint is the command line's, and a client tied to it would
+// start a sidecar when that program exits, which then keeps it from opening
+// again.
+func refuseEmbedded(found *served, serve string) error {
+	if found == nil || found.embedded == 0 {
+		return nil
+	}
+	found.connection.Close()
+	return Errorf(InUse, "a program holds %s inside its own process, pid %d, and lets the command line alone in: use the store in that program, or close it there first", filepath.Dir(filepath.Dir(serve)), found.embedded)
 }
 
 // reachServe is the sidecar SERVE names once its proof checks, whether SERVE
-// calls it a sidecar, and its instance; nil on any failure.
+// calls it a sidecar, its instance, and the pid of the program that opened
+// it embedded with CLI; nil on any failure.
 func reachServe(ctx context.Context, serve string) *served {
 	text, err := os.ReadFile(serve)
 	if err != nil {
@@ -280,6 +302,8 @@ func reachServe(ctx context.Context, serve string) *served {
 		Secret    string   `json:"secret"`
 		Protocol  int      `json:"protocol"`
 		Sidecar   bool     `json:"sidecar"`
+		Embedded  bool     `json:"embedded"`
+		Pid       uint64   `json:"pid"`
 		Instance  any      `json:"instance"`
 	}
 	if json.Unmarshal(text, &published) != nil || len(published.Endpoints) == 0 || published.Protocol != ProtocolVersion {
@@ -293,7 +317,11 @@ func reachServe(ctx context.Context, serve string) *served {
 	if err != nil {
 		return nil
 	}
-	return &served{connection: c, sidecar: published.Sidecar, instance: fmt.Sprint(published.Instance)}
+	found := &served{connection: c, sidecar: published.Sidecar, instance: fmt.Sprint(published.Instance)}
+	if published.Embedded {
+		found.embedded = published.Pid
+	}
+	return found
 }
 
 var release = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?$`)

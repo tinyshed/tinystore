@@ -156,6 +156,14 @@ func Binary(path string) Option
 
 Binary is the tinystore binary a sidecar or a private child runs; TINYSTORE\_BIN, PATH's, or the release's own, fetched into the user's cache at the first open, unless given.
 
+### CLI
+
+```go
+func CLI() Option
+```
+
+CLI lets the tinystore command line write to this store while the program runs: the store listens on a socket, or on Windows a named pipe, that only the user it runs as may reach. It needs Embedded: a sidecar lets the command line in already.
+
 ### Clock
 
 ```go

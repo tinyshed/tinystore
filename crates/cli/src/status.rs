@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! ● ./data  served by tinystore 0.1.0 · pid 37420 · up 12m · durability os
+//! ● ./data  held by a program · pid 4242 · the command line may write · durability os
 //!
 //!   kv           36 KiB   home
 //!   sql/app     1.2 MiB   copy · at commit 412
@@ -79,6 +80,8 @@ enum Served {
         pid: u64,
         since: SystemTime,
         durability: Option<String>,
+        /// A program that opened the store with `cli`, rather than a server.
+        embedded: bool,
     },
     /// `SERVE` names a server that does not answer: it died, or is not this
     /// store's.
@@ -98,6 +101,7 @@ impl Report {
                     pid: found.pid,
                     since: found.since,
                     durability: connection.durability,
+                    embedded: found.embedded,
                 },
                 Err(why) => Served::Gone { why },
             },
@@ -120,19 +124,14 @@ impl Report {
         let paint = |style: Style, text: &str| paint(colours, style, text);
         let (bold, dim) = (Style::new().bold(), Style::new().dimmed());
         let mut text = match &self.served {
-            Served::By { server, pid, since, durability } => format!(
-                "{} {}  {}\n",
-                paint(Color::Green.bold(), "●"),
-                paint(bold, &self.dir),
-                paint(
-                    dim,
-                    &format!(
-                        "served by tinystore {server} · pid {pid} · up {} · {}",
-                        age(*since),
-                        durability_of(durability.as_deref())
-                    )
-                )
-            ),
+            Served::By { server, pid, since, durability, embedded } => {
+                let durability = durability_of(durability.as_deref());
+                let said = match embedded {
+                    true => format!("held by a program · pid {pid} · the command line may write · {durability}"),
+                    false => format!("served by tinystore {server} · pid {pid} · up {} · {durability}", age(*since)),
+                };
+                format!("{} {}  {}\n", paint(Color::Green.bold(), "●"), paint(bold, &self.dir), paint(dim, &said))
+            }
             Served::Gone { why } => format!(
                 "{} {}  {}\n  {}\n",
                 paint(Color::Yellow.normal(), "○"),
@@ -209,11 +208,12 @@ impl Report {
 
     fn json(&self) -> serde_json::Value {
         let served = match &self.served {
-            Served::By { server, pid, since, durability } => json!({
+            Served::By { server, pid, since, durability, embedded } => json!({
                 "server": server,
                 "pid": pid,
                 "since": since.duration_since(UNIX_EPOCH).map_or(0, |since| since.as_millis() as u64),
                 "durability": durability,
+                "embedded": embedded,
             }),
             Served::Gone { why } => json!({ "gone": why }),
             Served::No => serde_json::Value::Null,

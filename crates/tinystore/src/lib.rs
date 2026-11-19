@@ -41,6 +41,9 @@ mod key;
 #[cfg(feature = "kv")]
 pub mod kv;
 pub mod limits;
+#[cfg(feature = "local")]
+#[doc(hidden)]
+pub mod local;
 #[cfg(all(feature = "records", feature = "config"))]
 mod log_config;
 #[cfg(feature = "mcp")]

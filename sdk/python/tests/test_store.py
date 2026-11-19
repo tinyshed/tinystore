@@ -6,6 +6,7 @@ import asyncio
 import base64
 import gc
 import json
+import os
 import secrets
 import subprocess
 import sys
@@ -46,6 +47,32 @@ async def test_a_private_store_runs_on_the_tests_clock(directory: Path) -> None:
 async def test_a_clock_is_a_private_stores_alone(directory: Path) -> None:
     with pytest.raises(tinystore.InvalidError, match="private"):
         await tinystore.open(directory, clock=datetime(2026, 10, 9, tzinfo=UTC))
+
+
+async def test_cli_is_an_embedded_stores_alone(directory: Path) -> None:
+    with pytest.raises(tinystore.InvalidError, match="cli is for an embedded store"):
+        await tinystore.open(directory, cli=True)
+
+
+# contract: CLI-05, STORE-13
+@pytest.mark.skipif(not CORE, reason="the core is not built here")
+async def test_a_store_opened_embedded_with_cli_takes_the_command_line_and_no_sidecar_attaches(
+    directory: Path,
+) -> None:
+    store = await tinystore.open(directory, embedded=True, cli=True)
+    serve = directory / "server" / "SERVE"
+    published = json.loads(serve.read_text())
+    assert (published.get("embedded"), published.get("sidecar"), published["pid"]) == (True, None, os.getpid())
+    if SERVED:
+        assert BINARY is not None
+        argv = [BINARY, "kv", str(directory), "set", "flags", "crawl", '"now"', "--as", "json"]
+        written = await asyncio.to_thread(subprocess.run, argv, capture_output=True, text=True, check=False)
+        assert written.returncode == 0, written.stderr
+        assert await store.bucket("flags").get("crawl") == "now"
+    with pytest.raises(tinystore.InUseError, match=f"inside its own process, pid {os.getpid()}"):
+        await tinystore.open(directory)
+    await store.close()
+    assert not serve.exists()
 
 
 async def test_an_address_is_no_directory() -> None:

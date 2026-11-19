@@ -3033,6 +3033,8 @@ pub(crate) struct StoreOptions {
     pub(crate) max_series: Option<u64>,
     /// The files of the store's older keys, which open the values they sealed and seal none.
     pub(crate) older_encryption_keys: Vec<String>,
+    /// Lets the command line write to the store while the program runs, through an endpoint of the user's alone that server/SERVE names.
+    pub(crate) cli: bool,
 }
 
 impl Message for StoreOptions {
@@ -3059,6 +3061,7 @@ impl Message for StoreOptions {
                 14 => message.without_system = codec::bool(r, "withoutSystem")?,
                 15 => message.max_series = Some(codec::uint(r, "maxSeries")?),
                 16 => message.older_encryption_keys = codec::list(r, "olderEncryptionKeys", codec::str)?,
+                18 => message.cli = codec::bool(r, "cli")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -3131,6 +3134,10 @@ impl Message for StoreOptions {
             map.field(out, 16);
             codec::write_list(out, &self.older_encryption_keys, codec::write_str);
         }
+        if self.cli {
+            map.field(out, 18);
+            codec::write_bool(out, &self.cli);
+        }
         map.close(out);
     }
 
@@ -3152,6 +3159,7 @@ impl Message for StoreOptions {
             + 2
             + self.max_series.map_or(0, |_| 10)
             + 1 + codec::list_size(&self.older_encryption_keys, |item| 5 + item.len())
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -3171,6 +3179,7 @@ impl Message for StoreOptions {
             && !self.without_system
             && self.max_series.is_none()
             && self.older_encryption_keys.is_empty()
+            && !self.cli
     }
 }
 

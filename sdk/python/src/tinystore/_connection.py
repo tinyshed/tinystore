@@ -24,7 +24,7 @@ from . import _runtime
 from ._pipe import open_pipe
 from ._session import PROTOCOL, ConnectionLostError, Session, Stream
 from ._wire.protocol import Empty, StoreOptions, methods
-from .errors import ClosedError, InvalidError, OutcomeUnknownError, UnavailableError
+from .errors import ClosedError, InUseError, InvalidError, OutcomeUnknownError, UnavailableError
 
 if TYPE_CHECKING:
     import os
@@ -118,6 +118,8 @@ class Started:
     """with self_metrics, the machine it runs on too"""
     max_series: int | None = None
     """the metrics series the store holds at most, when not the store's own 100,000"""
+    cli: bool = False
+    """with the core in this process, an endpoint that lets the command line write while the program runs"""
 
 
 def check_max_series(max_series: int | None) -> None:
@@ -224,6 +226,7 @@ def in_process(
         self_metrics=started.self_metrics,
         without_system=started.self_metrics and not started.system_metrics,
         max_series=started.max_series,
+        cli=started.cli,
     )
 
     async def start() -> Connection:
@@ -273,9 +276,10 @@ def sidecar(
         nonlocal told
         waiting("the sidecar starts")
         found = await _reach_serve(serve)
+        await _refuse_embedded(found, serve)
         stopped_instance: str | None = None
         if found is not None:
-            connection, is_sidecar, instance = found
+            connection, is_sidecar, instance, _ = found
             server = (await connection.session.welcomed).server
             if not is_older(server):
                 return connection
@@ -315,6 +319,7 @@ async def _start_sidecar(serve: Path, log: Path, command: list[str], stopped_ins
         wait = 0.005
         while loop.time() < deadline:
             reached = await _reach_serve(serve)
+            await _refuse_embedded(reached, serve)
             if reached is not None and reached[2] != stopped_instance:
                 return reached[0]
             if reached is not None:
@@ -414,10 +419,26 @@ def _compare_releases(a: tuple[list[int], list[str]], b: tuple[list[int], list[s
     return len(a[1]) - len(b[1])
 
 
-async def _reach_serve(serve: Path) -> tuple[Connection, bool, str] | None:
+async def _refuse_embedded(reached: tuple[Connection, bool, str, int | None] | None, serve: Path) -> None:
+    """Refuses a store a program holds embedded, which it opened with cli.
+
+    Its endpoint is the command line's, and a client tied to it would start a
+    sidecar when that program exits, which then keeps it from opening again.
+    """
+    if reached is None or reached[3] is None:
+        return
+    await reached[0].close()
+    raise InUseError(
+        f"a program holds {serve.parent.parent} inside its own process, pid {reached[3]}, "
+        "and lets the command line alone in: use the store in that program, or close it there first"
+    )
+
+
+async def _reach_serve(serve: Path) -> tuple[Connection, bool, str, int | None] | None:
     """The sidecar SERVE names, once its proof checks, whether SERVE calls it a sidecar, and its instance.
 
-    None on any failure.
+    Last, the pid of the program that published it, when it opened its store
+    embedded with cli. None on any failure.
     """
     try:
         published = json.loads(await asyncio.to_thread(serve.read_bytes))
@@ -428,9 +449,11 @@ async def _reach_serve(serve: Path) -> tuple[Connection, bool, str] | None:
     if published.get("protocol") != PROTOCOL or len(secret) != 32:
         return None
     try:
-        return await dial(endpoint, secret=secret), published.get("sidecar") is True, str(published.get("instance"))
+        connection = await dial(endpoint, secret=secret)
     except Exception:
         return None
+    embedded = published.get("pid") if published.get("embedded") is True else None
+    return connection, published.get("sidecar") is True, str(published.get("instance")), embedded
 
 
 def start_failure(log: Path, start: int, stderr: str) -> str:

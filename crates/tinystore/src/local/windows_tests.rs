@@ -28,6 +28,7 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 
 use super::*;
+use crate::encryption::random;
 
 /// Every user may do anything, and what a directory holds inherits it.
 const EVERY_USER: &str = "D:P(A;OICI;FA;;;WD)";
@@ -142,6 +143,36 @@ fn the_server_folder_held_for_its_check_is_neither_moved_nor_removed() {
     std::fs::rename(&server, store.path().join("moved")).expect("let go, it moves");
 }
 
+/// A store a program opened with `cli`, in a directory every user may enter:
+/// its `SERVE` and its pipe are the user's alone.
+// contract: SEC-07
+#[test]
+fn a_store_opened_with_cli_keeps_serve_and_its_pipe_to_the_user() {
+    let dir = tempfile::tempdir().unwrap();
+    Descriptor::parse(EVERY_USER).unwrap().set_on(dir.path()).unwrap();
+    let options = crate::Options { cli: true, background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let serve = dir.path().join("server").join("SERVE");
+    let security = Security::of_file(&serve);
+    assert!(security.protected(), "SERVE inherits the store directory's ACL");
+    security.grants_the_user_alone("SERVE");
+    let pipe_name = crate::local::pipe_names(dir.path()).0;
+    let token = this_user_disabled();
+    let tried = {
+        let _impersonating = Impersonating::start(&token);
+        [
+            ("SERVE", File::open(&serve).map(drop)),
+            ("the pipe", OpenOptions::new().read(true).write(true).open(&pipe_name).map(drop)),
+            ("another instance of the pipe", pipe_of_default_security(&pipe_name).map(drop)),
+        ]
+    };
+    for (what, tried) in tried {
+        assert_eq!(tried.map_err(|error| error.raw_os_error()), Err(Some(ERROR_ACCESS_DENIED.cast_signed())), "{what}");
+    }
+    OpenOptions::new().read(true).write(true).open(&pipe_name).expect("the user connects to the pipe");
+    store.close().unwrap();
+}
+
 fn assert_refused(refused: &io::Error, path: &Path, why: &str) {
     assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
     let message = refused.to_string();
@@ -151,9 +182,8 @@ fn assert_refused(refused: &io::Error, path: &Path, why: &str) {
 /// A store's directory every user may enter, with what a server keeps to its
 /// user in it, and beside them a file and a pipe every user may open.
 struct Served {
-    pipe: NamedPipeServer,
-    _open_pipe: NamedPipeServer,
-    runtime: tokio::runtime::Runtime,
+    pipe: OwnedHandle,
+    _open_pipe: OwnedHandle,
     pipe_name: String,
     open_pipe_name: String,
     server: PathBuf,
@@ -168,17 +198,13 @@ impl Served {
         std::fs::create_dir(dir.path().join("server")).unwrap();
         std::fs::write(dir.path().join("server").join(EARLIER), "the store's directory's ACL").unwrap();
         let server = crate::local::server_dir(dir.path()).unwrap();
-        crate::local::publish(&server, &crate::local::Serve::new(Vec::new(), false).unwrap()).unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_io().build().unwrap();
-        let pipe_name = format!(r"\\.\pipe\{}", crate::local::pipe_name(dir.path()));
+        let serve = crate::local::Serve::new(Vec::new(), crate::local::Holder::Embedded).unwrap();
+        crate::local::publish(&server, &serve).unwrap();
+        let pipe_name = crate::local::pipe_names(dir.path()).0;
         let open_pipe_name = format!("{pipe_name}-open");
-        let (pipe, open_pipe) = {
-            let _entered = runtime.enter();
-            let pipe = crate::local::pipe_instance(&pipe_name, true).unwrap();
-            let open = Descriptor::parse(EVERY_USER_OF_A_PIPE).unwrap();
-            (pipe, open.create_pipe(&ServerOptions::new(), &open_pipe_name).unwrap())
-        };
-        Served { pipe, _open_pipe: open_pipe, runtime, pipe_name, open_pipe_name, server, dir }
+        let pipe = crate::local::pipe_instance(&pipe_name, true).unwrap();
+        let open_pipe = Descriptor::parse(EVERY_USER_OF_A_PIPE).unwrap().create_pipe(&open_pipe_name, true).unwrap();
+        Served { pipe, _open_pipe: open_pipe, pipe_name, open_pipe_name, server, dir }
     }
 
     /// Checks that `token` opens what every user may, and nothing of what the
@@ -203,7 +229,6 @@ impl Served {
     /// What `token` opens, tried while the thread impersonates it: what any
     /// user may, and what a client of the server or a squatter would.
     fn tried_as(&self, token: &OwnedHandle) -> Tried {
-        let _entered = self.runtime.enter();
         let _impersonating = Impersonating::start(token);
         Tried {
             open_file: File::open(self.dir.path().join("open")).map(drop),
@@ -212,7 +237,7 @@ impl Served {
             earlier: File::open(self.server.join(EARLIER)).map(drop),
             pipe_to_read: OpenOptions::new().read(true).open(&self.pipe_name).map(drop),
             pipe_both_ways: OpenOptions::new().read(true).write(true).open(&self.pipe_name).map(drop),
-            another_instance: ServerOptions::new().create(&self.pipe_name).map(drop),
+            another_instance: pipe_of_default_security(&self.pipe_name).map(drop),
         }
     }
 }
@@ -255,7 +280,7 @@ impl Security {
         Security::read(failed, descriptor, dacl)
     }
 
-    fn of_pipe(pipe: &NamedPipeServer) -> Security {
+    fn of_pipe(pipe: &OwnedHandle) -> Security {
         let (mut dacl, mut descriptor) = (ptr::null_mut(), ptr::null_mut());
         // SAFETY: the handle is the pipe's, which lives through the call; the
         // call writes as GetNamedSecurityInfoW does above.
@@ -404,14 +429,9 @@ struct Stranger {
 
 impl Stranger {
     fn add() -> Stranger {
-        let random = |length| {
-            let mut bytes = vec![0; length];
-            getrandom::fill(&mut bytes).unwrap();
-            bytes
-        };
-        let name = wide(OsStr::new(&format!("tinystore-{}", crate::local::hex(&random(4)))));
+        let name = wide(OsStr::new(&format!("tinystore-{}", crate::local::hex(&random::<4>().unwrap()))));
         // a policy may ask for capitals, small letters, digits and signs
-        let password = wide(OsStr::new(&format!("{}Aa1-", crate::local::base64url(&random(24)))));
+        let password = wide(OsStr::new(&format!("{}Aa1-", crate::local::base64url(&random::<24>().unwrap()))));
         let user = USER_INFO_1 {
             usri1_name: name.as_ptr().cast_mut(),
             usri1_password: password.as_ptr().cast_mut(),
@@ -470,4 +490,30 @@ impl Drop for Stranger {
             let _ = writeln!(io::stderr(), "the local user {name} was not deleted: {failed}");
         }
     }
+}
+
+/// Another instance of the pipe `name`, made with the system's default DACL,
+/// as a squatter would make one.
+fn pipe_of_default_security(name: &str) -> io::Result<OwnedHandle> {
+    let name = wide(OsStr::new(name));
+    let mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
+    // SAFETY: the name is NUL-terminated UTF-16 that lives through the call;
+    // no attributes are given, which is the default DACL.
+    let handle = unsafe {
+        CreateNamedPipeW(
+            name.as_ptr(),
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+            mode,
+            PIPE_UNLIMITED_INSTANCES,
+            PIPE_BUFFER,
+            PIPE_BUFFER,
+            0,
+            ptr::null(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the call made the handle, and nothing else owns it.
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }

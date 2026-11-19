@@ -355,3 +355,52 @@ func TestAConnectPastAServersBoundOnItsConnectionsFailsLimitNamingTheBound(t *te
 		t.Fatalf("got %v, want a limit naming the bound", err)
 	}
 }
+
+func TestCLIIsAnEmbeddedStoresAlone(t *testing.T) {
+	_, err := tinystore.Open(context.Background(), t.TempDir(), tinystore.CLI())
+	if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "cli is for an embedded store") {
+		t.Fatalf("got %v, want an invalid error", err)
+	}
+}
+
+// contract: CLI-05, STORE-13
+func TestAStoreOpenedEmbeddedWithCLITakesTheCommandLineAndNoSidecarAttaches(t *testing.T) {
+	library := os.Getenv("TINYSTORE_LIBRARY")
+	if library == "" {
+		t.Skip("the core is not built here")
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := ways.Must(tinystore.Open(ctx, dir, tinystore.Library(library), tinystore.CLI()))
+	serve := filepath.Join(dir, "server", "SERVE")
+	var published struct {
+		Embedded bool  `json:"embedded"`
+		Sidecar  *bool `json:"sidecar"`
+		Pid      int   `json:"pid"`
+	}
+	if err := json.Unmarshal(ways.Must(os.ReadFile(serve)), &published); err != nil {
+		t.Fatal(err)
+	}
+	if !published.Embedded || published.Sidecar != nil || published.Pid != os.Getpid() {
+		t.Fatalf("SERVE says %+v", published)
+	}
+	if binary := ways.Binary(); binary != "" {
+		if out, err := exec.Command(binary, "kv", dir, "set", "flags", "crawl", "now").CombinedOutput(); err != nil {
+			t.Fatalf("kv set: %v: %s", err, out)
+		}
+		crawl, _, err := ways.Must(kv.OpenBucket[string](store, "flags")).Get(ctx, "crawl")
+		if err != nil || crawl != "now" {
+			t.Fatalf("the program reads %q: %v", crawl, err)
+		}
+	}
+	_, err := tinystore.Open(ctx, dir)
+	if want := fmt.Sprintf("inside its own process, pid %d", os.Getpid()); !errors.Is(err, tinystore.ErrInUse) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("got %v, want an in-use error naming the program", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(serve); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("SERVE outlived the store: %v", err)
+	}
+}

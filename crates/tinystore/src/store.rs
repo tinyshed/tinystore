@@ -70,6 +70,12 @@ pub struct Options {
     /// 100,000 unless said; docs/guides/metrics/ingesting.md says what one costs.
     #[cfg(feature = "metrics")]
     pub max_series: u64,
+    /// Lets the `tinystore` command line write to this store while the
+    /// program runs: the store listens on a socket, or on Windows a named
+    /// pipe, that only the user it runs as may reach, and names it in
+    /// `server/SERVE` until it closes. Off unless asked for.
+    #[cfg(feature = "local")]
+    pub cli: bool,
 }
 
 /// The disk a store keeps free unless its options say otherwise.
@@ -95,6 +101,8 @@ impl Default for Options {
             self_metrics: None,
             #[cfg(feature = "metrics")]
             max_series: MAX_SERIES,
+            #[cfg(feature = "local")]
+            cli: false,
         }
     }
 }
@@ -114,6 +122,8 @@ impl fmt::Debug for Options {
         let f = f.field("node", &self.node);
         #[cfg(feature = "metrics")]
         let f = f.field("self_metrics", &self.self_metrics).field("max_series", &self.max_series);
+        #[cfg(feature = "local")]
+        let f = f.field("cli", &self.cli);
         f.finish()
     }
 }
@@ -215,6 +225,10 @@ struct Inner {
     beside: bool,
     /// What marks the threads that run the handlers its close waits for.
     handling: Handling,
+    /// The command line's endpoint, when the store was opened with `cli`:
+    /// stopped first at the close, so that `SERVE` goes before `LOCK`.
+    #[cfg(feature = "local")]
+    endpoint: Mutex<Option<crate::local::Endpoint>>,
     closed: AtomicBool,
 }
 
@@ -227,7 +241,36 @@ impl Store {
         let lock = take_lock(&dir)?;
         refuse_half_restored(&dir)?;
         remove_left_snapshots(&dir);
-        Self::open_with(dir, options, Some(lock))
+        #[cfg(feature = "local")]
+        let cli = options.cli;
+        let store = Self::open_with(dir, options, Some(lock))?;
+        #[cfg(feature = "local")]
+        if cli {
+            store.listen_for_the_command_line()?;
+        }
+        Ok(store)
+    }
+
+    /// Whether the store was opened with `cli`, and its endpoint still serves.
+    #[cfg(feature = "local")]
+    pub(crate) fn serves_the_command_line(&self) -> bool {
+        lock(&self.inner.endpoint).is_some()
+    }
+
+    /// Starts the command line's endpoint, or closes the store and says why
+    /// not, as a pipe name another process squats on.
+    #[cfg(feature = "local")]
+    fn listen_for_the_command_line(&self) -> Result<()> {
+        match crate::local::Endpoint::start(self) {
+            Ok(endpoint) => {
+                *lock(&self.inner.endpoint) = Some(endpoint);
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.close();
+                Err(Error::io(format!("{}: its endpoint for the command line", self.describe()), error))
+            }
+        }
     }
 
     /// Opens the store in `dir` to read beside the process that holds it, a
@@ -290,6 +333,8 @@ impl Store {
                 .transpose()?,
             beside,
             handling: Handling::new(),
+            #[cfg(feature = "local")]
+            endpoint: Mutex::new(None),
             closed: AtomicBool::new(false),
             dir,
         };
@@ -794,6 +839,15 @@ impl Host for Store {
 
 impl Inner {
     fn close(&self) -> Result<()> {
+        // before the store refuses anything, so that the calls its command
+        // line clients have under way may finish (STORE-13)
+        #[cfg(feature = "local")]
+        {
+            let endpoint = lock(&self.endpoint).take();
+            if let Some(mut endpoint) = endpoint {
+                endpoint.stop();
+            }
+        }
         if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
@@ -942,14 +996,19 @@ fn remove_left_snapshots(dir: &Path) {
 /// Who holds the `LOCK`, as far as the directory says: a server publishes
 /// `server/SERVE` while it serves, and a sidecar serves on after its last
 /// client closed, so a program that opens the directory embedded next is
-/// told how to let it go.
+/// told how to let it go; a program that opened it with `cli` publishes one
+/// too, `"embedded"`, and is named by its pid.
 fn held_by(dir: &Path, what: String) -> String {
-    if dir.join("server").join("SERVE").is_file() {
-        let dir = dir.display();
-        format!("{what}: a tinystore server holds it; connect to it, or stop it first with `tinystore stop {dir}`")
-    } else {
-        format!("{what}: another store holds it")
+    let Ok(serve) = fs::read_to_string(dir.join("server").join("SERVE")) else {
+        return format!("{what}: another store holds it");
+    };
+    let published: serde_json::Value = serde_json::from_str(&serve).unwrap_or_default();
+    if published["embedded"] == true {
+        let pid = &published["pid"];
+        return format!("{what}: a program holds it inside its own process, pid {pid}");
     }
+    let dir = dir.display();
+    format!("{what}: a tinystore server holds it; connect to it, or stop it first with `tinystore stop {dir}`")
 }
 
 #[cfg(test)]

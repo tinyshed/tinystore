@@ -22,7 +22,8 @@ python = ["dep:pyo3"]
 node = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
 
 [dependencies]
-tinystore.workspace = true
+# local: a store an SDK opens embedded with cli serves the command line
+tinystore = { workspace = true, features = ["local"] }
 pyo3 = { version = "0.30.1", features = ["abi3-py312"], optional = true }
 napi = { version = "3.14.2", default-features = false, features = ["napi8"], optional = true }
 napi-derive = { version = "3.6.12", optional = true }

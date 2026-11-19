@@ -16,6 +16,8 @@ of repeating them.
 | free disk the store keeps                                  | 1 GiB, `keepFree`                                                    |
 | a time in the future                                       | 10 minutes ahead of the store's clock                                |
 | a sidecar with no clients                                  | exits after 30 seconds                                               |
+| command line connections a store opened with `cli` serves  | 4 at once; the next is told `GOAWAY` `limit`                         |
+| a `cli` store's close                                      | waits 2 seconds for the command line's calls, then cuts them off     |
 | a name of a bucket, queue, stream, database, index, config | `[a-z0-9][a-z0-9_-]{0,63}`                                           |
 
 ## SQL

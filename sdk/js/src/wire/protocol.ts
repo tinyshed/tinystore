@@ -3111,6 +3111,8 @@ export const StoreOptions = message(
 		maxSeries: [15, uint],
 		/** the files of the store's older keys, which open the values they sealed and seal none */
 		olderEncryptionKeys: [16, list(str)],
+		/** lets the command line write to the store while the program runs, through an endpoint of the user's alone that server/SERVE names */
+		cli: [18, bool],
 	},
 	{
 		write(w, v) {
@@ -3208,6 +3210,11 @@ export const StoreOptions = message(
 				}
 				n++
 			}
+			if (v.cli !== undefined) {
+				w.field(18)
+				w.bool(v.cli)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -3227,6 +3234,7 @@ export const StoreOptions = message(
 			let $withoutSystem: boolean | undefined
 			let $maxSeries: number | undefined
 			let $olderEncryptionKeys: string[] | undefined
+			let $cli: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -3301,6 +3309,9 @@ export const StoreOptions = message(
 						$olderEncryptionKeys = items0
 						break
 					}
+					case 18:
+						$cli = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -3323,6 +3334,7 @@ export const StoreOptions = message(
 				withoutSystem: $withoutSystem,
 				maxSeries: $maxSeries,
 				olderEncryptionKeys: $olderEncryptionKeys,
+				cli: $cli,
 			}
 		},
 	},

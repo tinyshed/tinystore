@@ -26,6 +26,10 @@ fn stop(asked: Asked) -> Done {
     let Some(found) = client::found(&dir).map_err(failed)? else {
         return Err(failed(format!("no server serves {}: it has no server/SERVE", dir.display())));
     };
+    if found.embedded {
+        let (dir, pid) = (dir.display(), found.pid);
+        return Err(failed(format!("a program holds {dir} embedded, pid {pid}; it stops when that program closes it")));
+    }
     let connection = found
         .connect()
         .map_err(|why| failed(format!("server/SERVE names a server that does not answer, pid {}: {why}", found.pid)))?;

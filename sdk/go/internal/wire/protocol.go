@@ -3903,6 +3903,8 @@ type StoreOptions struct {
 	MaxSeries *uint64 `wire:"15,maxSeries"`
 	// the files of the store's older keys, which open the values they sealed and seal none
 	OlderEncryptionKeys []string `wire:"16,olderEncryptionKeys"`
+	// lets the command line write to the store while the program runs, through an endpoint of the user's alone that server/SERVE names
+	Cli bool `wire:"18,cli"`
 }
 
 func (m StoreOptions) Write(w *Writer) {
@@ -4000,6 +4002,11 @@ func (m StoreOptions) Write(w *Writer) {
 		}
 		n++
 	}
+	if m.Cli {
+		w.Uint(18)
+		w.Bool(m.Cli)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -4070,6 +4077,8 @@ func (m *StoreOptions) Read(r *Reader) {
 			}
 			r.Leave()
 			m.OlderEncryptionKeys = v
+		case 18:
+			m.Cli = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -4094,7 +4103,8 @@ func (m StoreOptions) IsZero() bool {
 		!m.SelfMetrics &&
 		!m.WithoutSystem &&
 		m.MaxSeries == nil &&
-		len(m.OlderEncryptionKeys) == 0
+		len(m.OlderEncryptionKeys) == 0 &&
+		!m.Cli
 }
 
 // GoAway is the schema's GoAway.

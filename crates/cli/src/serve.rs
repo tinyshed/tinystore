@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use tinystore::local::{self, Holder};
 use tinystore::pipe::{Connect, Greeted, Stop};
 use tinystore::{Clock, ErrorKind, Options, Store, TestClock};
 use tokio::net::TcpListener;
@@ -22,7 +23,7 @@ use crate::args::{self, Transport};
 use crate::banner::{self, Shown};
 use crate::frames_out::FramesOut;
 use crate::lines::{self, Lines, Terminal};
-use crate::{connection, local, remote};
+use crate::{connection, remote};
 
 /// The exit of a server that found its directory held, by a server that
 /// started first or one still letting go: its client reads `SERVE` again.
@@ -238,7 +239,7 @@ async fn listen(store: &Store, listening: Listening, remote: Option<remote::Read
         }
         None => None,
     };
-    let serve = local::Serve::new(endpoints, sidecar)?;
+    let serve = local::Serve::new(endpoints, if sidecar { Holder::Sidecar } else { Holder::Server })?;
     let (closing, closed) = watch::channel(false);
     let stop = stop_by(closing.clone());
     let connect = Connect {
@@ -460,17 +461,13 @@ struct Listener {
 
 #[cfg(unix)]
 impl Listener {
-    /// Binds the store's socket, removing one a server gone left there: this
-    /// server holds `LOCK`, so no other listens on it.
+    /// Binds the store's socket as an embedded store's endpoint binds it, and
+    /// hands it to the runtime.
     fn bind(store: &Path, server: &Path) -> io::Result<(Listener, String)> {
-        let path = local::socket_path(store, server)?;
-        match std::fs::remove_file(&path) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-            _ => {}
-        }
-        let listener = tokio::net::UnixListener::bind(&path)?;
-        let endpoint = format!("unix://{}", path.display());
-        Ok((Listener { listener, path }, endpoint))
+        let socket = local::bind_socket(store, server)?;
+        socket.listener.set_nonblocking(true)?;
+        let listener = tokio::net::UnixListener::from_std(socket.listener)?;
+        Ok((Listener { listener, path: socket.path }, socket.endpoint))
     }
 
     async fn accept_all(
@@ -516,10 +513,9 @@ impl Listener {
     /// Creates the store's pipe as the first instance of its name, so that a
     /// process squatting on it is found here rather than by the clients.
     fn bind(store: &Path, _server: &Path) -> io::Result<(Listener, String)> {
-        let short = local::pipe_name(store);
-        let name = format!(r"\\.\pipe\{short}");
-        let first = local::pipe_instance(&name, true)?;
-        Ok((Listener { name, first: Mutex::new(Some(first)) }, format!("pipe:{short}")))
+        let (name, endpoint) = local::pipe_names(store);
+        let first = crate::pipe_server::instance(&name, true)?;
+        Ok((Listener { name, first: Mutex::new(Some(first)) }, endpoint))
     }
 
     async fn accept_all(
@@ -556,7 +552,7 @@ impl Listener {
     /// milliseconds apart, before the server gives up its name.
     async fn next_instance(&self) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
         for pause in [1, 2, 4, 8, 16, 32] {
-            match local::pipe_instance(&self.name, false) {
+            match crate::pipe_server::instance(&self.name, false) {
                 Err(error) => {
                     tracing::debug!(target: "tinystore", %error, "a pipe instance was not made");
                     tokio::time::sleep(Duration::from_millis(pause)).await;
@@ -564,7 +560,7 @@ impl Listener {
                 made => return made,
             }
         }
-        local::pipe_instance(&self.name, false)
+        crate::pipe_server::instance(&self.name, false)
     }
 
     fn remove(&self) {}

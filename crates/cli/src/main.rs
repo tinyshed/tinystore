@@ -46,7 +46,6 @@ mod help;
 mod jobs;
 mod kv;
 mod lines;
-mod local;
 mod lock;
 mod logs;
 mod mcp;
@@ -59,7 +58,7 @@ mod on_disk;
 #[cfg(windows)]
 mod own_handles;
 #[cfg(windows)]
-mod owner_only;
+mod pipe_server;
 mod reach;
 mod remote;
 mod search;

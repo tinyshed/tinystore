@@ -31,15 +31,17 @@ Each line cost a debugging session once. The fix named is the one in the code.
 
 - **Named pipes share one namespace across every user.** The first instance
   is made with `first_pipe_instance`, and every one with a DACL of the
-  user's alone (`pipe_instance` in `crates/cli/src/local.rs`): the system's
-  default lets every user connect to read. A name a dead server left is
-  anyone's: a client proves its server cryptographically, the `SERVE` proof.
+  user's alone (`pipe_instance` in `crates/tinystore/src/local/mod.rs`):
+  the system's default lets every user connect to read. A name a dead
+  server left is anyone's: a client proves its server cryptographically,
+  the `SERVE` proof.
 - **Anyone may traverse a directory to a file whose path they know, and a
   new file inherits its directory's ACL**, which a store's directory at a
   drive's root opens to every user. What stays the user's, `server\` and
-  `SERVE`, gets a protected DACL of its own (`crates/cli/src/owner_only.rs`),
-  set on `server\` each start, which reaches what is already in it too, and
-  given `SERVE` as `CreateFileW` makes it.
+  `SERVE`, gets a protected DACL of its own
+  (`crates/tinystore/src/local/windows.rs`), set on `server\` each start,
+  which reaches what is already in it too, and given `SERVE` as
+  `CreateFileW` makes it.
 - **An owner may change its object's DACL whatever the DACL says**, and a
   drive's root lets every user make folders: a `server\` another user owns,
   or a link in its place, is refused rather than protected, read through a

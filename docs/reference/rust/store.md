@@ -497,6 +497,7 @@ pub struct Options {
     pub node: Option<Node>,
     pub self_metrics: Option<SelfMetrics>,
     pub max_series: u64,
+    pub cli: bool,
 }
 ```
 

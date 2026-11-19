@@ -698,6 +698,7 @@ async def open(
     *,
     private: bool = False,
     embedded: bool = False,
+    cli: bool = False,
     library: str | None = None,
     binary: str | None = None,
     idle: Duration | None = None,
@@ -719,6 +720,10 @@ async def open(
     ``asyncio.timeout``, stops it at once and keeps no connection; the
     ``CancelledError`` carries a note of what it waited for.
 
+    - ``cli``: lets the ``tinystore`` command line write to this store while
+      the program runs: the store listens on a socket, or on Windows a named
+      pipe, that only the user it runs as may reach. Needs ``embedded``: a
+      sidecar lets the command line in already.
     - ``binary``: the tinystore binary; TINYSTORE_BIN, this platform's wheel's
       or PATH's when absent.
     - ``idle``: how long a sidecar this process starts stays once its last
@@ -748,8 +753,9 @@ async def open(
       running keeps its own.
     """
     where = _directory(directory)
-    _check_open(durability, max_series, clock, private=private, embedded=embedded)
+    _check_open(durability, max_series, clock, private=private, embedded=embedded, cli=cli)
     started = _started(
+        cli=cli,
         durability=durability,
         encryption_key_file=encryption_key_file,
         older_encryption_keys=older_encryption_keys,
@@ -764,7 +770,13 @@ async def open(
 
 
 def _check_open(
-    durability: Durability | None, max_series: int | None, clock: datetime | None, *, private: bool, embedded: bool
+    durability: Durability | None,
+    max_series: int | None,
+    clock: datetime | None,
+    *,
+    private: bool,
+    embedded: bool,
+    cli: bool,
 ) -> None:
     """Refuses what open was given that no store opens with, before anything starts."""
     check_durability(durability, "open")
@@ -773,10 +785,13 @@ def _check_open(
         raise InvalidError("a clock is a private server's: a shared sidecar runs on the system's time")
     if private and embedded:
         raise InvalidError("a store is private or embedded, not both")
+    if cli and not embedded:
+        raise InvalidError("cli is for an embedded store: a sidecar or a server lets the command line write already")
 
 
 def _started(
     *,
+    cli: bool,
     durability: Durability | None,
     encryption_key_file: str | os.PathLike[str] | None,
     older_encryption_keys: Sequence[str | os.PathLike[str]],
@@ -794,6 +809,7 @@ def _started(
         self_metrics=self_metrics is not False,
         system_metrics=isinstance(self_metrics, bool) or self_metrics.get("system", True),
         max_series=max_series,
+        cli=cli,
     )
 
 

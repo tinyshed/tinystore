@@ -6,6 +6,7 @@
 //!
 //! ```text
 //! SERVE names a server      connect, prove it, write
+//! SERVE names a program     the same: it opened its store with `cli`
 //! no SERVE, LOCK free       start `tinystore serve --local`, wait for its SERVE, write
 //! no SERVE, LOCK held       the sidecar cannot open the store: a program holds it embedded
 //! ```
@@ -277,12 +278,23 @@ impl Sidecar {
 
     /// Why no server listened: a store a program holds embedded, which the
     /// sidecar could not open and no other server serves, or what the
-    /// sidecar said as it stopped.
+    /// sidecar said as it stopped. A program that opened it with `cli`, whose
+    /// endpoint did not answer, is named: it serves four commands at once.
     fn refusal(&self, dir: &Path, code: Option<i32>) -> Refused {
+        if code == Some(HELD)
+            && let Ok(Some(found)) = client::found(dir)
+            && found.embedded
+        {
+            return failed(format!(
+                "a program holds {} embedded, pid {}, and its endpoint for the command line did not answer: try again",
+                dir.display(),
+                found.pid
+            ));
+        }
         if code == Some(HELD) {
             return failed(format!(
                 "a program holds {} inside its own process, so no other process can write to it\n  open it in that \
-                 program with a sidecar, or let `tinystore serve {}` hold it",
+                 program with cli or a sidecar, or let `tinystore serve {}` hold it",
                 dir.display(),
                 dir.display()
             ));

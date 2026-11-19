@@ -18,6 +18,13 @@ interface OpenOptions {
      */
     embedded?: boolean
     /**
+     * Lets the `tinystore` command line write to this store while the
+     * program runs: the store listens on a socket, or on Windows a named
+     * pipe, that only the user it runs as may reach. Needs `embedded`: a
+     * sidecar lets the command line in already.
+     */
+    cli?: boolean
+    /**
      * The core for `embedded`: under Bun the C library, TINYSTORE_LIBRARY when
      * absent, and under Node its addon, tinystore.node, TINYSTORE_ADDON when
      * absent; then this platform's package's.

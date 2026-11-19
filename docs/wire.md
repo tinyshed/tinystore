@@ -158,21 +158,23 @@ refuses its new mode. `SERVE` there is a hint; `LOCK` is the truth.
  "endpoints": ["unix:///srv/app/data/server/tinystore.sock"], "sidecar": true}
 ```
 
-| field     |                                                                                                                                                                                                                                                        |
-|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| protocol  | the newest protocol the server speaks                                                                                                                                                                                                                  |
-| server    | its version                                                                                                                                                                                                                                            |
-| pid       | its process, for a person reading the file; no client trusts it, since a pid is reused                                                                                                                                                                 |
-| instance  | 16 random bytes a start, base64url without padding, which `WELCOME` repeats                                                                                                                                                                            |
-| secret    | 32 random bytes a start, base64url without padding, the key of the proof                                                                                                                                                                               |
-| endpoints | where it listens: `unix://` and a socket's path, or `pipe:` and a Windows named pipe's name                                                                                                                                                            |
-| sidecar   | `true` when the server is a sidecar, which `tinystore serve --local` starts for its clients. A client of a newer release may replace a sidecar. The field is absent for a Go program's own server and for `tinystore serve <dir>`, which a person runs |
+| field     |                                                                                                                                                                                                                                                                                        |
+|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| protocol  | the newest protocol the server speaks                                                                                                                                                                                                                                                  |
+| server    | its version                                                                                                                                                                                                                                                                            |
+| pid       | its process, for a person reading the file; no client trusts it, since a pid is reused                                                                                                                                                                                                 |
+| instance  | 16 random bytes a start, base64url without padding, which `WELCOME` repeats                                                                                                                                                                                                            |
+| secret    | 32 random bytes a start, base64url without padding, the key of the proof                                                                                                                                                                                                               |
+| endpoints | where it listens: `unix://` and a socket's path, or `pipe:` and a Windows named pipe's name                                                                                                                                                                                            |
+| sidecar   | `true` when the server is a sidecar, which `tinystore serve --local` starts for its clients. A client of a newer release may replace a sidecar. The field is absent for a Go program's own server and for `tinystore serve <dir>`, which a person runs                                 |
+| embedded  | `true` when a program holds the store in its own process and opened it with `cli`, `store.Options` 18: its endpoint is the command line's, refuses `server.stop` and `server.clock`, and serves 4 connections at once. An SDK's sidecar open does not attach to it, and fails `in_use` |
 
 - **Written whole, under the lock.** Only the store holding `LOCK` writes
   `server/`. A server removes a `SERVE` left behind before it listens, since
   the endpoint that file names may be another process's by now, writes its
   own once it listens, as a temporary file renamed into place, and removes it
-  when it leaves, before it lets go of `LOCK`.
+  when it leaves, before it lets go of `LOCK`. A store opened with `cli`
+  does the same, its connections told `GOAWAY` and given 2 seconds first.
 - **Find or start.** A client reads `SERVE`, connects to an endpoint and
   checks the proof. Any failure, no file, a refused connection or a proof that
   does not check, starts `tinystore serve --dir <dir> --local --log-file

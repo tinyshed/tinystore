@@ -601,6 +601,7 @@ async def open(
     *,
     private: bool = False,
     embedded: bool = False,
+    cli: bool = False,
     library: str | None = None,
     binary: str | None = None,
     idle: Duration | None = None,
@@ -624,6 +625,10 @@ cannot be served fails here. A cancel or a timeout around it, such as
 ``asyncio.timeout``, stops it at once and keeps no connection; the
 ``CancelledError`` carries a note of what it waited for.
 
+- ``cli``: lets the ``tinystore`` command line write to this store while
+  the program runs: the store listens on a socket, or on Windows a named
+  pipe, that only the user it runs as may reach. Needs ``embedded``: a
+  sidecar lets the command line in already.
 - ``binary``: the tinystore binary; TINYSTORE_BIN, this platform's wheel's
   or PATH's when absent.
 - ``idle``: how long a sidecar this process starts stays once its last

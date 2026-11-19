@@ -30,6 +30,7 @@ These contracts are what does not.
 - **STORE-09** A read whose caller cancelled it, or whose timeout passed, MUST stop where it is, waiting or running, free at once what it held and fail `cancelled`; a cancel MUST NOT stop another caller's read, nor a write that runs.
 - **STORE-10** An awaited call MUST NOT commit, sync the disk or wait on the thread that polls its future, whatever it waits for: a reader, memory, a file's writer, a lock, a run under way, another node's answer. That work runs on the store's own threads, or waits on no thread at all.
 - **STORE-11** A store MUST read every format an earlier release wrote, and MUST refuse at its open a file a later release migrated, naming the step it lacks, rather than read that release's bytes as damage.
+- **STORE-13** A store opened with `cli` MUST remove its `SERVE` before it lets go of its `LOCK`, so that a client never finds a `SERVE` whose endpoint another process may hold.
 
 ## 2. Durability and transactions
 
@@ -291,6 +292,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **SEC-04** A value MUST open only with the key that sealed it, one of the store's own or older keys, and a value sealed with a key the store does not hold MUST be `invalid` naming it and stay as it is; a write MUST seal with the store's own key, and `reseal` MUST move every value an older key sealed to it, keeping its version and expiry; the store MUST NOT make a key while values sealed with a lost one remain.
 - **SEC-05** `status`, logs and errors MUST NOT print `SERVE`'s secret, a token or a config secret.
 - **SEC-06** On Linux, macOS and Windows alike, a local user other than the one a local server runs as, short of root or an administrator, MUST NOT read its `SERVE` nor connect to its socket or named pipe, whatever the store's directory lets other users do.
+- **SEC-07** On Linux, macOS and Windows alike, a store opened with `cli` MUST admit no local user other than the one its program runs as, short of root or an administrator, to its `SERVE` or its endpoint, as SEC-06 asks of a server.
 
 ## 8. Backup and recovery
 
@@ -307,7 +309,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **CLI-02** A misspelt command, flag or setting MUST be told the nearest one.
 - **CLI-03** `stop` MUST return once `SERVE` is gone, and fail when no server runs.
 - **CLI-04** A command whose reader closes stdout, as `| head` does, MUST end quietly with exit 0, and MUST NOT panic.
-- **CLI-05** A command that writes MUST write through the server that holds the directory, or a sidecar it starts, and MUST refuse a directory that a program holds inside its own process, or that holds no store, making nothing in it. `sql --write` MAY open a store that no program holds itself, and `migrate`, `search drop`, `node promote` and `node demote`, which open it themselves, MUST refuse a directory that a program or a server holds.
+- **CLI-05** A command that writes MUST write through the server that holds the directory, a sidecar it starts, or the endpoint of a program that opened its store with `cli`, and MUST refuse a directory that a program holds inside its own process without it, or that holds no store, making nothing in it. `sql --write` MAY open a store that no program holds itself, and `migrate`, `search drop`, `node promote` and `node demote`, which open it themselves, MUST refuse a directory that a program or a server holds.
 - **CLI-06** `metrics ingest -f` MUST write a stream's lines while the stream is still open, a batch at most a second after its first line, and MUST skip a line it cannot read, or one the store refuses, saying its number, ending 1 once the stream ends.
 - **CLI-07** Tab completion MUST make no store and write nothing, and MUST offer nothing rather than fail.
 - **CLI-08** `lock hold` MUST run its command only once it holds the key, MUST stop the command once the lease is lost, and MUST let the key go and end with the command's exit once it ends.

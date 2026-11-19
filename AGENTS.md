@@ -122,6 +122,7 @@ What has cost time before, so that it does not again:
 | `crates/tinystore/src/wire/`        | the protocol's bytes and the session that answers them                                                                                                                                                                                                   |
 | `crates/tinystore/src/aio/`         | the async API: `aio::Store`, `run`'s helpers an engine's awaited calls are built on, `handlers`, what a worker and the MCP server poll, and a module an engine                                                                                           |
 | `crates/tinystore/src/pipe.rs`      | the connection in memory the FFI carries                                                                                                                                                                                                                 |
+| `crates/tinystore/src/local/`       | what the command line reaches a store by: `SERVE`, the socket's path and the pipe's name, their DACL on Windows, which the server publishes, and the endpoint a store opened with `cli` serves on threads of its own                                     |
 | `crates/tinystore/src/mcp/`         | a program's MCP server on stdin and stdout: its session, which `aio::mcp` drives too, its tools and their marks, the allow list, the store's read tools, and the reads and JSON they share with the command line                                         |
 | `crates/ffi/`                       | the C ABI: `cdylib` for Bun, `staticlib` for cgo; with `python`, the Python SDK's `tinystore._core`; with `node`, Node's `tinystore.node`                                                                                                                |
 | `crates/cli/`                       | `tinystore`: `serve` on tokio, the commands that read a store beside it, backups, nodes and the witness, and their help                                                                                                                                  |
@@ -167,13 +168,17 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   feature that turns on kv, and a Rust program that calls the engines
   directly leaves it out. `client`, the protocol's client side, which the
   command line writes through a server with, turns on the wire, and like
-  `fuzzing` promises nothing to a program. `mcp`, a program's own MCP server
+  `fuzzing` promises nothing to a program. `local`, the endpoint a store
+  opened with `cli` serves the command line on, and the `SERVE`, socket and
+  pipe the command line's server publishes from the same code, turns on the
+  wire; the FFI and the command line build it, and a Rust program that does
+  not ask leaves it out. `mcp`, a program's own MCP server
   and tinystore's read tools on its store, each engine's where that engine is
   on, turns on `typos` alone, and with `async` it is awaited too, `aio::mcp`,
   on the same session; `tinystore mcp` runs on it, and the reads and
   JSON its tools share with the commands' `--json` are its hidden modules,
   which promise a program nothing. `just lint` builds the library with each engine,
-  the console, config's loader, the wire and its client alone, the client beside metrics and records,
+  the console, config's loader, the wire, its client and `local` alone, the client beside metrics and records,
   `async` alone and beside each engine, `mcp` alone, beside each engine it
   serves and beside `async`, and every engine with `async` and without the wire. An
   engine adds its calls to `Store` from its own module
@@ -192,20 +197,22 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   Config stands at the root, since `config::load` opens no store, and only its
   `store.rs` names kv, whose file keeps the live settings' changes and whose
   engine keeps the configs open in the process.
-- **`unsafe` lives in ten places**: `sqlite::memory`, `sqlite::mutex`,
+- **`unsafe` lives in eleven places**: `sqlite::memory`, `sqlite::mutex`,
   `sqlite::deferred`, which asks SQLite whether a foreign key a transaction
   defers to its commit stands broken,
   `space`, which asks the system for the disk's free space,
   `blobs::directory::opener`, which opens a directory's file a segment at a
   time with `openat` on Unix, following no link,
   `console::terminal`, which asks a Windows console to read colours,
-  `crates/ffi`, the command line's `owner_only`, which gives what a Windows server
-  keeps to its user, `server\`, `SERVE` and the pipe, a DACL of that user's
-  alone, its `own_handles`, which keeps a command's stdio from the sidecar
-  it starts on Windows, since std's `inherit_handles` is not stable, and the
+  `crates/ffi`, `local::windows`, which gives what a Windows endpoint keeps
+  to its user, `server\`, `SERVE` and the pipe, a DACL of that user's alone,
+  and makes the pipe's overlapped calls, the command line's `pipe_server`,
+  which hands tokio a pipe that module made, its `own_handles`, which keeps a
+  command's stdio from the sidecar it starts on Windows, since std's
+  `inherit_handles` is not stable, and the
   test `metrics_memory`, whose allocator counts the heap an
   ingest holds against what it reserves. The workspace denies
-  `unsafe_code` everywhere else, each of the ten allows it at its module's
+  `unsafe_code` everywhere else, each of the eleven allows it at its module's
   top, and clippy's `undocumented_unsafe_blocks` makes every block carry a
   `SAFETY:` comment saying what it relies on.
 - **A dependency is a decision**, and every program linking TinyStore pays for
@@ -221,10 +228,10 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   unicode-normalization, unicode-segmentation and rust-stemmers, pinned, for
   a search's words, libc on Unix for the disk's free space and a directory's `openat`, and futures-core,
   with `async` alone, for the `Stream` trait every runtime's stream helpers
-  take, a trait with no code to run. The command line adds windows-sys on
-  Windows alone, the release tokio already builds, for the DACL of a server's
-  `SERVE` and pipe: no maintained crate wraps a security descriptor safely,
-  and tokio's pipe takes one only through `unsafe`.
+  take, a trait with no code to run. With `local` alone, hmac for `SERVE`'s
+  proof, and windows-sys on Windows, the release tokio already builds, for
+  the DACL of a store's `SERVE` and pipe and the pipe's calls: no maintained
+  crate wraps a security descriptor safely, and std makes no named pipe.
   Anything a measurement needs belongs in research, not here.
 - **The toolchain is pinned** in `rust-toolchain.toml`; `rust-version` is the
   floor a user needs, raised only for a feature in use.
@@ -273,9 +280,14 @@ its pool, which the pipe's calls and the async API's run on and whose idle
 threads end after a minute, its timer, which ends the patience of the waits
 that hold no thread, the locks' timer, the threads channels run handlers on,
 and the threads a queue's `work` asks for, which its worker's `stop` and the
-store's close stop. Engines register periodic work
-with `Host::every`; `background: false` stops all of it, for tests, which run
-each engine's maintenance themselves.
+store's close stop; with `cli`, the thread that takes the command line's
+connections and two a connection, on blocking calls that look each tick at
+whether the store closes, so that no async runtime runs in the library. The
+close stops them first: `GOAWAY` to each connection, up to two seconds for
+the calls under way, then `SERVE` removed and `LOCK` let go last. A
+connection holds the store while it lasts, as a pipe does. Engines register
+periodic work with `Host::every`; `background: false` stops all of it, for
+tests, which run each engine's maintenance themselves.
 
 **Engine logs do not loop.** Engines log through `tracing` with the target
 `tinystore`, a failure of background work once and its recovery once, never a

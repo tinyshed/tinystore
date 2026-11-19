@@ -31,6 +31,7 @@ type Option func(*options)
 
 type options struct {
 	private, embedded bool
+	cli               bool
 	library, binary   string
 	idle              time.Duration
 	idleSet           bool
@@ -52,6 +53,12 @@ func Private() Option { return func(o *options) { o.private = true } }
 // names, TINYSTORE_LIBRARY, or the release's own, fetched into the user's
 // cache at the first open. On Linux and macOS it needs cgo.
 func Embedded() Option { return func(o *options) { o.embedded = true } }
+
+// CLI lets the tinystore command line write to this store while the program
+// runs: the store listens on a socket, or on Windows a named pipe, that only
+// the user it runs as may reach. It needs Embedded: a sidecar lets the
+// command line in already.
+func CLI() Option { return func(o *options) { o.cli = true } }
 
 // Library is the core's library the store in this process loads:
 // tinystore_ffi.dll, libtinystore_ffi.so or .dylib.
@@ -153,10 +160,13 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 	if o.private && o.embedded {
 		return nil, core.Errorf(core.Invalid, "a store is private or embedded, not both")
 	}
+	if o.cli && !o.embedded {
+		return nil, core.Errorf(core.Invalid, "cli is for an embedded store: a sidecar or a server lets the command line write already")
+	}
 	if o.maxSeriesSet && o.maxSeries < 1 {
 		return nil, core.Errorf(core.Invalid, "open: MaxSeries %d: a count above 0", o.maxSeries)
 	}
-	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, OlderEncryptionKeys: o.olderKeys, SelfMetrics: o.selfMetrics, WithoutSystem: o.withoutSystem, MaxSeries: uint64(max(o.maxSeries, 0))}
+	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, OlderEncryptionKeys: o.olderKeys, SelfMetrics: o.selfMetrics, WithoutSystem: o.withoutSystem, MaxSeries: uint64(max(o.maxSeries, 0)), CLI: o.cli}
 	if o.idleSet {
 		ms, err := core.Millis(o.idle, "a sidecar's idle")
 		if err != nil {

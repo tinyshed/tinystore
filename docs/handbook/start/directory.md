@@ -92,6 +92,13 @@ already started can still take the directory once it is free. With no client,
 that sidecar exits after its idle time, 30 seconds unless set, and never
 sooner than 15 seconds after it started (contract WIRE-11).
 
+A program that opened the directory `embedded` with `cli` lets the
+`tinystore` command line write to it, and names itself in `server/SERVE`.
+`open` does not wait for that one: it fails at once with `InUseError`, Go's
+`ErrInUse`, naming the program's pid. [Writing to a store a program
+holds](../../guides/cli/README.md#writing-to-a-store-a-program-holds) says
+what `cli` does.
+
 ## What is in the directory
 
 ```tree

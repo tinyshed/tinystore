@@ -12,6 +12,7 @@ import { checkSignal, currentSignal, unlessCancelled, withoutSignal } from './ca
 import {
 	CancelledError,
 	ClosedError,
+	InUseError,
 	InvalidError,
 	OutcomeUnknownError,
 	TinystoreError,
@@ -232,6 +233,8 @@ interface Published {
 	endpoints: string[]
 	/** a server started for its clients, which a client of a newer release replaces */
 	sidecar?: boolean
+	/** a program that opened its store embedded with cli, for the command line alone */
+	embedded?: boolean
 }
 
 /** How long a client waits for a sidecar to answer, its own or another's, before it gives up. */
@@ -263,6 +266,7 @@ export function sidecar(
 	return async dialling => {
 		dialling.waiting('the sidecar starts')
 		const found = await reachServe(runtime, serve, dialling.signal)
+		await refuseEmbedded(found, serve)
 		let stoppedInstance: string | undefined
 		if (found !== undefined) {
 			const server = (await found.connection.session.welcomed).server
@@ -483,6 +487,7 @@ class Spawned {
 				throw signal.reason
 			}
 			const reached = await reachServe(this.#runtime, serve, signal)
+			await refuseEmbedded(reached, serve)
 			if (reached !== undefined && reached.instance !== stoppedInstance) {
 				return reached.connection
 			}
@@ -631,12 +636,37 @@ function compareReleases(a: Release, b: Release): number {
 	return a.pre.length - b.pre.length
 }
 
+/** What SERVE named, its proof checked. */
+interface Reached {
+	connection: Connection
+	sidecar: boolean
+	instance: string
+	/** the pid of the program that opened the store embedded with cli */
+	embedded: number | undefined
+}
+
+/**
+ * Refuses a store a program holds embedded, which it opened with cli: its
+ * endpoint is the command line's, and a client tied to it would start a
+ * sidecar when that program exits, which then keeps it from opening again.
+ */
+async function refuseEmbedded(reached: Reached | undefined, serve: string): Promise<void> {
+	if (reached?.embedded === undefined) {
+		return
+	}
+	await reached.connection.close()
+	throw new InUseError(
+		`a program holds ${join(serve, '..', '..')} inside its own process, pid ${reached.embedded}, ` +
+			'and lets the command line alone in: use the store in that program, or close it there first',
+	)
+}
+
 /** The sidecar SERVE names, once its proof checks; undefined on any failure. */
 async function reachServe(
 	runtime: Runtime,
 	serve: string,
 	signal: AbortSignal,
-): Promise<{ connection: Connection; sidecar: boolean; instance: string } | undefined> {
+): Promise<Reached | undefined> {
 	let published: Published
 	try {
 		const text = await runtime.readFile(serve)
@@ -659,7 +689,13 @@ async function reachServe(
 			challenge: new Uint8Array(randomBytes(16)),
 		}
 		const connection = await Connection.dial(runtime, endpoint, asked, undefined, signal)
-		return { connection, sidecar: published.sidecar === true, instance: published.instance }
+		const embedded = published.embedded === true ? published.pid : undefined
+		return {
+			connection,
+			sidecar: published.sidecar === true,
+			instance: published.instance,
+			embedded,
+		}
 	} catch {
 		return undefined
 	}
@@ -732,12 +768,15 @@ export function privateChild(
 /**
  * The core in this process: no server and no socket, the frames handed to
  * the core and back, through bun:ffi under Bun and its addon under Node.
+ * With `cli` the core also serves the command line on an endpoint of the
+ * user's alone, which SERVE names until the store closes.
  */
 export function embedded(
 	runtime: Runtime,
 	dir: string,
 	library: () => string,
 	started: Started = {},
+	cli = false,
 ): Dialer {
 	const encryptionKeyFile =
 		started.encryptionKeyFile === undefined ? undefined : resolve(started.encryptionKeyFile)
@@ -764,6 +803,7 @@ export function embedded(
 		selfMetrics: selfMetricsOf(started.selfMetrics) !== undefined,
 		withoutSystem: selfMetricsOf(started.selfMetrics)?.system === false,
 		maxSeries: started.maxSeries,
+		cli,
 	})
 	return async dialling => {
 		dialling.waiting('the store opens')

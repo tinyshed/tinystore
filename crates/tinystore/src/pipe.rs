@@ -247,6 +247,8 @@ struct Asked {
     older_encryption_keys: Vec<PathBuf>,
     #[cfg(feature = "replication")]
     node: Option<crate::replication::Node>,
+    #[cfg(feature = "local")]
+    cli: bool,
 }
 
 fn asked(options: &[u8]) -> Result<Asked> {
@@ -286,6 +288,10 @@ fn asked(options: &[u8]) -> Result<Asked> {
     if asked.self_metrics || asked.max_series.is_some() {
         return Err(Error::invalid("pipe: the store's metrics, and the library was built without metrics"));
     }
+    #[cfg(not(feature = "local"))]
+    if asked.cli {
+        return Err(Error::invalid("pipe: an endpoint for the command line, and the library was built without local"));
+    }
     Ok(Asked {
         durability: durability.transpose()?,
         #[cfg(feature = "metrics")]
@@ -296,6 +302,8 @@ fn asked(options: &[u8]) -> Result<Asked> {
         older_encryption_keys: asked.older_encryption_keys.into_iter().map(PathBuf::from).collect(),
         #[cfg(feature = "replication")]
         node,
+        #[cfg(feature = "local")]
+        cli: asked.cli,
     })
 }
 
@@ -344,6 +352,10 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
         if asked.node.is_some() && store.node().is_none() {
             return Err(Error::invalid("pipe: the store is open as no node, and asked to be one"));
         }
+        #[cfg(feature = "local")]
+        if asked.cli && !store.serves_the_command_line() {
+            return Err(Error::invalid("pipe: the store is open without cli, and asked for it"));
+        }
         *pipes += 1;
         return Ok(store.clone());
     }
@@ -357,6 +369,8 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
         self_metrics: asked.self_metrics,
         #[cfg(feature = "metrics")]
         max_series: asked.max_series.unwrap_or(crate::store::MAX_SERIES),
+        #[cfg(feature = "local")]
+        cli: asked.cli,
         ..Options::default()
     };
     let store = Store::open(dir, options)?;

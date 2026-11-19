@@ -106,14 +106,15 @@ waits for no server (contract CLI-07).
 ## Who writes
 
 `kv set`, `metrics ingest` and the other commands of the Write group go
-through the server that holds the directory, or a sidecar the command starts
-(contract CLI-05):
+through the server that holds the directory, a sidecar the command starts, or
+a program that opened its store with `cli` (contract CLI-05):
 
-| Who holds `./data`                    | What a write does                                                           |
-|---------------------------------------|-----------------------------------------------------------------------------|
-| `tinystore serve` or an SDK's sidecar | writes through it                                                           |
-| nothing                               | starts a sidecar, which stops 30 seconds after its last client, and says so |
-| a program that opened it `embedded`   | refuses and exits 1                                                         |
+| Who holds `./data`                             | What a write does                                                           |
+|------------------------------------------------|-----------------------------------------------------------------------------|
+| `tinystore serve` or an SDK's sidecar          | writes through it                                                           |
+| nothing                                        | starts a sidecar, which stops 30 seconds after its last client, and says so |
+| a program that opened it `embedded` with `cli` | writes through that program                                                 |
+| a program that opened it `embedded` without it | refuses and exits 1                                                         |
 
 ```text
 tinystore kv set: started a server for ./data; it stops 30 s after the last client
@@ -125,8 +126,56 @@ inside its own process, so no other process can write to it:
 
 ```text
 tinystore kv set: a program holds ./data inside its own process, so no other process can write to it
-  open it in that program with a sidecar, or let `tinystore serve ./data` hold it
+  open it in that program with cli or a sidecar, or let `tinystore serve ./data` hold it
 ```
+
+### Writing to a store a program holds
+
+`cli` lets the `tinystore` command line write to an embedded store while the
+program runs, for an operator's one-off writes: run a job now, forget a
+cached value. The store listens where a sidecar would, on a socket, or on
+Windows a named pipe, that only the user the program runs as may reach
+(contract SEC-07), and names it in `server/SERVE`:
+
+```ts
+const store = await open('./data', { embedded: true, cli: true })
+```
+
+```python
+store = await tinystore.open("./data", embedded=True, cli=True)
+```
+
+```go
+store, err := tinystore.Open(ctx, "./data", tinystore.Embedded(), tinystore.CLI())
+```
+
+```rust
+// with the library's `local` feature
+let store = Store::open("./data", Options { cli: true, ..Options::default() })?;
+```
+
+```sh
+# while the program runs
+tinystore jobs ./data add teacher-reviews '{"teacher":4353}'
+tinystore status ./data
+● ./data  held by a program · pid 4242 · the command line may write · durability os
+```
+
+- **Every write command works**, and so does `tinystore mcp --write`: each
+  finds the program through `SERVE` and checks its proof, as it checks a
+  server's.
+- **The program decides when it stops.** `tinystore stop ./data` refuses:
+  "a program holds ./data embedded, pid 4242; it stops when that program
+  closes it".
+- **A close lets a command finish.** The store tells each command `GOAWAY`,
+  waits up to 2 seconds for its calls, removes `SERVE`, and only then lets
+  go of the directory (contract STORE-13). A command cut off hears what it
+  hears when a server goes: a write by an id goes again, one without is
+  `outcome unknown`.
+- **Four commands at a time.** A fifth is told to try again.
+- **An SDK does not attach.** A program that opens `./data` through a
+  sidecar while another holds it with `cli` gets `InUseError` at once, naming
+  the program's pid.
 
 A directory without a store is refused, and nothing is created in it. Run the
 program or `tinystore serve` there once to make the store.
@@ -136,10 +185,12 @@ Some commands open the store themselves instead of reaching a server.
 the server when one does. `migrate`, `search drop`, `node promote` and
 `node demote` need a directory that no program or server holds.
 
-| What                  | Value                                 |
-|-----------------------|---------------------------------------|
-| a sidecar's idle time | 30 seconds after its last client      |
-| the wait for a server | 15 seconds to start, 10 for an answer |
+| What                                  | Value                                 |
+|---------------------------------------|---------------------------------------|
+| a sidecar's idle time                 | 30 seconds after its last client      |
+| the wait for a server                 | 15 seconds to start, 10 for an answer |
+| commands a `cli` store serves at once | 4                                     |
+| what a `cli` store's close waits for  | 2 seconds for the calls under way     |
 
 ## Pages
 

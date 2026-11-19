@@ -14,8 +14,6 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use tinystore::client::Client;
 use tinystore::{Error, ErrorKind};
 
@@ -29,6 +27,9 @@ pub(crate) struct Found {
     pub(crate) endpoints: Vec<String>,
     /// When it was written: when the server began listening.
     pub(crate) since: SystemTime,
+    /// A program holds the store inside its own process, opened with `cli`:
+    /// nobody stops it but that program.
+    pub(crate) embedded: bool,
     secret: Vec<u8>,
 }
 
@@ -49,7 +50,8 @@ pub(crate) fn found(dir: &Path) -> Result<Option<Found>, String> {
         pid: field("pid")?.as_u64().unwrap_or_default(),
         endpoints: endpoints.iter().filter_map(|endpoint| endpoint.as_str().map(str::to_owned)).collect(),
         since,
-        secret: base64url(field("secret")?.as_str().unwrap_or_default())
+        embedded: serve["embedded"] == true,
+        secret: tinystore::local::from_base64url(field("secret")?.as_str().unwrap_or_default())
             .ok_or_else(|| unreadable("a secret that is no base64url"))?,
     }))
 }
@@ -87,10 +89,10 @@ fn hello(endpoint: &str, secret: &[u8]) -> Result<Connection, String> {
     let name = format!("tinystore-cli/{}", env!("CARGO_PKG_VERSION"));
     let (client, welcome) =
         Client::hello(stream, &name, Some(challenge)).map_err(|error| format!("{endpoint}: {error}"))?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC takes a key of any length");
-    mac.update(&challenge);
     let proof = welcome.proof.ok_or("the server gave no proof")?;
-    mac.verify_slice(&proof).map_err(|_| "a process on the endpoint did not prove it is the store's server")?;
+    if !tinystore::local::proven(secret, &challenge, &proof) {
+        return Err("a process on the endpoint did not prove it is the store's server".to_owned());
+    }
     Ok(Connection { client, server: welcome.server, durability: welcome.durability })
 }
 
@@ -190,30 +192,6 @@ fn dial(endpoint: &str) -> io::Result<Box<dyn Stream>> {
     }
 }
 
-/// Base64url without padding, as `SERVE` spells its secret.
-fn base64url(text: &str) -> Option<Vec<u8>> {
-    let mut bits = 0u32;
-    let mut held = 0;
-    let mut bytes = Vec::with_capacity(text.len() * 3 / 4);
-    for byte in text.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'-' => 62,
-            b'_' => 63,
-            _ => return None,
-        };
-        bits = bits << 6 | u32::from(value);
-        held += 6;
-        if held >= 8 {
-            held -= 8;
-            bytes.push((bits >> held) as u8);
-        }
-    }
-    Some(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,7 +199,8 @@ mod tests {
     #[test]
     fn a_server_that_takes_the_connection_and_never_answers_is_said_within_the_wait() {
         let (endpoint, _listening) = silent_endpoint();
-        let found = Found { pid: 0, endpoints: vec![endpoint], since: SystemTime::now(), secret: vec![1] };
+        let found =
+            Found { pid: 0, endpoints: vec![endpoint], since: SystemTime::now(), embedded: false, secret: vec![1] };
         let began = std::time::Instant::now();
         let refused = found.connect().err().expect("no answer came");
         assert!(refused.contains("did not answer within"), "{refused}");
@@ -245,13 +224,5 @@ mod tests {
             tokio::net::windows::named_pipe::ServerOptions::new().create(format!(r"\\.\pipe\{name}"))
         });
         (format!("pipe:{name}"), Box::new((pipe.unwrap(), runtime)))
-    }
-
-    // contract: CLI-03
-    #[test]
-    fn a_secret_reads_as_serve_spells_it() {
-        assert_eq!(base64url("Zm9vYmFy").unwrap(), b"foobar");
-        assert_eq!(base64url("-_8").unwrap(), [0xfb, 0xff]);
-        assert_eq!(base64url("a+b"), None);
     }
 }

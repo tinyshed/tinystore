@@ -26,7 +26,7 @@ fn token(asked: Asked) -> Done {
     };
     let mut random = [0; 32];
     getrandom::fill(&mut random).map_err(failed)?;
-    outln!("{capability} {}", crate::local::base64url(&random))?;
+    outln!("{capability} {}", tinystore::local::base64url(&random))?;
     Ok(())
 }
 
@@ -36,7 +36,7 @@ mod tests {
     fn a_tokens_line_is_one_the_server_reads() {
         let mut random = [7u8; 32];
         random[0] = 0xfb;
-        let line = format!("admin {}", crate::local::base64url(&random));
+        let line = format!("admin {}", tinystore::local::base64url(&random));
         assert_eq!(line.len(), "admin ".len() + 43);
         assert!(crate::remote::Tokens::parse(&line).is_ok(), "{line}");
     }
