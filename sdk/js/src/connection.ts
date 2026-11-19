@@ -785,7 +785,7 @@ export function embedded(
 	dir: string,
 	library: () => string,
 	started: Started = {},
-	{ clock, cli = false }: { clock?: Date; cli?: boolean } = {},
+	{ clock, cli = false }: { clock?: Date | undefined; cli?: boolean | undefined } = {},
 ): Dialer {
 	const encryptionKeyFile =
 		started.encryptionKeyFile === undefined ? undefined : resolve(started.encryptionKeyFile)
