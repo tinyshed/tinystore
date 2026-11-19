@@ -392,7 +392,7 @@ async fn a_handle_crosses_from_the_blocking_api_and_fails_closed_once_its_store_
     drop(dir);
 }
 
-// contract: MET-17
+// contract: MET-17, MET-28
 #[tokio::test]
 async fn an_awaited_page_walks_on_as_a_stream_as_its_blocking_twin_walks() {
     let f = fixture();
@@ -426,12 +426,13 @@ async fn an_awaited_page_walks_on_as_a_stream_as_its_blocking_twin_walks() {
         .collect();
     assert_eq!(seen(&walked), seen(&blocking));
     assert_eq!(walked.iter().map(|series| series.samples().len()).sum::<usize>(), 1000);
-    let groups = query().every(MINUTE).limit(3).aggregate(Op::Avg).await.unwrap();
+    let groups = query().every(MINUTE).by(&["host"]).limit(3).aggregate(Op::Avg).await.unwrap();
+    assert!(groups.groups[0].more, "a page cuts the group");
     let mut walk = groups.all();
-    let mut buckets = 0;
+    let mut joined = Vec::new();
     while let Some(group) = std::future::poll_fn(|context| Pin::new(&mut walk).poll_next(context)).await {
-        buckets += group.unwrap().buckets.len();
+        joined.push(group.unwrap());
     }
-    let once = stats.query().name("paged").since(HOUR).every(MINUTE).aggregate(Op::Avg).await.unwrap();
-    assert_eq!(buckets, once.groups[0].buckets.len());
+    let once = stats.query().name("paged").since(HOUR).every(MINUTE).by(&["host"]).aggregate(Op::Avg).await.unwrap();
+    assert_eq!(joined, once.groups, "each group once, whole");
 }

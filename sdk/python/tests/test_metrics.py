@@ -71,7 +71,7 @@ async def test_a_gauges_stretch_is_replaced_whole_and_a_counters_is_refused(stor
         await store.metrics.replace(Series(name="orders_total", kind="counter", samples=[]), from_=days[2], to=days[5])
 
 
-# contract: MET-17
+# contract: MET-17, MET-28
 async def test_a_read_and_an_aggregate_given_limit_come_in_pages_that_walk_on(store: tinystore.Store) -> None:
     at = now_ms() - 600_000
     samples = [(at + index * 1000, float(index)) for index in range(500)]
@@ -89,11 +89,11 @@ async def test_a_read_and_an_aggregate_given_limit_come_in_pages_that_walk_on(st
         host = str(part.labels["host"])
         read[host] = read.get(host, 0) + len(part.times or [])
     assert read == {"a": 500, "b": 500}
-    buckets = 0
-    async for group in await store.metrics.aggregate(name="paged", since="1h", every="1m", op="avg", limit=3):
-        buckets += len(group.buckets)
-    once = await store.metrics.aggregate(name="paged", since="1h", every="1m", op="avg")
-    assert buckets == len(once.groups[0].buckets)
+    paged = await store.metrics.aggregate(name="paged", since="1h", every="1m", op="avg", by=["host"], limit=3)
+    assert paged.groups[-1].more
+    walked = [group async for group in paged]
+    once = await store.metrics.aggregate(name="paged", since="1h", every="1m", op="avg", by=["host"])
+    assert walked == once.groups, "each group once, its parts joined"
 
 
 PROMETHEUS = json.loads(

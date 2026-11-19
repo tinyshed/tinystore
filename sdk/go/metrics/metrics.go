@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"iter"
 	"math"
+	"slices"
 	"time"
 
 	"tinyshed.org/tinystore"
@@ -583,16 +584,30 @@ type AggregatePage struct {
 }
 
 // All is the page's groups, then those of each page after it, read one page
-// at a time as the walk reaches the end of the one it holds.
+// at a time as the walk reaches the end of the one it holds. A group a page
+// cut comes once, whole, its parts joined.
 func (p AggregatePage) All(ctx context.Context) iter.Seq2[Group, error] {
 	return func(yield func(Group, error) bool) {
+		var held *Group
 		for page := p; ; {
 			for _, group := range page.Groups {
+				if held != nil {
+					group.Buckets = slices.Concat(held.Buckets, group.Buckets)
+					held = nil
+				}
+				if group.More {
+					held = &group
+					continue
+				}
 				if !yield(group, nil) {
 					return
 				}
 			}
 			if page.Next == "" {
+				// a cut part with nothing after it: the pages ended under it
+				if held != nil {
+					yield(*held, nil)
+				}
 				return
 			}
 			q := page.query

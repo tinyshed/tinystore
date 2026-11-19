@@ -252,7 +252,9 @@ class SeriesPage:
 class AggregatePage:
     """One page of an aggregate: its groups, and next while there is more, walked as a SeriesPage is.
 
-    A page ends between two whole buckets.
+    A page ends between two whole buckets. ``async for`` gives a group a page
+    cut once, whole, its parts joined, holding its buckets until the page that
+    ends it.
     """
 
     groups: list[Aggregate]
@@ -262,10 +264,21 @@ class AggregatePage:
 
     async def __aiter__(self) -> AsyncIterator[Aggregate]:
         page = self
+        held: Aggregate | None = None
         while True:
-            for group in page.groups:
+            for part in page.groups:
+                group = (
+                    part if held is None else Aggregate(held.name, held.labels, held.buckets + part.buckets, part.more)
+                )
+                held = None
+                if group.more:
+                    held = group
+                    continue
                 yield group
             if page.next is None:
+                # a cut part with nothing after it: the pages ended under it
+                if held is not None:
+                    yield held
                 return
             page = await page._read_on(page.next)
 

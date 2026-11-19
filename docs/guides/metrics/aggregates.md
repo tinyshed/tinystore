@@ -42,6 +42,29 @@ let traffic = stats
 let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).every(Duration::from_mins(5)).aggregate(Op::Percentile(95.0))?.groups;
 ```
 
+## A total for a range
+
+Without `every` the range is one bucket, so a total for the range is one
+call, one bucket a group:
+
+```ts
+const { groups } = await store.metrics.aggregate({ name: 'calls', since: '30d', op: 'increase' })
+const calls = groups[0]?.buckets[0]?.value // calls in 30 days, with no buckets to sum
+```
+
+```python
+groups = (await store.metrics.aggregate(name="calls", since="30d", op="increase")).groups
+calls = groups[0].buckets[0].value if groups else None
+```
+
+```go
+page, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "calls", Since: 30 * 24 * time.Hour, Op: metrics.Increase})
+```
+
+```rust
+let groups = stats.query().name("calls").since(Duration::from_hours(30 * 24)).aggregate(Op::Increase)?.groups;
+```
+
 ## Ops
 
 | `op`            | Of                        | A bucket's answer                                                              |
@@ -219,6 +242,11 @@ by every sample's count, never averaging averages; `p95` ranks every sample of
 the group, or adds a timer's bucket counts before it ranks. `last` adds up
 too: the last of several queues' depths is their total at the bucket's end.
 
+So `by` merges series exactly, a timer's percentiles among them. A timer
+labelled `fn` and `cached` grouped `by: ['fn']` gives each function's `p95`
+over its cached and uncached calls together, ranked over both spreads'
+counts, which no weighting of two percentiles gives.
+
 ```ts
 const { groups: backlog } = await store.metrics.aggregate({ name: 'queue_depth', since: '1d', every: '1h', op: 'last' })
 ```
@@ -306,6 +334,11 @@ for group in page.all() {
 - The answer goes group by group, each group's buckets in time order. A page
   ends only between two whole buckets. A group that a page cuts has
   `more: true`, and the next page starts with the rest of its buckets.
+- A walk of the pages, `for await`, `async for`, `All` or `all()`, joins a
+  group's parts across pages and gives each group once, whole, with `more`
+  false. It holds one group's buckets at a time, which the range bounds. A
+  walk of a read's pages gives a series in its parts, since a series is what
+  pages exist to bound.
 - `limit` counts only buckets that hold samples, so a stretch with none costs
   a page nothing. A page holds fewer than `limit` buckets only when it is the
   last, when a bound stops it, when a short gap lies inside samples dense

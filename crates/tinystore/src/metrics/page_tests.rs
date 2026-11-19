@@ -423,6 +423,21 @@ fn aggregate_pages_followed_by_next_give_the_whole_aggregate_bucket_for_bucket()
     }
 }
 
+// contract: MET-28
+#[test]
+fn a_walk_of_aggregate_pages_gives_each_group_once_whole() {
+    let f = fixture();
+    traffic(&f);
+    let query = f.metrics().query().name("requests_total").since(10 * HOUR).every(MINUTE).by(&["route"]);
+    let whole = query.aggregate(Op::Rate).unwrap().groups;
+    for limit in [1, 3, 17, 100_000] {
+        let first = query.clone().limit(limit).aggregate(Op::Rate).unwrap();
+        assert_eq!(first.groups.last().is_some_and(|group| group.more), limit < 100_000, "a page cuts a group");
+        let walked: Vec<Aggregate> = first.all().collect::<crate::Result<_>>().unwrap();
+        assert_eq!(walked, whole, "each group once, its buckets whole and in order, in pages of {limit}");
+    }
+}
+
 // contract: MET-17
 #[test]
 fn aggregate_pages_of_a_calendar_go_across_a_change_of_the_clock() {

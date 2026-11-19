@@ -103,7 +103,7 @@ func TestAGaugesStretchIsReplacedWholeAndACountersIsRefused(t *testing.T) {
 	})
 }
 
-// contract: MET-17
+// contract: MET-17, MET-28
 func TestAReadAndAnAggregateGivenLimitComeInPagesThatWalkOn(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
@@ -134,17 +134,22 @@ func TestAReadAndAnAggregateGivenLimitComeInPagesThatWalkOn(t *testing.T) {
 		if read["a"] != 500 || read["b"] != 500 {
 			t.Fatalf("walked %v", read)
 		}
-		buckets := 0
-		paged := metrics.Query{Name: "paged", Since: time.Hour, Every: time.Minute, Op: metrics.Avg, Limit: 3}
-		for group, err := range ways.Must(metrics.Aggregate(ctx, store, paged)).All(ctx) {
+		var walked []metrics.Group
+		paged := metrics.Query{Name: "paged", Since: time.Hour, Every: time.Minute, Op: metrics.Avg, By: []string{"host"}, Limit: 3}
+		page := ways.Must(metrics.Aggregate(ctx, store, paged))
+		if !page.Groups[len(page.Groups)-1].More {
+			t.Fatal("a page of 3 buckets cuts no group")
+		}
+		for group, err := range page.All(ctx) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			buckets += len(group.Buckets)
+			walked = append(walked, group)
 		}
 		paged.Limit = 0
-		if once := ways.Must(metrics.Aggregate(ctx, store, paged)); buckets != len(once.Groups[0].Buckets) {
-			t.Fatalf("walked %d buckets, once %d", buckets, len(once.Groups[0].Buckets))
+		// each group once, its parts joined
+		if once := ways.Must(metrics.Aggregate(ctx, store, paged)); !reflect.DeepEqual(walked, once.Groups) {
+			t.Fatalf("walked %+v, once %+v", walked, once.Groups)
 		}
 		_, err := metrics.Read(ctx, store, metrics.Query{Name: "paged", Since: time.Hour, Op: metrics.Avg})
 		is(t, err, tinystore.ErrInvalid)

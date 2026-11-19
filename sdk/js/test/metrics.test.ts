@@ -159,7 +159,7 @@ for (const way of ways) {
 			expect(await caught(store.metrics.replace(counter, range))).toBeInstanceOf(InvalidError)
 		})
 
-		// contract: MET-17
+		// contract: MET-17, MET-28
 		test('a read and an aggregate given limit come in pages that walk on to the whole answer', async () => {
 			const at = Date.now() - 600_000
 			const samples = Array.from({ length: 500 }, (_, i) => [at + i * 1000, i] as const)
@@ -184,17 +184,20 @@ for (const way of ways) {
 			expect(read).toEqual({ a: 500, b: 500 })
 			expect(walked.every(part => part.times.length <= 300)).toBe(true)
 			const groups = []
-			for await (const group of await store.metrics.aggregate({
+			const paged = await store.metrics.aggregate({
 				...query,
 				every: '1m',
 				op: 'avg',
+				by: ['host'],
 				limit: 3,
-			})) {
+			})
+			expect(paged.groups.at(-1)?.more).toBe(true)
+			for await (const group of paged) {
 				groups.push(group)
 			}
-			const buckets = groups.reduce((sum, group) => sum + group.buckets.length, 0)
-			const once = await store.metrics.aggregate({ ...query, every: '1m', op: 'avg' })
-			expect(buckets).toBe(once.groups[0]?.buckets.length ?? -1)
+			const once = await store.metrics.aggregate({ ...query, every: '1m', op: 'avg', by: ['host'] })
+			// each group once, its parts joined
+			expect(groups).toEqual(once.groups)
 			expect(JSON.parse(JSON.stringify(first))).toEqual({
 				series: expect.any(Array),
 				next: first.next,

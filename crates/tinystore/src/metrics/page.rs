@@ -64,10 +64,11 @@ impl SeriesPage {
     }
 
     /// The page's series, then those of each page after it, read one page at
-    /// a time as the walk reaches the end of the one it holds.
+    /// a time as the walk reaches the end of the one it holds. A series a
+    /// page cut comes in its parts, since a series is what pages bound.
     pub fn all(self) -> All<Series> {
         let query = self.query;
-        All::of(self.series, self.next, move |after| {
+        All::of(self.series, self.next, None, move |after| {
             query.clone().after(after).read().map(|page| (page.series, page.next))
         })
     }
@@ -92,10 +93,12 @@ impl AggregatePage {
     }
 
     /// The page's groups, then those of each page after it, read one page at
-    /// a time as the walk reaches the end of the one it holds.
+    /// a time as the walk reaches the end of the one it holds. A group a page
+    /// cut comes once, whole, its parts joined: the walk holds its buckets
+    /// until the page that ends it.
     pub fn all(self) -> All<Aggregate> {
         let (query, op) = (self.query, self.op);
-        All::of(self.groups, self.next, move |after| {
+        All::of(self.groups, self.next, group_parts(), move |after| {
             query.clone().after(after).aggregate(op).map(|page| (page.groups, page.next))
         })
     }
@@ -104,11 +107,25 @@ impl AggregatePage {
 /// What a walk reads the page after one by, from its `next`.
 type ReadOn<T> = Box<dyn FnMut(&str) -> Result<(Vec<T>, Option<String>)> + Send>;
 
+/// Whether a page cut an item, and how the rest of it, from the page after,
+/// joins onto it: none for an item a walk gives in its parts.
+pub(crate) type Parts<T> = Option<(fn(&T) -> bool, fn(&mut T, T))>;
+
+/// A group's parts, which a walk of an aggregate's pages joins (MET-28).
+pub(crate) fn group_parts() -> Parts<Aggregate> {
+    let joined = |group: &mut Aggregate, rest: Aggregate| {
+        group.buckets.extend(rest.buckets);
+        group.more = rest.more;
+    };
+    Some((|group| group.more, joined))
+}
+
 /// The series or the groups of a page and of every page after it, one page
 /// held at a time.
 pub struct All<T> {
     items: IntoIter<T>,
     next: Option<String>,
+    parts: Parts<T>,
     read_on: ReadOn<T>,
 }
 
@@ -116,9 +133,24 @@ impl<T> All<T> {
     fn of(
         items: Vec<T>,
         next: Option<String>,
+        parts: Parts<T>,
         read_on: impl FnMut(&str) -> Result<(Vec<T>, Option<String>)> + Send + 'static,
     ) -> All<T> {
-        All { items: items.into_iter(), next, read_on: Box::new(read_on) }
+        All { items: items.into_iter(), next, parts, read_on: Box::new(read_on) }
+    }
+
+    /// The next item of the pages, a part a page cut still to be joined.
+    fn part(&mut self) -> Option<Result<T>> {
+        loop {
+            if let Some(item) = self.items.next() {
+                return Some(Ok(item));
+            }
+            let after = self.next.take()?;
+            match (self.read_on)(&after) {
+                Ok((items, next)) => (self.items, self.next) = (items.into_iter(), next),
+                Err(error) => return Some(Err(error)),
+            }
+        }
     }
 }
 
@@ -132,16 +164,20 @@ impl<T> Iterator for All<T> {
     type Item = Result<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(item) = self.items.next() {
-                return Some(Ok(item));
-            }
-            let after = self.next.take()?;
-            match (self.read_on)(&after) {
-                Ok((items, next)) => (self.items, self.next) = (items.into_iter(), next),
-                Err(error) => return Some(Err(error)),
+        let mut item = match self.part()? {
+            Ok(item) => item,
+            Err(error) => return Some(Err(error)),
+        };
+        let Some((cut, join)) = self.parts else { return Some(Ok(item)) };
+        while cut(&item) {
+            match self.part() {
+                Some(Ok(rest)) => join(&mut item, rest),
+                Some(Err(error)) => return Some(Err(error)),
+                // a cut part with nothing after it: the pages ended under it
+                None => break,
             }
         }
+        Some(Ok(item))
     }
 }
 

@@ -24,6 +24,7 @@ use futures_core::Stream;
 
 use super::{Aggregate, Op, Query, Series};
 use crate::Result;
+use crate::metrics::page::{Parts, group_parts};
 
 /// One page of an awaited read: its series, and `next` while there is more.
 #[derive(Clone, Debug)]
@@ -41,7 +42,7 @@ impl SeriesPage {
     /// The page's series, then those of each page after it, as a stream.
     pub fn all(self) -> All<Series> {
         let query = self.query;
-        All::of(self.series, self.next, move |after| {
+        All::of(self.series, self.next, None, move |after| {
             let read = query.clone().after(after).read();
             Box::pin(async move { read.await.map(|page| (page.series, page.next)) })
         })
@@ -63,10 +64,11 @@ impl AggregatePage {
         AggregatePage { groups: page.groups, next: page.next, query, op }
     }
 
-    /// The page's groups, then those of each page after it, as a stream.
+    /// The page's groups, then those of each page after it, as a stream: a
+    /// group a page cut comes once, whole, its parts joined.
     pub fn all(self) -> All<Aggregate> {
         let (query, op) = (self.query, self.op);
-        All::of(self.groups, self.next, move |after| {
+        All::of(self.groups, self.next, group_parts(), move |after| {
             let read = query.clone().after(after).aggregate(op);
             Box::pin(async move { read.await.map(|page| (page.groups, page.next)) })
         })
@@ -87,13 +89,21 @@ type ReadOn<T> = Box<dyn FnMut(&str) -> Reading<T> + Send>;
 pub struct All<T> {
     items: IntoIter<T>,
     next: Option<String>,
+    parts: Parts<T>,
+    /// A part a page cut, waiting for its rest from the page after.
+    held: Option<T>,
     reading: Option<Reading<T>>,
     read_on: ReadOn<T>,
 }
 
 impl<T> All<T> {
-    fn of(items: Vec<T>, next: Option<String>, read_on: impl FnMut(&str) -> Reading<T> + Send + 'static) -> All<T> {
-        All { items: items.into_iter(), next, reading: None, read_on: Box::new(read_on) }
+    fn of(
+        items: Vec<T>,
+        next: Option<String>,
+        parts: Parts<T>,
+        read_on: impl FnMut(&str) -> Reading<T> + Send + 'static,
+    ) -> All<T> {
+        All { items: items.into_iter(), next, parts, held: None, reading: None, read_on: Box::new(read_on) }
     }
 }
 
@@ -109,7 +119,17 @@ impl<T: Unpin> Stream for All<T> {
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let all = self.get_mut();
         loop {
-            if let Some(item) = all.items.next() {
+            if let Some(mut item) = all.items.next() {
+                if let Some((cut, join)) = all.parts {
+                    if let Some(mut held) = all.held.take() {
+                        join(&mut held, item);
+                        item = held;
+                    }
+                    if cut(&item) {
+                        all.held = Some(item);
+                        continue;
+                    }
+                }
                 return Poll::Ready(Some(Ok(item)));
             }
             if let Some(reading) = &mut all.reading {
@@ -121,7 +141,8 @@ impl<T: Unpin> Stream for All<T> {
                 }
                 continue;
             }
-            let Some(after) = all.next.take() else { return Poll::Ready(None) };
+            // a cut part with nothing after it: the pages ended under it
+            let Some(after) = all.next.take() else { return Poll::Ready(all.held.take().map(Ok)) };
             all.reading = Some((all.read_on)(&after));
         }
     }

@@ -511,6 +511,11 @@ export class Metrics {
 			page,
 			at => at.groups,
 			after => this.aggregate({ ...query, after }),
+			(group, rest) => ({
+				...group,
+				buckets: [...group.buckets, ...rest.buckets],
+				more: rest.more,
+			}),
 		)
 	}
 
@@ -714,17 +719,34 @@ export class Metrics {
 /**
  * A page that for await walks: its items, then those of each page after it,
  * the next page read only once the walk reaches the end of the one it holds.
+ * Given `join`, an item a page cut, `more`, is held and joined with its rest
+ * from the page after, so that the walk gives it once, whole (MET-28); a
+ * read's series come in their parts, since a series is what pages bound.
  */
-function walked<P extends { next?: string }, T>(
+function walked<P extends { next?: string }, T extends { more: boolean }>(
 	page: P,
 	items: (page: P) => readonly T[],
 	readOn: (after: string) => Promise<P>,
+	join?: (item: T, rest: T) => T,
 ): P & AsyncIterable<T> {
 	return Object.assign(page, {
 		async *[Symbol.asyncIterator](): AsyncGenerator<T> {
+			let held: T | undefined
 			for (let at = page; ; ) {
-				yield* items(at)
+				for (const part of items(at)) {
+					const item = held === undefined || join === undefined ? part : join(held, part)
+					held = undefined
+					if (join !== undefined && item.more) {
+						held = item
+						continue
+					}
+					yield item
+				}
 				if (at.next === undefined) {
+					// a cut part with nothing after it: the pages ended under it
+					if (held !== undefined) {
+						yield held
+					}
 					return
 				}
 				at = await readOn(at.next)
