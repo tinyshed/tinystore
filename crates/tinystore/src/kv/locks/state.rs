@@ -44,6 +44,8 @@ pub(super) use crate::clock::millis;
 pub(super) struct Effects {
     answers: Vec<(Reply, Result<Answer>)>,
     endings: Vec<(Arc<Watch>, Ending)>,
+    /// The name of each lease the change ended before its holder let it go.
+    lost: Vec<Arc<str>>,
     /// Something came due sooner than the timer sleeps to.
     pub(super) sooner: bool,
 }
@@ -53,9 +55,10 @@ impl Effects {
         self.answers.push((reply, answer));
     }
 
-    /// How many leases the change ended before their holder let them go.
-    pub(super) fn lost(&self) -> usize {
-        self.endings.iter().filter(|(_, ending)| matches!(ending, Ending::Lost)).count()
+    /// The names of the leases the change ended before their holder let them
+    /// go, one a lease.
+    pub(super) fn lost(&self) -> &[Arc<str>] {
+        &self.lost
     }
 
     pub(super) fn run(self) {
@@ -128,6 +131,13 @@ impl Line {
     fn has_room(&self, limit: u32) -> bool {
         self.holders.len() < limit as usize
     }
+}
+
+/// How a name's keys stand: the asks in their lines and the leases held.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Standing {
+    pub(super) waiting: usize,
+    pub(super) held: usize,
 }
 
 /// What the store's locks hold now.
@@ -274,6 +284,7 @@ impl State {
         let given_up = line.given_up(now);
         for holder in ended {
             self.forget_lease(&holder);
+            effects.lost.push(Arc::clone(place.name()));
             effects.endings.push((holder.granted.watch, Ending::Lost));
         }
         for waiter in given_up {
@@ -444,6 +455,18 @@ impl State {
     #[cfg(test)]
     pub(super) fn waiting(&self) -> usize {
         self.waiting.len()
+    }
+
+    /// How many asks wait in line and how many leases are held, by the name
+    /// of their lock or semaphore.
+    pub(super) fn by_name(&self) -> HashMap<Arc<str>, Standing> {
+        let mut by_name: HashMap<Arc<str>, Standing> = HashMap::new();
+        for (place, line) in &self.lines {
+            let standing = by_name.entry(Arc::clone(place.name())).or_default();
+            standing.waiting += line.waiters.len();
+            standing.held += line.holders.len();
+        }
+        by_name
     }
 
     /// The keys, leases, requests and waiters the state keeps.

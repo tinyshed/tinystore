@@ -25,7 +25,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::sync::mpsc;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "async")]
 pub(crate) use self::awaited::{Ends, Held};
@@ -239,6 +239,11 @@ impl Lease<'_> {
     pub fn lost(&self) -> bool {
         self.holding.ended()
     }
+
+    /// How long the hold waited for the key, from its call to the grant.
+    pub fn waited(&self) -> Duration {
+        self.holding.waited
+    }
 }
 
 /// A holding of a semaphore's key: one of its limit.
@@ -249,6 +254,11 @@ pub struct Permit<'a> {
 impl Permit<'_> {
     pub fn lost(&self) -> bool {
         self.holding.ended()
+    }
+
+    /// How long the hold waited for its place, from its call to the grant.
+    pub fn waited(&self) -> Duration {
+        self.holding.waited
     }
 }
 
@@ -298,6 +308,7 @@ impl Opened {
 
     /// Asks for `place` and waits for the answer; none when it stayed busy.
     fn ask(&self, place: &Place, wait: Duration) -> Result<Option<Holding>> {
+        let asked = Instant::now();
         crate::polled::may_wait(|| format!("{place}: a hold"))?;
         refuse_where_a_hold_would_wait_for_itself(&self.locks, place)?;
         let mark = Mark::enter(&self.locks, place);
@@ -307,9 +318,13 @@ impl Opened {
         self.locks.ask(ask, Box::new(move |answer| drop(answered.send(answer))));
         let answer = answer.recv().map_err(|_| Error::internal("a lock's answer was dropped").within(place))?;
         Ok(match answer? {
-            Answer::Granted(granted) => {
-                Some(Holding { locks: Arc::downgrade(&self.locks), place: place.clone(), granted, _mark: Some(mark) })
-            }
+            Answer::Granted(granted) => Some(Holding {
+                locks: Arc::downgrade(&self.locks),
+                place: place.clone(),
+                granted,
+                waited: asked.elapsed(),
+                _mark: Some(mark),
+            }),
             Answer::Busy => None,
         })
     }
@@ -361,6 +376,8 @@ struct Holding {
     locks: Weak<Locks>,
     place: Place,
     granted: Granted,
+    /// From the hold's ask to its grant, as its caller saw it.
+    waited: Duration,
     _mark: Option<Mark>,
 }
 
@@ -437,13 +454,13 @@ impl fmt::Debug for SemaphoreKey<'_> {
 
 impl fmt::Debug for Lease<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Lease({}, {:?})", self.holding.place, self.fence)
+        write!(f, "Lease({}, {:?}, waited {:?})", self.holding.place, self.fence, self.holding.waited)
     }
 }
 
 impl fmt::Debug for Permit<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Permit({})", self.holding.place)
+        write!(f, "Permit({}, waited {:?})", self.holding.place, self.holding.waited)
     }
 }
 

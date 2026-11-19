@@ -20,6 +20,7 @@ import secrets
 import time
 import weakref
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Literal
 
 from ._connection import check_name
@@ -66,11 +67,16 @@ class Lease:
 
     fence: int
     """grows with every lease the store gives, 128 bits: hand it to whatever must refuse a late holder"""
+    waited: timedelta
+    """how long the hold waited for the key, from its call to the grant, the round trip included"""
 
 
 @dataclass(frozen=True, slots=True)
 class Permit:
     """A holding of a semaphore's key: one of its limit."""
+
+    waited: timedelta
+    """how long the hold waited for its place, from its call to the grant, the round trip included"""
 
 
 class _Keys:
@@ -154,7 +160,9 @@ class Holding[V]:
 
     async def __aenter__(self) -> V:
         self._keys.refuse(self._place)
+        asked = time.monotonic()
         answer = await self._keys.ask(self._key, self._wait)
+        waited = timedelta(seconds=time.monotonic() - asked)
         if not answer.get("acquired"):
             if self._tries:
                 return None  # type: ignore[return-value]
@@ -164,7 +172,7 @@ class Holding[V]:
         self._task = asyncio.current_task()
         self._inside = True
         fence = answer.get("fence") or "0"
-        return Lease(int(fence)) if self._view is Lease else Permit()  # type: ignore[return-value]
+        return Lease(int(fence), waited) if self._view is Lease else Permit(waited)  # type: ignore[return-value]
 
     async def __aexit__(
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None

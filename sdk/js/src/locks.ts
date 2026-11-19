@@ -13,7 +13,7 @@ import { checkName } from './handles.ts'
 import { keyText } from './kv.ts'
 import { ConnectionLostError } from './session.ts'
 import { insideDatabaseTx } from './sql.ts'
-import { type Duration, ms } from './time.ts'
+import { type Duration, type DurationText, ms, spelled } from './time.ts'
 import { insideStoreTx } from './tx.ts'
 import type { Key } from './wire/codec.ts'
 import { LocksHeld, LocksHold, LocksLease, LocksRenew, methods } from './wire/protocol.ts'
@@ -48,11 +48,15 @@ export interface Lease {
 	readonly fence: bigint
 	/** aborts when the lease is lost: run out, revoked at maxHold, or its store closed */
 	readonly signal: AbortSignal
+	/** how long the hold waited for the key, from its call to the grant, the round trip included */
+	readonly waited: DurationText
 }
 
 /** A holding of a semaphore's key: one of its limit. */
 export interface Permit {
 	readonly signal: AbortSignal
+	/** how long the hold waited for its place, from its call to the grant, the round trip included */
+	readonly waited: DurationText
 }
 
 /** Keys held one holder at a time: open them with `store.lock(name)`. */
@@ -148,8 +152,12 @@ function held<T>(tried: Tried<T>, place: string): T {
 	return tried.value
 }
 
-const leaseOf = (holding: Holding): Lease => ({ fence: holding.fence, signal: holding.signal })
-const permitOf = (holding: Holding): Permit => ({ signal: holding.signal })
+const leaseOf = (holding: Holding): Lease => ({
+	fence: holding.fence,
+	signal: holding.signal,
+	waited: holding.waited,
+})
+const permitOf = (holding: Holding): Permit => ({ signal: holding.signal, waited: holding.waited })
 
 // The keys the caller holds or waits for, as its async context carries them,
 // each with the link of the store it is of.
@@ -192,11 +200,14 @@ class Keys {
 	): Promise<Tried<T>> {
 		const place = this.place(key)
 		this.#refuse(place)
+		const asked = performance.now()
 		const answer = await this.#ask(keyText(key), wait)
 		if (answer.acquired !== true) {
 			return { acquired: false }
 		}
-		const lease = new Holding(this.#link, place, answer, this.#ttl)
+		// rounded up, so that it is never less than the time the ask stood in line
+		const waited = spelled(Math.ceil(performance.now() - asked))
+		const lease = new Holding(this.#link, place, answer, this.#ttl, waited)
 		try {
 			const inside = [...(holding.getStore() ?? []), [this.#link, place] as const]
 			const value = await holding.run(inside, () => fn(viewOf(lease)))
@@ -250,6 +261,7 @@ class Keys {
  */
 class Holding {
 	readonly fence: bigint
+	readonly waited: DurationText
 	readonly #link: Link
 	readonly #place: string
 	readonly #lease: Uint8Array
@@ -259,7 +271,14 @@ class Holding {
 	#runningOut: ReturnType<typeof setTimeout> | undefined
 	readonly #revoking: ReturnType<typeof setTimeout> | undefined
 
-	constructor(link: Link, place: string, answer: ReturnType<typeof LocksHeld.decode>, ttl: number) {
+	constructor(
+		link: Link,
+		place: string,
+		answer: ReturnType<typeof LocksHeld.decode>,
+		ttl: number,
+		waited: DurationText,
+	) {
+		this.waited = waited
 		this.#link = link
 		this.#place = place
 		this.#lease = answer.lease ?? new Uint8Array(0)

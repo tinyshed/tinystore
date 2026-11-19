@@ -213,6 +213,31 @@ fn a_semaphore_admits_its_limit_a_key_and_a_lock_of_its_name_is_another() {
     }
 }
 
+// contract: LOCK-08
+#[test]
+fn a_holding_says_it_waited_at_least_as_long_as_its_ask_stood_in_line() {
+    let f = fixture();
+    let invoices = f.store.lock("invoices").open().unwrap();
+    let (go, first) = held_elsewhere(&invoices, "42");
+    let second = {
+        let invoices = invoices.clone();
+        thread::spawn(move || invoices.hold("42", |lease| Ok::<_, Error>(lease.waited())))
+    };
+    let locks = locks(&f.store);
+    holds_within(PATIENCE, "the second in line", || locks.waiting() == 1);
+    let in_line = std::time::Instant::now();
+    thread::sleep(Duration::from_millis(30));
+    let stood = in_line.elapsed();
+    go.send(()).unwrap();
+    first.join().unwrap().unwrap();
+    let waited = second.join().unwrap().unwrap();
+    assert!(waited >= stood, "waited {waited:?}, though it stood in line {stood:?}");
+
+    let moodle = f.store.semaphore("moodle").limit(24).open().unwrap();
+    let free = moodle.hold("requests", |permit| Ok::<_, Error>(permit.waited())).unwrap();
+    assert!(free < PATIENCE, "a free key is granted at once: {free:?}");
+}
+
 // contract: LOCK-07
 #[test]
 fn a_semaphore_opened_again_in_the_program_keeps_the_limit_its_first_open_gave() {

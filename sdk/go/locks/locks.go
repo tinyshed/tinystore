@@ -50,9 +50,12 @@ func fenceOf(text string) Fence {
 
 const math64 = 1<<64 - 1
 
-// Lease is a holding of a key: a lock's Fence, none for a semaphore's.
+// Lease is a holding of a key: a lock's Fence, none for a semaphore's, and
+// how long the hold Waited for it, from its call to the grant, the round trip
+// included.
 type Lease struct {
-	Fence Fence
+	Fence  Fence
+	Waited time.Duration
 }
 
 // Option is how a lock or a semaphore opens.
@@ -209,10 +212,12 @@ func (k *keys) hold(ctx context.Context, given any, wait time.Duration, fn func(
 	if held(ctx, place) {
 		return false, core.Errorf(core.Invalid, "%s: a hold of a key inside its own hold would wait for itself", place)
 	}
+	asked := time.Now()
 	answer, err := k.ask(ctx, key, wait)
 	if err != nil {
 		return false, core.Wrap(core.KindOf(err), err, "%s", place)
 	}
+	waited := time.Since(asked)
 	if !answer.Acquired {
 		if wait == 0 {
 			return false, nil
@@ -224,7 +229,7 @@ func (k *keys) hold(ctx context.Context, given any, wait time.Duration, fn func(
 	defer cancel(nil)
 	lease := newLeasing(k, place, answer, cancel)
 	defer lease.stop()
-	ran := fn(inner, &Lease{Fence: fenceOf(answer.Fence)})
+	ran := fn(inner, &Lease{Fence: fenceOf(answer.Fence), Waited: waited})
 	if lost := lease.stop(); lost != nil {
 		return true, lost
 	}

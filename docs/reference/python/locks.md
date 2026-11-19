@@ -8,6 +8,7 @@ Every public class, function and type of the Locks engine in `tinystore`, genera
 @dataclass(frozen=True, slots=True)
 class Lease:
     fence: int  # grows with every lease the store gives, 128 bits: hand it to whatever must refuse a late holder
+    waited: timedelta  # how long the hold waited for the key, from its call to the grant, the round trip included
 ```
 
 A holding of a lock's key.
@@ -17,7 +18,7 @@ A holding of a lock's key.
 ```python
 @dataclass(frozen=True, slots=True)
 class Permit:
-    ...
+    waited: timedelta  # how long the hold waited for its place, from its call to the grant, the round trip included
 ```
 
 A holding of a semaphore's key: one of its limit.

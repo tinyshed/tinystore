@@ -355,6 +355,8 @@ const NAMES: &[(&str, Made, &str, &str)] = &[
     ("tinystore_locks_wait_ms", Made::Timer, "", "An ask's wait for its key, until it held it or gave up."),
     ("tinystore_locks_busy_total", Made::Counter, "asks", "Asks whose key stayed held past their wait."),
     ("tinystore_locks_lost_total", Made::Counter, "leases", "Leases that ran out or were revoked while held."),
+    ("tinystore_locks_waiting", Made::Gauge, "asks", "Asks waiting in line for a key."),
+    ("tinystore_locks_held", Made::Gauge, "leases", "Leases held now."),
     ("tinystore_search_ms", Made::Timer, "", "A search of an index."),
     ("tinystore_search_head_sets", Made::Gauge, "documents", "Documents set into an index since maintenance last ran."),
     ("tinystore_blobs_written_total", Made::Counter, "files", "Files written."),

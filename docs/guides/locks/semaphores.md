@@ -69,6 +69,74 @@ counts what started recently, even if it finished. A queue's concurrency is
 taken in the same transaction as the job, so it survives restarts; a
 semaphore lives in memory.
 
+## When what it guards is down
+
+A semaphore sees only whether your function threw, not why. When the service
+behind it is down, every waiter still sits out its own timeout. To stop
+calling it for a while, keep the decision in a key with a `ttl`, which every
+program of the store shares:
+
+```ts
+const strikes = store.counters('strikes', { ttl: '1m' })
+const broken = store.bucket<true>('broken')
+
+if (await broken.has('moodle')) throw new Unavailable()
+try {
+	return await moodle.hold('requests', permit => fetchMoodle(permit.signal))
+} catch (err) {
+	if (isTimeout(err) && (await strikes.add('moodle')) >= 2) await broken.set('moodle', true, { ttl: '30s' })
+	throw err
+}
+```
+
+```python
+strikes = store.counters("strikes", ttl="1m")
+broken = store.bucket("broken", bool)
+
+if await broken.has("moodle"):
+    raise Unavailable()
+try:
+    async with moodle.hold("requests"):
+        return await fetch_moodle()
+except TimeoutError:
+    if await strikes.add("moodle") >= 2:
+        await broken.set("moodle", True, ttl="30s")
+    raise
+```
+
+```go
+strikes, err := kv.OpenCounters(store, "strikes", kv.TTL(time.Minute))
+broken, err := kv.OpenBucket[bool](store, "broken")
+
+if down, _ := broken.Has(ctx, "moodle"); down {
+	return errUnavailable
+}
+err = moodle.Hold(ctx, "requests", fetchMoodle)
+if errors.Is(err, context.DeadlineExceeded) {
+	if n, _ := strikes.Add(ctx, "moodle", 1); n >= 2 {
+		_ = broken.Set(ctx, "moodle", true, kv.TTL(30*time.Second))
+	}
+}
+return err
+```
+
+```rust
+let strikes = store.counters("strikes").ttl(Duration::from_secs(60)).open()?;
+let broken = store.bucket::<bool>("broken").open()?;
+
+if broken.has("moodle")? {
+    return Err(unavailable());
+}
+let fetched = moodle.hold("requests", |_| fetch_moodle());
+if fetched.as_ref().is_err_and(is_timeout) && strikes.add("moodle", 1)? >= 2 {
+    broken.key("moodle").ttl(Duration::from_secs(30)).set(&true)?;
+}
+fetched
+```
+
+Two timeouts within a minute stop every program's calls for 30 seconds; the
+key expires by itself and the next call tries again.
+
 ## Two opens with different limits
 
 Inside one program a name has one limit. A second open of the name with

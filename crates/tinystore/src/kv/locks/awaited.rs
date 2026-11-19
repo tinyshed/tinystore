@@ -21,7 +21,7 @@ use std::mem;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::lease::{Answer, Ask, Ending, Place, Reply, Watch};
 use super::{Fence, Holding, Locks, Mark, Opened, refuse_where_a_hold_would_wait_for_itself};
@@ -90,6 +90,7 @@ struct Asking {
     place: Place,
     /// The waiter's id while it waits in line.
     waiter: Option<u64>,
+    asked: Instant,
 }
 
 enum Slot {
@@ -103,6 +104,7 @@ enum Slot {
 
 impl Asking {
     fn new(locks: &Arc<Locks>, place: Place, ask: Ask) -> Asking {
+        let asked = Instant::now();
         let slot = Arc::new(Mutex::new(Slot::Waiting(None)));
         let (replied, letting_go) = (Arc::clone(&slot), Arc::downgrade(locks));
         let reply: Reply = Box::new(move |answer| {
@@ -125,7 +127,7 @@ impl Asking {
         });
         let address = Arc::as_ptr(locks) as usize;
         let waiter = locks.ask(ask, reply);
-        Asking { slot, locks: Arc::downgrade(locks), address, place, waiter }
+        Asking { slot, locks: Arc::downgrade(locks), address, place, waiter, asked }
     }
 }
 
@@ -139,7 +141,13 @@ impl Future for Asking {
                 drop(slot);
                 Poll::Ready(answer.map(|answer| match answer {
                     Answer::Granted(granted) => Some(Held {
-                        holding: Holding { locks: self.locks.clone(), place: self.place.clone(), granted, _mark: None },
+                        holding: Holding {
+                            locks: self.locks.clone(),
+                            place: self.place.clone(),
+                            granted,
+                            waited: self.asked.elapsed(),
+                            _mark: None,
+                        },
                         address: self.address,
                     }),
                     Answer::Busy => None,
@@ -190,6 +198,10 @@ pub(crate) struct Held {
 impl Held {
     pub(crate) fn fence(&self) -> Fence {
         self.holding.granted.fence
+    }
+
+    pub(crate) fn waited(&self) -> Duration {
+        self.holding.waited
     }
 
     /// What says whether the lease ended, for the lease a function is given.

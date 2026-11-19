@@ -173,6 +173,32 @@ func TestASemaphoreAdmitsItsLimitAKeyItsPermitWithoutAFence(t *testing.T) {
 	})
 }
 
+// contract: LOCK-08
+func TestAHoldingSaysHowLongItWaitedAtLeastAsLongAsItStoodInLine(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		moodle := ways.Must(locks.OpenSemaphore(store, "moodle", locks.Limit(1)))
+		fences, letGo, ended := holding(t, moodle.Hold, "requests")
+		<-fences
+		waited := make(chan time.Duration, 1)
+		go func() {
+			ways.Must(0, moodle.Hold(ctx, "requests", func(_ context.Context, permit *locks.Lease) error {
+				waited <- permit.Waited
+				return nil
+			}))
+		}()
+		time.Sleep(10 * time.Millisecond)
+		inLine := time.Now()
+		time.Sleep(50 * time.Millisecond)
+		stood := time.Since(inLine)
+		close(letGo)
+		ways.Must(0, <-ended)
+		if got := <-waited; got < stood {
+			t.Fatalf("waited %v, though it stood in line %v", got, stood)
+		}
+	})
+}
+
 // contract: LOCK-07
 func TestASemaphoreOpenedAgainWithAnotherLimitIsRefusedAtTheOpenAndWithTheSameLimitIsNot(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {

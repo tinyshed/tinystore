@@ -194,6 +194,47 @@ fn a_lock_times_each_wait_for_its_key() {
     store.close().unwrap();
 }
 
+#[cfg(feature = "locks")]
+#[test]
+fn a_semaphore_says_how_many_wait_and_hold_now_and_a_lost_lease_its_name() {
+    use crate::testing::{PATIENCE, holds_within};
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path(), true);
+    let metrics = store.metrics().unwrap();
+    let standing = |metrics: &Metrics| {
+        metrics.flush().unwrap();
+        let of = |name| labelled(metrics, name, "lock", "moodle");
+        (of("tinystore_locks_waiting"), of("tinystore_locks_held"))
+    };
+    let moodle = store.semaphore("moodle").limit(1).open().unwrap();
+    let locks = crate::kv::locks::Locks::of(&store).unwrap();
+    moodle
+        .hold("requests", |_| {
+            let waiter = {
+                let moodle = moodle.clone();
+                std::thread::spawn(move || moodle.hold("requests", |_| Ok::<_, crate::Error>(())))
+            };
+            holds_within(PATIENCE, "the second in line", || locks.waiting() == 1);
+            assert_eq!(standing(&metrics), (Some(1.0), Some(1.0)));
+            Ok::<_, crate::Error>(waiter)
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+        .unwrap();
+    assert_eq!(standing(&metrics), (Some(0.0), Some(0.0)), "a name whose keys all went is told zero");
+
+    let invoices = store.lock("invoices").max_hold(Duration::from_millis(10)).open().unwrap();
+    let lost = invoices.hold("42", |lease| {
+        holds_within(PATIENCE, "the lease revoked", || lease.lost());
+        Ok::<_, crate::Error>(())
+    });
+    assert_eq!(lost.unwrap_err().kind(), crate::ErrorKind::Lost);
+    metrics.flush().unwrap();
+    assert_eq!(labelled(&metrics, "tinystore_locks_lost_total", "lock", "invoices"), Some(1.0));
+    store.close().unwrap();
+}
+
 #[cfg(feature = "search")]
 #[test]
 fn an_index_times_its_searches_and_says_what_its_head_holds() {

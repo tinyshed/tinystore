@@ -247,7 +247,7 @@ impl LockKey<'_> {
         let awaited = self.key.awaited();
         async move {
             let held = awaited.hold().await?;
-            let lease = Lease { fence: held.fence(), ends: held.ends() };
+            let lease = Lease { fence: held.fence(), waited: held.waited(), ends: held.ends() };
             holding(held, |held| held.marked(|| work(lease))).await
         }
     }
@@ -265,7 +265,7 @@ impl LockKey<'_> {
         let awaited = self.key.awaited();
         async move {
             let Some(held) = awaited.try_hold().await? else { return Ok(None) };
-            let lease = Lease { fence: held.fence(), ends: held.ends() };
+            let lease = Lease { fence: held.fence(), waited: held.waited(), ends: held.ends() };
             holding(held, |held| held.marked(|| work(lease))).await.map(Some)
         }
     }
@@ -290,7 +290,7 @@ impl SemaphoreKey<'_> {
         let awaited = self.key.awaited();
         async move {
             let held = awaited.hold().await?;
-            let permit = Permit { ends: held.ends() };
+            let permit = Permit { waited: held.waited(), ends: held.ends() };
             holding(held, |held| held.marked(|| work(permit))).await
         }
     }
@@ -308,7 +308,7 @@ impl SemaphoreKey<'_> {
         let awaited = self.key.awaited();
         async move {
             let Some(held) = awaited.try_hold().await? else { return Ok(None) };
-            let permit = Permit { ends: held.ends() };
+            let permit = Permit { waited: held.waited(), ends: held.ends() };
             holding(held, |held| held.marked(|| work(permit))).await.map(Some)
         }
     }
@@ -332,6 +332,7 @@ where
 /// by it: the future it makes may keep it across its awaits.
 pub struct Lease {
     fence: Fence,
+    waited: Duration,
     ends: Ends,
 }
 
@@ -347,11 +348,17 @@ impl Lease {
     pub fn lost(&self) -> bool {
         self.ends.lost()
     }
+
+    /// How long the hold waited for the key, from its first poll to the grant.
+    pub fn waited(&self) -> Duration {
+        self.waited
+    }
 }
 
 /// A holding of a semaphore's key, one of its limit, owned by the function
 /// that holds it.
 pub struct Permit {
+    waited: Duration,
     ends: Ends,
 }
 
@@ -359,6 +366,11 @@ impl Permit {
     /// As [`Lease::lost`]: true too once its hold is over.
     pub fn lost(&self) -> bool {
         self.ends.lost()
+    }
+
+    /// As [`Lease::waited`].
+    pub fn waited(&self) -> Duration {
+        self.waited
     }
 }
 
@@ -400,13 +412,17 @@ impl fmt::Debug for SemaphoreKey<'_> {
 
 impl fmt::Debug for Lease {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Lease").field("fence", &self.fence).field("lost", &self.lost()).finish()
+        f.debug_struct("Lease")
+            .field("fence", &self.fence)
+            .field("waited", &self.waited)
+            .field("lost", &self.lost())
+            .finish()
     }
 }
 
 impl fmt::Debug for Permit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Permit").field("lost", &self.lost()).finish()
+        f.debug_struct("Permit").field("waited", &self.waited).field("lost", &self.lost()).finish()
     }
 }
 

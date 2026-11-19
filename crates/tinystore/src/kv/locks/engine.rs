@@ -8,7 +8,7 @@
 //! that held them ended with its process and a client learns it at its next
 //! renewal.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -18,6 +18,7 @@ use super::lease::{Answer, Ask, LeaseId, Reply};
 use super::state::{Effects, Mint, State};
 use crate::engine::{Engine, Host};
 use crate::kv::engine::Kv;
+use crate::probe::{Probe, Sample};
 use crate::sqlite::sql_error;
 use crate::sync::lock;
 use crate::{Clock, Error, Result, Store, unix_millis};
@@ -40,6 +41,9 @@ pub(crate) struct Locks {
     /// one server serves several programs, and a program may change its
     /// limit between deploys while the old one's holds still run.
     opened: Mutex<HashMap<String, u32>>,
+    /// The names the last sample told of, so that one whose keys all went is
+    /// told zero once rather than left at what it last held.
+    sampled: Mutex<HashSet<Arc<str>>>,
 }
 
 struct Inner {
@@ -70,7 +74,15 @@ impl Locks {
             .name("tinystore-locks".to_owned())
             .spawn(move || timed.run_timer())
             .map_err(|error| Error::io("locks: the timer's thread", error))?;
-        Ok(Arc::new(Locks { inner, thread: Mutex::new(Some(thread)), opened: Mutex::default() }))
+        let locks = Arc::new(Locks {
+            inner,
+            thread: Mutex::new(Some(thread)),
+            opened: Mutex::default(),
+            sampled: Mutex::default(),
+        });
+        let sampler: std::sync::Weak<dyn Sample> = Arc::downgrade(&locks) as std::sync::Weak<Locks>;
+        store.probe().sampled(sampler);
+        Ok(locks)
     }
 
     /// Keeps the limit a semaphore's first open in this program gives: an
@@ -150,9 +162,8 @@ impl Inner {
         if effects.sooner {
             self.timer.wake();
         }
-        let lost = effects.lost();
-        if lost > 0 {
-            self.probe.count("tinystore_locks_lost_total", &[], lost as f64);
+        for name in effects.lost() {
+            self.probe.count("tinystore_locks_lost_total", &[("lock", name)], 1.0);
         }
         effects.run();
         value
@@ -173,6 +184,24 @@ impl Inner {
                 return;
             }
         }
+    }
+}
+
+impl Sample for Locks {
+    /// How many asks wait in line and how many leases are held now, by name.
+    fn sample(&self, probe: &Probe) {
+        let now = lock(&self.inner.state).by_name();
+        let mut sampled = lock(&self.sampled);
+        let gone = sampled.iter().filter(|name| !now.contains_key(*name));
+        for name in gone {
+            probe.set("tinystore_locks_waiting", &[("lock", name)], 0.0);
+            probe.set("tinystore_locks_held", &[("lock", name)], 0.0);
+        }
+        for (name, standing) in &now {
+            probe.set("tinystore_locks_waiting", &[("lock", name)], standing.waiting as f64);
+            probe.set("tinystore_locks_held", &[("lock", name)], standing.held as f64);
+        }
+        *sampled = now.into_keys().collect();
     }
 }
 

@@ -100,6 +100,39 @@ async fn a_hold_of_a_held_key_parks_no_thread_and_waiters_are_served_in_the_orde
     store.close().await.unwrap();
 }
 
+// contract: LOCK-08
+#[tokio::test]
+async fn an_awaited_holding_says_it_waited_at_least_as_long_as_its_ask_stood_in_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = opened(&dir);
+    let moodle = store.semaphore("moodle").limit(1).open().unwrap();
+    let blocking = moodle.blocking().clone();
+    let (holds, held) = mpsc::channel();
+    let (go, told) = mpsc::channel::<()>();
+    let first = thread::spawn(move || {
+        blocking.hold("requests", |_| {
+            holds.send(()).unwrap();
+            told.recv_timeout(PATIENCE).unwrap();
+            Ok::<_, Error>(())
+        })
+    });
+    held.recv_timeout(PATIENCE).unwrap();
+    let mut hold = Box::pin(moodle.hold("requests", |permit| async move { Ok::<_, Error>(permit.waited()) }));
+    assert!(poll(&mut hold).is_pending(), "in line");
+    let in_line = std::time::Instant::now();
+    thread::sleep(std::time::Duration::from_millis(30));
+    let stood = in_line.elapsed();
+    go.send(()).unwrap();
+    first.join().unwrap().unwrap();
+    let waited = hold.await.unwrap();
+    assert!(waited >= stood, "waited {waited:?}, though it stood in line {stood:?}");
+
+    let invoices = store.lock("invoices").open().unwrap();
+    let free = invoices.hold("42", |lease| async move { Ok::<_, Error>(lease.waited()) }).await.unwrap();
+    assert!(free < PATIENCE, "a free key is granted at once: {free:?}");
+    store.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_hold_past_its_wait_is_in_use_as_the_blocking_one_and_try_hold_answers_none_at_once() {
     let dir = tempfile::tempdir().unwrap();

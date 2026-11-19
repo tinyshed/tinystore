@@ -48,11 +48,12 @@ Wait is how long a hold waits in line for its key, 10 s unless given: a key stil
 
 ```go
 type Lease struct {
-	Fence Fence
+	Fence  Fence
+	Waited time.Duration
 }
 ```
 
-Lease is a holding of a key: a lock's Fence, none for a semaphore's.
+Lease is a holding of a key: a lock's Fence, none for a semaphore's, and how long the hold Waited for it, from its call to the grant, the round trip included.
 
 ## Lock
 

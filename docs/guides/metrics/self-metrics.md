@@ -94,23 +94,24 @@ seconds after the store opens. In a container they read the container's.
 
 ## Each engine's
 
-| Name                                                                                  | What it is                                |
-|---------------------------------------------------------------------------------------|-------------------------------------------|
-| `tinystore_jobs_completed_total`, `_failed_total`, `_retried_total`                   | jobs by `queue`                           |
-| `tinystore_jobs_run_ms`                                                               | a run, from its claim to its end          |
-| `tinystore_jobs_claim_delay_ms`                                                       | how late a claim took a job past its time |
-| `tinystore_jobs_waiting`, `_running`                                                  | jobs waiting, and held                    |
-| `tinystore_kv_expired_total`                                                          | keys deleted once they expired            |
-| `tinystore_records_events_total`                                                      | events appended, by `stream`              |
-| `tinystore_records_lines_dropped_total`                                               | a logger's lines dropped                  |
-| `tinystore_channels_published_total`, `_delivered_total`, `_missed_total`             | by `channel`                              |
-| `tinystore_locks_wait_ms`, `tinystore_locks_busy_total`, `tinystore_locks_lost_total` | by `lock`                                 |
-| `tinystore_search_ms`                                                                 | a search, by `index`                      |
-| `tinystore_blobs_written_total`, `_read_total`, `_damaged_total`                      | files, and their bytes                    |
-| `tinystore_files_evicted_total`, `tinystore_files_bytes`                              | evicted by a ceiling, held now, by `set`  |
-| `tinystore_files_get_or_create_total`                                                 | getOrCreate calls by `set` and `outcome`  |
-| `tinystore_wire_requests_total`, `tinystore_wire_call_ms`                             | requests by `method`, `kv.get`            |
-| `tinystore_replication_ack_wait_ms`                                                   | a synchronous home's wait for a copy      |
+| Name                                                                                  | What it is                                  |
+|---------------------------------------------------------------------------------------|---------------------------------------------|
+| `tinystore_jobs_completed_total`, `_failed_total`, `_retried_total`                   | jobs by `queue`                             |
+| `tinystore_jobs_run_ms`                                                               | a run, from its claim to its end            |
+| `tinystore_jobs_claim_delay_ms`                                                       | how late a claim took a job past its time   |
+| `tinystore_jobs_waiting`, `_running`                                                  | jobs waiting, and held                      |
+| `tinystore_kv_expired_total`                                                          | keys deleted once they expired              |
+| `tinystore_records_events_total`                                                      | events appended, by `stream`                |
+| `tinystore_records_lines_dropped_total`                                               | a logger's lines dropped                    |
+| `tinystore_channels_published_total`, `_delivered_total`, `_missed_total`             | by `channel`                                |
+| `tinystore_locks_wait_ms`, `tinystore_locks_busy_total`, `tinystore_locks_lost_total` | by `lock`                                   |
+| `tinystore_locks_waiting`, `tinystore_locks_held`                                     | asks in line and leases held now, by `lock` |
+| `tinystore_search_ms`                                                                 | a search, by `index`                        |
+| `tinystore_blobs_written_total`, `_read_total`, `_damaged_total`                      | files, and their bytes                      |
+| `tinystore_files_evicted_total`, `tinystore_files_bytes`                              | evicted by a ceiling, held now, by `set`    |
+| `tinystore_files_get_or_create_total`                                                 | getOrCreate calls by `set` and `outcome`    |
+| `tinystore_wire_requests_total`, `tinystore_wire_call_ms`                             | requests by `method`, `kv.get`              |
+| `tinystore_replication_ack_wait_ms`                                                   | a synchronous home's wait for a copy        |
 
 An engine's labels name its first 32 values, and every value after them counts
 into `__overflow`. A label is never what a program gives at a call: no key, no

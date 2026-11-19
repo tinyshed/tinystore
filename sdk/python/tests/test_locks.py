@@ -9,6 +9,8 @@ block and ending it LostError.
 from __future__ import annotations
 
 import asyncio
+import time
+from datetime import timedelta
 
 import pytest
 
@@ -156,6 +158,38 @@ async def test_a_cancel_of_the_holders_own_goes_on_as_a_cancel(store: tinystore.
         await holder
     async with jobs.hold("one", wait="2s") as lease:
         assert lease.fence > 0
+
+
+# contract: LOCK-08
+async def test_a_holding_says_how_long_it_waited_at_least_as_long_as_it_stood_in_line(
+    store: tinystore.Store,
+) -> None:
+    moodle = store.semaphore("moodle", limit=1)
+    holding, let_go = asyncio.Event(), asyncio.Event()
+
+    async def first() -> timedelta:
+        async with moodle.hold("requests") as permit:
+            holding.set()
+            await let_go.wait()
+            return permit.waited
+
+    async def second() -> timedelta:
+        async with moodle.hold("requests") as permit:
+            return permit.waited
+
+    held = asyncio.ensure_future(first())
+    await holding.wait()
+    waiting = asyncio.ensure_future(second())
+    await asyncio.sleep(0.01)
+    in_line = time.monotonic()
+    await asyncio.sleep(0.05)
+    stood = timedelta(seconds=time.monotonic() - in_line)
+    let_go.set()
+    granted_at_once, waited = await asyncio.gather(held, waiting)
+    assert granted_at_once < timedelta(seconds=10)
+    assert waited >= stood
+    async with store.lock("invoices").hold("waited") as lease:
+        assert isinstance(lease.waited, timedelta)
 
 
 async def test_a_semaphore_admits_its_limit_a_key_its_permit_without_a_fence(store: tinystore.Store) -> None:

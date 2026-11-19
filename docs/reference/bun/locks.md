@@ -52,6 +52,8 @@ interface Lease {
     readonly fence: bigint
     /** aborts when the lease is lost: run out, revoked at maxHold, or its store closed */
     readonly signal: AbortSignal
+    /** how long the hold waited for the key, from its call to the grant, the round trip included */
+    readonly waited: DurationText
 }
 ```
 
@@ -62,6 +64,8 @@ A holding of a lock's key, given to the function that holds it.
 ```ts
 interface Permit {
     readonly signal: AbortSignal
+    /** how long the hold waited for its place, from its call to the grant, the round trip included */
+    readonly waited: DurationText
 }
 ```
 

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { InUseError, InvalidError, LostError, type Store } from '../src/index.ts'
+import { InUseError, InvalidError, LostError, ms, type Store } from '../src/index.ts'
 import { caught, removed, ways } from './ways.ts'
 
 /** A promise the test resolves itself. */
@@ -136,6 +136,28 @@ for (const way of ways) {
 			expect(next).toBe('the next in line')
 			const lost = await hung
 			expect(lost).toBeInstanceOf(LostError)
+		})
+
+		// contract: LOCK-08
+		test('a holding says how long it waited, at least as long as it stood in line', async () => {
+			const moodle = store.semaphore('moodle', { limit: 1 })
+			const holding = gate()
+			const letGo = gate()
+			const first = moodle.hold('requests', async permit => {
+				holding.open()
+				await letGo.opened
+				return permit.waited
+			})
+			await holding.opened
+			const second = moodle.hold('requests', permit => ms(permit.waited))
+			const inLine = performance.now()
+			await sleep(50)
+			const stood = performance.now() - inLine
+			letGo.open()
+			expect(ms(await first)).toBeLessThan(10_000)
+			expect(await second).toBeGreaterThanOrEqual(Math.floor(stood))
+			const lease = await store.lock('invoices').hold('waited', lease => lease.waited)
+			expect(typeof lease).toBe('string')
 		})
 
 		test('a semaphore admits its limit a key, its permit without a fence', async () => {

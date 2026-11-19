@@ -63,6 +63,56 @@ let tried: Option<Receipt> = invoices.try_hold(&invoice.id, |lease| work(lease))
 given. A program that would wait as long as it takes says so with a longer
 one.
 
+## How long a hold waited
+
+A lease and a permit say how long their hold waited, from the call of `hold`
+to the moment the key was given. It is never less than the time the hold
+stood in line (contract LOCK-08). Through a connection, the core in your
+process included, it also holds the round trip.
+
+```ts
+const moodle = store.semaphore('moodle', { limit: 24 })
+
+await moodle.hold('requests', async permit => {
+	queueWait.record(permit.waited) // '22ms'
+	return fetchMoodle(permit.signal)
+})
+```
+
+```python
+moodle = store.semaphore("moodle", limit=24)
+
+async with moodle.hold("requests") as permit:
+    queue_wait.record(permit.waited)  # timedelta(microseconds=22000)
+    await fetch_moodle()
+```
+
+```go
+moodle, err := locks.OpenSemaphore(store, "moodle", locks.Limit(24))
+
+err = moodle.Hold(ctx, "requests", func(ctx context.Context, permit *locks.Lease) error {
+	queueWait.Record(permit.Waited) // 22ms, a time.Duration
+	return fetchMoodle(ctx)
+})
+```
+
+```rust
+let moodle = store.semaphore("moodle").limit(24).open()?;
+
+moodle.hold("requests", |permit| {
+    queue_wait.record(permit.waited()); // a Duration
+    fetch_moodle()
+})?;
+```
+
+In TypeScript `waited` is a duration's text, as every duration the SDK gives
+back; `ms(permit.waited)` is its milliseconds. A `tryHold` that ran its
+function waited only the round trip.
+
+With the store's [own metrics](../metrics/self-metrics.md) on, the store
+times every wait in `tinystore_locks_wait_ms` and says how many asks wait and
+how many leases are held now, by the lock's or semaphore's name.
+
 ## One key, one holder
 
 A key has one holder at a time (contract LOCK-01). The key is any text or
