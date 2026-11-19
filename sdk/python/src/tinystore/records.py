@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, cast, o
 
 from ._connection import check_name, piece_of
 from ._console import Line, encode_fields
+from ._fields import refuse_unknown
 from ._handles import Home, Opener, Via, handle_on, via_link
 from ._time import Calendar, Duration, ms, spelled_keep
 from ._values import to_json
@@ -325,12 +326,8 @@ def _query_of(query: Mapping[str, Any]) -> dict[str, Any]:
     A condition given as None reads nothing it was not asked, and a field no query has is refused by name, since one
     left out would read every event.
     """
+    refuse_unknown("records query", query, _QUERY_FIELDS)
     for key, value in query.items():
-        if key not in _QUERY_FIELDS:
-            near = next((f for f in (f"{key}s", key.removesuffix("s")) if f != key and f in _QUERY_FIELDS), None)
-            raise InvalidError(
-                f"records query: no field `{key}`" + ("" if near is None else f"; did you mean `{near}`?")
-            )
         if value is None:
             raise InvalidError(f"a query's {key} given as None: leave it out to read without it")
     where, conditions = _where_of(query.get("where") or {})

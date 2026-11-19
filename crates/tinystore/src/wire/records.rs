@@ -311,7 +311,7 @@ fn aggregate(reading: &Reading<'_>, asked: RecordsAggregateAsked) -> Answered {
         by: row.by.into_iter().map(|(key, value)| (key, value.to_string())).collect(),
         stats: row.stats.into_iter().map(|(key, stats)| (key, stats_of(stats))).collect(),
         distinct: row.distinct,
-        date: row.date,
+        date: row.date.map(|date| date.to_string()),
     });
     Ok(RecordsRows { rows: rows.collect() }.encode())
 }

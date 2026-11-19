@@ -301,7 +301,7 @@ fn fill_gives_a_row_for_every_span_of_the_range_and_a_calendars_rows_their_local
     orders.append_all((0..48).map(|hour| NewEvent::new("order").at(midnight + HOUR * hour))).unwrap();
     let rows = |list: List, asked: Aggregate| {
         let rows = list.aggregate(&asked).unwrap();
-        rows.iter().map(|row| (row.at, row.count, row.date.clone())).collect::<Vec<_>>()
+        rows.iter().map(|row| (row.at, row.count, row.date.map(|date| date.to_string()))).collect::<Vec<_>>()
     };
     let around = || orders.list().from(midnight - DAY).to(midnight + 3 * DAY);
     let day = |n: u32, count: u64, date: &str| (midnight - DAY + DAY * n, count, Some(date.to_owned()));

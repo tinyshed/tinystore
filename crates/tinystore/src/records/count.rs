@@ -23,7 +23,7 @@ use super::engine::{Records, nanos};
 use super::event::{Event, Fields};
 use super::events::AllEvents;
 use super::read::{EVENT_HELD, List};
-use crate::calendar::{Calendar, Zoned};
+use crate::calendar::{Calendar, LocalDate, Zoned};
 use crate::limits::{AGGREGATE_ROWS, COUNT_BYTES, Limit};
 use crate::sqlite::sql_error;
 use crate::{Error, Reservation, Result, unix_nanos};
@@ -91,7 +91,7 @@ pub struct Row {
     pub distinct: BTreeMap<String, u64>,
     /// The local date a calendar's span begins on, `2026-11-19`: a week's
     /// Monday, a month's first; none without a calendar.
-    pub date: Option<String>,
+    pub date: Option<LocalDate>,
 }
 
 /// What `aggregate` makes rows of: spans of `every` or of a calendar, the
@@ -294,7 +294,7 @@ impl Spans {
     }
 
     /// The local date a calendar's span that begins at `start` begins on.
-    fn date(&self, start: i64) -> Option<String> {
+    fn date(&self, start: i64) -> Option<LocalDate> {
         match self {
             Spans::Calendar(zoned) => zoned.date_nanos(start),
             Spans::Range | Spans::Every(_) => None,

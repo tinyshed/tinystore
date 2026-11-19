@@ -71,7 +71,7 @@ impl LocalDate {
 
     /// A day of the years 0 to 9999, which ISO 8601's ten characters write;
     /// none for one outside them.
-    #[cfg(feature = "metrics")]
+    #[cfg(any(feature = "metrics", feature = "records"))]
     fn of(day: Date) -> Option<LocalDate> {
         let text = format!("{:04}-{:02}-{:02}", day.year(), day.month(), day.day());
         let bytes: [u8; 10] = text.as_bytes().try_into().ok()?;
@@ -127,12 +127,11 @@ impl Zoned {
         end.and_then(|end| i64::try_from(end.as_nanosecond()).ok()).unwrap_or(i64::MAX)
     }
 
-    /// The local date of the instant `at`, in nanoseconds since 1970, as
-    /// ISO 8601 writes it: `2026-11-19`.
+    /// The local date the span that begins at `start`, in nanoseconds since
+    /// 1970, begins on.
     #[cfg(feature = "records")]
-    pub(crate) fn date_nanos(&self, at: i64) -> Option<String> {
-        let at = Timestamp::from_nanosecond(i128::from(at)).ok()?;
-        Some(at.to_zoned(self.zone.clone()).date().to_string())
+    pub(crate) fn date_nanos(&self, start: i64) -> Option<LocalDate> {
+        self.date(Timestamp::from_nanosecond(i128::from(start)).ok()?)
     }
 
     /// Where the bucket that holds `at` begins, both in milliseconds since
@@ -155,7 +154,11 @@ impl Zoned {
     /// 1970, begins on.
     #[cfg(feature = "metrics")]
     pub(crate) fn date_millis(&self, start: i64) -> Option<LocalDate> {
-        let at = Timestamp::from_millisecond(start).ok()?;
+        self.date(Timestamp::from_millisecond(start).ok()?)
+    }
+
+    #[cfg(any(feature = "metrics", feature = "records"))]
+    fn date(&self, at: Timestamp) -> Option<LocalDate> {
         LocalDate::of(at.to_zoned(self.zone.clone()).date())
     }
 

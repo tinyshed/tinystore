@@ -8,6 +8,7 @@
 import { type Connection, type Link, pieceOf } from './connection.ts'
 import { type ConsoleLine, jsonOf } from './console.ts'
 import { ClosedError, InvalidError } from './errors.ts'
+import { refuseUnknown } from './fields.ts'
 import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import { parseJson } from './json.ts'
 import {
@@ -1027,7 +1028,7 @@ function newEventOf(event: NewEvent, place: number): Parameters<typeof RecordsNe
 }
 
 /** The fields of a query, which a call takes on top of its own. */
-const queryFields: ReadonlySet<string> = new Set([
+const queryFields: readonly string[] = [
 	'since',
 	'from',
 	'to',
@@ -1040,7 +1041,7 @@ const queryFields: ReadonlySet<string> = new Set([
 	'newest',
 	'limit',
 	'after',
-])
+]
 
 /**
  * A query as the wire carries it; a condition given as undefined reads
@@ -1049,14 +1050,8 @@ const queryFields: ReadonlySet<string> = new Set([
  */
 function queryOf(query: Query | undefined): Parameters<typeof RecordsQuery.encode>[0] {
 	const q = query ?? {}
+	refuseUnknown('records query', q, queryFields)
 	for (const [key, value] of Object.entries(q)) {
-		if (!queryFields.has(key)) {
-			const near = [`${key}s`, key.replace(/s$/, '')].find(
-				field => field !== key && queryFields.has(field),
-			)
-			const named = near === undefined ? '' : `; did you mean \`${near}\`?`
-			throw new InvalidError(`records query: no field \`${key}\`${named}`)
-		}
 		if (value === undefined) {
 			throw new InvalidError(`a query's ${key} given as undefined: leave it out to read without it`)
 		}
