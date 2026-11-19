@@ -37,8 +37,10 @@ from ._wire.protocol import (
     RecordsDamage,
     RecordsDamages,
     RecordsDropped,
+    RecordsEvents,
     RecordsFieldNamesAsked,
     RecordsFieldsAsked,
+    RecordsLargestAsked,
     RecordsNames,
     RecordsOpen,
     RecordsPage,
@@ -449,7 +451,7 @@ class _Reads:
     async def top(self, key: str, /, **query: Unpack[Topped]) -> list[Top]:
         """A key's most frequent values and how many events hold each: ten unless limit asks for more, 1000 at most.
 
-        The key is a field's or a context's, or stream, name or level.
+        The key is a field's or a context's, or stream, name, level or message.
         """
         asked = _query_of(query)
         answer = await self._ask("records.top", lambda h: RecordsTopAsked.encode(query={**asked, "handle": h}, key=key))
@@ -457,6 +459,18 @@ class _Reads:
             Top(json.loads(each.get("value", "null")), each.get("count", 0))
             for each in RecordsTops.decode(answer).get("values", [])
         ]
+
+    async def largest(self, key: str, /, **query: Unpack[Topped]) -> list[Event]:
+        """The events whose value at key is a number, the largest first: ten unless limit asks for more, 1000 at most.
+
+        The key is a field's, else a context's; an event without a number there is passed over, and events of one
+        number come in the order a list gives them.
+        """
+        asked = _query_of(query)
+        answer = await self._ask(
+            "records.largest", lambda h: RecordsLargestAsked.encode(query={**asked, "handle": h}, key=key)
+        )
+        return [_event_of(event) for event in RecordsEvents.decode(answer).get("events", [])]
 
     async def aggregate(self, **query: Unpack[Aggregated]) -> list[Row]:
         """A row for each span of every and each value of the keys of by, with its count."""

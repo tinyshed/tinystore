@@ -256,11 +256,11 @@ impl List {
 
     /// Every event the read finds, ten thousand a page, for `what` to count:
     /// a count takes no newest first and no page after another, and only
-    /// `top` takes a limit.
+    /// `top` and `largest` take a limit, of what they give.
     pub(super) fn walk(&self, what: &str) -> Result<All> {
-        let limited = what != "top" && self.query.limit.is_some();
-        if self.query.newest || self.query.after.is_some() || limited {
-            let refused = if what == "top" { "newest or after" } else { "newest, limit or after" };
+        let takes_limit = what == "top" || what == "largest";
+        if self.query.newest || self.query.after.is_some() || (!takes_limit && self.query.limit.is_some()) {
+            let refused = if takes_limit { "newest or after" } else { "newest, limit or after" };
             return Err(self.within(Error::invalid(format!("{what} takes no {refused}"))));
         }
         let mut walk = self.clone();
@@ -271,6 +271,11 @@ impl List {
     /// The range the read asks for, both ends in it, in nanoseconds.
     pub(super) fn span(&self) -> Result<(i64, i64)> {
         range(&self.query, self.records.now()).map_err(|error| self.within(error))
+    }
+
+    /// Nothing yet of the store's memory, for what a count holds to grow.
+    pub(super) fn nothing_held(&self) -> crate::Reservation {
+        self.records.memory.nothing()
     }
 
     /// The limit the read was given.

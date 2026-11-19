@@ -26,9 +26,17 @@ func (e *Events) Count(ctx context.Context, q Query) (int, error) { return e.rea
 
 // Top is a key's most frequent values and how many events hold each: ten
 // unless Limit asks for more, 1000 at most. The key is a field's or a
-// context's, or stream, name or level.
+// context's, or stream, name, level or message.
 func (e *Events) Top(ctx context.Context, key string, q Query) ([]Top, error) {
 	return e.reads().top(ctx, key, q)
+}
+
+// Largest is the events whose value at key is a number, the largest first:
+// ten unless Limit asks for more, 1000 at most. The key is a field's, else
+// a context's; an event without a number there is passed over, and events
+// of one number come in the order List gives them.
+func (e *Events) Largest(ctx context.Context, key string, q Query) ([]Event, error) {
+	return e.reads().largest(ctx, key, q)
 }
 
 // Aggregate is a row for each span of Every and each value of the keys of
@@ -77,9 +85,15 @@ func (a *AllEvents) Count(ctx context.Context, q Query) (int, error) { return a.
 
 // Top is a key's most frequent values and how many events hold each: ten
 // unless Limit asks for more, 1000 at most. The key is a field's or a
-// context's, or stream, name or level.
+// context's, or stream, name, level or message.
 func (a *AllEvents) Top(ctx context.Context, key string, q Query) ([]Top, error) {
 	return a.reads().top(ctx, key, q)
+}
+
+// Largest is the events whose value at key is a number, the largest first,
+// as a stream's Largest gives them.
+func (a *AllEvents) Largest(ctx context.Context, key string, q Query) ([]Event, error) {
+	return a.reads().largest(ctx, key, q)
 }
 
 // Aggregate is a row for each span of Every and each value of the keys of

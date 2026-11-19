@@ -144,6 +144,7 @@ methods: dict[str, int] = {
     "records.damaged": 0x050C,
     "records.drop": 0x050D,
     "records.fields": 0x050E,
+    "records.largest": 0x050F,
     "search.open": 0x0B01,
     "search.set": 0x0B02,
     "search.setMany": 0x0B03,
@@ -8313,7 +8314,7 @@ RecordsTopAsked = Message(
     "records.TopAsked",
     {
         "query": (1, RecordsQuery),
-        # a field's or a context's, or stream, name or level
+        # a field's or a context's, or stream, name, level or message
         "key": (2, str_),
     },
     _write_records_top_asked,
@@ -8395,6 +8396,86 @@ RecordsTops = Message(
     },
     _write_records_tops,
     _read_records_tops,
+)
+
+
+def _write_records_largest_asked(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("query")) is not None:
+        w.uint(1)
+        RecordsQuery.write(w, x)
+        n += 1
+    if (x := v.get("key")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_largest_asked(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["query"] = RecordsQuery.read(r)
+            case 2:
+                read["key"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# The events whose value at key is a number, the largest first, as many as
+# the query's limit: ten unless it says, 1000 at most.
+RecordsLargestAsked = Message(
+    "records.LargestAsked",
+    {
+        "query": (1, RecordsQuery),
+        # a field's, else a context's
+        "key": (2, str_),
+    },
+    _write_records_largest_asked,
+    _read_records_largest_asked,
+)
+
+
+def _write_records_events(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("events")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            RecordsEvent.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_events(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [RecordsEvent.read(r) for _ in range(r.array())]
+                r.leave()
+                read["events"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+RecordsEvents = Message(
+    "records.Events",
+    {
+        "events": (1, list_(RecordsEvent)),
+    },
+    _write_records_events,
+    _read_records_events,
 )
 
 
@@ -11781,6 +11862,8 @@ messages: dict[str, Message] = {
     "records.TopAsked": RecordsTopAsked,
     "records.Top": RecordsTop,
     "records.Tops": RecordsTops,
+    "records.LargestAsked": RecordsLargestAsked,
+    "records.Events": RecordsEvents,
     "records.AggregateAsked": RecordsAggregateAsked,
     "records.Stats": RecordsStats,
     "records.Row": RecordsRow,

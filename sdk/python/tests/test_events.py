@@ -136,6 +136,24 @@ async def test_a_where_list_is_one_of_not_finds_an_absent_key_and_prefix_a_text(
             await calls.count(where=where)
 
 
+# contract: REC-19
+async def test_largest_gives_the_events_of_a_keys_largest_numbers_and_top_reads_the_message(
+    store: tinystore.Store,
+) -> None:
+    pages = store.events("pages")
+    for ms in (120, 9000, 300):
+        await pages.append("page-open", {"ms": ms, "path": f"/p{ms}"})
+    slowest = await pages.largest("ms", names=["page-open"], since="1h", limit=2)
+    assert [event.fields["path"] for event in slowest] == ["/p9000", "/p300"]
+    with pytest.raises(tinystore.InvalidError):
+        await pages.largest("ms", limit=1001)
+    errors = store.events("client-errors")
+    await errors.append("error", message="TypeError: x")
+    await errors.append("error", message="TypeError: x")
+    await errors.append("error", {"message": "copied"})
+    assert await errors.top("message") == [tinystore.Top("TypeError: x", 2), tinystore.Top("copied", 1)]
+
+
 async def test_a_condition_given_as_none_is_invalid_never_a_condition_left_out(store: tinystore.Store) -> None:
     api = store.events("api")
     with pytest.raises(tinystore.InvalidError):

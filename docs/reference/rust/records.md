@@ -204,8 +204,8 @@ is the instant its span begins.
 pub fn by<S: Into<String>>(self, keys: impl IntoIterator<Item = S>) -> Self
 ```
 
-A row a value of each key: a field's, or `stream`, `name` or `level`,
-which are the event's own before a field of that name.
+A row a value of each key: a field's, or `stream`, `name`, `level` or
+`message`, which are the event's own before a field of that name.
 
 ### Aggregate.stats
 
@@ -1069,7 +1069,21 @@ pub fn top(&self, key: &str) -> Result<Vec<Top>>
 The most frequent values of `key` and how many events hold each, the
 most first and those as frequent in the order of their JSON: ten
 unless the read's limit says, 1000 at most. The key is a field's or a
-context's, or `stream`, `name` or `level`.
+context's, or `stream`, `name`, `level` or `message`.
+
+### List.largest
+
+```rust
+pub fn largest(&self, key: &str) -> Result<Vec<Event>>
+```
+
+The events whose value at `key` is a JSON number, the largest first:
+what sorting every event the read finds by that number would give
+first, ten unless the read's limit says, 1000 at most. The key is a
+field's, else a context's; an event without a number there is passed
+over, and events of one number come in the read's order. It walks
+the read as `count` does and holds the events it gives, of the
+store's memory: past it the answer is `limit`, never a shorter list.
 
 ### List.aggregate
 
@@ -1997,6 +2011,16 @@ pub fn top(&self, key: &str) -> impl Future<Output = Result<Vec<Top>>> + Send + 
 
 The most frequent values of `key` and how many events hold each, as
 `crate::records::List::top` counts them, walking the read as
+`count` does.
+
+### aio::records::List.largest
+
+```rust
+pub fn largest(&self, key: &str) -> impl Future<Output = Result<Vec<Event>>> + Send + 'static
+```
+
+The events of the largest numbers at `key`, as
+`crate::records::List::largest` keeps them, walking the read as
 `count` does.
 
 ### aio::records::List.aggregate

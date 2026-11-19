@@ -4,9 +4,10 @@ use crate::wire::codec::Message;
 use crate::wire::frame::{Frame, Kind};
 use crate::wire::protocol::{
     Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCondition, RecordsCount,
-    RecordsDamage, RecordsDamages, RecordsDropped, RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsNames,
-    RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRows,
-    RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops, method,
+    RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvents, RecordsFieldNamesAsked, RecordsFieldsAsked,
+    RecordsLargestAsked, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked,
+    RecordsQuery, RecordsRows, RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops,
+    method,
 };
 use crate::{Options, Store};
 
@@ -153,6 +154,24 @@ fn where_finds_a_value_itself_and_conditions_a_list_none_of_one_or_a_prefix() {
     ] {
         assert_eq!(refused.unwrap_err().code, "invalid");
     }
+}
+
+// contract: REC-19
+#[test]
+fn largest_answers_the_events_of_a_keys_largest_numbers_and_refuses_a_limit_past_its_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let pages = open(&mut client, "pages");
+    let opens = [120, 9000, 300].map(|ms| event("page-open", &format!(r#"{{"ms":{ms},"path":"/p{ms}"}}"#)));
+    append(&mut client, pages, opens.into());
+    let mut largest = |limit: u64| {
+        let query = RecordsQuery { handle: Some(pages), limit: Some(limit), ..RecordsQuery::default() };
+        client.call::<RecordsEvents>(method::RECORDS_LARGEST, &RecordsLargestAsked { query, key: "ms".to_owned() })
+    };
+    let events = largest(2).unwrap().events;
+    let fields: Vec<&str> = events.iter().filter_map(|event| event.fields.as_deref()).collect();
+    assert_eq!(fields, [r#"{"ms":9000,"path":"/p9000"}"#, r#"{"ms":300,"path":"/p300"}"#]);
+    assert_eq!(largest(1001).unwrap_err().code, "invalid");
 }
 
 #[test]

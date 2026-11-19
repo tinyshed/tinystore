@@ -111,6 +111,7 @@ of repeating them.
 | a logger's buffer             | 1,024 lines, written every second          |
 | a page of events              | 1,000, at most 10,000                      |
 | a list in a records `where`   | 1 to 1,000 values, each at most 4 KiB      |
+| a `top` or a `largest`        | 10 answers, at most 1,000                  |
 | a name's `keep` in metrics    | 30 days                                    |
 | instruments' writes           | every 15 seconds, at `flush` and at close  |
 | sets of labels per instrument | 2,000 between two sends, then `__overflow` |

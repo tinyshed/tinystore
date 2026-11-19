@@ -5140,6 +5140,149 @@
     },
     {
       "fields": {
+        "key": {
+          "str": "key"
+        },
+        "query": {
+          "fields": {
+            "after": {
+              "str": "after"
+            },
+            "conditions": {
+              "names": {
+                "a": {
+                  "fields": {
+                    "not": {
+                      "bool": true
+                    },
+                    "prefix": {
+                      "str": "prefix"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "{\"a\":1}"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "from": {
+              "int": "1790000000000123456"
+            },
+            "handle": {
+              "uint": "107"
+            },
+            "limit": {
+              "uint": "1207"
+            },
+            "minLevel": {
+              "int": "-7"
+            },
+            "names": {
+              "list": [
+                {
+                  "str": "names"
+                }
+              ]
+            },
+            "newest": {
+              "bool": true
+            },
+            "search": {
+              "str": "search"
+            },
+            "since": {
+              "uint": "1500"
+            },
+            "streams": {
+              "list": [
+                {
+                  "str": "streams"
+                }
+              ]
+            },
+            "to": {
+              "int": "1790000000000123456"
+            },
+            "traceId": {
+              "bin": "01ff"
+            },
+            "where": {
+              "names": {
+                "a": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          }
+        }
+      },
+      "hex": "82018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802a36b6579",
+      "message": "records.LargestAsked",
+      "name": "records.LargestAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.LargestAsked",
+      "name": "records.LargestAsked with no field"
+    },
+    {
+      "fields": {
+        "events": {
+          "list": [
+            {
+              "fields": {
+                "at": {
+                  "int": "1790000000000123456"
+                },
+                "context": {
+                  "str": "{\"a\":1}"
+                },
+                "fields": {
+                  "str": "{\"a\":1}"
+                },
+                "id": {
+                  "str": "id"
+                },
+                "level": {
+                  "int": "-7"
+                },
+                "message": {
+                  "str": "message"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "spanId": {
+                  "bin": "01ff"
+                },
+                "stream": {
+                  "str": "stream"
+                },
+                "traceId": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918a01cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff0aa26964",
+      "message": "records.Events",
+      "name": "records.Events with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Events",
+      "name": "records.Events with no field"
+    },
+    {
+      "fields": {
         "by": {
           "list": [
             {
@@ -7129,6 +7272,7 @@
     "records.drop": 1293,
     "records.fieldNames": 1288,
     "records.fields": 1294,
+    "records.largest": 1295,
     "records.lines": 1291,
     "records.list": 1283,
     "records.open": 1281,

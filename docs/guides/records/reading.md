@@ -315,8 +315,10 @@ let hourly = store
 - When few events match, as with a search for a rare word, they read several
   pages at once on several threads. In Rust, `all` does the same.
 - `top` gives a key's most frequent values, ten unless `limit` asks for more,
-  1,000 at most. The key is a field's or a context's, or `stream`, `name` or
-  `level`.
+  1,000 at most. The key is a field's or a context's, or `stream`, `name`,
+  `level` or `message`.
+- `message` is the event's message in `top`, `by` and `distinct`. An event
+  without one gives a field or a context key named `message` instead.
 - `calendar` with `timeZone` (`time_zone` in Python, `Calendar` and
   `TimeZone` in Go, `.calendar(Calendar::Day, zone)` in Rust) gives a row for
   each local day, week from Monday or month in place of `every`, as
@@ -331,6 +333,38 @@ let hourly = store
 - An answer is whole or an error: past 10,000 rows, or 64 MiB of different
   values held for `top` or `distinct`, it is `limit`, never a smaller answer.
   Ask for a shorter range or a wider `every`.
+
+## The largest numbers
+
+`top('ms')` counts how often each value occurs. `largest` gives the events
+themselves, those of a field's largest numbers first, such as the slowest page
+opens with their `path`:
+
+```ts
+const slowest = await pages.largest('ms', { names: ['page-open'], since: '7d', limit: 20 }) // Event[]
+```
+
+```python
+slowest = await pages.largest("ms", names=["page-open"], since="7d", limit=20)  # list[Event]
+```
+
+```go
+slowest, err := pages.Largest(ctx, "ms", records.Query{Names: []string{"page-open"}, Since: 7 * 24 * time.Hour, Limit: 20})
+```
+
+```rust
+let slowest = pages.list().names(["page-open"]).since(Duration::from_hours(7 * 24)).limit(20).largest("ms")?; // Vec<Event>
+```
+
+- The key is a field's, else a context's. An event without a number there
+  is passed over.
+- Events of one number come in the order `list` gives them. An integer is
+  compared with a float exactly, past 2⁵³ too.
+- `limit` gives how many: ten unless it says, 1,000 at most. It takes a query
+  as `top` does, without `newest` and `after`, and the answer comes whole.
+- It reads every event the query finds, as `top` does, and holds only the
+  events it gives, out of the store's memory budget. Past the budget the
+  answer is `limit`, never a shorter list.
 
 ## What a store holds
 

@@ -309,6 +309,24 @@ func (r reads) top(ctx context.Context, key string, q Query) ([]Top, error) {
 	return out, nil
 }
 
+func (r reads) largest(ctx context.Context, key string, q Query) ([]Event, error) {
+	if _, err := q.asked(nil); err != nil {
+		return nil, err
+	}
+	answer, err := r.ask(ctx, wire.MethodRecordsLargest, func(handle *uint64) []byte {
+		asked, _ := q.asked(handle)
+		return wire.Encode(&wire.RecordsLargestAsked{Query: asked, Key: key})
+	})
+	if err != nil {
+		return nil, err
+	}
+	var events wire.RecordsEvents
+	if err := decode(answer, &events); err != nil {
+		return nil, err
+	}
+	return eventsOf(events.Events), nil
+}
+
 func (r reads) aggregate(ctx context.Context, q Query) ([]Row, error) {
 	if _, err := q.asked(nil); err != nil {
 		return nil, err

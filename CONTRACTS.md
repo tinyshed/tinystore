@@ -201,6 +201,7 @@ These contracts are what does not.
 - **REC-13** An event appended to a stream opened from a database (`db.events`), inside the database's transaction or batch, MUST reach the stream exactly when that transaction or batch commits: never when it rolls back, in the stream when the commit returns unless the stream refused it then, and once even after a crash between the commit and its move, which the stream's next open from the database or maintenance completes; an append of it around the transaction from inside its function MUST be refused where the SDK can tell.
 - **REC-14** A stream MUST say which names its events have and which keys their fields and contexts hold, each with how many events carry it and a key with the kinds of value it holds, without the program reading its events; the counts MUST follow what the stream holds, waiting and packed, across merges and expiry, and a segment an earlier release packed is counted once upkeep reaches it.
 - **REC-18** A `where` with a list MUST find what each of its values would find on its own, joined; `not` MUST find an event without the key; a `where` whose value it cannot take MUST be refused, never match nothing; each before the event is packed and after.
+- **REC-19** `largest` MUST give the events that sorting every event the query finds by the key's number, largest first, would give first, events of one number in read order, an integer compared with a float exactly; past the memory budget it MUST be `limit`, never a shorter list.
 
 ### Logger and console
 

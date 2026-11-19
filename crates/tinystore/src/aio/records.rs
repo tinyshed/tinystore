@@ -461,6 +461,14 @@ impl List {
         run::read(&self.pool, format!("{}: a top of {key}", self.named), move || list.top(&key))
     }
 
+    /// The events of the largest numbers at `key`, as
+    /// [`crate::records::List::largest`] keeps them, walking the read as
+    /// `count` does.
+    pub fn largest(&self, key: &str) -> impl Future<Output = Result<Vec<Event>>> + Send + 'static {
+        let (list, key) = (self.list.clone(), key.to_owned());
+        run::read(&self.pool, format!("{}: the largest of {key}", self.named), move || list.largest(&key))
+    }
+
     /// A row for each span and each value of the keys `by` names, as
     /// [`crate::records::List::aggregate`] makes them, walking the read as
     /// `count` does.

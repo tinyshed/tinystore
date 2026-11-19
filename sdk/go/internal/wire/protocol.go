@@ -135,6 +135,7 @@ const (
 	MethodRecordsDamaged    = 0x050c
 	MethodRecordsDrop       = 0x050d
 	MethodRecordsFields     = 0x050e
+	MethodRecordsLargest    = 0x050f
 	MethodSearchOpen        = 0x0b01
 	MethodSearchSet         = 0x0b02
 	MethodSearchSetMany     = 0x0b03
@@ -269,6 +270,7 @@ var methodNames = []struct {
 	{"records.damaged", MethodRecordsDamaged},
 	{"records.drop", MethodRecordsDrop},
 	{"records.fields", MethodRecordsFields},
+	{"records.largest", MethodRecordsLargest},
 	{"search.open", MethodSearchOpen},
 	{"search.set", MethodSearchSet},
 	{"search.setMany", MethodSearchSetMany},
@@ -591,6 +593,10 @@ func NewMessage(name string) Message {
 		return &RecordsTop{}
 	case "records.Tops":
 		return &RecordsTops{}
+	case "records.LargestAsked":
+		return &RecordsLargestAsked{}
+	case "records.Events":
+		return &RecordsEvents{}
 	case "records.AggregateAsked":
 		return &RecordsAggregateAsked{}
 	case "records.Stats":
@@ -11005,7 +11011,7 @@ func (m RecordsCount) IsZero() bool {
 // A key's most frequent values among what a query finds.
 type RecordsTopAsked struct {
 	Query RecordsQuery `wire:"1,query"`
-	// a field's or a context's, or stream, name or level
+	// a field's or a context's, or stream, name, level or message
 	Key string `wire:"2,key"`
 }
 
@@ -11134,6 +11140,99 @@ func (m *RecordsTops) Read(r *Reader) {
 // IsZero says whether RecordsTops writes as no field at all.
 func (m RecordsTops) IsZero() bool {
 	return len(m.Values) == 0
+}
+
+// RecordsLargestAsked is the schema's records.LargestAsked.
+//
+// The events whose value at key is a number, the largest first, as many as
+// the query's limit: ten unless it says, 1000 at most.
+type RecordsLargestAsked struct {
+	Query RecordsQuery `wire:"1,query"`
+	// a field's, else a context's
+	Key string `wire:"2,key"`
+}
+
+func (m RecordsLargestAsked) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if !m.Query.IsZero() {
+		w.Uint(1)
+		m.Query.Write(w)
+		n++
+	}
+	if m.Key != "" {
+		w.Uint(2)
+		w.Str(m.Key)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsLargestAsked) Read(r *Reader) {
+	*m = RecordsLargestAsked{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Query.Read(r)
+		case 2:
+			m.Key = r.Str()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsLargestAsked writes as no field at all.
+func (m RecordsLargestAsked) IsZero() bool {
+	return m.Query.IsZero() &&
+		m.Key == ""
+}
+
+// RecordsEvents is the schema's records.Events.
+type RecordsEvents struct {
+	Events []RecordsEvent `wire:"1,events"`
+}
+
+func (m RecordsEvents) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Events) > 0 {
+		w.Uint(1)
+		w.Array(len(m.Events))
+		for _, item0 := range m.Events {
+			item0.Write(w)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsEvents) Read(r *Reader) {
+	*m = RecordsEvents{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []RecordsEvent{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 RecordsEvent
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Events = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsEvents writes as no field at all.
+func (m RecordsEvents) IsZero() bool {
+	return len(m.Events) == 0
 }
 
 // RecordsAggregateAsked is the schema's records.AggregateAsked.

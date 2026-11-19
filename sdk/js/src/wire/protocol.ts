@@ -170,6 +170,7 @@ export const methods = {
 	'records.damaged': 0x050c,
 	'records.drop': 0x050d,
 	'records.fields': 0x050e,
+	'records.largest': 0x050f,
 	'search.open': 0x0b01,
 	'search.set': 0x0b02,
 	'search.setMany': 0x0b03,
@@ -10182,7 +10183,7 @@ export const RecordsTopAsked = message(
 	'records.TopAsked',
 	{
 		query: [1, RecordsQuery],
-		/** a field's or a context's, or stream, name or level */
+		/** a field's or a context's, or stream, name, level or message */
 		key: [2, str],
 	},
 	{
@@ -10303,6 +10304,96 @@ export const RecordsTops = message(
 			}
 			r.leave()
 			return { values: $values }
+		},
+	},
+)
+
+/**
+ * The events whose value at key is a number, the largest first, as many as
+ * the query's limit: ten unless it says, 1000 at most.
+ */
+export const RecordsLargestAsked = message(
+	'records.LargestAsked',
+	{
+		query: [1, RecordsQuery],
+		/** a field's, else a context's */
+		key: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.query !== undefined) {
+				w.field(1)
+				RecordsQuery.write(w, v.query)
+				n++
+			}
+			if (v.key !== undefined) {
+				w.field(2)
+				w.str(v.key)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $query: Read<typeof RecordsQuery.fields> | undefined
+			let $key: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$query = RecordsQuery.read(r)
+						break
+					case 2:
+						$key = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { query: $query, key: $key }
+		},
+	},
+)
+
+export const RecordsEvents = message(
+	'records.Events',
+	{
+		events: [1, list(RecordsEvent)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.events !== undefined) {
+				w.field(1)
+				w.array(v.events.length)
+				for (const item0 of v.events) {
+					RecordsEvent.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $events: Read<typeof RecordsEvent.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsEvent.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsEvent.read(r))
+						}
+						r.leave()
+						$events = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { events: $events }
 		},
 	},
 )

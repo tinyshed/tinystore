@@ -33,8 +33,10 @@ import {
 	RecordsDamages,
 	RecordsDropped,
 	type RecordsEvent,
+	RecordsEvents,
 	RecordsFieldNamesAsked,
 	RecordsFieldsAsked,
+	RecordsLargestAsked,
 	RecordsNames,
 	type RecordsNewEvent,
 	RecordsOpen,
@@ -324,7 +326,7 @@ abstract class Reads {
 	/**
 	 * A key's most frequent values and how many events hold each: ten unless
 	 * `limit` asks for more, at most 1000. The key is a field's or a
-	 * context's, or `stream`, `name` or `level`.
+	 * context's, or `stream`, `name`, `level` or `message`.
 	 */
 	async top(key: string, query?: Counted & { limit?: number }): Promise<Top[]> {
 		const asked = queryOf(query)
@@ -335,6 +337,20 @@ abstract class Reads {
 			value: parseJson(top.value ?? 'null'),
 			count: top.count ?? 0,
 		}))
+	}
+
+	/**
+	 * The events whose value at `key` is a number, the largest first: ten
+	 * unless `limit` asks for more, at most 1000. The key is a field's, else
+	 * a context's; an event without a number there is passed over, and
+	 * events of one number come in the order a list gives them.
+	 */
+	async largest(key: string, query?: Counted & { limit?: number }): Promise<Event[]> {
+		const asked = queryOf(query)
+		const answer = await this.ask('records.largest', handle =>
+			RecordsLargestAsked.encode({ query: { ...asked, handle }, key }),
+		)
+		return (RecordsEvents.decode(answer).events ?? []).map(eventOf)
 	}
 
 	/** A row for each span of `every` and each value of the keys of `by`, with its count. */

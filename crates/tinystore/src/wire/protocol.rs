@@ -9635,7 +9635,7 @@ impl Message for RecordsCount {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RecordsTopAsked {
     pub(crate) query: RecordsQuery,
-    /// A field's or a context's, or stream, name or level.
+    /// A field's or a context's, or stream, name, level or message.
     pub(crate) key: String,
 }
 
@@ -9768,6 +9768,99 @@ impl Message for RecordsTops {
 
     fn is_zero(&self) -> bool {
         self.values.is_empty()
+    }
+}
+
+/// The events whose value at key is a number, the largest first, as many as
+/// the query's limit: ten unless it says, 1000 at most.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsLargestAsked {
+    pub(crate) query: RecordsQuery,
+    /// A field's, else a context's.
+    pub(crate) key: String,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsLargestAsked {
+    const NAME: &'static str = "records.LargestAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.query = RecordsQuery::read(r)?,
+                2 => message.key = codec::str(r, "key")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.query.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.query);
+        }
+        if !self.key.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.key);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.query.size()
+            + 1 + 5 + self.key.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.query.is_zero()
+            && self.key.is_empty()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsEvents {
+    pub(crate) events: Vec<RecordsEvent>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsEvents {
+    const NAME: &'static str = "records.Events";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.events = codec::list(r, "events", codec::message::<RecordsEvent>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.events.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.events, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.events, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.events.is_empty()
     }
 }
 
@@ -13280,6 +13373,8 @@ pub(crate) mod method {
     pub(crate) const RECORDS_DROP: u16 = 0x050d;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_FIELDS: u16 = 0x050e;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_LARGEST: u16 = 0x050f;
     #[cfg(feature = "search")]
     pub(crate) const SEARCH_OPEN: u16 = 0x0b01;
     #[cfg(feature = "search")]
@@ -13540,6 +13635,8 @@ pub(crate) mod method {
             RECORDS_DROP => Some(Access::Write),
             #[cfg(feature = "records")]
             RECORDS_FIELDS => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_LARGEST => Some(Access::Read),
             #[cfg(feature = "search")]
             SEARCH_OPEN => Some(Access::Read),
             #[cfg(feature = "search")]
@@ -13793,6 +13890,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("records.drop", 0x050d, "call"),
     #[cfg(feature = "records")]
     ("records.fields", 0x050e, "call"),
+    #[cfg(feature = "records")]
+    ("records.largest", 0x050f, "call"),
     #[cfg(feature = "search")]
     ("search.open", 0x0b01, "call"),
     #[cfg(feature = "search")]
@@ -14116,6 +14215,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.Top" => RecordsTop::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Tops" => RecordsTops::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.LargestAsked" => RecordsLargestAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Events" => RecordsEvents::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.AggregateAsked" => RecordsAggregateAsked::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]

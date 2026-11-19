@@ -234,6 +234,35 @@ func TestAWhereListIsOneOfNotFindsAnAbsentKeyAndPrefixAText(t *testing.T) {
 	})
 }
 
+// contract: REC-19
+func TestLargestGivesTheEventsOfAKeysLargestNumbersAndTopReadsTheMessage(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		pages := ways.Must(records.OpenEvents(store, "pages"))
+		for _, ms := range []int{120, 9000, 300} {
+			ways.Must(pages.Append(ctx, "page-open", records.Fields{"ms": ms, "path": fmt.Sprintf("/p%d", ms)}))
+		}
+		slowest := ways.Must(pages.Largest(ctx, "ms", records.Query{Names: []string{"page-open"}, Since: time.Hour, Limit: 2}))
+		var paths []any
+		for _, event := range slowest {
+			paths = append(paths, fields(t, event.Fields)["path"])
+		}
+		if fmt.Sprint(paths) != "[/p9000 /p300]" {
+			t.Fatalf("largest %v", paths)
+		}
+		_, err := pages.Largest(ctx, "ms", records.Query{Limit: 1001})
+		is(t, err, tinystore.ErrInvalid)
+		errs := ways.Must(records.OpenEvents(store, "client-errors"))
+		ways.Must(errs.AppendMany(ctx, []records.Event{
+			{Name: "error", Message: "TypeError: x"}, {Name: "error", Message: "TypeError: x"},
+			{Name: "error", Fields: records.Fields{"message": "copied"}},
+		}))
+		if top := ways.Must(errs.Top(ctx, "message", records.Query{})); !reflect.DeepEqual(top, []records.Top{{"TypeError: x", 2}, {"copied", 1}}) {
+			t.Fatalf("top %v", top)
+		}
+	})
+}
+
 func TestCountsAKeysTopValuesAndRowsOfASpanWithTheirStats(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

@@ -150,6 +150,26 @@ for (const way of ways) {
 			}
 		})
 
+		test('largest gives the events of a key’s largest numbers; top reads the message', async () => {
+			// contract: REC-19
+			const pages = store.events('pages')
+			for (const ms of [120, 9000, 300]) {
+				await pages.append('page-open', { ms, path: `/p${ms}` })
+			}
+			await pages.append('page-open', { ms: 'slow' })
+			const slowest = await pages.largest('ms', { names: ['page-open'], since: '1h', limit: 2 })
+			expect(slowest.map(event => event.fields.path)).toEqual(['/p9000', '/p300'])
+			expect(await caught(pages.largest('ms', { limit: 1001 }))).toBeInstanceOf(InvalidError)
+			const errors = store.events('client-errors')
+			await errors.append('error', {}, { message: 'TypeError: x' })
+			await errors.append('error', {}, { message: 'TypeError: x' })
+			await errors.append('error', { message: 'copied' })
+			expect(await errors.top('message')).toEqual([
+				{ value: 'TypeError: x', count: 2 },
+				{ value: 'copied', count: 1 },
+			])
+		})
+
 		test('a condition given as undefined is InvalidError, never a condition left out', async () => {
 			const api = store.events('api')
 			expect(await caught(api.list({ traceId: undefined as unknown as string }))).toBeInstanceOf(

@@ -17,10 +17,11 @@ use serde_json::value::RawValue;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCondition,
-    RecordsCount, RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsFieldInfo,
-    RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsNameCount, RecordsNames, RecordsNewEvent, RecordsOpen,
-    RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats, RecordsStream,
-    RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
+    RecordsCount, RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsEvents, RecordsFieldInfo,
+    RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsLargestAsked, RecordsNameCount, RecordsNames, RecordsNewEvent,
+    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats,
+    RecordsStream, RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops,
+    method,
 };
 use super::{Lent, Link, Route};
 use crate::records::{
@@ -144,6 +145,7 @@ pub(crate) fn call(
         method::RECORDS_LIST => list(&reading, &RecordsQuery::decode(body)?),
         method::RECORDS_COUNT => count(&reading, &RecordsQuery::decode(body)?),
         method::RECORDS_TOP => top(&reading, &RecordsTopAsked::decode(body)?),
+        method::RECORDS_LARGEST => largest(&reading, &RecordsLargestAsked::decode(body)?),
         method::RECORDS_AGGREGATE => aggregate(&reading, RecordsAggregateAsked::decode(body)?),
         method::RECORDS_STREAMS => streams(&reading),
         method::RECORDS_FIELD_NAMES => field_names(&reading, &RecordsFieldNamesAsked::decode(body)?),
@@ -284,6 +286,11 @@ fn top(reading: &Reading<'_>, asked: &RecordsTopAsked) -> Answered {
     let tops = query(reading, &asked.query)?.top(&asked.key)?;
     let values = tops.into_iter().map(|top| RecordsTop { value: top.value.to_string(), count: top.count });
     Ok(RecordsTops { values: values.collect() }.encode())
+}
+
+fn largest(reading: &Reading<'_>, asked: &RecordsLargestAsked) -> Answered {
+    let events = query(reading, &asked.query)?.largest(&asked.key)?;
+    Ok(RecordsEvents { events: events.into_iter().map(event_of).collect() }.encode())
 }
 
 fn aggregate(reading: &Reading<'_>, asked: RecordsAggregateAsked) -> Answered {

@@ -12,22 +12,24 @@
 //! Each walks every event the read finds, a page at a time, so that what it
 //! holds is its answer and never the events.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
 use rusqlite::params;
 use serde_json::Value;
 
 use super::engine::{Records, nanos};
-use super::event::Event;
+use super::event::{Event, Fields};
 use super::events::AllEvents;
-use super::read::List;
+use super::read::{EVENT_HELD, List};
 use crate::calendar::{Calendar, Zoned};
 use crate::limits::{AGGREGATE_ROWS, COUNT_BYTES, Limit};
 use crate::sqlite::sql_error;
-use crate::{Error, Result, unix_nanos};
+use crate::{Error, Reservation, Result, unix_nanos};
 
-/// The values `top` gives unless its read's limit says, and at most.
+/// The values `top` and the events `largest` give unless its read's limit
+/// says, and at most.
 const TOP: usize = 10;
 const MOST_TOP: usize = 1000;
 /// The rows `aggregate` gives at most.
@@ -121,8 +123,8 @@ impl Aggregate {
         self
     }
 
-    /// A row a value of each key: a field's, or `stream`, `name` or `level`,
-    /// which are the event's own before a field of that name.
+    /// A row a value of each key: a field's, or `stream`, `name`, `level` or
+    /// `message`, which are the event's own before a field of that name.
     pub fn by<S: Into<String>>(mut self, keys: impl IntoIterator<Item = S>) -> Self {
         self.by.extend(keys.into_iter().map(Into::into));
         self
@@ -167,7 +169,7 @@ impl List {
     /// The most frequent values of `key` and how many events hold each, the
     /// most first and those as frequent in the order of their JSON: ten
     /// unless the read's limit says, 1000 at most. The key is a field's or a
-    /// context's, or `stream`, `name` or `level`.
+    /// context's, or `stream`, `name`, `level` or `message`.
     pub fn top(&self, key: &str) -> Result<Vec<Top>> {
         let limit = self.given_limit().unwrap_or(TOP);
         if !(1..=MOST_TOP).contains(&limit) {
@@ -184,6 +186,28 @@ impl List {
         top.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.to_string().cmp(&b.value.to_string())));
         top.truncate(limit);
         Ok(top)
+    }
+
+    /// The events whose value at `key` is a JSON number, the largest first:
+    /// what sorting every event the read finds by that number would give
+    /// first, ten unless the read's limit says, 1000 at most. The key is a
+    /// field's, else a context's; an event without a number there is passed
+    /// over, and events of one number come in the read's order. It walks
+    /// the read as `count` does and holds the events it gives, of the
+    /// store's memory: past it the answer is `limit`, never a shorter list.
+    pub fn largest(&self, key: &str) -> Result<Vec<Event>> {
+        let limit = self.given_limit().unwrap_or(TOP);
+        if !(1..=MOST_TOP).contains(&limit) {
+            return Err(Error::invalid(format!("largest {limit} events: it gives 1 to {MOST_TOP}")));
+        }
+        let mut largest = Largest { kept: BinaryHeap::new(), limit, held: self.nothing_held(), bytes: 0 };
+        for (place, event) in self.walk("largest")?.enumerate() {
+            let event = event?;
+            if let Some(number) = value_of(&event, key).as_ref().and_then(number) {
+                largest.offer(Ranked { number, place, event }).map_err(|error| error.within(key))?;
+            }
+        }
+        Ok(largest.kept.into_sorted_vec().into_iter().map(|Reverse(ranked)| ranked.event).collect())
     }
 
     /// A row for each span and each value of the keys `by` names, in the
@@ -317,6 +341,100 @@ impl Records {
     }
 }
 
+/// The events `largest` keeps while it walks, the least of them on top.
+struct Largest {
+    kept: BinaryHeap<Reverse<Ranked>>,
+    limit: usize,
+    held: Reservation,
+    /// What each event kept weighs, together.
+    bytes: u64,
+}
+
+impl Largest {
+    /// Keeps an event among the largest, letting the least go past the limit.
+    fn offer(&mut self, ranked: Ranked) -> Result<()> {
+        if self.kept.len() == self.limit && self.kept.peek().is_some_and(|Reverse(least)| ranked <= *least) {
+            return Ok(());
+        }
+        let heavy = weight(&ranked.event);
+        self.held.grow(heavy, "records: largest")?;
+        self.bytes += heavy;
+        self.kept.push(Reverse(ranked));
+        if self.kept.len() > self.limit
+            && let Some(Reverse(least)) = self.kept.pop()
+        {
+            self.bytes -= weight(&least.event);
+            self.held.shrink(self.bytes);
+        }
+        Ok(())
+    }
+}
+
+/// What an event kept in memory weighs, about: its text and what holds it.
+fn weight(event: &Event) -> u64 {
+    let fields = |fields: &Fields| fields.iter().map(|(key, json)| key.len() + json.len()).sum::<usize>();
+    let text = event.message.as_ref().map_or(0, String::len) + event.name.len() + event.stream.len();
+    (EVENT_HELD as usize + text + fields(&event.fields) + fields(&event.context)) as u64
+}
+
+/// An event by its number, and of one number the earlier in the read the
+/// greater, so that it is kept and comes first.
+struct Ranked {
+    number: Number,
+    place: usize,
+    event: Event,
+}
+
+impl Ord for Ranked {
+    fn cmp(&self, other: &Ranked) -> Ordering {
+        compare(self.number, other.number).then_with(|| other.place.cmp(&self.place))
+    }
+}
+
+impl PartialOrd for Ranked {
+    fn partial_cmp(&self, other: &Ranked) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Ranked {
+    fn eq(&self, other: &Ranked) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Ranked {}
+
+/// Two numbers in their order, an integer against a float exactly: no
+/// integer is rounded to a float to be compared, past 2⁵³ included.
+fn compare(a: Number, b: Number) -> Ordering {
+    match (a, b) {
+        (Number::Integer(a), Number::Integer(b)) => a.cmp(&b),
+        (Number::Float(a), Number::Float(b)) => a.total_cmp(&b),
+        (Number::Integer(a), Number::Float(b)) => integer_against(a, b),
+        (Number::Float(a), Number::Integer(b)) => integer_against(b, a).reverse(),
+    }
+}
+
+/// An integer against a float, by the float's whole part and then its
+/// fraction.
+fn integer_against(integer: i128, float: f64) -> Ordering {
+    // 2¹²⁷, which no i128 reaches and every float at or past it passes
+    const PAST: f64 = 1.701_411_834_604_692_3e38;
+    if float.is_nan() || float >= PAST {
+        return Ordering::Less;
+    }
+    if float < -PAST {
+        return Ordering::Greater;
+    }
+    let whole = float.trunc();
+    match integer.cmp(&(whole as i128)) {
+        Ordering::Equal if float > whole => Ordering::Less,
+        Ordering::Equal if float < whole => Ordering::Greater,
+        order => order,
+    }
+}
+
 /// What the different values a count holds weigh, and the most they may.
 struct Held {
     bytes: usize,
@@ -343,15 +461,19 @@ impl Held {
 }
 
 /// The value of a key an event holds: its stream's name, its name or its
-/// level's, or a field's, else its context's.
+/// level's, its message, or a field's, else its context's. An event without
+/// a message gives a field's or a context's `message`, as a program that
+/// kept its message in a field read it before.
 fn value_of(event: &Event, key: &str) -> Option<Value> {
+    let held = |key: &str| {
+        event.fields.json(key).or_else(|| event.context.json(key)).and_then(|json| serde_json::from_str(json).ok())
+    };
     match key {
         "stream" => Some(Value::String(event.stream.clone())),
         "name" => Some(Value::String(event.name.clone())),
         "level" => event.level.map(|level| Value::String(level.name().to_owned())),
-        key => {
-            event.fields.json(key).or_else(|| event.context.json(key)).and_then(|json| serde_json::from_str(json).ok())
-        }
+        "message" => event.message.clone().map(Value::String).or_else(|| held(key)),
+        key => held(key),
     }
 }
 
@@ -463,10 +585,7 @@ impl Summing {
             }
             Number::Float(float) => (self.floats, self.float) = (self.floats + float, true),
         }
-        let less = |a: Number, b: Number| match (a, b) {
-            (Number::Integer(a), Number::Integer(b)) => a < b,
-            (a, b) => a.as_f64() < b.as_f64(),
-        };
+        let less = |a: Number, b: Number| compare(a, b) == Ordering::Less;
         if self.least.is_none_or(|least| less(number, least)) {
             self.least = Some(number);
         }

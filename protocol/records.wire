@@ -95,7 +95,7 @@ message records.Count {
 # A key's most frequent values among what a query finds.
 message records.TopAsked {
   1 query: records.Query
-  2 key: str             # a field's or a context's, or stream, name or level
+  2 key: str             # a field's or a context's, or stream, name, level or message
 }
 
 message records.Top {
@@ -105,6 +105,17 @@ message records.Top {
 
 message records.Tops {
   1 values: [records.Top]
+}
+
+# The events whose value at key is a number, the largest first, as many as
+# the query's limit: ten unless it says, 1000 at most.
+message records.LargestAsked {
+  1 query: records.Query
+  2 key: str             # a field's, else a context's
+}
+
+message records.Events {
+  1 events: [records.Event]
 }
 
 # A row for each span of every and each value of the keys of by.
@@ -244,3 +255,4 @@ write 0x050b records.lines(Handle)                       -> exchange records.Dro
 read  0x050c records.damaged(Empty)                      -> records.Damages
 write 0x050d records.drop(records.Damage)                -> Empty
 read  0x050e records.fields(records.FieldsAsked)         -> records.StreamFields
+read  0x050f records.largest(records.LargestAsked)       -> records.Events

@@ -7,7 +7,7 @@ use super::super::events::Events;
 use super::super::fixture::{DAY, Fixture, SECOND, fixture};
 use super::super::maintain::maintain;
 use super::*;
-use crate::records::{Level, NewEvent};
+use crate::records::{Event, Level, NewEvent};
 use crate::{Calendar, ErrorKind};
 
 const HOUR: Duration = Duration::from_secs(60 * 60);
@@ -67,6 +67,87 @@ fn top_gives_a_keys_most_frequent_values_first() {
     assert_eq!(all.list().top("stream").unwrap(), [top(json!("api"), 61)]);
     assert_eq!(api.list().limit(1001).top("route").unwrap_err().kind(), ErrorKind::Invalid);
     assert_eq!(api.list().newest().top("route").unwrap_err().kind(), ErrorKind::Invalid);
+}
+
+// contract: REC-19
+#[test]
+fn largest_gives_the_events_of_a_keys_largest_numbers_first_those_of_one_number_in_read_order() {
+    let fixture = fixture();
+    let (api, _) = api(&fixture);
+    let ms = |events: Vec<Event>| -> Vec<String> {
+        events.iter().map(|event| event.fields.json("ms").unwrap().to_owned()).collect()
+    };
+    assert_eq!(
+        ms(api.list().largest("ms").unwrap()),
+        ["590", "580", "570", "560", "550", "540", "530", "520", "510", "500"]
+    );
+    // packed and waiting alike: the event that waits holds 5
+    assert_eq!(ms(api.list().min_level(Level::ERROR).limit(3).largest("ms").unwrap()), ["590", "490", "390"]);
+    assert_eq!(ms(api.list().filter("route", "/notes").limit(1000).largest("ms").unwrap()).last().unwrap(), "0");
+    // a key with no number in any event finds none; a limit past 1000, newest and after are refused
+    assert!(api.list().largest("route").unwrap().is_empty());
+    for refused in [api.list().limit(1001), api.list().limit(0), api.list().newest(), api.list().after("1~2")] {
+        assert_eq!(refused.largest("ms").unwrap_err().kind(), ErrorKind::Invalid);
+    }
+
+    let pages = fixture.events("pages");
+    let at = fixture.now() - MINUTE;
+    let open = |n: u32, ms: serde_json::Value| {
+        NewEvent::new("page-open").at(at + SECOND * n).fields(&json!({ "n": n, "ms": ms }))
+    };
+    pages
+        .append_all([
+            open(0, json!(9_007_199_254_740_992.0)),
+            open(1, json!(9_007_199_254_740_993_u64)),
+            open(2, json!(300)),
+            open(3, json!("9000")),
+            open(4, json!(300)),
+            open(5, json!(300.5)),
+            open(6, json!(-1)),
+        ])
+        .unwrap();
+    pages.append_all([NewEvent::new("page-open").at(at).context(&json!({ "ms": 301 }))]).unwrap();
+    let order: Vec<String> = pages
+        .list()
+        .limit(6)
+        .largest("ms")
+        .unwrap()
+        .iter()
+        .map(|event| event.fields.json("n").unwrap_or("context").to_owned())
+        .collect();
+    // an integer past 2⁵³ above the float below it; a context's number counts; text is passed over; ties as read
+    assert_eq!(order, ["1", "0", "context", "5", "2", "4"]);
+}
+
+#[test]
+fn an_integer_and_a_float_compare_exactly() {
+    let (int, float) = (Number::Integer, Number::Float);
+    assert_eq!(compare(int(9_007_199_254_740_993), float(9_007_199_254_740_992.0)), Ordering::Greater);
+    assert_eq!(compare(int(3), float(3.0)), Ordering::Equal);
+    assert_eq!(compare(int(-3), float(-2.5)), Ordering::Less);
+    assert_eq!(compare(float(-3.5), int(-3)), Ordering::Less);
+    assert_eq!(compare(int(i128::MAX), float(1e39)), Ordering::Less);
+    assert_eq!(compare(int(i128::MIN), float(-1e39)), Ordering::Greater);
+}
+
+#[test]
+fn top_and_by_read_message_as_the_events_own_and_a_field_of_that_name_without_one() {
+    let fixture = fixture();
+    let errors = fixture.events("client-errors");
+    errors
+        .append_all([
+            NewEvent::new("error").message("TypeError: x is undefined"),
+            NewEvent::new("error").message("TypeError: x is undefined").fields(&json!({ "message": "other" })),
+            NewEvent::new("error").fields(&json!({ "message": "copied" })),
+        ])
+        .unwrap();
+    let top = |value: &str, count: u64| Top { value: json!(value), count };
+    assert_eq!(errors.list().top("message").unwrap(), [top("TypeError: x is undefined", 2), top("copied", 1)]);
+    let rows = errors.list().aggregate(&Aggregate::new().by(["message"]).distinct(["message"])).unwrap();
+    assert_eq!(
+        rows.iter().map(|row| (row.by["message"].clone(), row.count)).collect::<Vec<_>>(),
+        [(json!("TypeError: x is undefined"), 2), (json!("copied"), 1)]
+    );
 }
 
 #[test]

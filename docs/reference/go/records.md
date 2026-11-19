@@ -100,6 +100,14 @@ func (a *AllEvents) Fields(ctx context.Context, stream string) (StreamFields, er
 
 Fields is what the events of stream carry, none of it read from a packed event: each name with how many events have it, and each key of their fields and contexts with the kinds of value it holds and how many events carry it. A stream with no events carries nothing.
 
+### AllEvents.Largest
+
+```go
+func (a *AllEvents) Largest(ctx context.Context, key string, q Query) ([]Event, error)
+```
+
+Largest is the events whose value at key is a number, the largest first, as a stream's Largest gives them.
+
 ### AllEvents.List
 
 ```go
@@ -138,7 +146,7 @@ Tail is the events written from now on that the query finds, a batch as they are
 func (a *AllEvents) Top(ctx context.Context, key string, q Query) ([]Top, error)
 ```
 
-Top is a key's most frequent values and how many events hold each: ten unless Limit asks for more, 1000 at most. The key is a field's or a context's, or stream, name or level.
+Top is a key's most frequent values and how many events hold each: ten unless Limit asks for more, 1000 at most. The key is a field's or a context's, or stream, name, level or message.
 
 ## AppendOption
 
@@ -364,6 +372,14 @@ func (e *Events) In(tx tinystore.InTx) *Events
 
 In is the stream inside a transaction of the database it was opened through: an append there is kept with the transaction's rows and reaches the stream once it commits, before db.Tx returns. A read goes through the stream itself, and finds what committed.
 
+### Events.Largest
+
+```go
+func (e *Events) Largest(ctx context.Context, key string, q Query) ([]Event, error)
+```
+
+Largest is the events whose value at key is a number, the largest first: ten unless Limit asks for more, 1000 at most. The key is a field's, else a context's; an event without a number there is passed over, and events of one number come in the order List gives them.
+
 ### Events.Lines
 
 ```go
@@ -407,7 +423,7 @@ Tail is the events written from now on that the query finds, a batch as they are
 func (e *Events) Top(ctx context.Context, key string, q Query) ([]Top, error)
 ```
 
-Top is a key's most frequent values and how many events hold each: ten unless Limit asks for more, 1000 at most. The key is a field's or a context's, or stream, name or level.
+Top is a key's most frequent values and how many events hold each: ten unless Limit asks for more, 1000 at most. The key is a field's or a context's, or stream, name, level or message.
 
 ## FieldInfo
 

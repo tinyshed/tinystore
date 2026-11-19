@@ -762,6 +762,7 @@ carries.
 | `0x050c` | records.damaged    | read  | `Empty`                   | `records.Damages`                              |
 | `0x050d` | records.drop       | write | `records.Damage`          | `Empty`                                        |
 | `0x050e` | records.fields     | read  | `records.FieldsAsked`     | `records.StreamFields`                         |
+| `0x050f` | records.largest    | read  | `records.LargestAsked`    | `records.Events`                               |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/records.wire`. `records.tail` sends a batch
