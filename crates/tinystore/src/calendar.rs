@@ -59,9 +59,11 @@ impl Calendar {
 /// The local date a calendar's span begins on, as ISO 8601 writes it:
 /// `2026-11-19` for a day, its Monday for a week, its first for a month.
 /// Text held in place, so that a bucket that carries one stays `Copy`.
+#[cfg(any(feature = "metrics", feature = "records"))]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalDate([u8; 10]);
 
+#[cfg(any(feature = "metrics", feature = "records"))]
 impl LocalDate {
     /// The date as text: `2026-11-19`.
     pub fn as_str(&self) -> &str {
@@ -71,7 +73,6 @@ impl LocalDate {
 
     /// A day of the years 0 to 9999, which ISO 8601's ten characters write;
     /// none for one outside them.
-    #[cfg(any(feature = "metrics", feature = "records"))]
     fn of(day: Date) -> Option<LocalDate> {
         let text = format!("{:04}-{:02}-{:02}", day.year(), day.month(), day.day());
         let bytes: [u8; 10] = text.as_bytes().try_into().ok()?;
@@ -79,18 +80,21 @@ impl LocalDate {
     }
 }
 
+#[cfg(any(feature = "metrics", feature = "records"))]
 impl std::fmt::Display for LocalDate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
+#[cfg(any(feature = "metrics", feature = "records"))]
 impl std::fmt::Debug for LocalDate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.as_str())
     }
 }
 
+#[cfg(any(feature = "metrics", feature = "records"))]
 impl PartialEq<&str> for LocalDate {
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other
