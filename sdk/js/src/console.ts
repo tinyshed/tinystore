@@ -448,13 +448,63 @@ function findPassword(text: string, start: number): [number, number, number] {
 	return at < 0 || colon < 0 || colon + 1 >= at ? [-1, -1, end] : [colon + 1, at, end]
 }
 
+/** The most causes an Error's text follows: a longer chain is cut there. */
+const mostCauses = 10
+
+/**
+ * An Error as its text: its stack, then `Caused by: ` and the stack of each
+ * cause, as deep as the chain goes and ten at most, and of each of an
+ * AggregateError's errors the same way. A cause met again stops the chain.
+ *
+ *     Error: moodle 502
+ *         at sync (moodle.ts:40:11)
+ *     Caused by: Error: timeout
+ *         at fetch (http.ts:7:5)
+ */
+function errorText(error: Error): string {
+	const lines = [stackOf(error)]
+	const seen = new Set<unknown>([error])
+	const causes = causesOf(error)
+	while (causes.length > 0 && seen.size <= mostCauses) {
+		const cause = causes.shift()
+		if (seen.has(cause)) {
+			continue
+		}
+		seen.add(cause)
+		lines.push(`Caused by: ${causeText(cause)}`)
+		if (cause instanceof Error) {
+			causes.unshift(...causesOf(cause))
+		}
+	}
+	return lines.join('\n')
+}
+
+function stackOf(error: Error): string {
+	return error.stack ?? String(error)
+}
+
+/** A cause as its text: an Error's stack, text as it is, anything else its JSON. */
+function causeText(cause: unknown): string {
+	if (cause instanceof Error) {
+		return stackOf(cause)
+	}
+	return typeof cause === 'string' ? cause : jsonOf(cause)
+}
+
+/** What an Error was caused by: its errors when it is an AggregateError, then its cause. */
+function causesOf(error: Error): unknown[] {
+	const errors = error instanceof AggregateError ? [...error.errors] : []
+	return error.cause === undefined ? errors : [...errors, error.cause]
+}
+
 /** What a hidden value becomes, in the store and on the console. */
 export const redacted = '"[redacted]"'
 
 /**
  * A value as JSON, its keys at any depth hidden as hides says; a bigint is its
- * digits, and what JSON cannot write is its text, so that a line is never lost
- * to one field.
+ * digits, an Error at any depth its text, which JSON would write as {}, and
+ * what JSON cannot write is its text, so that a line is never lost to one
+ * field.
  */
 export function jsonOf(value: unknown, hides?: (key: string) => boolean): string {
 	if (typeof value === 'bigint') {
@@ -464,6 +514,9 @@ export function jsonOf(value: unknown, hides?: (key: string) => boolean): string
 		const json = JSON.stringify(value, (key, inner) => {
 			if (key !== '' && hides?.(key)) {
 				return '[redacted]'
+			}
+			if (inner instanceof Error) {
+				return errorText(inner)
 			}
 			return typeof inner === 'bigint' ? inner.toString() : inner
 		})

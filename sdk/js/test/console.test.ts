@@ -17,6 +17,7 @@ import {
 	secrets,
 	words,
 } from '../src/console.ts'
+import { InvalidError } from '../src/errors.ts'
 import { encodeFields, logger, newLogger } from '../src/logger.ts'
 
 test('a URL password is hidden through JSON escapes without changing other numbers', () => {
@@ -241,6 +242,42 @@ describe('a logger of the console alone', () => {
 		const line = JSON.parse(written[0] as string)
 		expect([line.body, line.route, line.fn]).toEqual([undefined, '/pay', '() => 1'])
 		expect(Object.hasOwn(line, 'body')).toBe(false)
+	})
+
+	test("an Error's value is its stack and each cause's, at any depth of a field", () => {
+		const written: string[] = []
+		const log = newLogger(undefined, 'app', { console: 'json' }, { write: t => written.push(t) })
+		const timeout = new Error('timeout')
+		const failed = new Error('moodle 502', { cause: timeout })
+		const first = new Error('first try')
+		log.error('sync failed', { err: failed, job: { id: 7, last: first } })
+		const line = JSON.parse(written[0] as string)
+		expect(line.err).toBe(`${failed.stack}\nCaused by: ${timeout.stack}`)
+		expect(line.job).toEqual({ id: 7, last: first.stack }) // not {}
+
+		const all = new AggregateError([new Error('a'), 'b'], 'both failed', { cause: { code: 3 } })
+		const looped = new Error('loop')
+		looped.cause = looped
+		const chain = Array.from({ length: 12 }).reduce<Error>(
+			(cause, _, n) => new Error(`e${n}`, { cause }),
+			new Error('root'),
+		)
+		log.error('more', { all, looped, chain })
+		const more = JSON.parse(written[1] as string)
+		expect(
+			more.all
+				.split('\nCaused by: ')
+				.slice(1)
+				.map((part: string) => part.split('\n')[0]),
+		).toEqual(['Error: a', 'b', '{"code":3}'])
+		expect(more.looped.split('Caused by:')).toHaveLength(1)
+		expect(more.chain.split('Caused by:')).toHaveLength(11)
+	})
+
+	test('refuses a stream that is not text', () => {
+		const options = { console: 'off' } as const
+		expect(() => logger(options as unknown as string)).toThrow(InvalidError)
+		expect(() => logger('')).toThrow(InvalidError)
 	})
 
 	test('needs no store', () => {

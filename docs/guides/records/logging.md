@@ -74,6 +74,37 @@ http.with({ component: 'access' }).info('request completed')
 So `store.events('api')` reads the logger's lines beside any events appended
 to the same stream, and every read finds both. See [Reading](reading.md).
 
+A program that names its components by a path keeps the path itself, in two
+lines, since `with` replaces the key:
+
+```ts
+const named = (log: Logger, path: string) => log.with({ component: path })
+const queue = named(log, 'moodle.queue')
+```
+
+## Errors
+
+A field takes a value of any type, and an error is a field like another. In
+TypeScript an `Error` is kept as its stack, then `Caused by: ` and the stack of
+each `cause`, ten at most, and of each of an `AggregateError`'s `errors`. An
+`Error` inside an object is written the same way, not as `{}`. Python keeps an
+exception's traceback, its causes included, and Go and Rust an error's text.
+
+```ts
+log.error('sync failed', { err: new Error('moodle 502', { cause: timeout }) })
+```
+
+```log
+16:42:24.094 ERROR api  sync failed
+    err: Error: moodle 502
+        at sync (moodle.ts:40:11)
+    Caused by: Error: timeout
+        at fetch (http.ts:7:5)
+```
+
+Something thrown that is not an `Error`, a string or an object, goes in a field
+as it is: `log.error('sync failed', { err: thrown })`.
+
 ## Each language's own logger
 
 | Language   | The store's logger is                                                                                                    |

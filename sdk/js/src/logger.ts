@@ -217,6 +217,11 @@ function sharedOf(
 	options: Told,
 	out: (ConsoleOut & { utc?: boolean }) | undefined,
 ): { shared: Shared; spelled: Record<string, string> } {
+	if (typeof stream !== 'string') {
+		throw new InvalidError(
+			`a logger's stream is its name as text, such as 'api', not ${typeof stream}`,
+		)
+	}
 	if (stream === '') {
 		throw new InvalidError('a logger of no stream')
 	}
@@ -652,8 +657,9 @@ function textOf(line: ConsoleLine): number {
 /**
  * Fields as key, JSON pairs, as a console writes them and the store keeps
  * them: a field whose value is undefined left out, as JSON.stringify leaves
- * it out of an object, an Error's value its stack, which JSON would write as
- * {}, a secret's value hidden at any depth, and a URL's password unless kept.
+ * it out of an object, an Error at any depth its stack and its causes', which
+ * JSON would write as {}, a secret's value hidden at any depth, and a URL's
+ * password unless kept.
  */
 export function encodeFields(
 	fields: Fields,
@@ -670,12 +676,11 @@ export function encodeFields(
 		if (value === undefined) {
 			continue
 		}
-		const shown = value instanceof Error ? (value.stack ?? String(value)) : value
 		if (redact?.hides(key)) {
 			flat.push(key, redacted)
 			continue
 		}
-		const json = jsonOf(shown, redact?.hides)
+		const json = jsonOf(value, redact?.hides)
 		flat.push(key, redact?.urls === true ? hideUrlPasswords(json) : json)
 	}
 	return flat
