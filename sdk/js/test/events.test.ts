@@ -197,13 +197,14 @@ for (const way of ways) {
 			const later = new Date(Date.now() + 60_000)
 			expect(await activity.delete({ where: { userId: [97516, 97517] }, to: later })).toBe(1)
 			expect(await errors.count()).toBe(1)
+			// each started only as it is awaited: one refused before its turn is an unhandled rejection under Node
 			const refused = [
-				activity.delete({ where: {} }),
-				activity.delete({ where: { userId: 1 }, limit: 1 } as never),
-				activity.delete({ where: { userId: 1 }, search: 'x' } as never),
+				() => activity.delete({ where: {} }),
+				() => activity.delete({ where: { userId: 1 }, limit: 1 } as never),
+				() => activity.delete({ where: { userId: 1 }, search: 'x' } as never),
 			]
 			for (const deleted of refused) {
-				expect(await caught(deleted)).toBeInstanceOf(InvalidError)
+				expect(await caught(deleted())).toBeInstanceOf(InvalidError)
 			}
 		}
 
