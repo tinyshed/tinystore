@@ -30,10 +30,10 @@ const PENDING: Duration = Duration::from_secs(1);
 const GONE_ROWS: usize = 1024;
 
 const READ_COLUMNS: &str = "select name, pk from pragma_table_info(?1)";
-const UNIQUE_BY: &str = "select exists (select 1 from pragma_index_list(?1) as list
-    where list.\"unique\" and not list.partial
-    and (select count(*) from pragma_index_info(list.name)) = 1
-    and (select name from pragma_index_info(list.name)) = ?2)";
+/// The columns of each unique index of a table that is not partial, an
+/// index's together.
+const UNIQUE_INDEXES: &str = "select list.name, info.name from pragma_index_list(?1) as list
+    join pragma_index_info(list.name) as info where list.\"unique\" and not list.partial";
 
 impl Search {
     /// The search engine kept in a database's file, which its tables'
@@ -104,33 +104,102 @@ pub(crate) fn resolve(connection: &Connection, table: &Table, read: &[&str]) -> 
     if columns.is_empty() {
         return Err(Error::invalid(format!("the database has no table {}", table.name)));
     }
-    let primary: Vec<&String> = columns.iter().filter(|(_, pk)| *pk > 0).map(|(name, _)| name).collect();
-    let key = match (table.key.as_str(), primary.as_slice()) {
-        ("", [only]) => (*only).clone(),
-        ("", _) => {
+    let mut primary: Vec<(i64, String)> =
+        columns.iter().filter(|(_, pk)| *pk > 0).map(|(name, pk)| (*pk, name.clone())).collect();
+    primary.sort_unstable();
+    let primary: Vec<String> = primary.into_iter().map(|(_, name)| name).collect();
+    let key = match table.key.as_slice() {
+        [] if primary.is_empty() => {
             return Err(Error::invalid(format!(
-                "table {} has no primary key of one column: name a column of unique values with key(…)",
+                "table {} has no primary key: give the index a key, a column or columns of unique values",
                 table.name
             )));
         }
-        (key, _) => key.to_owned(),
+        [] => primary.clone(),
+        key => key.to_vec(),
     };
+    if let Some(twice) = key.iter().enumerate().find(|(at, column)| key[..*at].contains(column)) {
+        return Err(Error::invalid(format!("a key names column {} twice", twice.1)));
+    }
     let has = |column: &str| columns.iter().any(|(name, _)| name == column);
     let vector = table.vector.as_deref();
-    if let Some(missing) = std::iter::once(key.as_str()).chain(read.iter().copied()).chain(vector).find(|c| !has(c)) {
+    let named = key.iter().map(String::as_str).chain(read.iter().copied()).chain(vector);
+    if let Some(missing) = named.into_iter().find(|column| !has(column)) {
         return Err(Error::invalid(format!("table {} has no column {missing}", table.name)));
     }
-    let unique = primary.as_slice() == [&key] || {
-        let mut select = connection.prepare_cached(UNIQUE_BY).map_err(failed)?;
-        select.query_row((&table.name, &key), |row| row.get::<_, bool>(0)).map_err(failed)?
-    };
-    if !unique {
-        return Err(Error::invalid(format!(
-            "column {key} of table {} is no key: its values are not unique, by a primary key or a unique index",
-            table.name
-        )));
+    if !same_columns(&primary, &key) && !unique_by_an_index(connection, &table.name, &key)? {
+        return Err(not_unique(&table.name, &key));
     }
     Ok(Table { name: table.name.clone(), key, vector: table.vector.clone() })
+}
+
+/// Whether a unique index of `table` that is not partial holds the columns
+/// of `key` and no other.
+fn unique_by_an_index(connection: &Connection, table: &str, key: &[String]) -> Result<bool> {
+    let failed = |error| sql_error(format!("read table {table}'s indexes"), error);
+    let mut select = connection.prepare_cached(UNIQUE_INDEXES).map_err(failed)?;
+    let rows = select.query_map([table], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)));
+    let rows: Vec<(String, String)> = rows.and_then(Iterator::collect).map_err(failed)?;
+    let mut indexes: std::collections::HashMap<&str, Vec<String>> = std::collections::HashMap::new();
+    for (index, column) in &rows {
+        indexes.entry(index).or_default().push(column.clone());
+    }
+    Ok(indexes.values().any(|columns| same_columns(columns, key)))
+}
+
+/// Whether two lists name the same columns, in any order.
+fn same_columns(a: &[String], b: &[String]) -> bool {
+    a.len() == b.len() && a.iter().all(|column| b.contains(column))
+}
+
+fn not_unique(table: &str, key: &[String]) -> Error {
+    Error::invalid(match key {
+        [one] => format!(
+            "column {one} of table {table} is no key: its values are not unique, by a primary key or a unique index"
+        ),
+        columns => format!(
+            "columns {} of table {table} are no key: their values are not unique together, by a primary key or a \
+             unique index",
+            columns.join(", ")
+        ),
+    })
+}
+
+/// What [`TableIndexBuilder::key`] takes: a column, `"slug"`, or columns,
+/// `["space_id", "n"]`.
+pub trait Columns {
+    #[doc(hidden)]
+    fn columns(self) -> Vec<String>;
+}
+
+impl Columns for &str {
+    fn columns(self) -> Vec<String> {
+        vec![self.to_owned()]
+    }
+}
+
+impl Columns for &String {
+    fn columns(self) -> Vec<String> {
+        vec![self.clone()]
+    }
+}
+
+impl<S: AsRef<str>> Columns for &[S] {
+    fn columns(self) -> Vec<String> {
+        self.iter().map(|column| column.as_ref().to_owned()).collect()
+    }
+}
+
+impl<S: AsRef<str>, const N: usize> Columns for [S; N] {
+    fn columns(self) -> Vec<String> {
+        self.iter().map(|column| column.as_ref().to_owned()).collect()
+    }
+}
+
+impl<S: AsRef<str>> Columns for Vec<S> {
+    fn columns(self) -> Vec<String> {
+        self.iter().map(|column| column.as_ref().to_owned()).collect()
+    }
 }
 
 /// How the hits' rows are read as `T`s, in the snapshot their search read:
@@ -157,7 +226,7 @@ impl<T> std::fmt::Debug for TableIndexBuilder<T> {
 
 impl<T: DeserializeOwned> TableIndexBuilder<T> {
     pub(crate) fn in_file(shared: Arc<SharedFile>, name: &str, read_rows: ReadRows<T>) -> Self {
-        let table = Table { name: String::new(), key: String::new(), vector: None };
+        let table = Table { name: String::new(), key: Vec::new(), vector: None };
         let wanted = Wanted { table: Some(table), ..Wanted::default() };
         TableIndexBuilder { shared, name: name.to_owned(), wanted, read_rows }
     }
@@ -168,10 +237,13 @@ impl<T: DeserializeOwned> TableIndexBuilder<T> {
         self
     }
 
-    /// The column of unique values a row is found by, the table's primary
-    /// key unless said; a hit's id is its value as text.
-    pub fn key(mut self, column: &str) -> Self {
-        self.followed().key = column.to_owned();
+    /// The column of unique values a row is found by, or the columns whose
+    /// values are unique together, `key(["space_id", "n"])`: the table's
+    /// primary key unless said. A hit's id is the value of a key of one
+    /// column as text, and the values of a key of several as a JSON array,
+    /// `[1,6]` or `["NW",6]`.
+    pub fn key(mut self, columns: impl Columns) -> Self {
+        self.followed().key = columns.columns();
         self
     }
 
@@ -257,7 +329,7 @@ impl<T: DeserializeOwned> TableIndexBuilder<T> {
     }
 
     fn followed(&mut self) -> &mut Table {
-        self.wanted.table.get_or_insert_with(|| Table { name: String::new(), key: String::new(), vector: None })
+        self.wanted.table.get_or_insert_with(|| Table { name: String::new(), key: Vec::new(), vector: None })
     }
 
     fn opened(mut self, reindex: bool) -> Result<TableIndex<T>> {
@@ -391,7 +463,10 @@ pub(crate) fn found<T, R>(
     query: Query,
     tx: Option<&Transaction<'_>>,
 ) -> Result<Found<R>> {
-    let read = |connection: &Connection, settings: &Settings, answer: &Answer| -> Result<(Vec<Option<R>>, Columns)> {
+    let read = |connection: &Connection,
+                settings: &Settings,
+                answer: &Answer|
+     -> Result<(Vec<Option<R>>, ColumnsRead)> {
         let select = table::hit_select(&table_of(settings)?);
         let keys = answer.hits.iter().map(|hit| table::hit_key(&hit.value)).collect::<Result<Vec<_>>>()?;
         let rows = read_rows(connection, &index.search.memory, (&select, &keys))?;
@@ -426,7 +501,7 @@ pub(crate) fn found<T, R>(
 }
 
 /// A search's answer, and its hits' rows and the columns read of them.
-type Searched<R> = (Answer, (Vec<Option<R>>, Columns));
+type Searched<R> = (Answer, (Vec<Option<R>>, ColumnsRead));
 
 /// Searches until the page holds its `limit` of hits whose rows the table
 /// holds, or the search finds no more. SQLite removes the row a `replace`
@@ -462,7 +537,7 @@ fn filled<R>(
 
 /// The columns the index reads of each hit's row, for where it matched;
 /// none for a search that does not ask.
-type Columns = Vec<Option<serde_json::Value>>;
+type ColumnsRead = Vec<Option<serde_json::Value>>;
 
 /// Drops the table's index `name` kept in a database's file.
 pub(crate) fn drop_in_file(shared: &SharedFile, name: &str) -> Result<bool> {

@@ -83,9 +83,9 @@ pub(crate) use matches::Unit;
 pub use open::Status;
 pub use rebuild::Listed;
 #[cfg(feature = "sql")]
-pub(crate) use table_index::{ReadRows, drop_in_file};
+pub use table_index::{Columns, TableIndex, TableIndexBuilder, TxTableIndex};
 #[cfg(feature = "sql")]
-pub use table_index::{TableIndex, TableIndexBuilder, TxTableIndex};
+pub(crate) use table_index::{ReadRows, drop_in_file};
 #[cfg(all(feature = "sql", feature = "wire"))]
 pub(crate) use table_index::{by_cells, found_by, table_as_it_is};
 

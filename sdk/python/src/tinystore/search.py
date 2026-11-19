@@ -395,7 +395,7 @@ def index_open(
     reindex: bool = False,
     database: int | None = None,
     table: str | None = None,
-    key: str | None = None,
+    key: str | Sequence[str] | None = None,
 ) -> bytes:
     """The open of an index, or of a table's index with its table and its database's handle."""
     check_name(name, "index")
@@ -420,7 +420,9 @@ def index_open(
         reindex=reindex,
         database=database,
         table=table,
-        key=key,
+        # one column as key, several as keys, which a server before them ignores
+        key=key if isinstance(key, str) or key is None else key[0] if len(key) == 1 else None,
+        keys=list(key) if not isinstance(key, str) and key is not None and len(key) > 1 else None,
         vector_column=None if vectors is None else vectors.column,
     )
 

@@ -266,6 +266,7 @@ These contracts are what does not.
 - **SRCH-16** A maintenance pass of an index that keeps failing MUST be told by its `status()`, beside `ready` or `rebuilding`, from its first failure until a pass of it passes; `ready()` MUST NOT fail for it where it waited before.
 - **SRCH-17** A table's index's search kept to the rows of a statement of its database MUST answer what the same search with those rows' values as a list answers, the statement read in the snapshot the search reads.
 - **SRCH-18** A search with `total` MUST answer the exact number of documents it finds, under its filter and in its snapshot, whatever its `limit` and `offset`, when that number is 10,000 or less, and otherwise 10,000 with `atLeast`; it MUST never answer an estimate.
+- **SRCH-19** A table's index keyed by several columns MUST hold each row once, by its key's values together, and follow every change of it as an index keyed by one column does; an index keyed by one column MUST keep its ids, triggers and settings as before.
 
 ## 5. Replication
 

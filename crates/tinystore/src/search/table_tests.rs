@@ -714,3 +714,77 @@ fn a_where_by_a_statement_answers_as_the_list_of_its_values_read_in_the_search_s
     let elsewhere = documents.search("bread").filter(search::is_in("id", sql!("select 1"))).run().unwrap_err();
     assert!(elsewhere.to_string().contains("an index of documents has no tables"), "{elsewhere}");
 }
+
+const TASKS: &str = "create table tasks (
+    space text not null, n integer not null, title text not null, primary key (space, n)
+)";
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct Task {
+    space: String,
+    n: i64,
+    title: String,
+}
+
+// contract: SRCH-19
+#[test]
+fn a_table_s_index_keyed_by_several_columns_follows_each_row_once_by_their_values_together() {
+    let f = fixture();
+    f.db.exec(TASKS).unwrap();
+    for n in 1..=300 {
+        f.db.exec(sql!("insert into tasks values ('NW', ?, ?)", n, format!("task {n}"))).unwrap();
+    }
+    f.db.exec("insert into tasks values ('EU', 1, 'экран входа'), ('NW', 301, 'экран входа')").unwrap();
+    let open = || f.db.search_index::<Task>("tasks_search").table("tasks").field("title", 1.0).filters(["space"]);
+    let tasks = open().open().unwrap();
+    f.ready(&tasks);
+    let found = |text: &str| ids(&tasks.search(text).limit(20).run().unwrap()).join(" ");
+    assert_eq!(found("экран"), r#"["EU",1] ["NW",301]"#, "the primary key of two columns, no key given");
+    assert_eq!(found("task"), (1..=20).map(|n| format!(r#"["NW",{n}]"#)).collect::<Vec<_>>().join(" "));
+    assert_eq!(tasks.search("300").run().unwrap().hits.len(), 1, "every row of a fill of several steps");
+    let hit = &tasks.search("экран").filter(eq("space", "EU")).run().unwrap().hits[0];
+    assert_eq!(hit.value, Task { space: "EU".to_owned(), n: 1, title: "экран входа".to_owned() }, "its row");
+    f.db.exec("update tasks set n = 2 where space = 'EU' and n = 1").unwrap();
+    assert_eq!(found("экран"), r#"["NW",301] ["EU",2]"#, "a key changed leaves its old id");
+    f.db.exec("update tasks set title = 'выход' where space = 'NW' and n = 301").unwrap();
+    assert_eq!(found("экран"), r#"["EU",2]"#);
+    f.db.exec("delete from tasks where space = 'EU'").unwrap();
+    assert_eq!(found("экран"), "");
+    let rolled = f.db.tx(|tx| -> crate::Result<()> {
+        tx.exec("insert into tasks values ('EU', 9, 'экран')")?;
+        Err(Error::invalid("rolled back"))
+    });
+    assert!(rolled.is_err());
+    assert_eq!(found("экран"), "", "a rollback changes neither");
+    let named = open().key(["space", "n"]).open().unwrap();
+    assert_eq!(ids(&named.search("выход").run().unwrap()), [r#"["NW",301]"#], "the same key named");
+    let other = open().key(["n", "space"]).open().map(drop).unwrap_err().to_string();
+    assert!(other.contains("follows table tasks by space, n, not table tasks by n, space"), "{other}");
+}
+
+#[test]
+fn a_key_of_several_columns_is_unique_together_and_a_table_without_one_is_told_so_in_no_language_s_syntax() {
+    let f = fixture();
+    f.db.exec("create table loose (a text, b integer, title text)").unwrap();
+    let opened = |key: &[&str]| {
+        let index = f.db.search_index::<IgnoredAny>("loose_search").table("loose").field("title", 1.0);
+        index.key(key).open().map(drop)
+    };
+    let said = |key: &[&str]| opened(key).unwrap_err().to_string();
+    let none = "table loose has no primary key: give the index a key, a column or columns of unique values";
+    assert!(said(&[]).ends_with(&format!("{none}: invalid")), "{}", said(&[]));
+    let loose = "columns a, b of table loose are no key: their values are not unique together, by a primary key \
+                 or a unique index";
+    assert!(said(&["a", "b"]).contains(loose), "{}", said(&["a", "b"]));
+    assert!(said(&["a", "a"]).contains("names column a twice"));
+    assert!(said(&["a", "c"]).contains("has no column c"));
+    f.db.exec("create unique index loose_ba on loose (b, a)").unwrap();
+    opened(&["a", "b"]).unwrap();
+    let index = f.db.search_index::<IgnoredAny>("loose_search").table("loose").key(["a", "b"]).field("title", 1.0);
+    let index = index.open().unwrap();
+    f.ready(&index);
+    f.db.exec("insert into loose values ('x', 1, 'bread')").unwrap();
+    let keyless = f.db.exec("insert into loose values (null, 2, 'bread')").unwrap_err();
+    assert!(keyless.to_string().contains("a row without a key"), "a null in its key fails its write: {keyless}");
+    assert_eq!(ids(&index.search("bread").run().unwrap()), [r#"["x",1]"#]);
+}

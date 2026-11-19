@@ -54,18 +54,25 @@ pub(crate) struct Settings {
 }
 
 /// The table of a database that a table's index follows: its rows are the
-/// index's documents by `key`, a column of unique values, and their vectors
-/// are the column `vector`'s, when it keeps them.
+/// index's documents by `key`, a column or columns of unique values
+/// together, and their vectors are the column `vector`'s, when it keeps
+/// them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Table {
     pub(crate) name: String,
-    pub(crate) key: String,
+    pub(crate) key: Vec<String>,
     pub(crate) vector: Option<String>,
 }
 
 impl Table {
+    /// A key of one column keeps its name, as every release wrote it, and
+    /// one of several their list, which a release before 0003 refuses.
     fn to_json(&self) -> Value {
-        json!({ "name": self.name, "key": self.key, "vector": self.vector })
+        let key = match self.key.as_slice() {
+            [one] => json!(one),
+            columns => json!(columns),
+        };
+        json!({ "name": self.name, "key": key, "vector": self.vector })
     }
 
     /// A table as its settings keep it, none for an index of documents;
@@ -75,8 +82,19 @@ impl Table {
             return Some(None);
         }
         let name = table["name"].as_str()?.to_owned();
-        let key = table["key"].as_str()?.to_owned();
+        let key = match &table["key"] {
+            Value::String(one) => vec![one.clone()],
+            Value::Array(columns) if columns.len() > 1 => {
+                columns.iter().map(|column| column.as_str().map(str::to_owned)).collect::<Option<_>>()?
+            }
+            _ => return None,
+        };
         Some(Some(Table { name, key, vector: table["vector"].as_str().map(str::to_owned) }))
+    }
+
+    /// The key as an error names it: `id`, or `space_id, n`.
+    pub(crate) fn key_shown(&self) -> String {
+        self.key.join(", ")
     }
 }
 
@@ -375,7 +393,7 @@ impl Settings {
     /// Refuses another table or key than the index follows: its documents
     /// would be another's.
     fn check_same_table(&self, wanted: &Wanted) -> Result<()> {
-        let followed = |table: &Option<Table>| table.as_ref().map(|table| (table.name.clone(), table.key.clone()));
+        let followed = |table: &Option<Table>| table.as_ref().map(|table| (table.name.clone(), table.key_shown()));
         let (kept, asked) = (followed(&self.table), followed(&wanted.table));
         if kept == asked {
             return Ok(());
@@ -632,6 +650,22 @@ mod tests {
         assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
         let settings = Settings::new(&with_vectors(1024, Some(0.7), false));
         assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
+    }
+
+    #[test]
+    fn a_key_of_one_column_keeps_its_name_as_every_release_wrote_it_and_one_of_several_their_list() {
+        let keyed = |key: &[&str]| {
+            let table =
+                Table { name: "tasks".to_owned(), key: key.iter().map(|c| (*c).to_owned()).collect(), vector: None };
+            Settings::new(&Wanted { table: Some(table), ..wanted(&[("title", 1.0)]) })
+        };
+        let one = keyed(&["id"]);
+        assert!(one.to_json().contains(r#""key":"id""#), "{}", one.to_json());
+        assert_eq!(Settings::from_json(&one.to_json()).unwrap(), one);
+        let several = keyed(&["space", "n"]);
+        assert!(several.to_json().contains(r#""key":["space","n"]"#), "{}", several.to_json());
+        assert_eq!(Settings::from_json(&several.to_json()).unwrap(), several);
+        assert!(Settings::from_json(&several.to_json().replace(r#"["space","n"]"#, "[]")).is_err());
     }
 
     #[test]

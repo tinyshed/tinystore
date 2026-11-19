@@ -13680,6 +13680,8 @@ export const SearchOpen = message(
 		vectorColumn: [14, str],
 		/** the keyboard layouts its readers type with: ru and en, or none */
 		layouts: [15, list(str)],
+		/** a key of several columns, in place of key: their values unique together */
+		keys: [16, list(str)],
 	},
 	{
 		write(w, v) {
@@ -13769,6 +13771,14 @@ export const SearchOpen = message(
 				}
 				n++
 			}
+			if (v.keys !== undefined) {
+				w.field(16)
+				w.array(v.keys.length)
+				for (const item0 of v.keys) {
+					w.str(item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -13787,6 +13797,7 @@ export const SearchOpen = message(
 			let $key: string | undefined
 			let $vectorColumn: string | undefined
 			let $layouts: string[] | undefined
+			let $keys: string[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -13852,6 +13863,15 @@ export const SearchOpen = message(
 						$layouts = items0
 						break
 					}
+					case 16: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$keys = items0
+						break
+					}
 					default:
 						r.skip()
 				}
@@ -13873,6 +13893,7 @@ export const SearchOpen = message(
 				key: $key,
 				vectorColumn: $vectorColumn,
 				layouts: $layouts,
+				keys: $keys,
 			}
 		},
 	},

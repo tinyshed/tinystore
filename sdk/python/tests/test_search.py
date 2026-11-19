@@ -308,6 +308,35 @@ async def test_a_tables_index_keeps_a_search_to_the_values_a_statement_of_its_da
     assert await db.drop_search_index("people_search")
 
 
+@dataclass
+class Task:
+    space: str
+    n: int
+    title: str
+
+
+# contract: SRCH-19
+async def test_a_tables_index_keyed_by_two_columns_names_each_hit_by_their_values_together(
+    store: tinystore.Store,
+) -> None:
+    db = await store.database(
+        "tasks",
+        migrations={
+            "0001_tasks.sql": "create table tasks (space text not null, n integer not null, title text not null, "
+            "primary key (space, n))"
+        },
+    )
+    await db.exec("insert into tasks values ('NW', 6, 'login screen'), ('EU', 6, 'login screen')")
+    tasks = db.search_index(
+        "tasks_search", Task, table="tasks", key=("space", "n"), fields=["title"], filters=["space"]
+    )
+    await tasks.ready()
+    found = await tasks.search("screen", where={"space": "NW"})
+    assert ids(found) == ['["NW",6]']
+    assert found.hits[0].value == Task("NW", 6, "login screen")
+    assert await db.drop_search_index("tasks_search")
+
+
 async def test_an_index_is_listed_and_dropped_with_every_document_it_holds(store: tinystore.Store) -> None:
     posts = store.index("posts", str)
     await posts.set("p", "hello")

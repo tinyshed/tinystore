@@ -1,0 +1,6 @@
+-- From here on a table's index may be keyed by several columns, its
+-- settings keeping their list as the key where one column keeps its name,
+-- and its documents' ids the key's values as a JSON array. No table
+-- changes, and an index keyed by one column reads as before. The step is
+-- here so that a release before it refuses the file at its open, rather
+-- than read such settings as damage.

@@ -137,8 +137,19 @@ func Rebuild(mode RebuildMode) Option {
 // change of a row in the commit that makes it.
 func Table(name string) Option { return optionFunc(func(o *wire.SearchOpen) { o.Table = &name }) }
 
-// Key is a table's column of unique values the index names rows by; its primary key unless given.
-func Key(column string) Option { return optionFunc(func(o *wire.SearchOpen) { o.Key = &column }) }
+// Key is a table's column of unique values the index names rows by, or its
+// columns whose values are unique together, Key("space_id", "n"): its
+// primary key unless given. A hit's ID is a key of several columns' values
+// as a JSON array, "[1,6]".
+func Key(column string, more ...string) Option {
+	return optionFunc(func(o *wire.SearchOpen) {
+		if len(more) == 0 {
+			o.Key = &column
+			return
+		}
+		o.Keys = append([]string{column}, more...)
+	})
+}
 
 // Index is documents of one type by id, or a table's rows, found again by
 // their words, vectors or both.

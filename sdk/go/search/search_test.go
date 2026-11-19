@@ -371,6 +371,30 @@ func TestATotalCountsWhatASearchFindsUnderItsWhereWhateverItsPage(t *testing.T) 
 	})
 }
 
+type task struct {
+	Space string `db:"space"`
+	N     int    `db:"n"`
+	Title string `db:"title"`
+}
+
+// contract: SRCH-19
+func TestATablesIndexKeyedByTwoColumnsNamesEachHitByTheirValuesTogether(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := ways.Must(sqldb.Open(ctx, store, "tasks", sqldb.Migrations(fstest.MapFS{"0001_tasks.sql": {Data: []byte(
+			"create table tasks (space text not null, n integer not null, title text not null, primary key (space, n))")}})))
+		ways.Must(db.Exec(ctx, "insert into tasks values ('NW', 6, 'login screen'), ('EU', 6, 'login screen')"))
+		tasks := ways.Must(search.OpenIndex[task](db, "tasks_search", search.Table("tasks"), search.Key("space", "n"),
+			search.FieldNames("title"), search.Filters("space")))
+		ways.Must(0, tasks.Ready(ctx))
+		found := ways.Must(tasks.Search(ctx, "screen", search.Where{"space": "NW"}))
+		if got := ids(found); !reflect.DeepEqual(got, []string{`["NW",6]`}) || found.Hits[0].Value != (task{"NW", 6, "login screen"}) {
+			t.Fatalf("found %v %+v", got, found.Hits)
+		}
+		ways.Must(search.Drop(ctx, db, "tasks_search"))
+	})
+}
+
 type person struct {
 	ID   int    `db:"id"`
 	Name string `db:"name"`

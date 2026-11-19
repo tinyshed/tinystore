@@ -35,6 +35,7 @@ use crate::{Error, Memory, Result, Store};
 const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
     Migration::of(2, "0002_segments.sql", include_str!("migrations/0002_segments.sql")),
+    Migration::of(3, "0003_keys.sql", include_str!("migrations/0003_keys.sql")),
 ];
 
 /// search's file in the store's directory.

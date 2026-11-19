@@ -126,7 +126,9 @@ fn table_index(shared: Arc<SharedFile>, asked: &SearchOpen, read_only: bool) -> 
     let mut builder = search::TableIndexBuilder::<Value>::in_file(shared, &asked.name, search::by_cells()).table(table);
     builder = builder.typo_tolerance(asked.typo_tolerance.unwrap_or(true)).filters(&asked.filters);
     builder = builder.layouts(&asked.layouts);
-    if let Some(key) = &asked.key {
+    if !asked.keys.is_empty() {
+        builder = builder.key(&asked.keys[..]);
+    } else if let Some(key) = &asked.key {
         builder = builder.key(key);
     }
     for field in &asked.fields {

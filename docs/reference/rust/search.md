@@ -687,6 +687,15 @@ pub struct Listed {
 
 An index as `search::list` says it.
 
+## Columns
+
+```rust
+pub trait Columns
+```
+
+What `TableIndexBuilder::key` takes: a column, `"slug"`, or columns,
+`["space_id", "n"]`.
+
 ## TableIndex
 
 ```rust
@@ -756,11 +765,14 @@ The table whose rows the index holds and follows from then on.
 ### TableIndexBuilder.key
 
 ```rust
-pub fn key(self, column: &str) -> Self
+pub fn key(self, columns: impl Columns) -> Self
 ```
 
-The column of unique values a row is found by, the table's primary
-key unless said; a hit's id is its value as text.
+The column of unique values a row is found by, or the columns whose
+values are unique together, `key(["space_id", "n"])`: the table's
+primary key unless said. A hit's id is the value of a key of one
+column as text, and the values of a key of several as a JSON array,
+`[1,6]` or `["NW",6]`.
 
 ### TableIndexBuilder.field
 

@@ -61,19 +61,47 @@ const MOST_ROW: usize = DOCUMENT_BYTES.bound as usize;
 /// beside the statement that makes it as SQLite keeps it: `CREATE TRIGGER`
 /// in capitals, so that one already there compares equal.
 fn triggers(name: &str, table: &Table) -> [(String, String); 3] {
-    let (on, key) = (quoted(&table.name), quoted(&table.key));
+    let on = quoted(&table.name);
+    let (new, old) = (key_of(table, "new."), key_of(table, "old."));
     let pending = "insert into _tinystore_search_pending (name, key)";
-    let changed = format!("select '{name}', new.{key} where new.{key} is not old.{key};");
+    let changed = format!("select '{name}', {new} where {new} is not {old};");
     let made = |event: &str, body: String| {
         let trigger = trigger_of(name, event);
         let sql = format!("CREATE TRIGGER {} after {event} on {on} begin {body} end", quoted(&trigger));
         (trigger, sql)
     };
     [
-        made("insert", format!("{pending} values ('{name}', new.{key});")),
-        made("update", format!("{pending} values ('{name}', old.{key}); {pending} {changed}")),
-        made("delete", format!("{pending} values ('{name}', old.{key});")),
+        made("insert", format!("{pending} values ('{name}', {new});")),
+        made("update", format!("{pending} values ('{name}', {old}); {pending} {changed}")),
+        made("delete", format!("{pending} values ('{name}', {old});")),
     ]
+}
+
+/// A row's key as a statement over `table` reads it, of the row `of`,
+/// `new.`, `old.` or none: its one column, or its columns' values as a JSON
+/// array, `[1,6]` or `["NW",6]`, which is then the row's document's id. Two
+/// rows never give the same, and every SDK reads it back.
+fn key_of(table: &Table, of: &str) -> String {
+    match table.key.as_slice() {
+        [one] => format!("{of}{}", quoted(one)),
+        columns => {
+            let each: Vec<String> = columns.iter().map(|column| format!("{of}{}", quoted(column))).collect();
+            format!("json_array({})", each.join(", "))
+        }
+    }
+}
+
+/// That a row of `table` is the one whose key `?1` binds, as [`key_of`]
+/// writes it: each column of several equal to its place in the array, so
+/// that SQLite still finds the row by its primary key's index.
+fn keyed(table: &Table) -> String {
+    match table.key.as_slice() {
+        [one] => format!("{} = ?1", quoted(one)),
+        columns => {
+            let each = columns.iter().enumerate().map(|(at, column)| format!("{} = (?1 ->> {at})", quoted(column)));
+            each.collect::<Vec<_>>().join(" and ")
+        }
+    }
 }
 
 use crate::sqlite::quote_ident as quoted;
@@ -350,11 +378,17 @@ fn read_pending(tx: &Tx<'_>) -> Result<Vec<(i64, String, SqlValue)>> {
 /// The keys after `through` in the table's order, a step of them.
 fn next_keys(tx: &Tx<'_>, table: &Table, through: &SqlValue) -> Result<Vec<SqlValue>> {
     let failed = |error| sql_error(format!("read table {}", table.name), error);
-    let (on, key) = (quoted(&table.name), quoted(&table.key));
+    let (on, key) = (quoted(&table.name), key_of(table, ""));
+    let columns: Vec<String> = table.key.iter().map(|column| quoted(column)).collect();
+    let bound: Vec<String> = (0..columns.len()).map(|at| format!("?1 ->> {at}")).collect();
+    let after = match columns.as_slice() {
+        [one] => format!("{one} > ?1"),
+        _ => format!("({}) > ({})", columns.join(", "), bound.join(", ")),
+    };
     // A table's statements are written from its names, and kept by their text.
     let first = matches!(through, SqlValue::Null);
-    let after = if first { String::new() } else { format!("where {key} > ?1") };
-    let sql = format!("select {key} from {on} {after} order by {key} limit {STEP}");
+    let after = if first { String::new() } else { format!("where {after}") };
+    let sql = format!("select {key} from {on} {after} order by {} limit {STEP}", columns.join(", "));
     let mut select = tx.prepare_cached(&sql).map_err(failed)?;
     let params: &[&dyn ToSql] = if first { &[] } else { &[through] };
     let rows = select.query_map(params, |row| row.get(0));
@@ -369,6 +403,14 @@ pub(crate) fn key_id(key: &SqlValue) -> Result<String> {
         SqlValue::Null => Err(Error::invalid("a row without a key, which a table's index finds rows by")),
         other => Err(Error::invalid(format!("a key of {other:?}: a table's index keys rows by integers or text"))),
     }
+}
+
+/// Whether a key of several columns holds a value in each: SQLite lets a
+/// column of a primary key that is no integer hold null, and such a row has
+/// no key the index can find it by.
+fn whole(key: &SqlValue) -> bool {
+    let SqlValue::Text(json) = key else { return false };
+    serde_json::from_str::<Vec<Value>>(json).is_ok_and(|values| values.iter().all(|value| !value.is_null()))
 }
 
 /// A key as a set tells two apart.
@@ -444,7 +486,7 @@ pub(crate) fn prepared_again(
 /// The statement that reads a hit's row whole, by the key it binds.
 #[cfg(feature = "sql")]
 pub(crate) fn hit_select(table: &Table) -> String {
-    format!("select * from {} where {} = ?", quoted(&table.name), quoted(&table.key))
+    format!("select * from {} where {}", quoted(&table.name), keyed(table))
 }
 
 /// The columns of the row keyed `key` the index reads, as its document holds
@@ -505,7 +547,10 @@ fn read(connection: &Connection, settings: &Settings, key: &SqlValue) -> Result<
     columns.extend(table.vector.as_deref());
     let mut seen = HashSet::new();
     columns.retain(|column| seen.insert(*column));
-    let sql = format!("select * from {} where {} = ?1", quoted(&table.name), quoted(&table.key));
+    if table.key.len() > 1 && !whole(key) {
+        return Err(Error::invalid("a row without a key, which a table's index finds rows by"));
+    }
+    let sql = format!("select * from {} where {}", quoted(&table.name), keyed(table));
     // A table or a key column gone is the program's schema, not the store's
     // failure: `invalid`, which leaves out a row a process beside the store
     // left, rather than failing every later write of the file.
@@ -585,7 +630,7 @@ mod tests {
 
     #[test]
     fn a_triggers_statement_starts_as_sqlite_keeps_it_and_quotes_every_name() {
-        let table = Table { name: "my \"table\"".to_owned(), key: "id".to_owned(), vector: None };
+        let table = Table { name: "my \"table\"".to_owned(), key: vec!["id".to_owned()], vector: None };
         let [(insert, sql), _, (delete, _)] = triggers("articles_search", &table);
         assert_eq!(insert, "_tinystore_search_articles_search_insert");
         assert_eq!(delete, "_tinystore_search_articles_search_delete");

@@ -10984,6 +10984,8 @@ pub(crate) struct SearchOpen {
     pub(crate) vector_column: Option<String>,
     /// The keyboard layouts its readers type with: ru and en, or none.
     pub(crate) layouts: Vec<String>,
+    /// A key of several columns, in place of key: their values unique together.
+    pub(crate) keys: Vec<String>,
 }
 
 #[cfg(feature = "search")]
@@ -11010,6 +11012,7 @@ impl Message for SearchOpen {
                 13 => message.key = Some(codec::str(r, "key")?),
                 14 => message.vector_column = Some(codec::str(r, "vectorColumn")?),
                 15 => message.layouts = codec::list(r, "layouts", codec::str)?,
+                16 => message.keys = codec::list(r, "keys", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11078,6 +11081,10 @@ impl Message for SearchOpen {
             map.field(out, 15);
             codec::write_list(out, &self.layouts, codec::write_str);
         }
+        if !self.keys.is_empty() {
+            map.field(out, 16);
+            codec::write_list(out, &self.keys, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -11098,6 +11105,7 @@ impl Message for SearchOpen {
             + self.key.as_ref().map_or(0, |key| 1 + 5 + key.len())
             + self.vector_column.as_ref().map_or(0, |vector_column| 1 + 5 + vector_column.len())
             + 1 + codec::list_size(&self.layouts, |item| 5 + item.len())
+            + 1 + codec::list_size(&self.keys, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -11116,6 +11124,7 @@ impl Message for SearchOpen {
             && self.key.is_none()
             && self.vector_column.is_none()
             && self.layouts.is_empty()
+            && self.keys.is_empty()
     }
 }
 

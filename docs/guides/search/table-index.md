@@ -73,13 +73,13 @@ articles.ready()?; // the rows the table already holds, read once
 let found = articles.search("хлеба").filter(eq("author_id", &7)).filter(eq("published", &true)).run()?;
 ```
 
-| Option    | What it says                                                                         |
-|-----------|--------------------------------------------------------------------------------------|
-| `table`   | the table whose rows the index holds                                                 |
-| `key`     | a column of unique values that names a row, a hit's `id`; the primary key unless set |
-| `fields`  | the columns whose words are read, with their weights                                 |
-| `filters` | the columns a search may keep to; a boolean matches the 1 or 0 SQLite keeps          |
-| `vectors` | the column of vectors your program fills, and their dimensions                       |
+| Option    | What it says                                                                                     |
+|-----------|--------------------------------------------------------------------------------------------------|
+| `table`   | the table whose rows the index holds                                                             |
+| `key`     | a column, or columns, of unique values that name a row, a hit's `id`; the primary key unless set |
+| `fields`  | the columns whose words are read, with their weights                                             |
+| `filters` | the columns a search may keep to; a boolean matches the 1 or 0 SQLite keeps                      |
+| `vectors` | the column of vectors your program fills, and their dimensions                                   |
 
 A hit's `value` is its row as `db.all` reads it, every column. The index
 lives in the database's file, `sql/blog.db`, beside the table. A `where` can
@@ -90,6 +90,46 @@ The rows of one search count together, as the rows of one `db.all` do. If
 they pass 64 MiB, or more than the store's memory has free, the search fails
 with a limit error instead of returning fewer hits. Ask for fewer hits, or
 keep large columns such as files in a table of their own.
+
+## A key of several columns
+
+A table whose rows are named by two columns together, task 6 of space NW,
+needs no surrogate id. Its primary key is the index's key unless `key` names
+other columns, and a unique index of exactly those columns serves as well:
+
+```sql title="migrations/0001_tasks.sql"
+create table tasks (space text not null, n integer not null, title text not null, primary key (space, n));
+```
+
+```ts
+const tasks = db.searchIndex<Task>('tasks_search', { table: 'tasks', key: ['space', 'n'], fields: { title: 1 } })
+const found = await tasks.search('экран')
+found.hits[0] // { id: '["NW",6]', value: { space: 'NW', n: 6, title: 'экран входа' }, score: … }
+```
+
+```python
+tasks = db.search_index("tasks_search", Task, table="tasks", key=("space", "n"), fields={"title": 1})
+```
+
+```go
+tasks, err := search.OpenIndex[Task](db, "tasks_search", search.Table("tasks"), search.Key("space", "n"), search.Fields{"title": 1})
+```
+
+```rust
+let tasks = db.search_index::<Task>("tasks_search").table("tasks").key(["space", "n"]).field("title", 1.0).open()?;
+```
+
+A hit's `id` is the key's values as a JSON array, `["NW",6]`, which reads
+back in every language, and the row in `value` carries every column. To keep
+a search to one space, list `space` in `filters`. Each row is held once by
+its key's values together, and follows every change as an index keyed by
+one column does (contract SRCH-19). A row with no value in a key column has
+no key the index can find it by, and its write fails with an invalid error.
+
+Bun, Node, Python and Go open a handle at its first call, so a key that
+isn't one, or a table without a primary key, fails there. Call `await
+index.status()` once at start-up, after the migrations, so that the mistake
+fails before a user types the first search.
 
 ## Every change reaches it
 

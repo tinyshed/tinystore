@@ -569,7 +569,7 @@ impl Reader<'_> {
             let refused = format!("filter {path}: a statement of more than {MOST_ROWS} rows");
             return Err(FILTER_ROWS.refuse(values.len() as u64, refused));
         }
-        if table.key == path {
+        if table.key == [path] {
             return self.keyed(&values);
         }
         let values = values.into_iter().filter_map(|value| value_of(value, path).transpose());

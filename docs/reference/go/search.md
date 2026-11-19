@@ -266,10 +266,10 @@ Filters are the fields a search's Where may keep its hits to.
 ### Key
 
 ```go
-func Key(column string) Option
+func Key(column string, more ...string) Option
 ```
 
-Key is a table's column of unique values the index names rows by; its primary key unless given.
+Key is a table's column of unique values the index names rows by, or its columns whose values are unique together, Key("space\_id", "n"): its primary key unless given. A hit's ID is a key of several columns' values as a JSON array, "\[1,6]".
 
 ### Layouts
 

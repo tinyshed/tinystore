@@ -379,6 +379,29 @@ for (const way of ways) {
 			expect(await db.dropSearchIndex('people_search')).toBe(true)
 		})
 
+		// contract: SRCH-19
+		test("a table's index keyed by two columns names each hit by their values together", async () => {
+			const db = await store.database('tasks', {
+				migrations: {
+					'0001_tasks.sql':
+						'create table tasks (space text not null, n integer not null, title text not null, primary key (space, n))',
+				},
+			})
+			await db.exec`insert into tasks values ('NW', 6, 'login screen'), ('EU', 6, 'login screen')`
+			const tasks = db.searchIndex<{ space: string; n: number; title: string }>('tasks_search', {
+				table: 'tasks',
+				key: ['space', 'n'],
+				fields: ['title'],
+				filters: ['space'],
+			})
+			await tasks.ready()
+			const found = await tasks.search({ text: 'screen', where: { space: 'NW' } })
+			expect(ids(found)).toEqual(['["NW",6]'])
+			expect(found.hits[0]?.value).toEqual({ space: 'NW', n: 6, title: 'login screen' })
+			expect(JSON.parse(found.hits[0]?.id ?? '')).toEqual(['NW', 6])
+			expect(await db.dropSearchIndex('tasks_search')).toBe(true)
+		})
+
 		test('an index is listed, and dropped with every document it holds', async () => {
 			const posts = store.index<string>('posts')
 			await posts.set('p', 'hello')

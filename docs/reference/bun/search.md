@@ -230,8 +230,13 @@ An index as `store.indexes()` lists it.
 interface TableIndexOptions {
     /** the table whose rows the index holds and follows */
     table: string
-    /** the column of unique values a row is found by, the table's primary key unless said */
-    key?: string | undefined
+    /**
+     * the column of unique values a row is found by, or the columns whose
+     * values are unique together, `['space_id', 'n']`: the table's primary
+     * key unless said; a hit's `id` is a key of several columns' values as a
+     * JSON array, `'[1,6]'`
+     */
+    key?: string | readonly string[] | undefined
     /** the columns whose words are read, each with what a word found there weighs, or a list that weighs each 1 */
     fields: Record<string, number> | readonly string[]
     /** the columns a search may keep its hits to; a boolean is the 1 or 0 SQLite keeps */
