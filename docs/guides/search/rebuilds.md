@@ -54,7 +54,7 @@ the index serves now, which `status()` says.
 | `recall` added or removed                              | clusters built or dropped in the background; searches stay exact |
 | `vectors` added                                        | at once: documents have none until they are set again            |
 | the vectors' dimensions, `vectors` left out            | `invalid`: the store cannot make your model's vectors            |
-| a table's index's table or key                         | `invalid`: open another name, and drop the old one               |
+| a table's index's table or key                         | the new table read beside, then switched in                      |
 
 A weight is read by each search as it runs, which is why it is free. A field
 added needs every document's words, which is why it is read again.

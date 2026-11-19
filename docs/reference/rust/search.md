@@ -871,7 +871,9 @@ pub fn open(self) -> Result<TableIndex<T>>
 Opens the index, made the first time: its triggers put on the table,
 and its rows read in the background, which `TableIndex::ready`
 waits for. Other settings change it as [`IndexBuilder::open`](super::IndexBuilder::open)
-says; another table or key is refused.
+says; another table or key is read beside it, the old table's rows
+answering and taking its writes until the new table is read whole and
+switches in.
 
 ### TableIndexBuilder.reindex
 

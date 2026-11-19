@@ -239,9 +239,54 @@ transaction wrote once the transaction commits, so search after it returns.
 The index's fields, filters, weights and vectors change as a store's index's
 do: open it with other settings under the same name, and it reads the table
 again beside itself while it answers. Never version an index's name for
-this. See [Rebuilds](rebuilds.md). Another table or key is refused, since
-its documents would be another table's: open another name for it, and drop
-the old one.
+this. See [Rebuilds](rebuilds.md).
+
+Another table or key works the same way. Open the index with it under the
+same name, and the store reads the new table beside the index while the old
+table's rows answer every search and the index takes the old table's
+writes. Once the new table is read, the index switches to it in one commit
+(contract SRCH-20):
+
+```ts
+const articles = db.searchIndex<Article>('articles_search', { table: 'articles_v2', key: 'slug', fields: { title: 2, body: 1 } })
+await articles.status() // { state: 'rebuilding', done: 0 }: the rows of articles answer until the switch
+await articles.ready() // switched: the rows of articles_v2, by slug
+```
+
+```python
+articles = db.search_index("articles_search", Article, table="articles_v2", key="slug", fields={"title": 2, "body": 1})
+await articles.ready()
+```
+
+```go
+articles, err := search.OpenIndex[Article](db, "articles_search",
+	search.Table("articles_v2"), search.Key("slug"), search.Fields{"title": 2, "body": 1})
+err = articles.Ready(ctx)
+```
+
+```rust
+let articles = db
+    .search_index::<Article>("articles_search")
+    .table("articles_v2")
+    .key("slug")
+    .field("title", 2.0)
+    .field("body", 1.0)
+    .open()?;
+articles.ready()?;
+```
+
+- A write to the new table during the read reaches the rows beside, through
+  triggers of their own, so that the new rows miss nothing. Two sets of
+  triggers can sit on one table, when only the key changes, and never
+  collide.
+- The switch's commit takes the old table's triggers off and puts the
+  index's own on the new table. From then on a write to the old table no
+  longer reaches the index.
+- A restart goes on where the read stopped.
+- With `rebuild: 'manual'`, the change is `invalid` until `reindex` asks
+  for it, as for a field.
+- `status()` says `rebuilding` while the new table is read, and its `done`
+  stays 0 until the switch.
 
 ```ts
 await db.dropSearchIndex('articles_search') // true: its triggers off the table, its rows dropped

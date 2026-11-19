@@ -274,6 +274,7 @@ These contracts are what does not.
 - **SRCH-17** A table's index's search kept to the rows of a statement of its database MUST answer what the same search with those rows' values as a list answers, the statement read in the snapshot the search reads.
 - **SRCH-18** A search with `total` MUST answer the exact number of documents it finds, under its filter and in its snapshot, whatever its `limit` and `offset`, when that number is 10,000 or less, and otherwise 10,000 with `atLeast`; it MUST never answer an estimate.
 - **SRCH-19** A table's index keyed by several columns MUST hold each row once, by its key's values together, and follow every change of it as an index keyed by one column does; an index keyed by one column MUST keep its ids, triggers and settings as before.
+- **SRCH-20** A table's index opened with another table or key MUST read the new table beside it while its old rows answer every search and take the old table's writes, and switch in only once the new table is read whole, with the writes to it made meanwhile, as SRCH-06 holds a rebuild to; from the switch on, a write to the old table MUST NOT reach it.
 - **SRCH-21** A table's index whose table a migration dropped MUST be dropped, its rows and its name, when search next starts in that database's file, said once in the log; a table a migration rebuilt under its name MUST keep its index, read again.
 
 ## 5. Replication

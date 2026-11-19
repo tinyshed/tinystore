@@ -378,7 +378,8 @@ fn a_table_s_index_follows_one_table_by_a_key_of_unique_values() {
     let notes = index("n").table("notes").key("slug").field("body", 1.0).open().unwrap();
     f.db.exec(sql!("insert into notes values ('a-note', 'hello')")).unwrap();
     assert_eq!(ids(&notes.search("hello").run().unwrap()), ["a-note"], "a hit's id is its key as text");
-    assert!(opened(index("n").table("articles").field("title", 1.0)).contains("follows table notes by slug"));
+    let moved = index("n").table("articles").field("title", 1.0).open().unwrap();
+    assert!(matches!(moved.status().unwrap(), Status::Rebuilding { .. }), "another table is read beside");
 }
 
 const PAGES: &str = "create table pages (id integer primary key, slug text not null unique, body text not null)";
@@ -758,8 +759,10 @@ fn a_table_s_index_keyed_by_several_columns_follows_each_row_once_by_their_value
     assert_eq!(found("экран"), "", "a rollback changes neither");
     let named = open().key(["space", "n"]).open().unwrap();
     assert_eq!(ids(&named.search("выход").run().unwrap()), [r#"["NW",301]"#], "the same key named");
-    let other = open().key(["n", "space"]).open().map(drop).unwrap_err().to_string();
-    assert!(other.contains("follows table tasks by space, n, not table tasks by n, space"), "{other}");
+    let other = open().key(["n", "space"]).open().unwrap();
+    assert!(matches!(other.status().unwrap(), Status::Rebuilding { .. }), "another order is another key, read beside");
+    f.ready(&other);
+    assert_eq!(ids(&other.search("выход").run().unwrap()), ["[301,\"NW\"]"], "ids by the key's new order");
 }
 
 #[test]
@@ -807,4 +810,71 @@ fn a_table_a_migration_dropped_drops_its_index_at_the_file_s_next_start_and_says
     notes.ready().unwrap();
     assert_eq!(ids(&notes.search("rye").run().unwrap()), ["7"]);
     assert!(notes.search("bread").run().unwrap().hits.is_empty(), "nothing of the dropped one's");
+}
+
+// contract: SRCH-20
+#[test]
+fn another_table_or_key_is_read_beside_the_index_while_the_old_rows_answer_and_take_writes_then_switched_in() {
+    let f = fixture();
+    let titles = |table: &str| f.db.search_index::<IgnoredAny>("articles_search").table(table).field("title", 1.0);
+    let old = titles("articles").open().unwrap();
+    f.ready(&old);
+    f.insert(1, "bread", "");
+    f.db.exec("create table posts (slug text primary key, title text not null)").unwrap();
+    f.db.exec("insert into posts values ('rye', 'rye bread'), ('oats', 'oat porridge')").unwrap();
+    let moved = titles("posts").open().unwrap();
+    assert!(matches!(moved.status().unwrap(), Status::Rebuilding { .. }));
+    let found = |text: &str| ids(&moved.search(text).limit(20).run().unwrap()).join(" ");
+    assert_eq!(found("bread"), "1", "the old table answers until the switch");
+    f.insert(2, "bread again", "");
+    assert_eq!(found("bread"), "1 2", "and takes its writes");
+    f.db.exec("insert into posts values ('wheat', 'wheat bread')").unwrap();
+    f.db.exec("delete from posts where slug = 'oats'").unwrap();
+    assert_eq!(found("wheat"), "", "the new table's writes wait beside");
+    let triggers = |table: &str| -> i64 {
+        f.db.scalar(sql!("select count(*) from sqlite_schema where type = 'trigger' and tbl_name = ?", table)).unwrap()
+    };
+    assert_eq!((triggers("articles"), triggers("posts")), (3, 3), "two sets, one a table, never colliding");
+    f.ready(&moved);
+    assert_eq!(found("bread"), "rye wheat", "switched in: the new table's rows, its writes meanwhile included");
+    assert_eq!(found("porridge"), "", "a row deleted beside is gone");
+    assert_eq!((triggers("articles"), triggers("posts")), (0, 3), "the switch took the old table's triggers off");
+    f.insert(3, "bread once more", "");
+    f.db.exec("update posts set title = 'spelt' where slug = 'rye'").unwrap();
+    assert_eq!(found("bread"), "wheat", "the old table reaches it no longer, the new one does");
+    let pending: i64 = f.db.scalar(sql!("select count(*) from _tinystore_search_pending")).unwrap();
+    assert_eq!(pending, 0);
+    f.db.exec("create unique index posts_title on posts (title)").unwrap();
+    let rekeyed = titles("posts").key("title").open().unwrap();
+    assert_eq!(triggers("posts"), 6, "another key of the same table: two sets on it, never colliding");
+    f.db.exec("insert into posts values ('barley', 'barley bread')").unwrap();
+    assert_eq!(found("bread"), "wheat barley", "the old key answers until the switch, its writes included");
+    f.ready(&rekeyed);
+    assert_eq!(found("bread"), "barley bread wheat bread", "each row by its new key");
+    assert_eq!(triggers("posts"), 3);
+    let manual = titles("articles").rebuild(super::Rebuild::Manual).open().map(drop).unwrap_err();
+    assert!(manual.to_string().contains("table articles by id"), "manual waits for reindex: {manual}");
+    let rebuilt = titles("articles").rebuild(super::Rebuild::Manual).reindex().unwrap();
+    f.ready(&rebuilt);
+    assert_eq!(ids(&rebuilt.search("bread").limit(20).run().unwrap()), ["1", "2", "3"], "and a key back again");
+}
+
+// contract: SRCH-20
+#[test]
+fn a_table_read_beside_an_index_goes_on_after_a_restart_with_the_writes_made_meanwhile() {
+    let f = fixture();
+    drop(f.articles());
+    f.db.exec("create table posts (slug text primary key, title text not null)").unwrap();
+    f.db.exec("insert into posts values ('rye', 'rye bread')").unwrap();
+    let posts = f.db.search_index::<IgnoredAny>("articles_search").table("posts").field("title", 1.0);
+    drop(posts.open().unwrap());
+    f.db.exec("insert into posts values ('wheat', 'wheat bread')").unwrap();
+    f.store.close().unwrap();
+    let store = Store::open(f.dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let db = store.database("app").migrations([("0001_articles.sql", ARTICLES)]).open().unwrap();
+    db.exec("insert into posts values ('spelt', 'spelt bread')").unwrap();
+    let posts = db.search_index::<IgnoredAny>("articles_search").table("posts").field("title", 1.0).open().unwrap();
+    search::maintain(&store).unwrap();
+    posts.ready().unwrap();
+    assert_eq!(ids(&posts.search("bread").run().unwrap()), ["rye", "spelt", "wheat"]);
 }

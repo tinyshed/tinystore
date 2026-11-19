@@ -22,8 +22,8 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::engine::Search;
-use super::open::Current;
-use super::rebuild::read_current;
+use super::open::{Current, Data};
+use super::rebuild::{BESIDE, read_current, read_moving};
 use super::settings::{Settings, Table};
 use super::write::{self, Incoming, Prepared, execute};
 use crate::limits::DOCUMENT_BYTES;
@@ -43,6 +43,9 @@ const BEGIN_FILL: &str = "update _tinystore_search_indexes set filling = ?2, fil
 const READ_DOCS: &str = "select doc, value from _tinystore_search_docs
     where index_id = ?1 and doc > ?2 order by doc limit cast(?3 as integer)";
 const READ_ID: &str = "select id from _tinystore_search_docs where index_id = ?1 and doc = ?2";
+const READ_THROUGH: &str = "select filled_through from _tinystore_search_indexes where id = ?1";
+const WRITE_THROUGH: &str = "update _tinystore_search_indexes set filled_through = ?2 where id = ?1";
+const RENAME_PENDING: &str = "update _tinystore_search_pending set name = ?2 where name = ?1";
 
 /// What a table's index reads while it fills, as `filling` keeps it.
 const FILLED: i64 = 0;
@@ -135,12 +138,52 @@ fn trigger_of(name: &str, event: &str) -> String {
 /// Takes the triggers of the index `name` off its table, and its pending
 /// keys with them.
 pub(crate) fn unfollow(tx: &Tx<'_>, name: &str) -> Result<()> {
+    drop_triggers(tx, name)?;
+    execute(tx, DROP_NAMED_PENDING, [name], "drop an index's pending keys").map(drop)
+}
+
+fn drop_triggers(tx: &Tx<'_>, name: &str) -> Result<()> {
     let failed = |error| sql_error("stop following a table", error);
     for event in ["insert", "update", "delete"] {
         let drop = format!("drop trigger if exists {}", quoted(&trigger_of(name, event)));
         tx.execute_batch(&drop).map_err(failed)?;
     }
-    execute(tx, DROP_NAMED_PENDING, [name], "drop an index's pending keys").map(drop)
+    Ok(())
+}
+
+/// Moves the index `name` to the table its rows beside, `beside`, read, in
+/// the commit that switches them in: the old table's triggers and keys off,
+/// the index's own triggers on the new table in place of the rows beside's,
+/// and the keys those noted named by the index, for this commit's settle.
+pub(crate) fn move_to(tx: &Tx<'_>, name: &str, (beside, beside_name): (i64, &str), table: &Table) -> Result<()> {
+    unfollow(tx, name)?;
+    drop_triggers(tx, beside_name)?;
+    follow(tx, name, table)?;
+    execute(tx, RENAME_PENDING, (beside_name, name), "name the keys the rows beside noted by their index")?;
+    execute(tx, WRITE_FILL, (beside, FILLED, SqlValue::Null), "write a table read whole").map(drop)
+}
+
+/// A step of reading another table beside an index into the rows `beside`:
+/// the table's next rows after the key they read through, set in them in the
+/// transaction that reads them, so that no write since is undone, as a
+/// table's first read does. Says whether it read the table to its end; a
+/// row the rows' settings cannot read fails the rebuild.
+pub(crate) fn read_beside_step(tx: &Tx<'_>, beside: &Data) -> Result<bool> {
+    let Some(table) = &beside.settings.table else { return Ok(true) };
+    let through: SqlValue = tx
+        .prepare_cached(READ_THROUGH)
+        .and_then(|mut select| select.query_row([beside.id], |row| row.get(0)))
+        .map_err(|error| sql_error("read how far a table was read", error))?;
+    let keys = next_keys(tx, table, &through)?;
+    for key in &keys {
+        let id = key_id(key)?;
+        if let Some(prepared) = prepared_row(tx, beside.id, &beside.settings, key, &id)? {
+            write::set(tx, &prepared).map_err(|error| error.within(format!("row {id}")))?;
+        }
+    }
+    let Some(last) = keys.last().filter(|_| keys.len() == STEP) else { return Ok(true) };
+    execute(tx, WRITE_THROUGH, (beside.id, last), "write how far a table was read")?;
+    Ok(false)
 }
 
 /// Has a new table's index read its table's rows the first time.
@@ -260,11 +303,11 @@ impl Search {
                 self.table_set(name);
                 Ok(())
             }
-            None => current.written().try_for_each(|data| write::delete(tx, data.id, &id).map(drop)),
+            None => current.following().try_for_each(|data| write::delete(tx, data.id, &id).map(drop)),
         });
         match set {
             Err(error) if left == Left::Before && matches!(error.kind(), ErrorKind::Invalid | ErrorKind::Limit) => {
-                current.written().try_for_each(|data| write::delete(tx, data.id, &id).map(drop))?;
+                current.following().try_for_each(|data| write::delete(tx, data.id, &id).map(drop))?;
                 said_left_out(&id, &error)
             }
             set => set.map_err(|error| error.within(format!("row {id}"))),
@@ -339,7 +382,7 @@ impl Search {
                 .and_then(|mut select| select.query_row((serving.id, doc), |row| row.get(0)))
                 .map_err(failed)?;
             if prepared_again(tx, serving.id, &serving.settings, (&id, value))?.is_none() {
-                current.written().try_for_each(|data| write::delete(tx, data.id, &id).map(drop))?;
+                current.following().try_for_each(|data| write::delete(tx, data.id, &id).map(drop))?;
             }
         }
         Ok(docs.last().filter(|_| docs.len() == STEP).map(|(doc, _)| SqlValue::Integer(*doc)))
@@ -354,14 +397,16 @@ struct Target<'a> {
 }
 
 /// The current rows of each index a settle meets, read once a settle; none
-/// for an index dropped.
+/// for an index dropped. A rebuild beside that reads another table names its
+/// keys by its rows' name, `~` and the serving rows' id, and is its own
+/// target: a write to its table reaches it alone.
 #[derive(Default)]
 struct Targets(std::collections::HashMap<String, Option<Current>>);
 
 impl Targets {
     fn of(&mut self, tx: &Tx<'_>, name: &str) -> Result<Option<&Current>> {
         if !self.0.contains_key(name) {
-            let current = read_current(tx, name)?;
+            let current = if name.starts_with(BESIDE) { read_moving(tx, name)? } else { read_current(tx, name)? };
             self.0.insert(name.to_owned(), current);
         }
         Ok(self.0.get(name).and_then(Option::as_ref))
@@ -440,6 +485,9 @@ fn kept_value(tx: &Tx<'_>, index: i64, id: &str) -> Result<Option<Vec<u8>>> {
 /// again, so that its new number brings the rebuild's copy back to it.
 fn read_otherwise_beside(tx: &Tx<'_>, current: &Current, key: &SqlValue, (id, serving): (&str, &[u8])) -> Result<bool> {
     let Some(beside) = current.beside.as_ref().filter(|beside| !beside.failed) else { return Ok(false) };
+    if !beside.data.settings.follows_as(&current.serving.settings) {
+        return Ok(false);
+    }
     let read = match read(tx, &beside.data.settings, key) {
         Ok(Some(row)) => [row.digest.as_slice(), &key_json(key)].concat(),
         Ok(None) => return Ok(false),

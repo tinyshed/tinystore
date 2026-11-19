@@ -263,8 +263,10 @@ impl Search {
         drop(indexes);
         open.manual.store(wanted.manual, Ordering::Relaxed);
         self.change(&open, wanted, reindex)?;
-        if let Some(followed) = &wanted.table {
-            self.follow(&open, followed, made)?;
+        // the table the index serves, which another one asked of it is read
+        // beside until it switches in
+        if let Some(followed) = open.current().serving.settings.table.clone() {
+            self.follow(&open, &followed, made)?;
         }
         self.opened(open.id())?;
         Ok(open)
@@ -327,7 +329,7 @@ impl Search {
         let beside = match (reads_as_asked, why) {
             (Some(beside), _) => Some(self.change_beside(beside, wanted)?),
             (None, Some(why)) => Some(self.begin_beside(open, &current, (target, why))?),
-            (None, None) => self.keep_beside(current.beside.as_ref(), wanted)?,
+            (None, None) => self.keep_beside(current.serving.id, current.beside.as_ref(), wanted)?,
         };
         for line in &changed.said {
             tracing::info!(target: "tinystore", "search {}: {line}", open.name);
@@ -349,7 +351,7 @@ impl Search {
     /// A rebuild under way that no change asks again: a failed one kept to
     /// say why, one that can take `wanted` at once changed, and one that
     /// cannot dropped.
-    fn keep_beside(&self, beside: Option<&Beside>, wanted: &Wanted) -> Result<Option<Beside>> {
+    fn keep_beside(&self, serving: i64, beside: Option<&Beside>, wanted: &Wanted) -> Result<Option<Beside>> {
         let Some(beside) = beside else { return Ok(None) };
         if beside.failed {
             return Ok(Some(beside.clone()));
@@ -362,7 +364,10 @@ impl Search {
                     %error,
                     "search: a rebuild under way dropped, since the change asks another",
                 );
-                self.file.transaction(|tx| rebuild::mark_dropping(tx, beside.data.id))?;
+                self.file.transaction(|tx| {
+                    rebuild::mark_dropping(tx, beside.data.id)?;
+                    table::unfollow(tx, &rebuild::beside_name(serving))
+                })?;
                 Ok(None)
             }
         }

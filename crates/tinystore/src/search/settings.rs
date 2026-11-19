@@ -325,13 +325,14 @@ impl Settings {
     /// field or a filter added to an index that holds documents needs them
     /// read again, as do words read by another release. Other vectors than
     /// those kept are refused: the store has nothing to make them from, but
-    /// a table's index reads them again from their column. A table's index
-    /// follows the table and key it was made for.
+    /// a table's index reads them again from their column. Another table or
+    /// key for a table's index needs the new table read beside it, the rows
+    /// it serves following the old one until they switch.
     pub(crate) fn change(&self, wanted: &Wanted, documents: u64) -> Result<Changed> {
-        self.check_same_table(wanted)?;
         let mut changed = Settings { fields: Vec::new(), ..self.clone() };
         let mut said = Vec::new();
         let mut rebuild = Rebuild::default();
+        self.change_table(wanted, &mut rebuild)?;
         changed.change_filters(wanted, documents, (&mut said, &mut rebuild));
         changed.change_vectors(wanted, documents, (&mut said, &mut rebuild))?;
         for (path, weight) in wanted.fields() {
@@ -390,22 +391,41 @@ impl Settings {
             && self.table == other.table
     }
 
-    /// Refuses another table or key than the index follows: its documents
-    /// would be another's.
-    fn check_same_table(&self, wanted: &Wanted) -> Result<()> {
+    /// Asks a table's index of another table or key to read the new one
+    /// beside it; refuses documents of its own for a table, or the other way.
+    fn change_table(&self, wanted: &Wanted, rebuild: &mut Rebuild) -> Result<()> {
         let followed = |table: &Option<Table>| table.as_ref().map(|table| (table.name.clone(), table.key_shown()));
         let (kept, asked) = (followed(&self.table), followed(&wanted.table));
-        if kept == asked {
-            return Ok(());
+        match (kept, asked) {
+            (kept, asked) if kept == asked => Ok(()),
+            (Some(_), Some((name, key))) => {
+                rebuild.needs(format!("table {name} by {key}"));
+                Ok(())
+            }
+            (kept, asked) => {
+                let shown = |table: Option<(String, String)>| {
+                    table.map_or_else(
+                        || "documents of its own".to_owned(),
+                        |(name, key)| format!("table {name} by {key}"),
+                    )
+                };
+                Err(Error::invalid(format!(
+                    "the index follows {}, not {}: open another name, or drop it to make one that does",
+                    shown(kept),
+                    shown(asked)
+                )))
+            }
         }
-        let shown = |table: Option<(String, String)>| {
-            table.map_or_else(|| "documents of its own".to_owned(), |(name, key)| format!("table {name} by {key}"))
-        };
-        Err(Error::invalid(format!(
-            "the index follows {}, not {}: open another name, or drop it to make one that does",
-            shown(kept),
-            shown(asked)
-        )))
+    }
+
+    /// Whether these settings read the rows of the same table by the same key
+    /// as `other`: a rebuild beside that reads another follows it with
+    /// triggers of its own, and no write to the serving rows' table reaches it.
+    pub(crate) fn follows_as(&self, other: &Settings) -> bool {
+        fn followed(settings: &Settings) -> Option<(&String, &Vec<String>)> {
+            settings.table.as_ref().map(|table| (&table.name, &table.key))
+        }
+        followed(self) == followed(other)
     }
 
     /// Keeps the filters `wanted` names, each with its number; one removed
@@ -504,6 +524,11 @@ impl Settings {
         documents: u64,
         (said, rebuild): (&mut Vec<String>, &mut Rebuild),
     ) -> Result<()> {
+        let followed = |table: &Option<Table>| table.as_ref().map(|table| (table.name.clone(), table.key.clone()));
+        if followed(&self.table) != followed(&wanted.table) {
+            // the new table's vectors are read beside, with its rows
+            return Ok(());
+        }
         let column = |table: &Option<Table>| table.as_ref().and_then(|table| table.vector.clone());
         let (kept, asked) = (column(&self.table), column(&wanted.table));
         let kept_dimensions = self.vectors.map(|vectors| vectors.dimensions);

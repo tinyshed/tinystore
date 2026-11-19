@@ -59,9 +59,9 @@ let result = articles.search("хлеба").filter(eq("author_id", &42)).run()?;
 Change an index by opening it with other options under the same name, and
 never version its name. A weight or the layouts change at once; a field or
 a filter added is read beside the index, which answers as before until the
-new one switches in ([Rebuilds](rebuilds.md)). Only what the store cannot
-make again needs another name: vectors of a new model, or a table's index of
-another table or key.
+new one switches in ([Rebuilds](rebuilds.md)), and so is a table's index's
+new table or key. Only what the store cannot make again needs another name:
+the vectors of a new model.
 
 ## Listing what it holds
 

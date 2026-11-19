@@ -18,6 +18,13 @@
 //! - **A rebuild that fails**, a document the new settings cannot read, says
 //!   why in `failed`; the serving rows answer as before, and the next change
 //!   or `reindex` begins again.
+//! - **Another table or key** of a table's index is read from that table, not
+//!   copied: the new rows follow it with triggers of their own, named by
+//!   their rows' name, `~` and the serving rows' id, so that two sets of
+//!   triggers on one table never collide, and read its rows a step a commit
+//!   from `filled_through`, as a table's first read does. The serving rows
+//!   keep following the old table until the switch, whose commit takes their
+//!   triggers off it and puts the index's own on the new one.
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
@@ -39,6 +46,17 @@ const READ_SERVING: &str = "select id, settings from _tinystore_search_indexes
     where name = ?1 and dropping = 0 and beside_of is null";
 const READ_BESIDE: &str = "select id, settings, failed from _tinystore_search_indexes
     where beside_of = ?1 and dropping = 0";
+const READ_MOVING: &str = "select id, settings from _tinystore_search_indexes
+    where name = ?1 and beside_of is not null and dropping = 0 and failed is null";
+
+/// What the name of rows beside an index starts with, `~` and the serving
+/// rows' id, as [`ADD_BESIDE`] names them; an index's own name never does.
+pub(crate) const BESIDE: &str = "~";
+
+/// The name of the rows beside the serving rows `serving`.
+pub(crate) fn beside_name(serving: i64) -> String {
+    format!("{BESIDE}{serving}")
+}
 const ADD_INDEX: &str = "insert into _tinystore_search_indexes (name, settings) values (?1, ?2) returning id";
 const ADD_BESIDE: &str = "insert into _tinystore_search_indexes (name, settings, beside_of, why)
     values ('~' || ?1, ?2, ?1, ?3) returning id";
@@ -161,6 +179,18 @@ pub(crate) fn read_current(connection: &Connection, name: &str) -> Result<Option
     Ok(Some(Current { serving: Data::new(id, Settings::from_json(&json)?), beside }))
 }
 
+/// The rows beside an index by their name, `~12`, while their rebuild goes
+/// on, as the target of the keys their own triggers note: a write to the
+/// table they read reaches them alone.
+pub(crate) fn read_moving(connection: &Connection, name: &str) -> Result<Option<Current>> {
+    let failed = |error| sql_error("read an index's rows beside it", error);
+    let mut select = connection.prepare_cached(READ_MOVING).map_err(failed)?;
+    let row: Option<(i64, String)> =
+        select.query_row([name], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(failed)?;
+    let Some((id, json)) = row else { return Ok(None) };
+    Ok(Some(Current { serving: Data::new(id, Settings::from_json(&json)?), beside: None }))
+}
+
 pub(crate) fn progress(connection: &Connection, (serving, beside): (i64, i64)) -> Result<Progress> {
     let failed = |error| sql_error("read a rebuild", error);
     let mut select = connection.prepare_cached(READ_PROGRESS).map_err(failed)?;
@@ -212,6 +242,24 @@ fn copied(connection: &Connection, serving: i64, beside: &Data, progress: &Progr
     Ok(Copy { documents, through, full: rows.len() as i64 == COPY_STEP })
 }
 
+/// A step of reading another table into the rows `beside`, while they are
+/// still the rebuild of the serving rows: whether it read the table to its
+/// end, or none once the rebuild was dropped or failed.
+fn read_beside_step(tx: &Tx<'_>, (serving, beside): (i64, i64), rows: &Data) -> Result<Option<bool>> {
+    let live = tx
+        .prepare_cached(BESIDE_LIVE)
+        .and_then(|mut select| select.query_row((beside, serving), |row| row.get::<_, bool>(0)));
+    if !live.map_err(|error| sql_error("read a rebuild", error))? {
+        return Ok(None);
+    }
+    table::read_beside_step(tx, rows).map(Some)
+}
+
+/// Whether the rows beside read the serving rows' table by its key.
+fn moves_with(current: &Current, beside: &Data) -> bool {
+    beside.settings.follows_as(&current.serving.settings)
+}
+
 /// Writes a step of copying: each document still there as it was read, so
 /// that no write since is undone. Says whether the rows beside still take it.
 fn copy(tx: &Tx<'_>, (serving, beside): (i64, i64), step: &Copy) -> Result<bool> {
@@ -247,18 +295,31 @@ impl Search {
     ) -> Result<Beside> {
         let (serving, json, old) = (current.serving.id, target.to_json(), current.beside.as_ref().map(|b| b.data.id));
         let told = why.clone();
+        let moved = target.table.clone().filter(|_| !target.follows_as(&current.serving.settings));
         let id = self.file.transaction(|tx| {
             if let Some(old) = old {
                 execute(tx, MARK_DROPPING, [old], "drop an index's rows")?;
             }
+            // the triggers of a rebuild before, which read another table, go with it
+            table::unfollow(tx, &beside_name(serving))?;
             let added = tx
                 .prepare_cached(ADD_BESIDE)
                 .and_then(|mut insert| insert.query_row((serving, &json, &told), |row| row.get(0)));
-            added.map_err(|error| sql_error("begin a rebuild", error))
+            let id: i64 = added.map_err(|error| sql_error("begin a rebuild", error))?;
+            if let Some(moved) = &moved {
+                table::follow(tx, &beside_name(serving), moved)?;
+            }
+            Ok::<i64, Error>(id)
         })?;
-        let documents = self.file.read(|connection| numbers(connection, serving))?.0;
-        tracing::info!(target: "tinystore", "search {}: {why}: reading {documents} documents beside the index, \
-            which answers as before until then", open.name);
+        match &moved {
+            Some(moved) => tracing::info!(target: "tinystore", "search {}: {why}: reading table {} beside the \
+                index, which answers as before until then", open.name, moved.name),
+            None => {
+                let documents = self.file.read(|connection| numbers(connection, serving))?.0;
+                tracing::info!(target: "tinystore", "search {}: {why}: reading {documents} documents beside the \
+                    index, which answers as before until then", open.name);
+            }
+        }
         *open.began.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::time::Instant::now());
         self.wake();
         Ok(Beside { data: Data::new(id, target), failed: false })
@@ -273,6 +334,9 @@ impl Search {
             return self.renumber(open, &current);
         };
         let rows = (current.serving.id, beside.data.id);
+        if current.moving().is_some() {
+            return self.read_beside(open, rows, &beside.data);
+        }
         loop {
             let progress = self.file.read(|connection| progress(connection, rows))?;
             if progress.failed.is_some() {
@@ -291,6 +355,20 @@ impl Search {
         }
     }
 
+    /// Goes on reading another table into the rows beside an index, a step a
+    /// commit, and switches them in once a step reads the table to its end.
+    fn read_beside(&self, open: &OpenIndex, rows: (i64, i64), beside: &Data) -> Result<()> {
+        loop {
+            match self.file.transaction(|tx| read_beside_step(tx, rows, beside)) {
+                Err(error) if a_documents_fault(&error) => return self.fail(open, beside.id, &error),
+                Ok(Some(false)) => {}
+                Ok(Some(true)) => return self.switch(open, beside.id),
+                Ok(None) => return Ok(()),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Switches a rebuild's rows in, no write running meanwhile: the last
     /// documents copied and the rows renamed in one commit, and the old ones
     /// dropped in the background.
@@ -300,14 +378,21 @@ impl Search {
         let (serving, name) = (current.serving.id, open.name.clone());
         let switched: Result<Option<String>> = self.file.transaction(|tx| {
             let why = progress(tx, (serving, beside))?.why;
-            loop {
-                let step = copied(tx, serving, &rebuilt.data, &progress(tx, (serving, beside))?)?;
-                if !copy(tx, (serving, beside), &step)? || !step.full {
-                    break;
-                }
+            let moved = rebuilt.data.settings.table.as_ref().filter(|_| !moves_with(&current, &rebuilt.data));
+            match moved {
+                Some(_) => while read_beside_step(tx, (serving, beside), &rebuilt.data)? == Some(false) {},
+                None => loop {
+                    let step = copied(tx, serving, &rebuilt.data, &progress(tx, (serving, beside))?)?;
+                    if !copy(tx, (serving, beside), &step)? || !step.full {
+                        break;
+                    }
+                },
             }
             execute(tx, MARK_DROPPING, [serving], "drop an index's old rows")?;
             execute(tx, SWITCH, (beside, &name, serving), "switch an index's rows")?;
+            if let Some(moved) = moved {
+                table::move_to(tx, &name, (beside, &beside_name(serving)), moved)?;
+            }
             Ok(why)
         });
         let why = match switched {
@@ -455,6 +540,9 @@ impl Search {
         let named = name.to_owned();
         let marked = self.file.transaction(|tx| {
             table::unfollow(tx, &named)?;
+            if let Some(current) = read_current(tx, &named)? {
+                table::unfollow(tx, &beside_name(current.serving.id))?;
+            }
             mark_named_dropping(tx, &named)
         })?;
         if let Some(open) = &open {

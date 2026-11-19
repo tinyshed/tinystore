@@ -402,6 +402,32 @@ for (const way of ways) {
 			expect(await db.dropSearchIndex('tasks_search')).toBe(true)
 		})
 
+		// contract: SRCH-20
+		test("a table's index opened with another table answers from the old one until the new one switches in", async () => {
+			const db = await store.database('moves', {
+				migrations: {
+					'0001_posts.sql':
+						'create table posts (id integer primary key, title text not null);' +
+						'create table posts_v2 (slug text primary key, title text not null)',
+				},
+			})
+			await db.exec`insert into posts values (1, 'rye bread')`
+			await db.exec`insert into posts_v2 values ('wheat', 'wheat bread')`
+			const old = db.searchIndex<{ title: string }>('posts_search', {
+				table: 'posts',
+				fields: ['title'],
+			})
+			await old.ready()
+			const moved = db.searchIndex<{ slug: string; title: string }>('posts_search', {
+				table: 'posts_v2',
+				key: 'slug',
+				fields: ['title'],
+			})
+			await moved.ready()
+			expect(ids(await moved.search('bread'))).toEqual(['wheat'])
+			expect(await db.dropSearchIndex('posts_search')).toBe(true)
+		})
+
 		test('an index is listed, and dropped with every document it holds', async () => {
 			const posts = store.index<string>('posts')
 			await posts.set('p', 'hello')

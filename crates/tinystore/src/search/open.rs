@@ -69,6 +69,23 @@ impl Current {
         let beside = self.beside.as_ref().filter(|beside| !beside.failed).map(|beside| &beside.data);
         std::iter::once(&self.serving).chain(beside)
     }
+
+    /// The rows a write to the serving rows' table reaches: [`written`]'s,
+    /// but for rows beside that read another table or key, whose triggers
+    /// of their own tell them of their table's writes.
+    ///
+    /// [`written`]: Self::written
+    pub(crate) fn following(&self) -> impl Iterator<Item = &Data> {
+        let serving = &self.serving.settings;
+        self.written().filter(move |data| data.settings.follows_as(serving))
+    }
+
+    /// The rows beside, while they read another table or key than the
+    /// serving ones and their rebuild goes on.
+    pub(crate) fn moving(&self) -> Option<&Data> {
+        let beside = self.beside.as_ref().filter(|beside| !beside.failed)?;
+        (!beside.data.settings.follows_as(&self.serving.settings)).then_some(&beside.data)
+    }
 }
 
 /// Where an index stands: serving the settings it was opened with, read
