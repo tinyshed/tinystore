@@ -4780,7 +4780,7 @@ impl Message for JobsKept {
 #[cfg(feature = "jobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct JobsOp {
-    /// Jobs.add, jobs.set, jobs.update or jobs.cancel.
+    /// Jobs.add, jobs.set, jobs.update, jobs.upsert or jobs.cancel.
     pub(crate) method: u64,
     pub(crate) call: Option<JobsCall>,
     pub(crate) id: Option<JobsId>,
@@ -13042,6 +13042,10 @@ pub(crate) mod method {
     pub(crate) const JOBS_TX: u16 = 0x020d;
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_COUNTS: u16 = 0x020e;
+    /// Adds the job under the call's id, or brings the one there to the call:
+    /// what differs written, its time, attempts and steps kept.
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_UPSERT: u16 = 0x020f;
     /// A schedule's one run as soon as a worker is free, its later times as they
     /// were: a schedule's handle alone.
     #[cfg(feature = "jobs")]
@@ -13312,6 +13316,8 @@ pub(crate) mod method {
             #[cfg(feature = "jobs")]
             JOBS_COUNTS => Some(Access::Read),
             #[cfg(feature = "jobs")]
+            JOBS_UPSERT => Some(Access::Write),
+            #[cfg(feature = "jobs")]
             JOBS_RUN_NOW => Some(Access::Write),
             #[cfg(feature = "kv")]
             KV_BUCKET_OPEN => Some(Access::Read),
@@ -13562,6 +13568,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("jobs.tx", 0x020d, "call"),
     #[cfg(feature = "jobs")]
     ("jobs.counts", 0x020e, "call"),
+    #[cfg(feature = "jobs")]
+    ("jobs.upsert", 0x020f, "call"),
     #[cfg(feature = "jobs")]
     ("jobs.runNow", 0x0210, "call"),
     #[cfg(feature = "kv")]

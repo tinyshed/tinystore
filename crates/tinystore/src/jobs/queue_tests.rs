@@ -138,6 +138,82 @@ fn dedupe_keeps_a_done_id_taken_until_its_span_passes() {
     assert!(pushes.id("m1:u1").add(&note("push")).unwrap());
 }
 
+// contract: JOB-17
+#[test]
+fn upsert_adds_a_job_or_brings_the_one_there_to_the_call_its_time_kept() {
+    let f = fixture();
+    let polls = f.store.queue::<Note>("polls").open().unwrap();
+    assert!(polls.id("group:1").every(3 * MINUTE).upsert(&note("241-327")).unwrap(), "added");
+    let added = polls.get("group:1").unwrap().unwrap();
+    assert!(!polls.id("group:1").every(3 * MINUTE).upsert(&note("241-327")).unwrap(), "it already was so");
+    assert_eq!(polls.get("group:1").unwrap().unwrap(), added, "and nothing was written");
+
+    assert!(polls.id("group:1").every(3 * MINUTE).upsert(&note("renamed")).unwrap());
+    let renamed = polls.get("group:1").unwrap().unwrap();
+    assert_eq!((renamed.value.text.as_str(), renamed.at), ("renamed", added.at), "a new value, its time kept");
+    assert!(polls.id("group:1").delay(HOUR).every(3 * MINUTE).upsert(&note("renamed")).is_ok_and(|changed| !changed));
+    assert_eq!(polls.get("group:1").unwrap().unwrap().at, added.at, "a delay counts only when it adds");
+
+    assert!(polls.id("group:1").every(HOUR).upsert(&note("renamed")).unwrap());
+    let slower = polls.get("group:1").unwrap().unwrap();
+    assert!(slower.repeat.as_deref().is_some_and(|repeat| repeat.starts_with("@every 1h")), "{slower:?}");
+    assert!(slower.at > f.now() && slower.at != added.at, "the new repeat's next time");
+
+    f.clock.advance(HOUR);
+    assert!(polls.id("group:1").every(2 * HOUR).upsert(&note("renamed")).unwrap());
+    let due = polls.get("group:1").unwrap().unwrap();
+    assert_eq!((due.state, due.at), (State::Waiting, slower.at), "a due job stays due");
+    let error = polls.upsert("", &note("x")).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+}
+
+// contract: JOB-17
+#[test]
+fn upsert_keeps_a_retrys_attempts_and_a_done_job_its_dedupe_holds() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").attempts(3).dedupe(HOUR).open().unwrap();
+    pushes.id("retry").add(&note("first")).unwrap();
+    fail_due(&pushes);
+    let waiting = pushes.get("retry").unwrap().unwrap();
+    assert!(pushes.upsert("retry", &note("second")).unwrap());
+    let changed = pushes.get("retry").unwrap().unwrap();
+    assert_eq!((changed.attempt, changed.at, changed.error), (1, waiting.at, waiting.error), "attempts and time kept");
+
+    pushes.id("done").add(&note("done")).unwrap();
+    assert_eq!(ran(&pushes), ["done"]);
+    assert!(!pushes.upsert("done", &note("again")).unwrap(), "a done job its dedupe holds is left alone");
+    assert_eq!(pushes.get("done").unwrap().unwrap().value, note("done"));
+}
+
+// contract: JOB-17
+#[test]
+fn upsert_of_a_running_job_gives_its_next_run_what_differs_and_one_that_ends_with_its_run_nothing() {
+    let f = fixture();
+    let polls = f.store.queue::<Note>("polls").open().unwrap();
+    polls.id("repeat").every(MINUTE).add(&note("old")).unwrap();
+    polls.id("once").add(&note("old")).unwrap();
+    f.clock.advance(MINUTE);
+    let answers = Mutex::new(Vec::new());
+    polls
+        .concurrency(1)
+        .run_due(|value: Note, run| -> Result<()> {
+            let id = run.id().unwrap_or_default().to_owned();
+            if value.text == "old" {
+                answers.lock().unwrap().push((id.clone(), polls.upsert(&id, &note("new"))?));
+            }
+            Ok(())
+        })
+        .unwrap();
+    let answers = answers.into_inner().unwrap();
+    assert!(
+        answers.contains(&("repeat".to_owned(), true)) && answers.contains(&("once".to_owned(), false)),
+        "{answers:?}"
+    );
+    let next = polls.get("repeat").unwrap().unwrap();
+    assert_eq!((next.state, next.value), (State::Scheduled, note("new")), "its next run takes the new value");
+    assert!(polls.get("once").unwrap().is_none(), "a job that ended with its run took nothing");
+}
+
 /// Fails every job due, as a handler that always fails does.
 fn fail_due(queue: &Queue<Note>) {
     queue.concurrency(1).run_due(|_: Note, _run| -> Result<(), String> { Err("push service 503".into()) }).unwrap();

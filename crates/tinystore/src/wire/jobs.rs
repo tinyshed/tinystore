@@ -64,9 +64,12 @@ pub(crate) fn route(called: u16) -> Route {
     match called {
         method::JOBS_WORK => Route::Exchange,
         method::JOBS_WATCH => Route::Watch,
-        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE | method::JOBS_CANCEL | method::JOBS_RUN_NOW => {
-            Route::Submit
-        }
+        method::JOBS_ADD
+        | method::JOBS_SET
+        | method::JOBS_UPDATE
+        | method::JOBS_UPSERT
+        | method::JOBS_CANCEL
+        | method::JOBS_RUN_NOW => Route::Submit,
         _ => Route::Worker,
     }
 }
@@ -152,6 +155,7 @@ pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnO
     let change = match called {
         method::JOBS_ADD => Change::Add,
         method::JOBS_SET => Change::Set,
+        method::JOBS_UPSERT => Change::Upsert,
         _ => Change::Update,
     };
     let mut done = Some(done);
@@ -179,7 +183,7 @@ pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnO
 #[cfg(feature = "sql")]
 pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body: &[u8], max_body: usize) -> Answered {
     match called {
-        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE => {
+        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE | method::JOBS_UPSERT => {
             let changed = write_op(
                 handles,
                 tx,
@@ -233,6 +237,9 @@ fn write_op(handles: &Handles, tx: &Transaction<'_>, op: &JobsOp) -> Result<bool
         }
         (method::JOBS_UPDATE, Some(call), _) => {
             on_job(handles, call.clone(), Some(tx), |job, value| job.update(&value))
+        }
+        (method::JOBS_UPSERT, Some(call), _) => {
+            on_job(handles, call.clone(), Some(tx), |job, value| job.upsert(&value))
         }
         (method::JOBS_CANCEL, _, Some(id)) => {
             Ok(handles.opened(id.handle)?.queue.cancel_in(&which_of(id)?, Some(tx))?)

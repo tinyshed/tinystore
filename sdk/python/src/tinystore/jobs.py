@@ -614,6 +614,37 @@ class Queue[T]:
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.update", fields)
 
+    async def upsert(
+        self,
+        id: str,
+        value: T,
+        *,
+        at: datetime | None = None,
+        delay: Duration | None = None,
+        group: str | None = None,
+        every: Duration | None = None,
+        cron: str | None = None,
+        time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
+    ) -> bool:
+        """Adds the job under id when it is free, or brings the one there to this call.
+
+        Its value, group, repeat and options of its own are written where they
+        differ, its time, attempts and steps kept. A changed value drops the
+        steps kept for the old one; a changed repeat moves a job not yet due to
+        the repeat's next time. It says whether it added or changed anything:
+        a job that already was so is not written, so it is cheap to call on
+        every request. ``at`` and ``delay`` count only when it adds.
+
+            changed = await polls.upsert(f"group:{g}", Poll(group=g), every="3m")
+        """
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
+        fields = {**timing, "id": id, "value": self._source.encode(value)}
+        return await self._changed("jobs.upsert", fields)
+
     async def cancel(self, id: Job[T] | str) -> bool:
         """Takes a job, whatever its state, and says whether it was there.
 
@@ -845,6 +876,26 @@ class StoreTxQueue[T]:
             at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
         )
         self._write("jobs.update", {**timing, "id": id}, value)
+
+    async def upsert(
+        self,
+        id: str,
+        value: T,
+        *,
+        at: datetime | None = None,
+        delay: Duration | None = None,
+        group: str | None = None,
+        every: Duration | None = None,
+        cron: str | None = None,
+        time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
+    ) -> None:
+        """Adds the job under id, or brings the one there to this call, its time kept, with the commit."""
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
+        self._write("jobs.upsert", {**timing, "id": id}, value)
 
     async def cancel(self, id: Job[T] | str) -> None:
         """Takes the job under id, or a job a list gave, whatever its state, with the commit."""

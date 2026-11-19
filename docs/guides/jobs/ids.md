@@ -98,6 +98,51 @@ indexing.id(&format!("note:{id}")).delay(Duration::from_secs(5)).set(&Index { no
 reports.id(&format!("report:{team}")).delay(Duration::from_mins(1)).add(&Report { team })?; // throttle
 ```
 
+## Add it, or bring it to the call: upsert
+
+`add` of a taken id changes nothing, so a changed `every` never reaches a
+job that is already there. `set` makes the job new, its attempts and time
+included, so calling it on every request keeps pushing the run on. `upsert`
+adds the job when the id is free, and otherwise changes only what differs:
+
+```ts
+const polls = store.queue<{ group: string }>('polls')
+const changed = await polls.upsert(`group:${g}`, { group: g }, { every: '3m' }) // true: added or changed; false: it already was so
+```
+
+```python
+polls = store.queue("polls", Poll)
+changed = await polls.upsert(f"group:{g}", Poll(group=g), every="3m")  # True: added or changed
+```
+
+```go
+polls, err := jobs.OpenQueue[Poll](store, "polls")
+changed, err := polls.Upsert(ctx, "group:"+g, Poll{Group: g}, jobs.Every(3*time.Minute))
+```
+
+```rust
+let polls = store.queue::<Poll>("polls").open()?;
+let changed: bool = polls.id(&format!("group:{g}")).every(Duration::from_mins(3)).upsert(&Poll { group: g })?;
+```
+
+| The id's job is               | `upsert`                                                      |
+|-------------------------------|---------------------------------------------------------------|
+| none, or failed               | adds it, as `add` does: `true`                                |
+| scheduled, or waiting         | gives it the call's value, group and repeat where they differ |
+| running                       | its run goes on, and its next run takes what differs          |
+| done, while `dedupe` keeps it | nothing: `false`, as `add`                                    |
+
+- Its time, attempts and steps stay as they are; `at` and `delay` count
+  only when it adds the job (contract JOB-17).
+- A changed repeat moves the job to the new repeat's next time. A job that
+  is due now stays due: it runs now, and after that by the new repeat.
+- A changed value drops the steps kept for the old one, as `update` does.
+- It answers `false` when the job already was what the call says, and then
+  writes nothing, so it is cheap enough to call on every request.
+- A running job that ends with its run has no next run to take the change:
+  `upsert` answers `false` for it.
+- It needs an id, and works in a transaction as `add` does.
+
 ## Look now
 
 "Look now" requests that arrive in a burst should become one job, and one

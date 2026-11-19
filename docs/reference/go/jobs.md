@@ -397,6 +397,16 @@ func (q *Queue[T]) Update(ctx context.Context, id string, value T, opts ...SetOp
 
 Update changes the id's job when it is not running, the steps kept for the old value dropped with it, and says whether it did.
 
+### Queue.Upsert
+
+```go
+func (q *Queue[T]) Upsert(ctx context.Context, id string, value T, opts ...SetOption) (bool, error)
+```
+
+Upsert adds the job under id when it is free, as Add does, or brings the one there to this call: its value, group, repeat and options of its own where they differ, its time, attempts and steps as they were. A changed value drops the steps kept for the old one; a changed repeat moves a job not yet due to the repeat's next time. It says whether it added or changed anything: a job that already was so is not written, so it is cheap to call on every request. At and Delay count only when it adds. Inside the store's transaction it is kept for the commit, and says true.
+
+	changed, err := polls.Upsert(ctx, "group:"+g, Poll{Group: g}, jobs.Every(3*time.Minute))
+
 ### Queue.Watch
 
 ```go

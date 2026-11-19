@@ -67,6 +67,9 @@ methods: dict[str, int] = {
     "jobs.watch": 0x020C,
     "jobs.tx": 0x020D,
     "jobs.counts": 0x020E,
+    # Adds the job under the call's id, or brings the one there to the call:
+    # what differs written, its time, attempts and steps kept.
+    "jobs.upsert": 0x020F,
     # A schedule's one run as soon as a worker is free, its later times as they
     # were: a schedule's handle alone.
     "jobs.runNow": 0x0210,
@@ -4074,7 +4077,7 @@ def _read_jobs_op(r: Reader) -> dict[str, Any]:
 JobsOp = Message(
     "jobs.Op",
     {
-        # jobs.add, jobs.set, jobs.update or jobs.cancel
+        # jobs.add, jobs.set, jobs.update, jobs.upsert or jobs.cancel
         "method": (1, uint),
         "call": (2, JobsCall),
         "id": (3, JobsId),

@@ -790,6 +790,22 @@ export class Queue<T> {
 	}
 
 	/**
+	 * Adds the job under `id` when it is free, as `add` does, or brings the
+	 * one there to this call: its value, group, repeat and options of its own
+	 * where they differ, its time, attempts and steps as they were. A changed
+	 * value drops the steps kept for the old one; a changed repeat moves a job
+	 * not yet due to the repeat's next time. It says whether it added or
+	 * changed anything: a job that already was so is not written, so it is
+	 * cheap to call on every request. `at` and `delay` count only when it adds.
+	 *
+	 *     const changed = await polls.upsert(`group:${g}`, { group: g }, { every: '3m' })
+	 */
+	async upsert(id: string, value: T, options: JobOptions = {}): Promise<boolean> {
+		const fields = { ...jobFields(options), id, value: this.#source.values.encode(value) }
+		return (await this.#changed(methods['jobs.upsert'], fields)) === true
+	}
+
+	/**
 	 * Takes a job, whatever its state, and says whether it was there: the job
 	 * under an id, or a job a list gave, by its id or, for one without, by the
 	 * row it was listed from. A job retried, run again for its repeat or
@@ -928,6 +944,10 @@ export class TxQueue<T> {
 		return this.#queue.update(id, value, options)
 	}
 
+	upsert(id: string, value: T, options: JobOptions = {}): Promise<boolean> {
+		return this.#queue.upsert(id, value, options)
+	}
+
 	cancel(job: Job<T> | string): Promise<boolean> {
 		return this.#queue.cancel(job)
 	}
@@ -1028,6 +1048,11 @@ export class StoreTxQueue<T> {
 		this.#write('jobs.update', { ...jobFields(options), id }, value)
 	}
 
+	/** Adds the job under id, or brings the one there to this call, its time kept, with the commit. */
+	async upsert(id: string, value: T, options: JobOptions = {}): Promise<void> {
+		this.#write('jobs.upsert', { ...jobFields(options), id }, value)
+	}
+
 	/** Takes the job under id, or a job a list gave, whatever its state, with the commit. */
 	async cancel(job: Job<T> | string): Promise<void> {
 		const id = namedBy(job as Job<unknown> | string, this.#source.describe)
@@ -1035,7 +1060,7 @@ export class StoreTxQueue<T> {
 	}
 
 	#write(
-		method: 'jobs.add' | 'jobs.set' | 'jobs.update',
+		method: 'jobs.add' | 'jobs.set' | 'jobs.update' | 'jobs.upsert',
 		fields: Omit<Written<typeof JobsCall.fields>, 'handle' | 'value'>,
 		value: T,
 	): void {

@@ -88,6 +88,20 @@ const ASK_AGAIN: &str = "update _tinystore_jobs
     set again = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
         dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep)
     where queue = ?1 and next = ?2 and id = ?3";
+/// What an upsert compares of the job that is there with its call: whether
+/// its value is the call's, ?4, and its group and options of its own.
+const SHAPE_OF: &str = "select
+        coalesce(j.value, (select s.value from _tinystore_jobs_spilled s where s.id = j.spill)) is ?4,
+        j.grp, j.dedupe, j.keep
+    from _tinystore_jobs j where j.queue = ?1 and j.next = ?2 and j.id = ?3";
+/// An upsert's job: what the call changed, its time when its repeat changed,
+/// and the time its run is for unless that time moved; its attempts as they
+/// are. Each `next` on the right is the row's before the update.
+const RESHAPE_JOB: &str = "update _tinystore_jobs
+    set at = case when next = ?4 then at else ?4 end, next = ?4, value = ?5, spill = ?6,
+        repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
+        dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep)
+    where queue = ?1 and next = ?2 and id = ?3";
 /// A run asked of a job that runs, right after the run under way: its
 /// settlement reads `again`.
 const RUN_AFTER: &str = "update _tinystore_jobs set again = min(coalesce(again, ?4), ?4)
@@ -151,6 +165,15 @@ pub(crate) struct Own<'a> {
     /// How long it holds its id once done, as [`Dedupe::text`](super::dedupe::Dedupe) writes it.
     pub(crate) dedupe: Option<&'a str>,
     /// How long it is kept once it failed for good, in milliseconds; zero not at all.
+    pub(crate) keep: Option<i64>,
+}
+
+/// What an upsert finds of the job that is there, beside its row.
+#[derive(Debug)]
+pub(crate) struct Shape {
+    pub(crate) same_value: bool,
+    pub(crate) group: Option<String>,
+    pub(crate) dedupe: Option<String>,
     pub(crate) keep: Option<i64>,
 }
 
@@ -301,6 +324,35 @@ pub(crate) fn update(c: &Connection, queue: i64, key: &str, there: &Row, change:
     end_lease(c, there.id)?;
     rewrite(c, queue, there, (Some(change.next), change), (UPDATE_JOB, "an update's job"))?;
     execute(c, DROP_STEPS, [there.id], "an update's job: the steps kept for its old value")?;
+    follow(c, queue, key, there.next, change.next)
+}
+
+/// The job that is there as an upsert compares it with `value`.
+pub(crate) fn shape(c: &Connection, queue: i64, there: &Row, value: &Kept) -> Result<Shape> {
+    c.prepare_cached(SHAPE_OF)
+        .and_then(|mut select| {
+            select.query_row(params![queue, there.next, there.id, value.bytes()], |row| {
+                Ok(Shape { same_value: row.get(0)?, group: row.get(1)?, dedupe: row.get(2)?, keep: row.get(3)? })
+            })
+        })
+        .map_err(|error| sql_error("an upsert's job", error))
+}
+
+/// Brings a job that is not running to what an upsert names, its attempts as
+/// they are; the steps an earlier attempt kept go only with a value they
+/// were kept for. No live lease holds it.
+pub(crate) fn reshape(
+    c: &Connection,
+    (queue, key): (i64, &str),
+    there: &Row,
+    change: &Change<'_>,
+    value_changed: bool,
+) -> Result<()> {
+    end_lease(c, there.id)?;
+    rewrite(c, queue, there, (Some(change.next), change), (RESHAPE_JOB, "an upsert's job"))?;
+    if value_changed {
+        execute(c, DROP_STEPS, [there.id], "an upsert's job: the steps kept for its old value")?;
+    }
     follow(c, queue, key, there.next, change.next)
 }
 

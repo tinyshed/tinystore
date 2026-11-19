@@ -33,6 +33,12 @@ impl Kept {
         }
     }
 
+    pub(crate) fn bytes(&self) -> &[u8] {
+        match self {
+            Kept::Inline(bytes) | Kept::Spilled(bytes) => bytes,
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         match self {
             Kept::Inline(bytes) | Kept::Spilled(bytes) => bytes.len(),

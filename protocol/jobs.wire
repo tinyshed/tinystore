@@ -186,7 +186,7 @@ message jobs.Kept {
 # One write of a transaction: an add, a set or an update with its call, or a
 # cancel with its id or its row.
 message jobs.Op {
-  1 method: uint                     # jobs.add, jobs.set, jobs.update or jobs.cancel
+  1 method: uint                     # jobs.add, jobs.set, jobs.update, jobs.upsert or jobs.cancel
   2 call: jobs.Call?
   3 id: jobs.Id?
 }
@@ -217,6 +217,10 @@ write 0x020b jobs.keep(jobs.Step)                  -> Empty
 read  0x020c jobs.watch(jobs.Id)                   -> download jobs.Job until Empty
 write 0x020d jobs.tx(jobs.Tx)                      -> jobs.TxResults
 read  0x020e jobs.counts(Handle)                   -> jobs.Counts
+
+# Adds the job under the call's id, or brings the one there to the call:
+# what differs written, its time, attempts and steps kept.
+write 0x020f jobs.upsert(jobs.Call) -> jobs.Changed
 
 # A schedule's one run as soon as a worker is free, its later times as they
 # were: a schedule's handle alone.

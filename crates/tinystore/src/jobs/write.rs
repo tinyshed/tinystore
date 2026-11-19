@@ -1,13 +1,13 @@
-//! What add, set, update and cancel do to the job under an id, by where that
-//! job is:
+//! What add, set, update, upsert and cancel do to the job under an id, by
+//! where that job is:
 //!
-//! | the id's job is      | add            | set                         | update                    | cancel                     |
-//! |----------------------|----------------|-----------------------------|---------------------------|----------------------------|
-//! | none                 | adds it        | adds it                     | false                     | false                      |
-//! | scheduled or waiting | false          | makes it new                | changes what it names     | removes it                 |
-//! | running              | false          | one run more after this one | false                     | tells its handler to stop  |
-//! | failed               | adds it        | starts it again             | false                     | removes it                 |
-//! | done, kept by dedupe | false          | adds it again               | false                     | false                      |
+//! | the id's job is      | add     | set                         | update                | upsert                      | cancel                    |
+//! |----------------------|---------|-----------------------------|-----------------------|-----------------------------|---------------------------|
+//! | none                 | adds it | adds it                     | false                 | adds it                     | false                     |
+//! | scheduled or waiting | false   | makes it new                | changes what it names | changes what differs        | removes it                |
+//! | running              | false   | one run more after this one | false                 | next run takes what differs | tells its handler to stop |
+//! | failed               | adds it | starts it again             | false                 | adds it                     | removes it                |
+//! | done, kept by dedupe | false   | adds it again               | false                 | false                       | false                     |
 //!
 //! A done job holds its id while its own dedupe or its queue's lasts, and a
 //! failed one is kept for its own keep or its queue's; a write that names
@@ -30,6 +30,8 @@ pub(crate) struct Prepared {
     /// Whether the call named a time.
     pub(crate) timed: bool,
     pub(crate) repeat: Option<String>,
+    /// When the call's repeat runs next after now.
+    pub(crate) repeated: Option<i64>,
     pub(crate) group: Option<String>,
     /// How long the job holds its id once done, as it keeps it.
     pub(crate) dedupe: Option<String>,
@@ -119,6 +121,46 @@ fn again(call: &Prepared, there: &rows::Row) -> Option<i64> {
         (false, true) => None,
         (false, false) => Some(call.now),
     }
+}
+
+/// Adds the job when its id is free, as `add` does, or brings the one there
+/// to the call: its value, group, repeat and options of its own where they
+/// differ, its time, attempts and steps as they were. A changed value drops
+/// the steps kept for the old one; a changed repeat moves a job not yet due
+/// to the repeat's next time, and one due stays due. A running job's run
+/// goes on, and its next run, when it has one, takes what differs. Answers
+/// when the job is due when the call changed it, none when the job already
+/// was what the call says, which writes nothing.
+pub(crate) fn upsert(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Option<i64>> {
+    let key = call.key.as_deref().unwrap_or_default();
+    let Some(there) = rows::job_by_key(c, queue.id, key)? else {
+        return Ok(add(c, queue, call)?.then_some(call.at));
+    };
+    let shape = rows::shape(c, queue.id, &there, &call.value)?;
+    let differs = |asked: Option<&str>, kept: Option<&str>| asked.is_some() && asked != kept;
+    let repeat_changed = differs(call.repeat.as_deref(), there.repeat.as_deref());
+    let changed = !shape.same_value
+        || repeat_changed
+        || differs(call.group.as_deref(), shape.group.as_deref())
+        || differs(call.dedupe.as_deref(), shape.dedupe.as_deref())
+        || call.keep.is_some() && call.keep != shape.keep;
+    if !changed {
+        return Ok(None);
+    }
+    if rows::lease_held(c, there.id, call.now)? {
+        // a job that ends with its run has no next run to take the change
+        if there.repeat.is_none() && call.repeat.is_none() && there.again.is_none() {
+            return Ok(None);
+        }
+        rows::ask_again(c, queue.id, &there, there.again, &call.change(there.next))?;
+        return Ok(Some(rows::due_of(there.next)));
+    }
+    let next = match call.repeated {
+        Some(repeated) if repeat_changed && rows::due_of(there.next) > call.now => repeated,
+        _ => there.next,
+    };
+    rows::reshape(c, (queue.id, key), &there, &call.change(next), !shape.same_value)?;
+    Ok(Some(rows::due_of(next)))
 }
 
 /// Changes a job that is not running, one waiting for a retry among them: its

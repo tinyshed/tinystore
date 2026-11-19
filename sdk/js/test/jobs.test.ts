@@ -78,6 +78,23 @@ for (const way of ways) {
 			expect(await later.cancel(id)).toBe(false)
 		})
 
+		// contract: JOB-17
+		test('upsert adds a job, or brings the one there to the call and keeps its time', async () => {
+			const polls = store.queue<{ group: string }>('polls')
+			expect(await polls.upsert('group:1', { group: '241-327' }, { every: '3m' })).toBe(true)
+			const added = await polls.get('group:1')
+			expect(await polls.upsert('group:1', { group: '241-327' }, { every: '3m' })).toBe(false)
+			expect(await polls.upsert('group:1', { group: 'renamed' }, { every: '3m' })).toBe(true)
+			const renamed = await polls.get('group:1')
+			expect([renamed?.value, renamed?.at]).toEqual([{ group: 'renamed' }, added?.at])
+			expect(await polls.upsert('group:1', { group: 'renamed' }, { every: '1h' })).toBe(true)
+			expect((await polls.get('group:1'))?.repeat?.startsWith('@every 1h')).toBe(true)
+			await store.tx(async tx => {
+				await tx.with(polls).upsert('group:2', { group: '2' }, { every: '1h' })
+			})
+			expect((await polls.get('group:2'))?.state).toBe('scheduled')
+		})
+
 		test('a worker runs each job as it falls due, the value first and the run second', async () => {
 			const reminders = store.queue<Reminder>('reminders')
 			const ran: [number, string | undefined, number][] = []

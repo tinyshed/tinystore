@@ -50,6 +50,21 @@ async def test_an_id_adds_a_job_once_set_makes_it_whatever_it_was_update_and_can
     assert not await later.cancel(job_id)
 
 
+# contract: JOB-17
+async def test_upsert_adds_a_job_or_brings_the_one_there_to_the_call_and_keeps_its_time(store: tinystore.Store) -> None:
+    polls = store.queue("polls", dict[str, str])
+    assert await polls.upsert("group:1", {"group": "241-327"}, every="3m")
+    added = await polls.get("group:1")
+    assert not await polls.upsert("group:1", {"group": "241-327"}, every="3m")
+    assert await polls.upsert("group:1", {"group": "renamed"}, every="3m")
+    renamed = await polls.get("group:1")
+    assert added is not None and renamed is not None
+    assert (renamed.value, renamed.at) == ({"group": "renamed"}, added.at)
+    assert await polls.upsert("group:1", {"group": "renamed"}, every="1h")
+    slower = await polls.get("group:1")
+    assert slower is not None and (slower.repeat or "").startswith("@every 1h")
+
+
 async def test_a_worker_runs_each_job_as_it_falls_due_the_value_first_and_the_run_second(
     store: tinystore.Store,
 ) -> None:

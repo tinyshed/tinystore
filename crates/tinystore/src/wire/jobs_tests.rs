@@ -544,6 +544,26 @@ fn a_watch_the_client_cancels_or_its_server_leaves_ends_with_why() {
     store.close().unwrap();
 }
 
+// contract: JOB-17
+#[test]
+fn a_client_upserts_a_job_alone_and_in_a_transaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "polls");
+    let poll = JobsCall { every: Some(180_000), ..job(handle, "group:1", "1") };
+    let upsert = |client: &mut Client, call: &JobsCall| client.call::<JobsChanged>(method::JOBS_UPSERT, call).unwrap();
+    assert!(upsert(&mut client, &poll).changed, "added");
+    assert!(!upsert(&mut client, &poll).changed, "it already was so");
+    let slower = JobsCall { every: Some(3_600_000), ..poll.clone() };
+    let op = JobsOp { method: u64::from(method::JOBS_UPSERT), call: Some(slower), id: None };
+    let results: JobsTxResults = client.call(method::JOBS_TX, &JobsTx { writes: vec![op] }).unwrap();
+    assert_eq!(results.outcomes, [JobsChanged { changed: true }]);
+    assert!(get(&mut client, handle, "group:1").repeat.is_some_and(|repeat| repeat.starts_with("@every 1h")));
+    let nameless = JobsCall { id: None, ..poll };
+    let refused = client.call::<JobsChanged>(method::JOBS_UPSERT, &nameless).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+}
+
 // contract: JOB-18, JOB-20
 #[test]
 fn a_call_gives_its_job_a_dedupe_of_a_calendar_and_a_keep_of_its_own() {

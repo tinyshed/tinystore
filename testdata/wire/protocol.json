@@ -6937,6 +6937,7 @@
     "jobs.step": 522,
     "jobs.tx": 525,
     "jobs.update": 517,
+    "jobs.upsert": 527,
     "jobs.watch": 524,
     "jobs.work": 521,
     "kv.allow": 290,

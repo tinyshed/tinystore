@@ -58,6 +58,9 @@ const (
 	MethodJobsWatch        = 0x020c
 	MethodJobsTx           = 0x020d
 	MethodJobsCounts       = 0x020e
+	// Adds the job under the call's id, or brings the one there to the call:
+	// what differs written, its time, attempts and steps kept.
+	MethodJobsUpsert = 0x020f
 	// A schedule's one run as soon as a worker is free, its later times as they
 	// were: a schedule's handle alone.
 	MethodJobsRunNow       = 0x0210
@@ -202,6 +205,7 @@ var methodNames = []struct {
 	{"jobs.watch", MethodJobsWatch},
 	{"jobs.tx", MethodJobsTx},
 	{"jobs.counts", MethodJobsCounts},
+	{"jobs.upsert", MethodJobsUpsert},
 	{"jobs.runNow", MethodJobsRunNow},
 	{"kv.bucket.open", MethodKvBucketOpen},
 	{"kv.get", MethodKvGet},
@@ -5762,7 +5766,7 @@ func (m JobsKept) IsZero() bool {
 // One write of a transaction: an add, a set or an update with its call, or a
 // cancel with its id or its row.
 type JobsOp struct {
-	// jobs.add, jobs.set, jobs.update or jobs.cancel
+	// jobs.add, jobs.set, jobs.update, jobs.upsert or jobs.cancel
 	Method uint64    `wire:"1,method"`
 	Call   *JobsCall `wire:"2,call"`
 	Id     *JobsId   `wire:"3,id"`

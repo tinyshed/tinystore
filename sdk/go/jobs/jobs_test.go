@@ -540,6 +540,31 @@ func TestAWorkerRunsAsManyHandlersAtOnceAsItsConcurrencySays(t *testing.T) {
 	})
 }
 
+// contract: JOB-17
+func TestUpsertAddsAJobOrBringsTheOneThereToTheCallAndKeepsItsTime(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		polls := ways.Must(jobs.OpenQueue[string](store, "polls"))
+		if !ways.Must(polls.Upsert(ctx, "group:1", "241-327", jobs.Every(3*time.Minute))) {
+			t.Fatal("added")
+		}
+		added, _ := ways.Must2(polls.Get(ctx, "group:1"))
+		if ways.Must(polls.Upsert(ctx, "group:1", "241-327", jobs.Every(3*time.Minute))) {
+			t.Fatal("it already was so")
+		}
+		if !ways.Must(polls.Upsert(ctx, "group:1", "renamed", jobs.Every(3*time.Minute))) {
+			t.Fatal("a new value")
+		}
+		if renamed, _ := ways.Must2(polls.Get(ctx, "group:1")); renamed.Value != "renamed" || !renamed.At.Equal(added.At) {
+			t.Fatalf("its time kept: %+v", renamed)
+		}
+		ways.Must(polls.Upsert(ctx, "group:1", "renamed", jobs.Every(time.Hour)))
+		if slower, _ := ways.Must2(polls.Get(ctx, "group:1")); !strings.HasPrefix(slower.Repeat, "@every 1h") {
+			t.Fatalf("slower %+v", slower)
+		}
+	})
+}
+
 // contract: JOB-18, JOB-20
 func TestAJobsOwnDedupeHoldsItsIDByALocalCalendarAndItsKeepOfZeroKeepsNothing(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {

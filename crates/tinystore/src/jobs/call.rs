@@ -139,6 +139,18 @@ where
         self.queue.set_asked(self.asked, value, self.tx)
     }
 
+    /// Adds the job when its id is free, as `add` does, or brings the one
+    /// there to this call: its value, group, repeat and options of its own
+    /// where they differ, its time, attempts and steps as they were. A
+    /// changed value drops the steps kept for the old one; a changed repeat
+    /// moves a job not yet due to the repeat's next time. Says whether it
+    /// added or changed anything: a job that already was so is not written,
+    /// so it is cheap to call on every request. A done job its dedupe holds
+    /// is left alone, `false`, as `add` leaves it.
+    pub fn upsert(self, value: &V) -> Result<bool> {
+        self.queue.upsert_asked(self.asked, value, self.tx)
+    }
+
     /// Changes the id's job when it is not running: its value, the steps kept
     /// for the old one dropped with it, and its time, group or repeat when the
     /// call names them. Says whether it did: a job that runs, is done or failed,
@@ -304,6 +316,7 @@ impl Asked {
             key: self.id,
             at,
             timed: self.when.is_some(),
+            repeated: repeat.as_ref().and_then(|repeat| repeat.next(now)),
             repeat: repeat.map(|repeat| repeat.text()),
             group: self.group,
             dedupe: self.dedupe.map(|dedupe| dedupe.text()),

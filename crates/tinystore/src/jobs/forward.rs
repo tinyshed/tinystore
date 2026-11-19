@@ -4,8 +4,8 @@
 //!
 //! ```text
 //! name         the queue's
-//! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open, 5 schedule, 6 cancel by row, 8 run now
-//! add, set and update: what was asked, the job's JSON, then its own options
+//! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open, 5 schedule, 6 cancel by row, 7 upsert, 8 run now
+//! add, set, update and upsert: what was asked, the job's JSON, then its own options
 //! cancel:      the id
 //! by row:      the row of a job without an id, as a page's cursor writes it
 //! run now:     nothing more: the schedule is the queue
@@ -39,7 +39,7 @@ pub(crate) fn make_in(home: &crate::engine::Home) -> Result<()> {
 /// jobs' file, where its home passes writes.
 pub(crate) use super::engine::FILE;
 
-/// Passes an add, a set or an update of a job of the queue `name` to the
+/// Passes an add, a set, an update or an upsert of a job of the queue `name` to the
 /// home of the copy jobs' file is, and says whether it changed a job.
 pub(crate) fn pass_on_write<V: Serialize>(
     store: &Store,
@@ -55,6 +55,7 @@ pub(crate) fn pass_on_write<V: Serialize>(
             Change::Add => 0,
             Change::Set => 1,
             Change::Update => 2,
+            Change::Upsert => 7,
         },
     );
     asked.write(&mut out);
@@ -124,11 +125,11 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
     let state = jobs.queue_as_open(&name, kind)?;
     let queue: Queue<serde_json::Value> = Queue::of_state(Arc::clone(&jobs), state);
     let changed = match call {
-        0..=2 => {
+        0..=2 | 7 => {
             let mut asked = Asked::read(&mut at)?;
             let value: serde_json::Value = serde_json::from_slice(at.bytes()?).map_err(|_| corrupt("a job's JSON"))?;
             asked.read_own(&mut at)?;
-            let change = [Change::Add, Change::Set, Change::Update][usize::from(call)];
+            let change = [Change::Add, Change::Set, Change::Update, Change::Upsert][usize::from(call.min(3))];
             queue.write_asked(change, asked, &value)?
         }
         3 => queue.cancel(at.text()?)?,

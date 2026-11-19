@@ -359,6 +359,22 @@ for the old one dropped with it, and its time, group or repeat when the
 options give them. It says whether it did: a job that runs, is done or
 failed, or never was answers false.
 
+### Queue.upsert
+
+```ts
+upsert(id: string, value: T, options?: JobOptions): Promise<boolean>
+```
+
+Adds the job under `id` when it is free, as `add` does, or brings the
+one there to this call: its value, group, repeat and options of its own
+where they differ, its time, attempts and steps as they were. A changed
+value drops the steps kept for the old one; a changed repeat moves a job
+not yet due to the repeat's next time. It says whether it added or
+changed anything: a job that already was so is not written, so it is
+cheap to call on every request. `at` and `delay` count only when it adds.
+
+    const changed = await polls.upsert(`group:${g}`, { group: g }, { every: '3m' })
+
 ### Queue.cancel
 
 ```ts
@@ -481,6 +497,12 @@ set(id: string, value: T, options?: JobOptions): Promise<void>
 update(id: string, value: T, options?: JobOptions): Promise<boolean>
 ```
 
+### TxQueue.upsert
+
+```ts
+upsert(id: string, value: T, options?: JobOptions): Promise<boolean>
+```
+
 ### TxQueue.cancel
 
 ```ts
@@ -542,6 +564,14 @@ update(id: string, value: T, options?: JobOptions): Promise<void>
 ```
 
 Changes the id's job when it is not running, its old value's steps dropped, with the commit.
+
+### StoreTxQueue.upsert
+
+```ts
+upsert(id: string, value: T, options?: JobOptions): Promise<void>
+```
+
+Adds the job under id, or brings the one there to this call, its time kept, with the commit.
 
 ### StoreTxQueue.cancel
 

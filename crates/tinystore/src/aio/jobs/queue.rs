@@ -155,6 +155,12 @@ where
         self.id(id).update(value)
     }
 
+    /// Adds the job under `id`, or brings the one there to this value, its
+    /// time, attempts and steps as they were; see [`JobCall::upsert`].
+    pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
+        self.id(id).upsert(value)
+    }
+
     /// Takes a job, whatever its state, and says whether it was there: the
     /// job under an id, or a job a page gave, as [`jobs::Queue::cancel`]
     /// does. A running one's handler is told to stop: `run.stopped()` turns
@@ -432,6 +438,13 @@ where
     /// [`jobs::JobCall::update`].
     pub fn update(self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
         self.write(Change::Update, "an update", value)
+    }
+
+    /// Adds the job when its id is free, or brings the one there to this
+    /// call, and says whether it added or changed anything; see
+    /// [`jobs::JobCall::upsert`].
+    pub fn upsert(self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
+        self.write(Change::Upsert, "an upsert", value)
     }
 
     /// The blocking call, which the job's add for a database's batch is made

@@ -53,6 +53,10 @@ where
         self.queue.update_asked(Asked::with_id(id.as_ref()), value, Some(self.tx))
     }
 
+    pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> Result<bool> {
+        self.queue.upsert_asked(Asked::with_id(id.as_ref()), value, Some(self.tx))
+    }
+
     /// Takes the job under an id, or a job a page gave, as [`Queue::cancel`]
     /// does; a running job's handler is told to stop once the transaction
     /// commits.

@@ -281,6 +281,35 @@ async def update(
 
 Changes the id's job when it is not running, its old value's steps dropped, and says whether it did.
 
+### Queue.upsert
+
+```python
+async def upsert(
+    id: str,
+    value: T,
+    *,
+    at: datetime | None = None,
+    delay: Duration | None = None,
+    group: str | None = None,
+    every: Duration | None = None,
+    cron: str | None = None,
+    time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
+) -> bool: ...
+```
+
+Adds the job under id when it is free, or brings the one there to this call.
+
+Its value, group, repeat and options of its own are written where they
+differ, its time, attempts and steps kept. A changed value drops the
+steps kept for the old one; a changed repeat moves a job not yet due to
+the repeat's next time. It says whether it added or changed anything:
+a job that already was so is not written, so it is cheap to call on
+every request. ``at`` and ``delay`` count only when it adds.
+
+    changed = await polls.upsert(f"group:{g}", Poll(group=g), every="3m")
+
 ### Queue.cancel
 
 ```python
@@ -473,6 +502,26 @@ async def update(
 ```
 
 Changes the id's job when it is not running, its old value's steps dropped, with the commit.
+
+### StoreTxQueue.upsert
+
+```python
+async def upsert(
+    id: str,
+    value: T,
+    *,
+    at: datetime | None = None,
+    delay: Duration | None = None,
+    group: str | None = None,
+    every: Duration | None = None,
+    cron: str | None = None,
+    time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
+) -> None: ...
+```
+
+Adds the job under id, or brings the one there to this call, its time kept, with the commit.
 
 ### StoreTxQueue.cancel
 

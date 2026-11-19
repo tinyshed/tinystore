@@ -82,6 +82,11 @@ export const methods = {
 	'jobs.tx': 0x020d,
 	'jobs.counts': 0x020e,
 	/**
+	 * Adds the job under the call's id, or brings the one there to the call:
+	 * what differs written, its time, attempts and steps kept.
+	 */
+	'jobs.upsert': 0x020f,
+	/**
 	 * A schedule's one run as soon as a worker is free, its later times as they
 	 * were: a schedule's handle alone.
 	 */
@@ -5035,7 +5040,7 @@ export const JobsKept = message(
 export const JobsOp = message(
 	'jobs.Op',
 	{
-		/** jobs.add, jobs.set, jobs.update or jobs.cancel */
+		/** jobs.add, jobs.set, jobs.update, jobs.upsert or jobs.cancel */
 		method: [1, uint],
 		call: [2, JobsCall],
 		id: [3, JobsId],

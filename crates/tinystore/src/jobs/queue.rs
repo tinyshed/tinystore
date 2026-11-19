@@ -248,6 +248,13 @@ where
         self.update_asked(Asked::with_id(id.as_ref()), value, None)
     }
 
+    /// Adds the job under `id` with this value, or brings the one there to
+    /// it, its time, attempts and steps as they were, and says whether it
+    /// added or changed anything; see [`JobCall::upsert`].
+    pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> Result<bool> {
+        self.upsert_asked(Asked::with_id(id.as_ref()), value, None)
+    }
+
     /// Takes a job, whatever its state, and says whether it was there: the
     /// job under an id, `"welcome-42"`, or a job a page gave, `&job`, by its
     /// id or, for one without, by the row it was listed from. A job retried,
@@ -488,6 +495,10 @@ where
         Ok(self.write_now(Change::Update, asked, value, tx)?.is_some())
     }
 
+    pub(crate) fn upsert_asked(&self, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<bool> {
+        Ok(self.write_now(Change::Upsert, asked, value, tx)?.is_some())
+    }
+
     /// An add, a set or an update in `tx`, or in a commit of its own that it
     /// waits for. It gives the time the job is due at when the write changed
     /// it, and wakes the queue's workers for that time.
@@ -587,6 +598,9 @@ where
             (Change::Update, None) => {
                 return Err(Error::invalid("an update needs an id, which names the job it changes"));
             }
+            (Change::Upsert, None) => {
+                return Err(Error::invalid("an upsert needs an id, which names the job it adds or changes"));
+            }
             _ => {}
         }
         asked.prepare(value, self.jobs.now())
@@ -640,6 +654,7 @@ pub(crate) enum Change {
     Add,
     Set,
     Update,
+    Upsert,
 }
 
 /// The write of a change in `queue`, which gives the time the job is due at
@@ -653,6 +668,7 @@ fn writes(
         Change::Add => Ok(write::add(c, &queue, &call)?.then_some(call.at)),
         Change::Set => write::set(c, &queue, &call).map(|set| Some(set.due)),
         Change::Update => write::update(c, &queue, &call),
+        Change::Upsert => write::upsert(c, &queue, &call),
     }
 }
 

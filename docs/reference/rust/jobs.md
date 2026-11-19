@@ -167,6 +167,21 @@ Makes the id's job this value at this time, whatever it was: a job
 waiting is made new, a failed one starts again, and a running one runs
 once more after this run, with this value.
 
+### JobCall.upsert
+
+```rust
+pub fn upsert(self, value: &V) -> Result<bool>
+```
+
+Adds the job when its id is free, as `add` does, or brings the one
+there to this call: its value, group, repeat and options of its own
+where they differ, its time, attempts and steps as they were. A
+changed value drops the steps kept for the old one; a changed repeat
+moves a job not yet due to the repeat's next time. Says whether it
+added or changed anything: a job that already was so is not written,
+so it is cheap to call on every request. A done job its dedupe holds
+is left alone, `false`, as `add` leaves it.
+
 ### JobCall.update
 
 ```rust
@@ -340,6 +355,16 @@ pub fn update(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
 Gives the job under `id` this value when it is not running, the steps
 kept for the old one dropped with it, and says whether it did; see
 `JobCall::update`.
+
+### Queue.upsert
+
+```rust
+pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
+```
+
+Adds the job under `id` with this value, or brings the one there to
+it, its time, attempts and steps as they were, and says whether it
+added or changed anything; see `JobCall::upsert`.
 
 ### Queue.cancel
 
@@ -1034,6 +1059,12 @@ pub fn set(&self, id: impl AsRef<str>, value: &V) -> Result<()>
 pub fn update(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
 ```
 
+### TxQueue.upsert
+
+```rust
+pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
+```
+
 ### TxQueue.cancel
 
 ```rust
@@ -1260,6 +1291,16 @@ Changes the id's job when it is not running, the steps kept for the old
 value dropped with it, and says whether it did; see
 `jobs::JobCall::update`.
 
+### aio::jobs::JobCall.upsert
+
+```rust
+pub fn upsert(self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Adds the job when its id is free, or brings the one there to this
+call, and says whether it added or changed anything; see
+`jobs::JobCall::upsert`.
+
 ### aio::jobs::JobCall.adding
 
 ```rust
@@ -1324,6 +1365,19 @@ pub fn update(
 Gives the job under `id` this value when it is not running, the steps
 kept for the old one dropped with it, and says whether it did; see
 `JobCall::update`.
+
+### aio::jobs::Queue.upsert
+
+```rust
+pub fn upsert(
+    &self,
+    id: impl AsRef<str>,
+    value: &V,
+) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Adds the job under `id`, or brings the one there to this value, its
+time, attempts and steps as they were; see `JobCall::upsert`.
 
 ### aio::jobs::Queue.cancel
 
