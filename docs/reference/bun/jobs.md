@@ -41,14 +41,27 @@ interface QueueOptions {
     rate?: Rate | undefined
     /** jobs of each group started in any span, beside rate: '2/s', each account's own limit; it lives in memory */
     groupRate?: Rate | undefined
-    /** how long a done job's id stays taken, so that an add of it adds nothing */
-    dedupe?: Duration | undefined
-    /** how long a failed job stays, to be found and started again: a week */
+    /** how long a done job's id stays taken, so that an add of it adds nothing: '10m', or { calendar: 'day', timeZone } */
+    dedupe?: Dedupe | undefined
+    /** how long a failed job stays, to be found and started again: a week; '0s' not at all */
     keep?: Duration | undefined
     /** jobs that may wait; an add past it is LimitError: ten million */
     maxWaiting?: number | undefined
 }
 ```
+
+## Dedupe
+
+```ts
+type Dedupe = Duration | {
+    calendar: Calendar
+    timeZone: string
+}
+```
+
+How long a done job holds its id: a span from when it was done, '10m', or
+until the local day, week or month it was done in ends, in its zone:
+`{ calendar: 'day', timeZone: 'Europe/Moscow' }`.
 
 ## JobOptions
 
@@ -66,10 +79,14 @@ interface JobOptions {
     cron?: string | undefined
     /** an IANA name, 'UTC' among them, which a cron needs: one given as undefined is InvalidError, never UTC */
     timeZone?: string | undefined
+    /** how long this job holds its id once done, in the place of its queue's dedupe */
+    dedupe?: Dedupe | undefined
+    /** how long this job is kept once it failed for good, in the place of its queue's: '0s' not at all */
+    keep?: Duration | undefined
 }
 ```
 
-A job's time, group and repeat, as an add, a set and an update take them.
+A job's time, group, repeat and options of its own, as an add, a set and an update take them.
 
 ## AddOptions
 

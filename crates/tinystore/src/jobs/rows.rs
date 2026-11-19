@@ -60,8 +60,8 @@ const LEASE_HELD: &str = "select 1 from _tinystore_jobs_leases where id = ?1 and
 const DONE_KEY: &str = "select 1 from _tinystore_jobs_done where queue = ?1 and key = ?2 and until > ?3";
 
 const INSERT_JOB: &str =
-    "insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill, grp, error)
-    values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7, ?8, ?9)";
+    "insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill, grp, error, dedupe, keep)
+    values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 const INSERT_SPILLED: &str = "insert into _tinystore_jobs_spilled (id, value) values (?1, ?2)";
 const DELETE_SPILLED: &str = "delete from _tinystore_jobs_spilled where id = ?1";
 /// A key's row: where its job lies, replacing a key a job left behind.
@@ -70,20 +70,23 @@ const INSERT_KEY: &str = "insert into _tinystore_jobs_keys (queue, key, next, id
 const MOVE_KEY: &str = "update _tinystore_jobs_keys set next = ?3 where queue = ?1 and key = ?2";
 const DROP_KEY: &str = "delete from _tinystore_jobs_keys where queue = ?1 and key = ?2";
 /// A set's job made new: its value and time, its attempts from one, its
-/// retry and error gone; the times of its last run stay, and so does a repeat
-/// or a group the set does not name.
+/// retry and error gone; the times of its last run stay, and so does a repeat,
+/// a group or an option of its own the set does not name.
 const RENEW_JOB: &str = "update _tinystore_jobs
     set next = ?4, at = ?4, attempt = 0, again = null, error = null, value = ?5, spill = ?6,
-        repeat = coalesce(?7, repeat), grp = coalesce(?8, grp)
+        repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
+        dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep)
     where queue = ?1 and next = ?2 and id = ?3";
 /// An update's job: its value, and what else the update named.
 const UPDATE_JOB: &str = "update _tinystore_jobs
-    set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp)
+    set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
+        dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep)
     where queue = ?1 and next = ?2 and id = ?3";
 /// A set while the job runs: the value and repeat its next run takes, and when
 /// that run is, which its settlement reads.
 const ASK_AGAIN: &str = "update _tinystore_jobs
-    set again = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp)
+    set again = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
+        dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep)
     where queue = ?1 and next = ?2 and id = ?3";
 /// A run asked of a job that runs, right after the run under way: its
 /// settlement reads `again`.
@@ -137,7 +140,18 @@ pub(crate) struct NewJob<'a> {
     pub(crate) group: Option<&'a str>,
     /// Why the failed job it takes the place of failed, until its first run ends.
     pub(crate) error: Option<&'a str>,
+    pub(crate) own: Own<'a>,
     pub(crate) value: &'a Kept,
+}
+
+/// The options a job may have of its own beside its queue's, as a write gives
+/// them; one it leaves out is its queue's, or stays as it was.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Own<'a> {
+    /// How long it holds its id once done, as [`Dedupe::text`](super::dedupe::Dedupe) writes it.
+    pub(crate) dedupe: Option<&'a str>,
+    /// How long it is kept once it failed for good, in milliseconds; zero not at all.
+    pub(crate) keep: Option<i64>,
 }
 
 /// What a failed job a write took the place of leaves to the new one.
@@ -154,6 +168,7 @@ pub(crate) struct Change<'a> {
     pub(crate) next: i64,
     pub(crate) repeat: Option<&'a str>,
     pub(crate) group: Option<&'a str>,
+    pub(crate) own: Own<'a>,
     pub(crate) value: &'a Kept,
 }
 
@@ -258,8 +273,10 @@ pub(crate) fn check_room(c: &Connection, queue: i64, max_waiting: u64) -> Result
 /// bound, and its key where it has one.
 pub(crate) fn insert(c: &Connection, job: &NewJob<'_>) -> Result<()> {
     let spill = spill(c, job.id, job.value)?;
-    let inline = job.value.inline();
-    let params = params![job.queue, job.at, job.id, job.key, job.repeat, inline, spill, job.group, job.error];
+    let (inline, own) = (job.value.inline(), job.own);
+    let params = params![
+        job.queue, job.at, job.id, job.key, job.repeat, inline, spill, job.group, job.error, own.dedupe, own.keep
+    ];
     execute(c, INSERT_JOB, params, "a job's row")?;
     if let Some(key) = job.key {
         execute(c, INSERT_KEY, params![job.queue, key, job.at, job.id], "a job's id")?;
@@ -272,7 +289,7 @@ pub(crate) fn insert(c: &Connection, job: &NewJob<'_>) -> Result<()> {
 /// lease holds it.
 pub(crate) fn renew(c: &Connection, queue: i64, key: &str, there: &Row, change: &Change<'_>) -> Result<()> {
     end_lease(c, there.id)?;
-    rewrite(c, queue, there, change, (RENEW_JOB, "a set's job"))?;
+    rewrite(c, queue, there, (Some(change.next), change), (RENEW_JOB, "a set's job"))?;
     execute(c, DROP_STEPS, [there.id], "a set's job: the steps of its last run")?;
     follow(c, queue, key, there.next, change.next)
 }
@@ -282,7 +299,7 @@ pub(crate) fn renew(c: &Connection, queue: i64, key: &str, there: &Row, change: 
 /// attempt kept go with the value they were kept for, as a set's do.
 pub(crate) fn update(c: &Connection, queue: i64, key: &str, there: &Row, change: &Change<'_>) -> Result<()> {
     end_lease(c, there.id)?;
-    rewrite(c, queue, there, change, (UPDATE_JOB, "an update's job"))?;
+    rewrite(c, queue, there, (Some(change.next), change), (UPDATE_JOB, "an update's job"))?;
     execute(c, DROP_STEPS, [there.id], "an update's job: the steps kept for its old value")?;
     follow(c, queue, key, there.next, change.next)
 }
@@ -296,18 +313,19 @@ fn end_lease(c: &Connection, id: i64) -> Result<()> {
 }
 
 /// Writes what a change names over the job that is there with `statement`,
-/// its value spilled anew; `what` names the write in an error.
+/// its value spilled anew, `time` its fourth parameter: when the job is due,
+/// or when a running one runs again; `what` names the write in an error.
 fn rewrite(
     c: &Connection,
     queue: i64,
     there: &Row,
-    change: &Change<'_>,
+    (time, change): (Option<i64>, &Change<'_>),
     (statement, what): (&str, &str),
 ) -> Result<()> {
     drop_spill(c, there.spill)?;
-    let spill = spill(c, there.id, change.value)?;
-    let params =
-        params![queue, there.next, there.id, change.next, change.value.inline(), spill, change.repeat, change.group];
+    let (spill, own) = (spill(c, there.id, change.value)?, change.own);
+    let (inline, repeat, group) = (change.value.inline(), change.repeat, change.group);
+    let params = params![queue, there.next, there.id, time, inline, spill, repeat, group, own.dedupe, own.keep];
     execute(c, statement, params, what).map(drop)
 }
 
@@ -320,10 +338,7 @@ pub(crate) fn ask_again(
     again: Option<i64>,
     change: &Change<'_>,
 ) -> Result<()> {
-    drop_spill(c, there.spill)?;
-    let spill = spill(c, there.id, change.value)?;
-    let params = params![queue, there.next, there.id, again, change.value.inline(), spill, change.repeat, change.group];
-    execute(c, ASK_AGAIN, params, "a set of a running job").map(drop)
+    rewrite(c, queue, there, (again, change), (ASK_AGAIN, "a set of a running job"))
 }
 
 /// Asks one run more of a job that runs, at `at` or as soon as the run under

@@ -9,6 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::call::{LONGEST_SPAN, in_years};
+use super::dedupe::Dedupe;
 use super::policy::Policy;
 use super::repeat::Repeat;
 use super::rows::{self, PARKED_BY, execute};
@@ -59,19 +60,21 @@ const EARLIEST_LEASE: &str = "select min(until) from _tinystore_jobs_leases wher
 const DROP_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1 and attempt = ?2 and next = ?3";
 const DROP_ANY_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1";
 const EXTEND_LEASE: &str = "update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2 and next = ?4";
-const JOB_HELD: &str =
-    "select again, repeat, error, attempt from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
+const JOB_HELD: &str = "select again, repeat, error, attempt, dedupe, keep from _tinystore_jobs
+    where queue = ?1 and next = ?2 and id = ?3";
 const JOB_SPILL: &str = "select spill from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
-/// The spill of a job whose end deletes it: one that neither repeats nor was
-/// asked to run again.
-const DONE_SPILL: &str = "select spill from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3
+/// The spill and the dedupe of a job whose end deletes it: one that neither
+/// repeats nor was asked to run again.
+const DONE_SPILL: &str = "select spill, dedupe from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3
     and again is null and repeat is null";
 const MOVE_JOB: &str = "update _tinystore_jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7,
         ran = coalesce(?8, ran), took = coalesce(?9, took)
     where queue = ?1 and next = ?2 and id = ?3";
+/// A job failed for good, kept until ?9 when it has a keep of its own, and
+/// for its queue's when that is null.
 const FAIL_JOB: &str = "insert into _tinystore_jobs_failed (queue, id, key, at, attempt, failed, error, value, spill,
-        ran, took, grp)
-    select queue, id, key, at, ?4, ?5, ?6, value, spill, coalesce(?7, ran), coalesce(?8, took), grp
+        ran, took, grp, until)
+    select queue, id, key, at, ?4, ?5, ?6, value, spill, coalesce(?7, ran), coalesce(?8, took), grp, ?9
     from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
 const DONE_ID_SPILL: &str = "select spill from _tinystore_jobs_done where queue = ?1 and key = ?2";
 const FORGET_DONE: &str = "delete from _tinystore_jobs_done where queue = ?1 and key = ?2";
@@ -473,15 +476,53 @@ fn abandon(c: &Connection, claiming: &Claiming<'_>, row: &DueRow, attempts: i64)
     );
     let (queue, place) = (claiming.queue, (row.next, row.id, row.key.as_deref()));
     execute(c, DROP_ANY_LEASE, [row.id], "an abandoned job's lease")?;
-    if let Some(next) = next_run(row.at, &held(c, queue, place)?, claiming.now) {
+    let held = held(c, queue, place)?;
+    if let Some(next) = next_run(row.at, &held, claiming.now) {
         run_again(c, queue, place, (next, Some(cause)), (None, None))?;
         return Ok(false);
     }
-    let failed =
-        params![queue.id, row.next, row.id, attempts, claiming.now, cause, Option::<i64>::None, Option::<i64>::None];
-    execute(c, FAIL_JOB, failed, "an abandoned job")?;
-    execute(c, DROP_JOB_ROW, params![queue.id, row.next, row.id], "an abandoned job")?;
+    let ending = Ending { attempts, cause: &cause, ran: (None, None), now: claiming.now };
+    failed_for_good(c, queue, (place, &held), &ending)?;
     Ok(true)
+}
+
+/// How a job that failed for good ended: its attempts, why, its last run
+/// and when.
+struct Ending<'a> {
+    attempts: i64,
+    cause: &'a str,
+    ran: (Option<i64>, Option<i64>),
+    now: i64,
+}
+
+/// Keeps a job that failed for good for its own keep or its queue's, or,
+/// for a keep of zero, deletes it at once and tells its watchers it failed,
+/// since a watcher that finds a job gone takes it for done otherwise.
+fn failed_for_good(
+    c: &Connection,
+    queue: &QueueState,
+    (place, held): (Place<'_>, &HeldRow),
+    ending: &Ending<'_>,
+) -> Result<()> {
+    let (next, id, key) = place;
+    let keep = held.keep.unwrap_or_else(|| crate::clock::millis(queue.policy.keep));
+    if keep == 0 {
+        let spilled: Option<i64> = c
+            .prepare_cached(JOB_SPILL)
+            .and_then(|mut select| select.query_row(params![queue.id, next, id], |row| row.get(0)))
+            .map_err(|error| sql_error("a job failed for good", error))?;
+        execute(c, DROP_JOB_ROW, params![queue.id, next, id], "a job failed for good")?;
+        rows::drop_spill(c, spilled)?;
+        if let Some(key) = key {
+            queue.watchers.failed(key, ending.cause);
+        }
+        return Ok(());
+    }
+    let until = held.keep.map(|keep| ending.now.saturating_add(keep));
+    let (ran, took) = ending.ran;
+    let failed = params![queue.id, next, id, ending.attempts, ending.now, ending.cause, ran, took, until];
+    execute(c, FAIL_JOB, failed, "a job failed for good")?;
+    execute(c, DROP_JOB_ROW, params![queue.id, next, id], "a job failed for good").map(drop)
 }
 
 /// When the queue next needs a claim: its first due job no live lease holds,
@@ -632,20 +673,20 @@ fn superseded(
 }
 
 /// Deletes a done job that neither repeats nor was asked to run again,
-/// reading nothing first; none for a job that moves to its next time instead,
-/// or one whose id the queue's dedupe keeps.
+/// reading nothing more first; none for a job that moves to its next time
+/// instead, or one whose id its dedupe or its queue's keeps.
 fn done_alone(c: &Connection, queue: &QueueState, lease: &Lease) -> Result<Option<Settled>> {
-    if queue.policy.dedupe.is_some() && lease.key.is_some() {
-        return Ok(None);
-    }
     let place = params![queue.id, lease.next, lease.id];
-    let spilled: Option<Option<i64>> = c
+    let found: Option<(Option<i64>, Option<String>)> = c
         .prepare_cached(DONE_SPILL)
-        .and_then(|mut select| select.query_row(place, |row| row.get(0)).optional())
+        .and_then(|mut select| select.query_row(place, |row| Ok((row.get(0)?, row.get(1)?))).optional())
         .map_err(|error| sql_error("a done job", error))?;
-    let Some(spilled) = spilled else {
+    let Some((spilled, dedupe)) = found else {
         return Ok(None);
     };
+    if lease.key.is_some() && (dedupe.is_some() || queue.policy.dedupe.is_some()) {
+        return Ok(None);
+    }
     execute(c, DROP_JOB_ROW, place, "a done job")?;
     rows::drop_spill(c, spilled)?;
     Ok(Some(Settled::default()))
@@ -658,6 +699,10 @@ struct HeldRow {
     repeat: Option<String>,
     error: Option<String>,
     attempt: i64,
+    /// The job's own dedupe, as it keeps it.
+    dedupe: Option<String>,
+    /// The job's own keep, in milliseconds.
+    keep: Option<i64>,
 }
 
 fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<HeldRow> {
@@ -665,7 +710,14 @@ fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<
         .and_then(|mut select| {
             select
                 .query_row(params![queue.id, next, id], |row| {
-                    Ok(HeldRow { again: row.get(0)?, repeat: row.get(1)?, error: row.get(2)?, attempt: row.get(3)? })
+                    Ok(HeldRow {
+                        again: row.get(0)?,
+                        repeat: row.get(1)?,
+                        error: row.get(2)?,
+                        attempt: row.get(3)?,
+                        dedupe: row.get(4)?,
+                        keep: row.get(5)?,
+                    })
                 })
                 .optional()
         })
@@ -674,13 +726,17 @@ fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<
 }
 
 /// Deletes a done job, or moves one that repeats, or that a set asked to run
-/// again, to its next time; a job whose id the queue's dedupe keeps leaves its
-/// value and last run behind with the id.
+/// again, to its next time; a job whose id its dedupe or its queue's keeps
+/// leaves its value and last run behind with the id.
 fn done(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, now: i64) -> Result<Settled> {
     if let Some(next) = next_run(lease.at, held, now) {
         return run_again(c, queue, lease.place(), (next, None), lease.last_run(now));
     }
-    if let (Some(dedupe), Some(key)) = (queue.policy.dedupe, &lease.key) {
+    let dedupe = match &held.dedupe {
+        Some(text) => Some(Dedupe::parse(text)?),
+        None => queue.policy.dedupe.clone(),
+    };
+    if let (Some(dedupe), Some(key)) = (dedupe, &lease.key) {
         let forgotten: Option<Option<i64>> = c
             .prepare_cached(DONE_ID_SPILL)
             .and_then(|mut select| select.query_row(params![queue.id, key], |row| row.get(0)).optional())
@@ -689,7 +745,7 @@ fn done(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, now: 
             execute(c, FORGET_DONE, params![queue.id, key], "a done job's id")?;
         }
         rows::drop_spill(c, forgotten.flatten())?;
-        let until = now.saturating_add(crate::clock::millis(dedupe));
+        let until = dedupe.until(now)?;
         let (ran, took) = lease.last_run(now);
         let keep = params![queue.id, lease.next, lease.id, until, lease.attempt, ran, took];
         execute(c, KEEP_DONE, keep, "a done job's id")?;
@@ -740,10 +796,8 @@ fn fail(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, cause
     if let Some(next) = next_run(lease.at, held, now) {
         return run_again(c, queue, lease.place(), (next, Some(cause)), lease.last_run(now));
     }
-    let (ran, took) = lease.last_run(now);
-    let failed = params![queue.id, lease.next, lease.id, lease.attempt, now, cause, ran, took];
-    execute(c, FAIL_JOB, failed, "a failed job")?;
-    execute(c, DROP_JOB_ROW, params![queue.id, lease.next, lease.id], "a failed job")?;
+    let ending = Ending { attempts: lease.attempt, cause: &cause, ran: lease.last_run(now), now };
+    failed_for_good(c, queue, (lease.place(), held), &ending)?;
     Ok(Settled { failed: Some(cause), ..Settled::default() })
 }
 

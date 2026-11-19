@@ -3,6 +3,7 @@ package jobs
 import (
 	"time"
 
+	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/wire"
 )
@@ -16,10 +17,12 @@ type QueueOption interface{ queue(*queueOptions) }
 // ScheduleOption is how a schedule opens: its repeat, attempts, backoff and timeout.
 type ScheduleOption interface{ schedule(*queueOptions) }
 
-// AddOption is what an Add gives besides its value: an id, a time, a group, a repeat.
+// AddOption is what an Add gives besides its value: an id, a time, a group, a
+// repeat, and a dedupe or a keep of the job's own.
 type AddOption interface{ add(*jobOptions) }
 
-// SetOption is what a Set or an Update gives besides its id and value: a time, a group, a repeat.
+// SetOption is what a Set or an Update gives besides its id and value: a time,
+// a group, a repeat, and a dedupe or a keep of the job's own.
 type SetOption interface{ set(*jobOptions) }
 
 // ListOption is how a page of jobs reads.
@@ -36,6 +39,7 @@ type queueOptions struct {
 	rate        *wire.JobsRate
 	groupRate   *wire.JobsRate
 	dedupe      *time.Duration
+	calendar    *wire.JobsCalendar
 	keep        *time.Duration
 	maxWaiting  *uint64
 	every       *time.Duration
@@ -44,12 +48,15 @@ type queueOptions struct {
 }
 
 type jobOptions struct {
-	id    *string
-	at    *time.Time
-	delay *time.Duration
-	group *string
-	every *time.Duration
-	cron  *cron
+	id       *string
+	at       *time.Time
+	delay    *time.Duration
+	group    *string
+	every    *time.Duration
+	cron     *cron
+	dedupe   *time.Duration
+	calendar *wire.JobsCalendar
+	keep     *time.Duration
 }
 
 type listOptions struct {
@@ -156,18 +163,40 @@ func (r groupRate) queue(o *queueOptions) {
 
 type dedupe time.Duration
 
-// Dedupe is how long a done job's id stays taken, so that the same id added
-// again meanwhile adds nothing.
+// Dedupe is how long a done job's id stays taken, from when it was done, so
+// that the same id added again meanwhile adds nothing: a queue's, or given to
+// an add or a set, the job's own in the place of its queue's.
 func Dedupe(d time.Duration) dedupe { return dedupe(d) }
 
-func (d dedupe) queue(o *queueOptions) { v := time.Duration(d); o.dedupe = &v }
+func (d dedupe) queue(o *queueOptions) { v := time.Duration(d); o.dedupe, o.calendar = &v, nil }
+func (d dedupe) add(o *jobOptions)     { v := time.Duration(d); o.dedupe, o.calendar = &v, nil }
+func (d dedupe) set(o *jobOptions)     { d.add(o) }
+
+type dedupeCalendar wire.JobsCalendar
+
+// DedupeCalendar keeps a done job's id taken until the local day, week or
+// month it was done in ends, in a time zone, an IANA name:
+// jobs.DedupeCalendar(tinystore.Day, "Europe/Moscow"). A queue's, or a job's own.
+func DedupeCalendar(c tinystore.Calendar, timeZone string) dedupeCalendar {
+	return dedupeCalendar{Calendar: string(c), TimeZone: timeZone}
+}
+
+func (d dedupeCalendar) queue(o *queueOptions) {
+	v := wire.JobsCalendar(d)
+	o.calendar, o.dedupe = &v, nil
+}
+func (d dedupeCalendar) add(o *jobOptions) { v := wire.JobsCalendar(d); o.calendar, o.dedupe = &v, nil }
+func (d dedupeCalendar) set(o *jobOptions) { d.add(o) }
 
 type keep time.Duration
 
-// Keep is how long a failed job stays: a week unless given.
+// Keep is how long a failed job stays: a week unless given, and 0 not at all.
+// Given to an add or a set, it is the job's own, in the place of its queue's.
 func Keep(d time.Duration) keep { return keep(d) }
 
 func (k keep) queue(o *queueOptions) { v := time.Duration(k); o.keep = &v }
+func (k keep) add(o *jobOptions)     { v := time.Duration(k); o.keep = &v }
+func (k keep) set(o *jobOptions)     { k.add(o) }
 
 type maxWaiting int
 

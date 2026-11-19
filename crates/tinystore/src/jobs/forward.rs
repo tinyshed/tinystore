@@ -5,7 +5,7 @@
 //! ```text
 //! name         the queue's
 //! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open, 5 schedule, 6 cancel by row, 8 run now
-//! add, set and update: what was asked, then the job's JSON
+//! add, set and update: what was asked, the job's JSON, then its own options
 //! cancel:      the id
 //! by row:      the row of a job without an id, as a page's cursor writes it
 //! run now:     nothing more: the schedule is the queue
@@ -59,6 +59,7 @@ pub(crate) fn pass_on_write<V: Serialize>(
     );
     asked.write(&mut out);
     out.bytes(&json);
+    asked.write_own(&mut out);
     answered(store, out)
 }
 
@@ -124,8 +125,9 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
     let queue: Queue<serde_json::Value> = Queue::of_state(Arc::clone(&jobs), state);
     let changed = match call {
         0..=2 => {
-            let asked = Asked::read(&mut at)?;
+            let mut asked = Asked::read(&mut at)?;
             let value: serde_json::Value = serde_json::from_slice(at.bytes()?).map_err(|_| corrupt("a job's JSON"))?;
+            asked.read_own(&mut at)?;
             let change = [Change::Add, Change::Set, Change::Update][usize::from(call)];
             queue.write_asked(change, asked, &value)?
         }

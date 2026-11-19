@@ -30,7 +30,7 @@ from ._background import FailureLog, message_of
 from ._connection import check_name
 from ._handles import Home, Opener, Via, handle_on, via_link
 from ._session import ConnectionLostError, Stream
-from ._time import Duration, moment, ms, unix_ms
+from ._time import Calendar, Duration, moment, ms, unix_ms
 from ._values import from_json, to_json
 from ._wire.protocol import (
     Handle,
@@ -466,8 +466,10 @@ def job_fields(
     every: Duration | None = None,
     cron: str | None = None,
     time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
 ) -> dict[str, Any]:
-    """A job's time, group and repeat, as an add, a set and an update take them."""
+    """A job's time, group, repeat and options of its own, as an add, a set and an update take them."""
     return {
         "at": None if at is None else unix_ms(at, "a job's time"),
         "delay": None if delay is None else ms(delay, "a job's delay"),
@@ -475,7 +477,28 @@ def job_fields(
         "every": None if every is None else ms(every, "a job's repeat"),
         "cron": cron,
         "time_zone": time_zone,
+        **dedupe_fields(dedupe, "a job's dedupe"),
+        "keep": None if keep is None else ms(keep, "a job's keep"),
     }
+
+
+@dataclass(frozen=True, slots=True)
+class Dedupe:
+    """Holds a done job's id until the local day, week or month it was done in ends, in its zone.
+
+    ``dedupe=tinystore.Dedupe(calendar="day", time_zone="Europe/Moscow")``; a
+    span, ``dedupe="10m"``, holds it that long from when it was done instead.
+    """
+
+    calendar: Calendar
+    time_zone: str
+
+
+def dedupe_fields(dedupe: Duration | Dedupe | None, what: str) -> dict[str, Any]:
+    """A dedupe as a queue's open and a job's call carry it: a span, or a calendar in its place."""
+    if isinstance(dedupe, Dedupe):
+        return {"dedupe": None, "dedupe_calendar": {"calendar": dedupe.calendar, "time_zone": dedupe.time_zone}}
+    return {"dedupe": None if dedupe is None else ms(dedupe, what), "dedupe_calendar": None}
 
 
 class Queue[T]:
@@ -500,6 +523,8 @@ class Queue[T]:
         every: Duration | None = None,
         cron: str | None = None,
         time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
     ) -> bool:
         """Adds a job unless its id is taken, and says whether it added one.
 
@@ -508,7 +533,9 @@ class Queue[T]:
         new job takes its place. It returns once the job is on disk; a job
         without an id is always added.
         """
-        timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.add", fields)
 
@@ -523,6 +550,8 @@ class Queue[T]:
         every: Duration | None = None,
         cron: str | None = None,
         time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
     ) -> Adding:
         """A job's add for a batch of the database the queue was opened from.
 
@@ -534,7 +563,9 @@ class Queue[T]:
 
             await db.batch([sql("update notes set body = ? where id = ?", body, id), indexing.adding(Index(id))])
         """
-        timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
         return Adding(self.name, self._source, {**timing, "id": id, "value": self._source.encode(value)})
 
     async def set(
@@ -548,13 +579,17 @@ class Queue[T]:
         every: Duration | None = None,
         cron: str | None = None,
         time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
     ) -> None:
         """Makes the id's job this value at this time, whatever it was.
 
         One waiting is made new, a failed one starts again, and a running one
         runs once more after this run, with this value.
         """
-        timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         await self._source.call("jobs.set", lambda h: JobsCall.encode(fields, handle=h), "write")
 
@@ -569,9 +604,13 @@ class Queue[T]:
         every: Duration | None = None,
         cron: str | None = None,
         time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
     ) -> bool:
         """Changes the id's job when it is not running, its old value's steps dropped, and says whether it did."""
-        timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.update", fields)
 
@@ -758,9 +797,13 @@ class StoreTxQueue[T]:
         every: Duration | None = None,
         cron: str | None = None,
         time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
     ) -> None:
         """Adds a job unless its id is taken, with the commit."""
-        timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
         self._write("jobs.add", {**timing, "id": id}, value)
 
     async def set(
@@ -774,9 +817,13 @@ class StoreTxQueue[T]:
         every: Duration | None = None,
         cron: str | None = None,
         time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
     ) -> None:
         """Makes the id's job this value at this time, whatever it was, with the commit."""
-        timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
         self._write("jobs.set", {**timing, "id": id}, value)
 
     async def update(
@@ -790,9 +837,13 @@ class StoreTxQueue[T]:
         every: Duration | None = None,
         cron: str | None = None,
         time_zone: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
     ) -> None:
         """Changes the id's job when it is not running, its old value's steps dropped, with the commit."""
-        timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
+        timing = job_fields(
+            at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone, dedupe=dedupe, keep=keep
+        )
         self._write("jobs.update", {**timing, "id": id}, value)
 
     async def cancel(self, id: Job[T] | str) -> None:
@@ -889,7 +940,7 @@ class QueueOptions:
     timeout: Duration | None = None
     concurrency: int | Concurrency | None = None
     rate: str | None = None
-    dedupe: Duration | None = None
+    dedupe: Duration | Dedupe | None = None
     keep: Duration | None = None
     max_waiting: int | None = None
     group_rate: str | None = None
@@ -919,7 +970,7 @@ def queue_fields(name: str, describe: str, options: QueueOptions) -> dict[str, A
         },
         "rate": rate,
         "group_rate": group_rate,
-        "dedupe": None if options.dedupe is None else ms(options.dedupe, f"{describe}: dedupe"),
+        **dedupe_fields(options.dedupe, f"{describe}: dedupe"),
         "keep": None if options.keep is None else ms(options.keep, f"{describe}: keep"),
         "max_waiting": _whole(options.max_waiting, describe, "a max_waiting"),
     }

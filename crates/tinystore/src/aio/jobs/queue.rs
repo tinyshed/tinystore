@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::run::Run;
-use crate::jobs::{self, Change, Concurrency, Counts, Filter, Job, JobRef, Lease, Outcome, Page, Took};
+use crate::jobs::{self, Change, Concurrency, Counts, Dedupe, Filter, Job, JobRef, Lease, Outcome, Page, Took};
 use crate::pool::Pool;
 use crate::{ErrorKind, Result, Transaction, TxHandle};
 
@@ -72,13 +72,14 @@ where
     }
 
     /// How long a done job keeps its id taken, so that adding it again adds
-    /// nothing: an id runs once.
-    pub fn dedupe(self, span: Duration) -> Self {
-        self.with(|builder| builder.dedupe(span))
+    /// nothing: a span, or a local calendar's day, week or month; see
+    /// [`jobs::QueueBuilder::dedupe`].
+    pub fn dedupe(self, dedupe: impl Into<Dedupe>) -> Self {
+        self.with(|builder| builder.dedupe(dedupe))
     }
 
     /// How long a failed job stays, with its error, to be found and started
-    /// again: a week.
+    /// again: a week; `Duration::ZERO` keeps it not at all.
     pub fn keep(self, span: Duration) -> Self {
         self.with(|builder| builder.keep(span))
     }
@@ -221,6 +222,10 @@ where
 
     pub fn group(&self, group: impl AsRef<str>) -> JobCall<'_, V> {
         JobCall { call: self.queue.group(group), queue: self }
+    }
+
+    pub fn keep(&self, span: Duration) -> JobCall<'_, V> {
+        JobCall { call: self.queue.keep(span), queue: self }
     }
 
     fn call(&self) -> JobCall<'_, V> {
@@ -383,6 +388,16 @@ where
     /// The group whose running jobs the queue's concurrency bounds.
     pub fn group(self, group: impl AsRef<str>) -> Self {
         self.with(|call| call.group(group))
+    }
+
+    /// How long this job holds its id once done; see [`jobs::JobCall::dedupe`].
+    pub fn dedupe(self, dedupe: impl Into<Dedupe>) -> Self {
+        self.with(|call| call.dedupe(dedupe))
+    }
+
+    /// How long this job is kept once it failed for good; see [`jobs::JobCall::keep`].
+    pub fn keep(self, span: Duration) -> Self {
+        self.with(|call| call.keep(span))
     }
 
     /// Repeats the job every `span`; see [`jobs::JobCall::every`].

@@ -13,9 +13,11 @@ use crate::sqlite::{Config, File, Migration};
 use crate::sync::lock;
 use crate::{Clock, Error, Result, Store, unix_millis};
 
-/// jobs.db's schema, a step a file; until `v0.1.0` the first step is edited
-/// rather than a second added.
-const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
+/// jobs.db's schema, a step a file, and jobs' tables in a database's file.
+pub(super) const MIGRATIONS: &[Migration] = &[
+    Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
+    Migration::of(2, "0002_own_options.sql", include_str!("migrations/0002_own_options.sql")),
+];
 
 /// jobs' own file in the store's directory.
 pub(crate) const FILE: &str = "jobs.db";
@@ -188,7 +190,7 @@ impl Jobs {
             if stored != kind.as_str() {
                 return Err(Error::invalid(format!("the name is a {stored}")).within(describe()));
             }
-            let state = Arc::new(QueueState::new(id, name, kind, policy, self.lent_by.clone()));
+            let state = Arc::new(QueueState::new(id, name, kind, policy.clone(), self.lent_by.clone()));
             let mut queues = lock(&self.queues);
             let kept = queues.entry(name.to_owned()).or_insert(state);
             // Another open may have kept one while the home answered.

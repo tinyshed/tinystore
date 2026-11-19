@@ -133,6 +133,8 @@ These contracts are what does not.
 - **JOB-14** A page of jobs in a state MUST hold its `limit` of them unless it is the last, which has no `next`, or their values reach the 4 MiB a page holds.
 - **JOB-15** `cancel` of a listed job MUST remove that job or none, never another.
 - **JOB-16** `counts` MUST read every state of a queue from one snapshot.
+- **JOB-18** A done job's id MUST stay taken until its `dedupe` ends: a span from when it was done, or the end of the local calendar unit it was done in, across daylight saving.
+- **JOB-20** A job that failed for good MUST be gone once its own `keep`, or its queue's, has passed, and at once for a `keep` of zero.
 - **JOB-21** `runNow` MUST run its schedule once as soon as a worker is free, never beside a run under way, and MUST leave its later times as they were.
 
 ### SQL

@@ -8,11 +8,15 @@
 //! | running              | false          | one run more after this one | false                     | tells its handler to stop  |
 //! | failed               | adds it        | starts it again             | false                     | removes it                 |
 //! | done, kept by dedupe | false          | adds it again               | false                     | false                      |
+//!
+//! A done job holds its id while its own dedupe or its queue's lasts, and a
+//! failed one is kept for its own keep or its queue's; a write that names
+//! neither leaves a job's own as it was.
 
 use rusqlite::Connection;
 
 use super::read::Row;
-use super::rows::{self, Change, Failed, NewJob};
+use super::rows::{self, Change, Failed, NewJob, Own};
 use super::state::QueueState;
 use super::values::Kept;
 use crate::Result;
@@ -27,6 +31,10 @@ pub(crate) struct Prepared {
     pub(crate) timed: bool,
     pub(crate) repeat: Option<String>,
     pub(crate) group: Option<String>,
+    /// How long the job holds its id once done, as it keeps it.
+    pub(crate) dedupe: Option<String>,
+    /// How long it is kept once it failed for good, in milliseconds.
+    pub(crate) keep: Option<i64>,
     pub(crate) value: Kept,
     pub(crate) now: i64,
 }
@@ -43,12 +51,18 @@ impl Prepared {
             repeat: self.repeat.as_deref(),
             group: self.group.as_deref().or(failed.and_then(|failed| failed.group.as_deref())),
             error: failed.and_then(|failed| failed.error.as_deref()),
+            own: self.own(),
             value: &self.value,
         }
     }
 
     fn change(&self, next: i64) -> Change<'_> {
-        Change { next, repeat: self.repeat.as_deref(), group: self.group.as_deref(), value: &self.value }
+        let (repeat, group) = (self.repeat.as_deref(), self.group.as_deref());
+        Change { next, repeat, group, own: self.own(), value: &self.value }
+    }
+
+    fn own(&self) -> Own<'_> {
+        Own { dedupe: self.dedupe.as_deref(), keep: self.keep }
     }
 }
 
@@ -59,8 +73,7 @@ impl Prepared {
 pub(crate) fn add(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<bool> {
     let mut failed = None;
     if let Some(key) = &call.key {
-        let taken = rows::job_by_key(c, queue.id, key)?.is_some()
-            || queue.policy.dedupe.is_some() && rows::done_key(c, queue.id, key, call.now)?;
+        let taken = rows::job_by_key(c, queue.id, key)?.is_some() || rows::done_key(c, queue.id, key, call.now)?;
         if taken {
             return Ok(false);
         }

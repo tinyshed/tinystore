@@ -3565,6 +3565,55 @@ export const JobsConcurrency = message(
 )
 
 /**
+ * A span of a local calendar in a time zone: a done job holds its id until
+ * the day, week or month it was done in ends.
+ */
+export const JobsCalendar = message(
+	'jobs.Calendar',
+	{
+		/** day, week or month */
+		calendar: [1, str],
+		/** an IANA name, UTC among them */
+		timeZone: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.calendar !== undefined) {
+				w.field(1)
+				w.str(v.calendar)
+				n++
+			}
+			if (v.timeZone !== undefined) {
+				w.field(2)
+				w.str(v.timeZone)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $calendar: string | undefined
+			let $timeZone: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$calendar = r.str()
+						break
+					case 2:
+						$timeZone = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { calendar: $calendar, timeZone: $timeZone }
+		},
+	},
+)
+
+/**
  * The wait before a retry: initial, doubling each time up to max.
  */
 export const JobsBackoff = message(
@@ -3675,7 +3724,7 @@ export const JobsQueueOpen = message(
 		rate: [6, JobsRate],
 		/** how long a done job's id stays taken */
 		dedupe: [7, uint],
-		/** how long a failed job stays: a week when absent */
+		/** how long a failed job stays: a week when absent; 0 not at all */
 		keep: [8, uint],
 		/** ten million when absent */
 		maxWaiting: [9, uint],
@@ -3683,6 +3732,8 @@ export const JobsQueueOpen = message(
 		database: [10, uint],
 		/** each group's starts, beside the queue's rate */
 		groupRate: [11, JobsRate],
+		/** in the place of dedupe: until the local unit a job was done in ends */
+		dedupeCalendar: [12, JobsCalendar],
 	},
 	{
 		write(w, v) {
@@ -3743,6 +3794,11 @@ export const JobsQueueOpen = message(
 				JobsRate.write(w, v.groupRate)
 				n++
 			}
+			if (v.dedupeCalendar !== undefined) {
+				w.field(12)
+				JobsCalendar.write(w, v.dedupeCalendar)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -3757,6 +3813,7 @@ export const JobsQueueOpen = message(
 			let $maxWaiting: number | undefined
 			let $database: number | undefined
 			let $groupRate: Read<typeof JobsRate.fields> | undefined
+			let $dedupeCalendar: Read<typeof JobsCalendar.fields> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -3792,6 +3849,9 @@ export const JobsQueueOpen = message(
 					case 11:
 						$groupRate = JobsRate.read(r)
 						break
+					case 12:
+						$dedupeCalendar = JobsCalendar.read(r)
+						break
 					default:
 						r.skip()
 				}
@@ -3809,6 +3869,7 @@ export const JobsQueueOpen = message(
 				maxWaiting: $maxWaiting,
 				database: $database,
 				groupRate: $groupRate,
+				dedupeCalendar: $dedupeCalendar,
 			}
 		},
 	},
@@ -3939,6 +4000,12 @@ export const JobsCall = message(
 		every: [7, uint],
 		cron: [8, str],
 		timeZone: [9, str],
+		/** this job's own, in the place of its queue's; not 0 */
+		dedupe: [10, uint],
+		/** this job's own, in the place of dedupe */
+		dedupeCalendar: [11, JobsCalendar],
+		/** this job's own once it failed for good; 0 not at all */
+		keep: [14, uint],
 	},
 	{
 		write(w, v) {
@@ -3989,6 +4056,21 @@ export const JobsCall = message(
 				w.str(v.timeZone)
 				n++
 			}
+			if (v.dedupe !== undefined) {
+				w.field(10)
+				w.uint(v.dedupe)
+				n++
+			}
+			if (v.dedupeCalendar !== undefined) {
+				w.field(11)
+				JobsCalendar.write(w, v.dedupeCalendar)
+				n++
+			}
+			if (v.keep !== undefined) {
+				w.field(14)
+				w.uint(v.keep)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -4001,6 +4083,9 @@ export const JobsCall = message(
 			let $every: number | undefined
 			let $cron: string | undefined
 			let $timeZone: string | undefined
+			let $dedupe: number | undefined
+			let $dedupeCalendar: Read<typeof JobsCalendar.fields> | undefined
+			let $keep: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -4030,6 +4115,15 @@ export const JobsCall = message(
 					case 9:
 						$timeZone = r.str()
 						break
+					case 10:
+						$dedupe = r.uint()
+						break
+					case 11:
+						$dedupeCalendar = JobsCalendar.read(r)
+						break
+					case 14:
+						$keep = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -4045,6 +4139,9 @@ export const JobsCall = message(
 				every: $every,
 				cron: $cron,
 				timeZone: $timeZone,
+				dedupe: $dedupe,
+				dedupeCalendar: $dedupeCalendar,
+				keep: $keep,
 			}
 		},
 	},

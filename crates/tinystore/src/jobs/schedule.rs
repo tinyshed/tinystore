@@ -11,7 +11,7 @@ use super::policy::Policy;
 use super::queue::Queue;
 use super::read::Job;
 use super::repeat::{Asked, Repeat};
-use super::rows::{self, Change, NewJob};
+use super::rows::{self, Change, NewJob, Own};
 use super::run::{Outcome, Run};
 use super::state::{Kind, QueueState};
 use super::values::{self, Kept};
@@ -280,6 +280,7 @@ fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &
             repeat: Some(text),
             group: None,
             error: None,
+            own: Own::default(),
             value,
         };
         return rows::insert(c, &job).map(|()| next);
@@ -288,12 +289,13 @@ fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &
         return Ok(rows::due_of(there.next));
     }
     if rows::lease_held(c, there.id, now)? {
-        let change = Change { next, repeat: Some(text), group: None, value };
+        let change = Change { next, repeat: Some(text), group: None, own: Own::default(), value };
         return rows::ask_again(c, queue.id, &there, there.again, &change).map(|()| next);
     }
     // a run missed while the program was down stays due, and runs once
     // before the new repeat takes over
     let due = if rows::due_of(there.next) <= now { there.next } else { next };
-    rows::renew(c, queue.id, key, &there, &Change { next: due, repeat: Some(text), group: None, value })?;
+    let change = Change { next: due, repeat: Some(text), group: None, own: Own::default(), value };
+    rows::renew(c, queue.id, key, &there, &change)?;
     Ok(due)
 }

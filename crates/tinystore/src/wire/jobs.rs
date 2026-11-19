@@ -17,8 +17,9 @@ use serde_json::value::RawValue;
 
 use super::codec::Message;
 use super::protocol::{
-    Empty, Failure, Handle, JobsAnswer, JobsCall, JobsChanged, JobsCounts, JobsHeld, JobsId, JobsJob, JobsKept,
-    JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork, method,
+    Empty, Failure, Handle, JobsAnswer, JobsCalendar, JobsCall, JobsChanged, JobsCounts, JobsHeld, JobsId, JobsJob,
+    JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork,
+    method,
 };
 use super::{Lent, Route};
 #[cfg(feature = "sql")]
@@ -26,12 +27,12 @@ use crate::TxHandle;
 use crate::clock::from_unix_millis;
 use crate::engine::Home;
 use crate::jobs::{
-    Answers, Change, Concurrency, Counts, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder,
-    Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded, kept, read_value, run_now_then,
-    start_remote,
+    Answers, Change, Concurrency, Counts, Dedupe, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue,
+    QueueBuilder, Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded, kept, read_value,
+    run_now_then, start_remote,
 };
 use crate::limits::{ANSWER_BYTES, Limit, PROGRESS_BYTES};
-use crate::{Error, ErrorKind, Store, Transaction, unix_millis};
+use crate::{Calendar, Error, ErrorKind, Store, Transaction, unix_millis};
 
 /// A job's value as the wire carries it.
 type Raw = Box<RawValue>;
@@ -300,8 +301,8 @@ fn open_queue(store: &Store, lent: Lent<'_>, open: JobsQueueOpen) -> Result<Queu
     if let Some(rate) = open.group_rate {
         builder = builder.group_rate(small(rate.count, "a group's rate")?, span(rate.per));
     }
-    if let Some(dedupe) = open.dedupe {
-        builder = builder.dedupe(span(dedupe));
+    if let Some(dedupe) = dedupe_of(open.dedupe, open.dedupe_calendar.as_ref())? {
+        builder = builder.dedupe(dedupe);
     }
     if let Some(keep) = open.keep {
         builder = builder.keep(span(keep));
@@ -365,7 +366,27 @@ fn on_job<T>(
         (None, Some(cron), zone) => job.cron(cron, zone.as_deref().unwrap_or_default()),
         _ => return Err(Failure::invalid("a repeat by every or by cron, not both; a time zone is a cron's")),
     };
+    if let Some(dedupe) = dedupe_of(call.dedupe, call.dedupe_calendar.as_ref())? {
+        job = job.dedupe(dedupe);
+    }
+    if let Some(keep) = call.keep {
+        job = job.keep(span(keep));
+    }
     Ok(write(job, value)?)
+}
+
+/// A dedupe as a message gives it: a span, or a calendar in its place.
+fn dedupe_of(span_of: Option<u64>, calendar: Option<&JobsCalendar>) -> Result<Option<Dedupe>, Failure> {
+    match (span_of, calendar) {
+        (None, None) => Ok(None),
+        (Some(dedupe), None) => Ok(Some(Dedupe::from(span(dedupe)))),
+        (None, Some(asked)) => {
+            let (unit, zone) = Calendar::asked(Some(&asked.calendar), Some(&asked.time_zone))?
+                .ok_or_else(|| Failure::invalid("a dedupe's calendar takes its unit and its time zone"))?;
+            Ok(Some(Dedupe::calendar(unit, zone)))
+        }
+        (Some(_), Some(_)) => Err(Failure::invalid("a dedupe by a span or by a calendar, not both")),
+    }
 }
 
 /// A page of jobs within the body agreed: a page past it is read again with

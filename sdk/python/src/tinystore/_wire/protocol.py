@@ -2886,6 +2886,50 @@ JobsConcurrency = Message(
 )
 
 
+def _write_jobs_calendar(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("calendar")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("time_zone")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_jobs_calendar(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["calendar"] = r.str()
+            case 2:
+                read["time_zone"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A span of a local calendar in a time zone: a done job holds its id until
+# the day, week or month it was done in ends.
+JobsCalendar = Message(
+    "jobs.Calendar",
+    {
+        # day, week or month
+        "calendar": (1, str_),
+        # an IANA name, UTC among them
+        "time_zone": (2, str_),
+    },
+    _write_jobs_calendar,
+    _read_jobs_calendar,
+)
+
+
 def _write_jobs_backoff(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -3015,6 +3059,10 @@ def _write_jobs_queue_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(11)
         JobsRate.write(w, x)
         n += 1
+    if (x := v.get("dedupe_calendar")) is not None:
+        w.uint(12)
+        JobsCalendar.write(w, x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -3045,6 +3093,8 @@ def _read_jobs_queue_open(r: Reader) -> dict[str, Any]:
                 read["database"] = r.uint()
             case 11:
                 read["group_rate"] = JobsRate.read(r)
+            case 12:
+                read["dedupe_calendar"] = JobsCalendar.read(r)
             case _:
                 r.skip()
     r.leave()
@@ -3068,7 +3118,7 @@ JobsQueueOpen = Message(
         "rate": (6, JobsRate),
         # how long a done job's id stays taken
         "dedupe": (7, uint),
-        # how long a failed job stays: a week when absent
+        # how long a failed job stays: a week when absent; 0 not at all
         "keep": (8, uint),
         # ten million when absent
         "max_waiting": (9, uint),
@@ -3076,6 +3126,8 @@ JobsQueueOpen = Message(
         "database": (10, uint),
         # each group's starts, beside the queue's rate
         "group_rate": (11, JobsRate),
+        # in the place of dedupe: until the local unit a job was done in ends
+        "dedupe_calendar": (12, JobsCalendar),
     },
     _write_jobs_queue_open,
     _read_jobs_queue_open,
@@ -3200,6 +3252,18 @@ def _write_jobs_call(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(9)
         w.str(x)
         n += 1
+    if (x := v.get("dedupe")) is not None:
+        w.uint(10)
+        w.uint(x)
+        n += 1
+    if (x := v.get("dedupe_calendar")) is not None:
+        w.uint(11)
+        JobsCalendar.write(w, x)
+        n += 1
+    if (x := v.get("keep")) is not None:
+        w.uint(14)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -3226,6 +3290,12 @@ def _read_jobs_call(r: Reader) -> dict[str, Any]:
                 read["cron"] = r.str()
             case 9:
                 read["time_zone"] = r.str()
+            case 10:
+                read["dedupe"] = r.uint()
+            case 11:
+                read["dedupe_calendar"] = JobsCalendar.read(r)
+            case 14:
+                read["keep"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -3248,6 +3318,12 @@ JobsCall = Message(
         "every": (7, uint),
         "cron": (8, str_),
         "time_zone": (9, str_),
+        # this job's own, in the place of its queue's; not 0
+        "dedupe": (10, uint),
+        # this job's own, in the place of dedupe
+        "dedupe_calendar": (11, JobsCalendar),
+        # this job's own once it failed for good; 0 not at all
+        "keep": (14, uint),
     },
     _write_jobs_call,
     _read_jobs_call,
@@ -11513,6 +11589,7 @@ messages: dict[str, Message] = {
     "Handle": Handle,
     "Empty": Empty,
     "jobs.Concurrency": JobsConcurrency,
+    "jobs.Calendar": JobsCalendar,
     "jobs.Backoff": JobsBackoff,
     "jobs.Rate": JobsRate,
     "jobs.QueueOpen": JobsQueueOpen,

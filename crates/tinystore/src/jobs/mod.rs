@@ -25,6 +25,7 @@ mod alarm;
 mod call;
 mod claim;
 mod cron;
+mod dedupe;
 mod engine;
 #[cfg(test)]
 mod fixture;
@@ -49,6 +50,7 @@ mod work;
 mod write;
 
 pub use call::JobCall;
+pub use dedupe::Dedupe;
 pub use maintain::{Maintenance, maintain};
 pub use policy::Concurrency;
 pub use queue::{All, Claimed, Queue, QueueBuilder, Workers};

@@ -399,6 +399,8 @@ func NewMessage(name string) Message {
 		return &Empty{}
 	case "jobs.Concurrency":
 		return &JobsConcurrency{}
+	case "jobs.Calendar":
+		return &JobsCalendar{}
 	case "jobs.Backoff":
 		return &JobsBackoff{}
 	case "jobs.Rate":
@@ -4346,6 +4348,55 @@ func (m JobsConcurrency) IsZero() bool {
 		m.Group == nil
 }
 
+// JobsCalendar is the schema's jobs.Calendar.
+//
+// A span of a local calendar in a time zone: a done job holds its id until
+// the day, week or month it was done in ends.
+type JobsCalendar struct {
+	// day, week or month
+	Calendar string `wire:"1,calendar"`
+	// an IANA name, UTC among them
+	TimeZone string `wire:"2,timeZone"`
+}
+
+func (m JobsCalendar) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Calendar != "" {
+		w.Uint(1)
+		w.Str(m.Calendar)
+		n++
+	}
+	if m.TimeZone != "" {
+		w.Uint(2)
+		w.Str(m.TimeZone)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *JobsCalendar) Read(r *Reader) {
+	*m = JobsCalendar{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Calendar = r.Str()
+		case 2:
+			m.TimeZone = r.Str()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether JobsCalendar writes as no field at all.
+func (m JobsCalendar) IsZero() bool {
+	return m.Calendar == "" &&
+		m.TimeZone == ""
+}
+
 // JobsBackoff is the schema's jobs.Backoff.
 //
 // The wait before a retry: initial, doubling each time up to max.
@@ -4455,7 +4506,7 @@ type JobsQueueOpen struct {
 	Rate        *JobsRate        `wire:"6,rate"`
 	// how long a done job's id stays taken
 	Dedupe *uint64 `wire:"7,dedupe"`
-	// how long a failed job stays: a week when absent
+	// how long a failed job stays: a week when absent; 0 not at all
 	Keep *uint64 `wire:"8,keep"`
 	// ten million when absent
 	MaxWaiting *uint64 `wire:"9,maxWaiting"`
@@ -4463,6 +4514,8 @@ type JobsQueueOpen struct {
 	Database *uint64 `wire:"10,database"`
 	// each group's starts, beside the queue's rate
 	GroupRate *JobsRate `wire:"11,groupRate"`
+	// in the place of dedupe: until the local unit a job was done in ends
+	DedupeCalendar *JobsCalendar `wire:"12,dedupeCalendar"`
 }
 
 func (m JobsQueueOpen) Write(w *Writer) {
@@ -4523,6 +4576,11 @@ func (m JobsQueueOpen) Write(w *Writer) {
 		m.GroupRate.Write(w)
 		n++
 	}
+	if m.DedupeCalendar != nil {
+		w.Uint(12)
+		m.DedupeCalendar.Write(w)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -4567,6 +4625,10 @@ func (m *JobsQueueOpen) Read(r *Reader) {
 			var v JobsRate
 			v.Read(r)
 			m.GroupRate = &v
+		case 12:
+			var v JobsCalendar
+			v.Read(r)
+			m.DedupeCalendar = &v
 		default:
 			r.Skip()
 		}
@@ -4586,7 +4648,8 @@ func (m JobsQueueOpen) IsZero() bool {
 		m.Keep == nil &&
 		m.MaxWaiting == nil &&
 		m.Database == nil &&
-		m.GroupRate == nil
+		m.GroupRate == nil &&
+		m.DedupeCalendar == nil
 }
 
 // JobsScheduleOpen is the schema's jobs.ScheduleOpen.
@@ -4706,6 +4769,12 @@ type JobsCall struct {
 	Every    *uint64 `wire:"7,every"`
 	Cron     *string `wire:"8,cron"`
 	TimeZone *string `wire:"9,timeZone"`
+	// this job's own, in the place of its queue's; not 0
+	Dedupe *uint64 `wire:"10,dedupe"`
+	// this job's own, in the place of dedupe
+	DedupeCalendar *JobsCalendar `wire:"11,dedupeCalendar"`
+	// this job's own once it failed for good; 0 not at all
+	Keep *uint64 `wire:"14,keep"`
 }
 
 func (m JobsCall) Write(w *Writer) {
@@ -4756,6 +4825,21 @@ func (m JobsCall) Write(w *Writer) {
 		w.Str(*m.TimeZone)
 		n++
 	}
+	if m.Dedupe != nil {
+		w.Uint(10)
+		w.Uint(*m.Dedupe)
+		n++
+	}
+	if m.DedupeCalendar != nil {
+		w.Uint(11)
+		m.DedupeCalendar.Write(w)
+		n++
+	}
+	if m.Keep != nil {
+		w.Uint(14)
+		w.Uint(*m.Keep)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -4789,6 +4873,16 @@ func (m *JobsCall) Read(r *Reader) {
 		case 9:
 			v := r.Str()
 			m.TimeZone = &v
+		case 10:
+			v := r.Uint()
+			m.Dedupe = &v
+		case 11:
+			var v JobsCalendar
+			v.Read(r)
+			m.DedupeCalendar = &v
+		case 14:
+			v := r.Uint()
+			m.Keep = &v
 		default:
 			r.Skip()
 		}
@@ -4806,7 +4900,10 @@ func (m JobsCall) IsZero() bool {
 		m.Group == nil &&
 		m.Every == nil &&
 		m.Cron == nil &&
-		m.TimeZone == nil
+		m.TimeZone == nil &&
+		m.Dedupe == nil &&
+		m.DedupeCalendar == nil &&
+		m.Keep == nil
 }
 
 // JobsId is the schema's jobs.Id.

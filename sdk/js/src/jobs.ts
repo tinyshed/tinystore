@@ -13,7 +13,7 @@ import { type Rate, rateOf } from './limits.ts'
 import { sayOwn } from './logger.ts'
 import { check, type StandardSchemaV1 } from './schema.ts'
 import { ConnectionLostError, type Stream } from './session.ts'
-import { type Duration, ms, type Time, unixMs } from './time.ts'
+import { type Calendar, type Duration, ms, type Time, unixMs } from './time.ts'
 import type { Read, Written } from './wire/codec.ts'
 import {
 	Handle,
@@ -61,15 +61,22 @@ export interface QueueOptions {
 	rate?: Rate | undefined
 	/** jobs of each group started in any span, beside rate: '2/s', each account's own limit; it lives in memory */
 	groupRate?: Rate | undefined
-	/** how long a done job's id stays taken, so that an add of it adds nothing */
-	dedupe?: Duration | undefined
-	/** how long a failed job stays, to be found and started again: a week */
+	/** how long a done job's id stays taken, so that an add of it adds nothing: '10m', or { calendar: 'day', timeZone } */
+	dedupe?: Dedupe | undefined
+	/** how long a failed job stays, to be found and started again: a week; '0s' not at all */
 	keep?: Duration | undefined
 	/** jobs that may wait; an add past it is LimitError: ten million */
 	maxWaiting?: number | undefined
 }
 
-/** A job's time, group and repeat, as an add, a set and an update take them. */
+/**
+ * How long a done job holds its id: a span from when it was done, '10m', or
+ * until the local day, week or month it was done in ends, in its zone:
+ * `{ calendar: 'day', timeZone: 'Europe/Moscow' }`.
+ */
+export type Dedupe = Duration | { calendar: Calendar; timeZone: string }
+
+/** A job's time, group, repeat and options of its own, as an add, a set and an update take them. */
 export interface JobOptions {
 	/** runs at this time, one past now; not beside delay */
 	at?: Time | undefined
@@ -83,6 +90,10 @@ export interface JobOptions {
 	cron?: string | undefined
 	/** an IANA name, 'UTC' among them, which a cron needs: one given as undefined is InvalidError, never UTC */
 	timeZone?: string | undefined
+	/** how long this job holds its id once done, in the place of its queue's dedupe */
+	dedupe?: Dedupe | undefined
+	/** how long this job is kept once it failed for good, in the place of its queue's: '0s' not at all */
+	keep?: Duration | undefined
 }
 
 export interface AddOptions extends JobOptions {
@@ -1141,7 +1152,7 @@ export function openQueue<T>(
 					},
 		rate: options.rate === undefined ? undefined : rateOf(options.rate),
 		groupRate: options.groupRate === undefined ? undefined : rateOf(options.groupRate),
-		dedupe: msOf(options.dedupe),
+		...dedupeOf(options.dedupe),
 		keep: msOf(options.keep),
 		maxWaiting: whole(options.maxWaiting, describe, 'a maxWaiting'),
 	}
@@ -1219,6 +1230,22 @@ function jobFields(
 		every: msOf(options.every),
 		cron: options.cron,
 		timeZone: options.timeZone,
+		...dedupeOf(options.dedupe),
+		keep: msOf(options.keep),
+	}
+}
+
+/** A dedupe as a queue's open and a job's call carry it: a span, or a calendar in its place. */
+function dedupeOf(dedupe: Dedupe | undefined): {
+	dedupe: number | undefined
+	dedupeCalendar: { calendar: string; timeZone: string } | undefined
+} {
+	if (typeof dedupe !== 'object') {
+		return { dedupe: msOf(dedupe), dedupeCalendar: undefined }
+	}
+	return {
+		dedupe: undefined,
+		dedupeCalendar: { calendar: dedupe.calendar, timeZone: dedupe.timeZone },
 	}
 }
 

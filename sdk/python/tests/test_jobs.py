@@ -401,6 +401,26 @@ async def test_dedupe_keeps_a_done_id_taken_and_the_job_its_last_run(store: tiny
     assert done.last_run is not None and done.last_run.ended_at >= done.last_run.started_at
 
 
+# contract: JOB-18, JOB-20
+async def test_a_jobs_own_dedupe_holds_its_id_by_a_local_calendar_and_its_keep_of_zero_keeps_nothing(
+    store: tinystore.Store,
+) -> None:
+    crawl = store.queue("crawl", str, attempts=1)
+    day = tinystore.Dedupe(calendar="day", time_zone="Europe/Moscow")
+    assert await crawl.add("241-327", id="crawl:241-327", dedupe=day)
+    assert await crawl.add("push", id="push:1", keep="0s")
+
+    async def send(value: str, run: tinystore.Run) -> None:
+        if value == "push":
+            raise RuntimeError("push service 503")
+
+    assert await crawl.run_due(send) == 2
+    assert not await crawl.add("241-327", id="crawl:241-327")  # until Moscow's midnight
+    assert await crawl.get("push:1") is None  # failed, and kept not at all
+    with pytest.raises(tinystore.InvalidError):
+        await crawl.add("x", id="x", dedupe=tinystore.Dedupe(calendar="day", time_zone="Mars/Olympus"))
+
+
 async def test_a_value_json_cannot_write_is_refused_before_it_leaves(store: tinystore.Store) -> None:
     odd = store.queue("odd")
     with pytest.raises(tinystore.InvalidError):

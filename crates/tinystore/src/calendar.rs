@@ -1,6 +1,6 @@
 //! Buckets on the calendar of a time zone, which an aggregate of metrics or
 //! of records asks for by a unit and a zone: a shop's "orders a day" counted
-//! in the shop's own days.
+//! in the shop's own days; and the local day a done job holds its id for.
 //!
 //! A bucket begins at the start of a local day, of a week from its Monday or
 //! of a month, as an instant, and ends where the next begins. A day is 23
@@ -80,7 +80,7 @@ impl Zoned {
 
     /// Where the bucket that holds `at` begins, both in milliseconds since
     /// 1970; `at` itself for a time the calendar cannot reach.
-    #[cfg(feature = "metrics")]
+    #[cfg(any(feature = "metrics", feature = "jobs"))]
     pub(crate) fn start_millis(&self, at: i64) -> i64 {
         let start = Timestamp::from_millisecond(at).ok().and_then(|at| self.start(at));
         start.map_or(at, |start| start.as_millisecond())
@@ -88,7 +88,7 @@ impl Zoned {
 
     /// Where the bucket that begins at `start` ends, the next one's start,
     /// in milliseconds since 1970; the end of time past what it can reach.
-    #[cfg(feature = "metrics")]
+    #[cfg(any(feature = "metrics", feature = "jobs"))]
     pub(crate) fn end_millis(&self, start: i64) -> i64 {
         let end = Timestamp::from_millisecond(start).ok().and_then(|start| self.end(start));
         end.map_or(i64::MAX, |end| end.as_millisecond())
@@ -104,7 +104,7 @@ impl Zoned {
         self.midnight(first)
     }
 
-    #[cfg(feature = "metrics")]
+    #[cfg(any(feature = "metrics", feature = "jobs"))]
     fn end(&self, start: Timestamp) -> Option<Timestamp> {
         let day = start.to_zoned(self.zone.clone()).date();
         let next = match self.unit {

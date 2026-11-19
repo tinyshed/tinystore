@@ -138,6 +138,131 @@ fn dedupe_keeps_a_done_id_taken_until_its_span_passes() {
     assert!(pushes.id("m1:u1").add(&note("push")).unwrap());
 }
 
+/// Fails every job due, as a handler that always fails does.
+fn fail_due(queue: &Queue<Note>) {
+    queue.concurrency(1).run_due(|_: Note, _run| -> Result<(), String> { Err("push service 503".into()) }).unwrap();
+}
+
+// contract: JOB-18
+#[test]
+fn a_jobs_own_dedupe_holds_its_id_beside_its_queues() {
+    let f = fixture();
+    let crawl = f.store.queue::<Note>("crawl").open().unwrap();
+    assert!(crawl.id("now:1").dedupe(10 * MINUTE).add(&note("crawl")).unwrap());
+    assert!(crawl.id("plain").add(&note("crawl")).unwrap());
+    assert_eq!(ran(&crawl), ["crawl", "crawl"]);
+    assert!(!crawl.id("now:1").add(&note("again")).unwrap(), "its own dedupe holds the id");
+    assert_eq!(crawl.get("now:1").unwrap().unwrap().state, State::Done);
+    assert!(crawl.id("plain").add(&note("again")).unwrap(), "a queue without dedupe holds nothing");
+    f.clock.advance(10 * MINUTE);
+    assert!(crawl.id("now:1").add(&note("again")).unwrap());
+
+    let zero = crawl.id("zero").dedupe(Duration::ZERO).add(&note("x")).unwrap_err();
+    assert_eq!(zero.kind(), ErrorKind::Invalid, "{zero}");
+    let nowhere = crawl.id("z").dedupe(super::Dedupe::calendar(crate::Calendar::Day, "Mars/Olympus"));
+    assert!(nowhere.add(&note("x")).unwrap_err().to_string().contains("no such zone"));
+}
+
+// contract: JOB-18
+#[test]
+fn a_calendar_dedupe_holds_a_done_id_until_the_local_day_it_was_done_in_ends() {
+    let f = fixture(); // 12:00 UTC, 15:00 in Moscow
+    let day = super::Dedupe::calendar(crate::Calendar::Day, "Europe/Moscow");
+    let crawl = f.store.queue::<Note>("schedule-fetch").dedupe(day).open().unwrap();
+    crawl.id("crawl:241-327").add(&note("crawl")).unwrap();
+    assert_eq!(ran(&crawl), ["crawl"]);
+    f.clock.advance(8 * HOUR + 59 * MINUTE); // 23:59 in Moscow
+    assert!(!crawl.id("crawl:241-327").add(&note("again")).unwrap(), "once a Moscow day");
+    f.clock.advance(MINUTE);
+    assert!(crawl.id("crawl:241-327").add(&note("the next day")).unwrap());
+    assert!(crawl.id("now:1").dedupe(MINUTE).add(&note("a job's own")).unwrap());
+}
+
+// contract: JOB-20
+#[test]
+fn a_failed_job_with_a_keep_of_zero_is_gone_at_once_and_its_watcher_sees_it_failed() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").attempts(1).open().unwrap();
+    pushes.id("p1").keep(Duration::ZERO).add(&note("the text of a private message")).unwrap();
+    pushes.keep(Duration::ZERO).add(&note("one without an id")).unwrap();
+    let mut watched = pushes.watch("p1");
+    assert_eq!(watched.next().unwrap().unwrap().state, State::Waiting);
+    fail_due(&pushes);
+    let last = watched.next().unwrap().unwrap();
+    assert_eq!((last.state, last.error.as_deref()), (State::Failed, Some("push service 503")));
+    assert!(watched.next().is_none());
+    assert!(pushes.get("p1").unwrap().is_none(), "nothing keeps its value");
+    assert_eq!(pushes.counts().unwrap().failed, 0);
+}
+
+// contract: JOB-20
+#[test]
+fn a_jobs_own_keep_wins_over_its_queues_and_a_queues_of_zero_keeps_nothing() {
+    let f = fixture();
+    let reports = f.store.queue::<Note>("reports").attempts(1).keep(HOUR).open().unwrap();
+    reports.id("long").keep(30 * DAY).add(&note("kept a month")).unwrap();
+    reports.id("short").keep(MINUTE).add(&note("kept a minute")).unwrap();
+    reports.id("queue's").add(&note("kept an hour")).unwrap();
+    fail_due(&reports);
+    assert_eq!(reports.counts().unwrap().failed, 3);
+    f.clock.advance(2 * MINUTE);
+    assert!(reports.get("short").unwrap().is_none(), "gone once its keep passed, before maintenance ran");
+    assert_eq!(reports.counts().unwrap().failed, 2);
+    f.clock.advance(2 * HOUR);
+    assert_eq!(super::maintain(&f.store).unwrap().failed, 2, "the queue's keep, and the minute's");
+    assert_eq!(reports.get("long").unwrap().unwrap().state, State::Failed);
+    f.clock.advance(30 * DAY);
+    assert_eq!(super::maintain(&f.store).unwrap().failed, 1);
+
+    let pushes = f.store.queue::<Note>("pushes").attempts(1).keep(Duration::ZERO).open().unwrap();
+    pushes.id("p1").add(&note("x")).unwrap();
+    fail_due(&pushes);
+    assert!(pushes.get("p1").unwrap().is_none(), "a queue's keep of zero keeps nothing either");
+}
+
+// contract: STORE-11
+#[test]
+fn a_jobs_file_the_release_before_wrote_opens_and_its_jobs_run_by_their_queues_options() {
+    let mut f = fixture();
+    let notes = f.store.queue::<Note>("notes").attempts(1).dedupe(HOUR).keep(HOUR).open().unwrap();
+    notes.id("failing").add(&note("fails")).unwrap();
+    notes.id("done").add(&note("done")).unwrap();
+    notes.id("later").delay(DAY).add(&note("later")).unwrap();
+    notes
+        .concurrency(1)
+        .run_due(|note: Note, _run| -> Result<(), String> {
+            if note.text == "fails" { Err("down".into()) } else { Ok(()) }
+        })
+        .unwrap();
+    drop(notes);
+    let path = f.dir.path().join("jobs.db");
+    f.store.close().unwrap();
+    // as 0.10 left it: the tables of 0001 alone
+    let back = "drop index _tinystore_jobs_expiring; drop index _tinystore_jobs_failed_by_until;
+        alter table _tinystore_jobs drop column dedupe; alter table _tinystore_jobs drop column keep;
+        alter table _tinystore_jobs drop column expires; alter table _tinystore_jobs_failed drop column until;
+        delete from _tinystore_migrations where history = 'jobs' and version = 2";
+    let file = crate::sqlite::File::open(&path, crate::sqlite::Config::default()).unwrap();
+    let failed = |error| crate::sqlite::sql_error("a test", error);
+    file.transaction(|tx| tx.execute_batch(back).map_err(failed)).unwrap();
+    // and 0.10, which knows its first step alone, refuses a file this one migrated
+    file.migrate("jobs", super::engine::MIGRATIONS).unwrap();
+    let refused = file.migrate("jobs", &super::engine::MIGRATIONS[..1]).unwrap_err();
+    assert!(refused.to_string().contains("a newer program migrated it"), "{refused}");
+    file.transaction(|tx| tx.execute_batch(back).map_err(failed)).unwrap();
+    file.close().unwrap();
+
+    f.reopen();
+    let notes = f.store.queue::<Note>("notes").attempts(1).dedupe(HOUR).keep(HOUR).open().unwrap();
+    assert_eq!(notes.get("failing").unwrap().unwrap().state, State::Failed);
+    assert_eq!(notes.get("done").unwrap().unwrap().state, State::Done);
+    assert!(!notes.id("done").add(&note("again")).unwrap(), "its queue's dedupe holds it");
+    assert_eq!(notes.get("later").unwrap().unwrap().state, State::Scheduled);
+    f.clock.advance(DAY);
+    assert_eq!(ran(&notes), ["later"]);
+    assert_eq!(super::maintain(&f.store).unwrap().failed, 1, "a failed job of 0.10 goes by its queue's keep");
+}
+
 // contract: JOB-03
 #[test]
 fn set_makes_the_ids_job_this_value_at_this_time_whatever_it_was() {

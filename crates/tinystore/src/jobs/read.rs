@@ -285,7 +285,10 @@ macro_rules! failed_columns {
 }
 
 const GET_JOB: &str = concat!("select ", keyed_columns!(), " where k.queue = ?1 and k.key = ?2");
-const GET_FAILED: &str = concat!("select ", failed_columns!(), " where f.queue = ?1 and f.key = ?2");
+/// A failed job past a keep of its own is gone, though maintenance has not
+/// deleted it yet.
+const GET_FAILED: &str =
+    concat!("select ", failed_columns!(), " where f.queue = ?1 and f.key = ?2 and (f.until is null or f.until > ?3)");
 const GET_DONE: &str = "select d.key, d.until, 0, d.at, d.attempt, null, 2, null, null, d.value, d.spill,
         coalesce(length(d.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = d.spill), 0),
         d.ran, d.took, d.grp
@@ -305,6 +308,7 @@ const PAGE_BY_KEY: &str = concat!(
         select ",
     failed_columns!(),
     " where f.queue = ?1 and f.key > ?2 and f.key >= ?3 and (?4 is null or f.key < ?4) and ?5 in (0, 2)
+        and (f.until is null or f.until > ?9)
     ) order by 1 limit cast(?6 as integer)"
 );
 /// A page of the jobs without ids in the order the queue runs them, after the
@@ -324,6 +328,7 @@ const PAGE_FAILED: &str = concat!(
     "select ",
     failed_columns!(),
     " where f.queue = ?1 and (?5 = 0 or f.key is null) and (f.failed, f.id) < (?7, ?8)
+        and (f.until is null or f.until > ?9)
     order by f.failed desc, f.id desc limit cast(?6 as integer)"
 );
 
@@ -336,7 +341,8 @@ const COUNT_LATER: &str = "select (select count(*) from _tinystore_jobs where qu
     + (select count(*) from _tinystore_jobs where queue = ?1 and next > ?4)";
 /// The jobs live leases hold, which run once memory says their handler began.
 const LIVE_LEASES: &str = "select id from _tinystore_jobs_leases where queue = ?1 and until > ?2";
-const COUNT_FAILED: &str = "select count(*) from _tinystore_jobs_failed where queue = ?1";
+const COUNT_FAILED: &str =
+    "select count(*) from _tinystore_jobs_failed where queue = ?1 and (until is null or until > ?2)";
 
 /// How many jobs the queue holds in each state at `now`, as a page would
 /// list them: a job a lease holds runs once its handler has it, and until
@@ -356,7 +362,7 @@ pub(crate) fn counts(c: &Connection, queue: &QueueState, now: i64) -> Result<Cou
     let running =
         leased.into_iter().filter_map(|id| queue.held(id)).filter(|lease| lease.started() && !lease.settled()).count()
             as u64;
-    let failed = count(COUNT_FAILED, &[&queue.id])?;
+    let failed = count(COUNT_FAILED, &[&queue.id, &now])?;
     let scheduled = later.min(rows);
     let running = running.min(rows - scheduled);
     Ok(Counts { scheduled, waiting: rows - scheduled - running, running, failed })
@@ -374,7 +380,7 @@ pub(crate) fn get<V: DeserializeOwned>(
     // Each lookup only when the one before found nothing.
     let mut found = one(c, GET_JOB, params![queue.id, key, no, no, no, no, no, no, now])?;
     if found.is_none() {
-        found = one(c, GET_FAILED, params![queue.id, key])?;
+        found = one(c, GET_FAILED, params![queue.id, key, now])?;
     }
     if found.is_none() {
         found = one(c, GET_DONE, params![queue.id, key, now])?;
@@ -480,7 +486,7 @@ fn rows(c: &Connection, queue: &QueueState, filter: &Filter, limit: usize, now: 
         let left = (limit - found.len()) as i64;
         let read = match &walk {
             Cursor::Failed(before, id) if by_failure => {
-                all(c, PAGE_FAILED, params![queue.id, no, no, no, 0, left, before, id])?
+                all(c, PAGE_FAILED, params![queue.id, no, no, no, 0, left, before, id, now])?
             }
             Cursor::Id(after) if !by_failure => {
                 let tables = match filter.state {
@@ -496,7 +502,7 @@ fn rows(c: &Connection, queue: &QueueState, filter: &Filter, limit: usize, now: 
                 all(c, PAGE_UNNAMED, params![queue.id, no, no, no, no, left, next, id, now])?
             }
             Cursor::Failed(before, id) if filter.prefix.is_empty() && filter.state.is_none() => {
-                all(c, PAGE_FAILED, params![queue.id, no, no, no, 1, left, before, id])?
+                all(c, PAGE_FAILED, params![queue.id, no, no, no, 1, left, before, id, now])?
             }
             _ => {
                 let given = filter.after.as_deref().unwrap_or_default();

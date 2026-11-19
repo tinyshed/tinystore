@@ -1,7 +1,8 @@
 //! Watching a job: the job as it is, then again each time it changes, until
 //! it ends. Every change a queue commits wakes its watchers, and each reads
-//! its own job again. A job found gone was done, unless a cancel marked its
-//! watchers before it committed.
+//! its own job again. A job found gone was done, unless the write that took
+//! it marked its watchers before it committed: a cancel, or a failure kept
+//! not at all.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,7 +30,16 @@ pub(crate) struct Watchers {
 struct Sub {
     key: String,
     hears: Hears,
-    cancelled: bool,
+    /// How the job left, when the write that took it said.
+    gone: Option<Gone>,
+}
+
+/// How a job a watcher finds gone left, other than done.
+#[derive(Clone, Debug)]
+enum Gone {
+    Cancelled,
+    /// Failed for good with a keep of zero, and why.
+    Failed(String),
 }
 
 impl Watchers {
@@ -47,8 +57,18 @@ impl Watchers {
     /// write, before it commits: a watcher woken by another commit meanwhile
     /// could find the job gone and take it for done.
     pub(crate) fn cancelled(&self, key: &str, cancelled: bool) {
+        self.mark(key, cancelled.then_some(Gone::Cancelled));
+    }
+
+    /// Marks the watchers of `key` as watching a job that failed for good
+    /// with `error` and is kept not at all, inside the write that deletes it.
+    pub(crate) fn failed(&self, key: &str, error: &str) {
+        self.mark(key, Some(Gone::Failed(error.to_owned())));
+    }
+
+    fn mark(&self, key: &str, gone: Option<Gone>) {
         for sub in self.lock().values_mut().filter(|sub| sub.key == key) {
-            sub.cancelled = cancelled;
+            sub.gone = gone.clone();
         }
     }
 
@@ -72,12 +92,12 @@ pub(crate) struct Subscription {
 impl Subscription {
     pub(crate) fn new(queue: &Arc<QueueState>, key: &str, hears: Hears) -> Subscription {
         let id = queue.watchers.last.fetch_add(1, Ordering::Relaxed) + 1;
-        queue.watchers.lock().insert(id, Sub { key: key.to_owned(), hears, cancelled: false });
+        queue.watchers.lock().insert(id, Sub { key: key.to_owned(), hears, gone: None });
         Subscription { queue: Arc::clone(queue), id }
     }
 
-    fn cancelled(&self) -> bool {
-        self.queue.watchers.lock().get(&self.id).is_some_and(|sub| sub.cancelled)
+    fn gone(&self) -> Option<Gone> {
+        self.queue.watchers.lock().get(&self.id).and_then(|sub| sub.gone.clone())
     }
 }
 
@@ -115,7 +135,8 @@ where
     V: Serialize + DeserializeOwned + Clone + Send + 'static,
 {
     /// Reads the job under `key` again and says what to report. A job found
-    /// gone is reported once more, as it was last seen, done or cancelled.
+    /// gone is reported once more, as it was last seen, done, cancelled, or
+    /// failed with its error.
     pub(crate) fn read(&mut self, queue: &Queue<V>, key: &str, sub: &Subscription) -> Result<Report<V>> {
         if self.over {
             return Ok(Report::Over);
@@ -123,7 +144,11 @@ where
         let Some(job) = queue.get(key)? else {
             self.over = true;
             return Ok(self.last.take().map_or(Report::Over, |mut last| {
-                last.state = if sub.cancelled() { State::Cancelled } else { State::Done };
+                match sub.gone() {
+                    None => last.state = State::Done,
+                    Some(Gone::Cancelled) => last.state = State::Cancelled,
+                    Some(Gone::Failed(error)) => (last.state, last.error) = (State::Failed, Some(error)),
+                }
                 last.ahead = 0;
                 Report::Changed(Box::new(last))
             }));

@@ -155,6 +155,20 @@ def fail(reason: str | BaseException) -> Outcome: ...
 
 Fails the job for good now, its reason kept as its error: return it.
 
+## Dedupe
+
+```python
+@dataclass(frozen=True, slots=True)
+class Dedupe:
+    calendar: Calendar
+    time_zone: str
+```
+
+Holds a done job's id until the local day, week or month it was done in ends, in its zone.
+
+``dedupe=tinystore.Dedupe(calendar="day", time_zone="Europe/Moscow")``; a
+span, ``dedupe="10m"``, holds it that long from when it was done instead.
+
 ## Queue
 
 ```python
@@ -184,6 +198,8 @@ async def add(
     every: Duration | None = None,
     cron: str | None = None,
     time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
 ) -> bool: ...
 ```
 
@@ -207,6 +223,8 @@ def adding(
     every: Duration | None = None,
     cron: str | None = None,
     time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
 ) -> Adding: ...
 ```
 
@@ -233,6 +251,8 @@ async def set(
     every: Duration | None = None,
     cron: str | None = None,
     time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
 ) -> None: ...
 ```
 
@@ -254,6 +274,8 @@ async def update(
     every: Duration | None = None,
     cron: str | None = None,
     time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
 ) -> bool: ...
 ```
 
@@ -405,6 +427,8 @@ async def add(
     every: Duration | None = None,
     cron: str | None = None,
     time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
 ) -> None: ...
 ```
 
@@ -423,6 +447,8 @@ async def set(
     every: Duration | None = None,
     cron: str | None = None,
     time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
 ) -> None: ...
 ```
 
@@ -441,6 +467,8 @@ async def update(
     every: Duration | None = None,
     cron: str | None = None,
     time_zone: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
 ) -> None: ...
 ```
 

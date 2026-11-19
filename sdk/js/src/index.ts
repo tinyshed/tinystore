@@ -82,6 +82,7 @@ export type {
 	Answer,
 	Backoff,
 	Concurrency,
+	Dedupe,
 	Handler,
 	Job,
 	JobCounts,

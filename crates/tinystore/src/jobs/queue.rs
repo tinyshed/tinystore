@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 
 use super::call::{Asked, JobCall};
 use super::claim::{self, Claiming, Lease};
+use super::dedupe::Dedupe;
 use super::engine::Jobs;
 use super::policy::{Concurrency, Policy};
 use super::read::named::Which;
@@ -110,14 +111,17 @@ where
     }
 
     /// How long a done job keeps its id taken, so that adding it again adds
-    /// nothing: an id runs once.
-    pub fn dedupe(mut self, span: Duration) -> Self {
-        self.policy.dedupe = Some(span);
+    /// nothing: a span from when it was done, or `Dedupe::calendar(Calendar::Day,
+    /// "Europe/Moscow")`, until the local day it was done in ends. A job's own
+    /// wins over it.
+    pub fn dedupe(mut self, dedupe: impl Into<Dedupe>) -> Self {
+        self.policy.dedupe = Some(dedupe.into());
         self
     }
 
     /// How long a failed job stays, with its error, to be found and started
-    /// again: a week.
+    /// again: a week; `Duration::ZERO` keeps it not at all. A job's own wins
+    /// over it.
     pub fn keep(mut self, span: Duration) -> Self {
         self.policy.keep = span;
         self
@@ -378,6 +382,10 @@ where
 
     pub fn group(&self, group: impl AsRef<str>) -> JobCall<'_, V> {
         JobCall::new(self, None).group(group)
+    }
+
+    pub fn keep(&self, span: Duration) -> JobCall<'_, V> {
+        JobCall::new(self, None).keep(span)
     }
 
     /// Runs `handler` on each job as it falls due, on threads the store starts

@@ -145,6 +145,83 @@ let pushes = store.queue::<Push>("pushes").dedupe(Duration::from_hours(1)).open(
 pushes.id(&format!("digest:{user_id}")).add(&push)?;
 ```
 
+## Once a day, in a user's time zone
+
+`dedupe` also takes a calendar: the id stays taken until the local day,
+week or month in which the job was done ends, in a time zone. A job can have
+its own `dedupe`, which wins over its queue's:
+
+```ts
+const crawl = store.queue<{ group: string }>('schedule-fetch', { dedupe: { calendar: 'day', timeZone: 'Europe/Moscow' } })
+await crawl.add({ group: g }, { id: `crawl:${g}` }) // false until Moscow's midnight after it was done
+await crawl.add({ group: g }, { id: `now:${g}`, dedupe: '10m' }) // this job's own
+```
+
+```python
+crawl = store.queue("schedule-fetch", Crawl, dedupe=tinystore.Dedupe(calendar="day", time_zone="Europe/Moscow"))
+await crawl.add(Crawl(group=g), id=f"crawl:{g}")
+await crawl.add(Crawl(group=g), id=f"now:{g}", dedupe="10m")
+```
+
+```go
+crawl, err := jobs.OpenQueue[Crawl](store, "schedule-fetch", jobs.DedupeCalendar(tinystore.Day, "Europe/Moscow"))
+_, err = crawl.Add(ctx, Crawl{Group: g}, jobs.ID("crawl:"+g))
+_, err = crawl.Add(ctx, Crawl{Group: g}, jobs.ID("now:"+g), jobs.Dedupe(10*time.Minute))
+```
+
+```rust
+let day = Dedupe::calendar(Calendar::Day, "Europe/Moscow");
+let crawl = store.queue::<Crawl>("schedule-fetch").dedupe(day).open()?;
+crawl.id(&format!("crawl:{g}")).add(&Crawl { group: g })?;
+crawl.id(&format!("now:{g}")).dedupe(Duration::from_mins(10)).add(&Crawl { group: g })?;
+```
+
+- "Once a day" means once in each local day, not once every 24 hours: a job
+  done at 23:59 Moscow time holds its id for a minute.
+- A day is 23 or 25 hours long on the days the clock moves (contract
+  JOB-18).
+- The calendar counts from when the job was done, as a span does. A job that
+  failed holds no id, and a repeating job is never done, so `dedupe` does
+  nothing to either.
+- A zone that doesn't exist and a job's own `dedupe` of zero are `invalid`.
+
+## Keep a failed job, or not
+
+A job that failed for good stays for its queue's `keep`, a week, with its
+value and its error, so that you can look at it and `set` it again. A job
+can have its own `keep`, and `'0s'` keeps it not at all:
+
+```ts
+await pushes.add({ to, text }, { keep: '0s' }) // fails for good: gone at once; its watcher sees failed and the error
+await reports.add(report, { id: `report:${id}`, keep: '30d' }) // this job's own, beside the queue's
+```
+
+```python
+await pushes.add(Push(to=to, text=text), keep="0s")
+await reports.add(report, id=f"report:{id}", keep="30d")
+```
+
+```go
+_, err = pushes.Add(ctx, Push{To: to, Text: text}, jobs.Keep(0))
+_, err = reports.Add(ctx, report, jobs.ID("report:"+id), jobs.Keep(30*24*time.Hour))
+```
+
+```rust
+pushes.keep(Duration::ZERO).add(&Push { to, text })?;
+reports.id(&format!("report:{id}")).keep(Duration::from_hours(24 * 30)).add(&report)?;
+```
+
+- A job's own `keep` wins over its queue's. A queue's `keep` of zero keeps
+  nothing either.
+- A job kept not at all leaves as a done one does: `get` finds nothing, and
+  its watcher sees `failed` with the error last (contract JOB-20).
+- A failed job is gone for `get`, pages and `counts` once its keep has
+  passed; maintenance deletes its row within the minute after.
+- Gone means unreadable through the store. jobs.db doesn't overwrite deleted
+  rows, so the bytes stay in the file's free pages until SQLite reuses them.
+  For text that must never rest on disk, put a reference in the value, such
+  as the message's id, and read the text in the handler from where it lives.
+
 ## Pages of jobs
 
 ```ts

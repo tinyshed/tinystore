@@ -19,6 +19,10 @@ import {
 } from '../src/index.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
+function fail(): never {
+	throw new Error('push service 503')
+}
+
 interface Reminder {
 	userId: number
 	text: string
@@ -443,6 +447,21 @@ for (const way of ways) {
 			expect([done?.state, done?.value]).toEqual(['done', 'ada'])
 			const { startedAt, endedAt } = done?.lastRun ?? {}
 			expect(endedAt!.getTime()).toBeGreaterThanOrEqual(startedAt!.getTime())
+		})
+
+		// contract: JOB-18, JOB-20
+		test("a job's own dedupe holds its id by a local calendar, and its own keep of zero keeps it not at all", async () => {
+			const crawl = store.queue<string>('crawl', { attempts: 1 })
+			const day = { calendar: 'day', timeZone: 'Europe/Moscow' } as const
+			expect(await crawl.add('241-327', { id: 'crawl:241-327', dedupe: day })).toBe(true)
+			expect(await crawl.add('push', { id: 'push:1', keep: '0s' })).toBe(true)
+			expect(await crawl.runDue(value => (value === 'push' ? fail() : undefined))).toBe(2)
+			expect(await crawl.add('241-327', { id: 'crawl:241-327' })).toBe(false) // until Moscow's midnight
+			expect(await crawl.get('push:1')).toBeUndefined() // failed, and kept not at all
+			const nowhere = { calendar: 'day', timeZone: 'Mars/Olympus' } as const
+			expect(await caught(crawl.add('x', { id: 'x', dedupe: nowhere }))).toBeInstanceOf(
+				InvalidError,
+			)
 		})
 
 		test('a value JSON cannot write is refused before it leaves', async () => {

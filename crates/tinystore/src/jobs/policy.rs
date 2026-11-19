@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use super::call::LONGEST_SPAN;
+use super::dedupe::Dedupe;
 use crate::clock::millis;
 use crate::{Error, Result};
 
@@ -35,7 +36,7 @@ impl From<u32> for Concurrency {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Policy {
     pub(crate) attempts: u32,
     pub(crate) backoff: (Duration, Duration),
@@ -44,7 +45,7 @@ pub(crate) struct Policy {
     pub(crate) rate: Option<(u32, Duration)>,
     /// Jobs of each group started in a span.
     pub(crate) group_rate: Option<(u32, Duration)>,
-    pub(crate) dedupe: Option<Duration>,
+    pub(crate) dedupe: Option<Dedupe>,
     pub(crate) keep: Duration,
     pub(crate) max_waiting: u64,
 }
@@ -90,6 +91,9 @@ impl Policy {
             past_the_years
                 .map(|span| format!("a timeout or a rate's span of {span:?}, longer than the years 1 to 9999"))
         };
+        if let Some(dedupe) = &self.dedupe {
+            dedupe.check(true)?;
+        }
         refused.map_or(Ok(()), |why| Err(Error::invalid(why)))
     }
 

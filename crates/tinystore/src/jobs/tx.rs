@@ -85,6 +85,10 @@ where
     pub fn group(&self, group: impl AsRef<str>) -> JobCall<'a, V> {
         JobCall::new(self.queue, Some(self.tx)).group(group)
     }
+
+    pub fn keep(&self, span: Duration) -> JobCall<'a, V> {
+        JobCall::new(self.queue, Some(self.tx)).keep(span)
+    }
 }
 
 impl<V> fmt::Debug for TxQueue<'_, V> {

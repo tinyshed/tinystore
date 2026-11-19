@@ -53,7 +53,15 @@ Cron repeats a job by a cron of five fields in a time zone, an IANA name, "UTC" 
 func Dedupe(d time.Duration) dedupe
 ```
 
-Dedupe is how long a done job's id stays taken, so that the same id added again meanwhile adds nothing.
+Dedupe is how long a done job's id stays taken, from when it was done, so that the same id added again meanwhile adds nothing: a queue's, or given to an add or a set, the job's own in the place of its queue's.
+
+## DedupeCalendar
+
+```go
+func DedupeCalendar(c tinystore.Calendar, timeZone string) dedupeCalendar
+```
+
+DedupeCalendar keeps a done job's id taken until the local day, week or month it was done in ends, in a time zone, an IANA name: jobs.DedupeCalendar(tinystore.Day, "Europe/Moscow"). A queue's, or a job's own.
 
 ## Delay
 
@@ -101,7 +109,7 @@ ID is a job's id, which finds it again and which an add of a taken one adds noth
 func Keep(d time.Duration) keep
 ```
 
-Keep is how long a failed job stays: a week unless given.
+Keep is how long a failed job stays: a week unless given, and 0 not at all. Given to an add or a set, it is the job's own, in the place of its queue's.
 
 ## Limit
 
@@ -159,7 +167,7 @@ type AddOption interface {
 }
 ```
 
-AddOption is what an Add gives besides its value: an id, a time, a group, a repeat.
+AddOption is what an Add gives besides its value: an id, a time, a group, a repeat, and a dedupe or a keep of the job's own.
 
 ## Backoff
 
@@ -566,7 +574,7 @@ type SetOption interface {
 }
 ```
 
-SetOption is what a Set or an Update gives besides its id and value: a time, a group, a repeat.
+SetOption is what a Set or an Update gives besides its id and value: a time, a group, a repeat, and a dedupe or a keep of the job's own.
 
 ## State
 

@@ -126,6 +126,26 @@ pub fn cron(self, expr: &str, zone: &str) -> Self
 Repeats the job by a five-field cron expression on the wall clock of
 `zone`, an IANA name, `"UTC"` among them.
 
+### JobCall.dedupe
+
+```rust
+pub fn dedupe(self, dedupe: impl Into<Dedupe>) -> Self
+```
+
+How long this job holds its id once done, in the place of its queue's:
+a span from when it was done, or `Dedupe::calendar(Calendar::Day,
+"Europe/Moscow")`, until the local day it was done in ends.
+
+### JobCall.keep
+
+```rust
+pub fn keep(self, span: Duration) -> Self
+```
+
+How long this job is kept once it failed for good, in the place of its
+queue's; `Duration::ZERO` keeps it not at all, its watchers still told
+it failed and why.
+
 ### JobCall.add
 
 ```rust
@@ -157,6 +177,26 @@ Changes the id's job when it is not running: its value, the steps kept
 for the old one dropped with it, and its time, group or repeat when the
 call names them. Says whether it did: a job that runs, is done or failed,
 or never was answers `false`.
+
+## Dedupe
+
+```rust
+pub struct Dedupe(_)
+```
+
+How long a done job keeps its id taken, so that an add of it adds
+nothing: a `Duration` from when it was done, or
+`Dedupe::calendar(Calendar::Day, "Europe/Moscow")`, until the local day it
+was done in ends. A day is 23 or 25 hours on the days the clock moves.
+
+### Dedupe.calendar
+
+```rust
+pub fn calendar(unit: Calendar, zone: &str) -> Dedupe
+```
+
+Until the end of the local `unit` the job was done in, in `zone`, an
+IANA name, `"UTC"` among them.
 
 ## Maintenance
 
@@ -377,6 +417,12 @@ pub fn delay(&self, span: Duration) -> JobCall<'_, V>
 pub fn group(&self, group: impl AsRef<str>) -> JobCall<'_, V>
 ```
 
+### Queue.keep
+
+```rust
+pub fn keep(&self, span: Duration) -> JobCall<'_, V>
+```
+
 ### Queue.work
 
 ```rust
@@ -505,11 +551,13 @@ groups' jobs start meanwhile. It lives in memory, as `rate` does.
 ### QueueBuilder.dedupe
 
 ```rust
-pub fn dedupe(self, span: Duration) -> Self
+pub fn dedupe(self, dedupe: impl Into<Dedupe>) -> Self
 ```
 
 How long a done job keeps its id taken, so that adding it again adds
-nothing: an id runs once.
+nothing: a span from when it was done, or `Dedupe::calendar(Calendar::Day,
+"Europe/Moscow")`, until the local day it was done in ends. A job's own
+wins over it.
 
 ### QueueBuilder.keep
 
@@ -518,7 +566,8 @@ pub fn keep(self, span: Duration) -> Self
 ```
 
 How long a failed job stays, with its error, to be found and started
-again: a week.
+again: a week; `Duration::ZERO` keeps it not at all. A job's own wins
+over it.
 
 ### QueueBuilder.max_waiting
 
@@ -1027,6 +1076,12 @@ pub fn delay(&self, span: Duration) -> JobCall<'a, V>
 pub fn group(&self, group: impl AsRef<str>) -> JobCall<'a, V>
 ```
 
+### TxQueue.keep
+
+```rust
+pub fn keep(&self, span: Duration) -> JobCall<'a, V>
+```
+
 ## Watch
 
 ```rust
@@ -1141,6 +1196,22 @@ pub fn group(self, group: impl AsRef<str>) -> Self
 ```
 
 The group whose running jobs the queue's concurrency bounds.
+
+### aio::jobs::JobCall.dedupe
+
+```rust
+pub fn dedupe(self, dedupe: impl Into<Dedupe>) -> Self
+```
+
+How long this job holds its id once done; see `jobs::JobCall::dedupe`.
+
+### aio::jobs::JobCall.keep
+
+```rust
+pub fn keep(self, span: Duration) -> Self
+```
+
+How long this job is kept once it failed for good; see `jobs::JobCall::keep`.
 
 ### aio::jobs::JobCall.every
 
@@ -1331,6 +1402,12 @@ pub fn delay(&self, span: Duration) -> JobCall<'_, V>
 pub fn group(&self, group: impl AsRef<str>) -> JobCall<'_, V>
 ```
 
+### aio::jobs::Queue.keep
+
+```rust
+pub fn keep(&self, span: Duration) -> JobCall<'_, V>
+```
+
 ### aio::jobs::Queue.claim
 
 ```rust
@@ -1478,11 +1555,12 @@ It counts starts, retries among them, and lives in memory.
 ### aio::jobs::QueueBuilder.dedupe
 
 ```rust
-pub fn dedupe(self, span: Duration) -> Self
+pub fn dedupe(self, dedupe: impl Into<Dedupe>) -> Self
 ```
 
 How long a done job keeps its id taken, so that adding it again adds
-nothing: an id runs once.
+nothing: a span, or a local calendar's day, week or month; see
+`jobs::QueueBuilder::dedupe`.
 
 ### aio::jobs::QueueBuilder.keep
 
@@ -1491,7 +1569,7 @@ pub fn keep(self, span: Duration) -> Self
 ```
 
 How long a failed job stays, with its error, to be found and started
-again: a week.
+again: a week; `Duration::ZERO` keeps it not at all.
 
 ### aio::jobs::QueueBuilder.max_waiting
 

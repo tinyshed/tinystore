@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use super::dedupe::Dedupe;
 #[cfg(any(feature = "wire", feature = "sql", feature = "async"))]
 use super::queue::Change;
 use super::queue::Queue;
@@ -48,6 +49,8 @@ pub(crate) struct Asked {
     when: Option<When>,
     group: Option<String>,
     repeat: Option<Repeat>,
+    dedupe: Option<Dedupe>,
+    keep: Option<Duration>,
     /// A step the chain refused, which its last step reports.
     refused: Option<String>,
 }
@@ -101,6 +104,22 @@ where
     /// `zone`, an IANA name, `"UTC"` among them.
     pub fn cron(mut self, expr: &str, zone: &str) -> Self {
         self.asked.repeat = Some(Repeat::Cron { expr: expr.to_owned(), zone: zone.to_owned() });
+        self
+    }
+
+    /// How long this job holds its id once done, in the place of its queue's:
+    /// a span from when it was done, or `Dedupe::calendar(Calendar::Day,
+    /// "Europe/Moscow")`, until the local day it was done in ends.
+    pub fn dedupe(mut self, dedupe: impl Into<Dedupe>) -> Self {
+        self.asked.dedupe = Some(dedupe.into());
+        self
+    }
+
+    /// How long this job is kept once it failed for good, in the place of its
+    /// queue's; `Duration::ZERO` keeps it not at all, its watchers still told
+    /// it failed and why.
+    pub fn keep(mut self, span: Duration) -> Self {
+        self.asked.keep = Some(span);
         self
     }
 
@@ -169,6 +188,45 @@ impl<V> fmt::Debug for JobCall<'_, V> {
 }
 
 impl Asked {
+    /// The options of a job's own, as a write passed on carries them after
+    /// its JSON, so that a home of a release before refuses the write rather
+    /// than drop them: a dedupe, 0 none, 1 a span, 2 a calendar's unit and
+    /// zone; then a keep, 0 none or 1 and its span. Nothing when none is
+    /// given.
+    #[cfg(feature = "replication")]
+    pub(crate) fn write_own(&self, out: &mut crate::replication::Out) {
+        if self.dedupe.is_none() && self.keep.is_none() {
+            return;
+        }
+        match &self.dedupe {
+            None => out.byte(0),
+            Some(dedupe) => out.byte(1).text(&dedupe.text()),
+        };
+        match self.keep {
+            None => out.byte(0),
+            Some(span) => out.byte(1).span(span),
+        };
+    }
+
+    /// Reads what [`Asked::write_own`] wrote, when the write carries it.
+    #[cfg(feature = "replication")]
+    pub(crate) fn read_own(&mut self, at: &mut crate::replication::In<'_>) -> Result<()> {
+        if at.done() {
+            return Ok(());
+        }
+        self.dedupe = match at.byte()? {
+            0 => None,
+            1 => Some(Dedupe::parse(&at.text()?)?),
+            _ => return Err(super::forward::corrupt("a job's dedupe")),
+        };
+        self.keep = match at.byte()? {
+            0 => None,
+            1 => Some(at.span()?),
+            _ => return Err(super::forward::corrupt("a job's keep")),
+        };
+        Ok(())
+    }
+
     /// What was asked, as a write passed on carries it: each part a byte
     /// saying whether it is there, then it.
     #[cfg(feature = "replication")]
@@ -198,7 +256,7 @@ impl Asked {
             0 => None,
             tag => Some(Repeat::read(tag, at)?),
         };
-        Ok(Asked { id, when, group, repeat, refused })
+        Ok(Asked { id, when, group, repeat, refused, ..Asked::default() })
     }
 
     pub(crate) fn with_id(id: &str) -> Asked {
@@ -235,12 +293,21 @@ impl Asked {
         if !in_years(at) {
             return Err(Error::invalid("a time outside the years 1 to 9999"));
         }
+        if let Some(dedupe) = &self.dedupe {
+            dedupe.check(false)?;
+        }
+        let keep = self.keep.map(millis);
+        if keep.is_some_and(|keep| keep > LONGEST_SPAN) {
+            return Err(Error::invalid("a keep longer than the years 1 to 9999"));
+        }
         Ok(Prepared {
             key: self.id,
             at,
             timed: self.when.is_some(),
             repeat: repeat.map(|repeat| repeat.text()),
             group: self.group,
+            dedupe: self.dedupe.map(|dedupe| dedupe.text()),
+            keep,
             value: Kept::of(values::encode(value)?),
             now,
         })

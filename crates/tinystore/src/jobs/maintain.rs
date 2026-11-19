@@ -1,5 +1,5 @@
-//! What the queues keep no longer: failed jobs past their queue's `keep`,
-//! done ids past their `dedupe`, and the ids jobs left behind.
+//! What the queues keep no longer: failed jobs past their own `keep` or
+//! their queue's, done ids past their `dedupe`, and the ids jobs left behind.
 
 use rusqlite::params;
 
@@ -11,9 +11,15 @@ use crate::{Result, Store};
 
 use crate::engine::{BATCH, BATCHES, in_batches};
 
+/// The failed jobs of a queue kept for its `keep`: those without one of
+/// their own, as every release before wrote them.
 const EXPIRE_FAILED: &str = "delete from _tinystore_jobs_failed where (queue, id) in (
-        select queue, id from _tinystore_jobs_failed where queue = ?1 and failed <= ?2
+        select queue, id from _tinystore_jobs_failed where queue = ?1 and failed <= ?2 and until is null
         order by failed limit cast(?3 as integer))
+    returning spill";
+/// The failed jobs of every queue kept for a keep of their own.
+const EXPIRE_FAILED_OWN: &str = "delete from _tinystore_jobs_failed where (queue, id) in (
+        select queue, id from _tinystore_jobs_failed where until <= ?1 order by until limit cast(?2 as integer))
     returning spill";
 const EXPIRE_DONE: &str = "delete from _tinystore_jobs_done where (queue, key) in (
         select queue, key from _tinystore_jobs_done where until <= ?1 order by until limit cast(?2 as integer))
@@ -30,7 +36,7 @@ const DROP_KEYS_LEFT: &str = "delete from _tinystore_jobs_keys where queue = ?1 
 /// What one maintenance pass removed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Maintenance {
-    /// Failed jobs past their queue's `keep`.
+    /// Failed jobs past their own `keep` or their queue's.
     pub failed: usize,
     /// Done ids past their queue's `dedupe`.
     pub done: usize,
@@ -55,6 +61,7 @@ pub(crate) fn run(jobs: &Jobs) -> Result<Maintenance> {
         done.failed += batches(jobs, move |tx| expire(tx, EXPIRE_FAILED, params![id, cutoff, BATCH as i64]))?;
         done.ids += drop_keys_left(jobs, id, &queue.keys_after)?;
     }
+    done.failed += batches(jobs, move |tx| expire(tx, EXPIRE_FAILED_OWN, params![now, BATCH as i64]))?;
     done.done += batches(jobs, move |tx| expire(tx, EXPIRE_DONE, params![now, BATCH as i64]))?;
     jobs.file().sweep();
     Ok(done)

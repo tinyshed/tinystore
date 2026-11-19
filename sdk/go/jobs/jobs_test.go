@@ -540,6 +540,33 @@ func TestAWorkerRunsAsManyHandlersAtOnceAsItsConcurrencySays(t *testing.T) {
 	})
 }
 
+// contract: JOB-18, JOB-20
+func TestAJobsOwnDedupeHoldsItsIDByALocalCalendarAndItsKeepOfZeroKeepsNothing(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		crawl := ways.Must(jobs.OpenQueue[string](store, "crawl", jobs.Attempts(1)))
+		day := jobs.DedupeCalendar(tinystore.Day, "Europe/Moscow")
+		ways.Must(crawl.Add(ctx, "241-327", jobs.ID("crawl:241-327"), day))
+		ways.Must(crawl.Add(ctx, "push", jobs.ID("push:1"), jobs.Keep(0)))
+		ways.Must(0, crawl.RunDue(ctx, func(_ context.Context, value string, _ *jobs.Run) error {
+			if value == "push" {
+				return errors.New("push service 503")
+			}
+			return nil
+		}))
+		if ways.Must(crawl.Add(ctx, "241-327", jobs.ID("crawl:241-327"))) {
+			t.Fatal("held until Moscow's midnight")
+		}
+		if _, found := ways.Must2(crawl.Get(ctx, "push:1")); found {
+			t.Fatal("failed, and kept not at all")
+		}
+		_, err := crawl.Add(ctx, "x", jobs.ID("x"), jobs.DedupeCalendar(tinystore.Day, "Mars/Olympus"))
+		if !errors.Is(err, tinystore.ErrInvalid) {
+			t.Fatalf("got %v", err)
+		}
+	})
+}
+
 func TestDedupeKeepsADoneIDTakenAndTheJobItsLastRun(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

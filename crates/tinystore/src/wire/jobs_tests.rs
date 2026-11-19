@@ -5,8 +5,9 @@ use crate::pipe::{Connect, Pipe};
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, JobsAnswer, JobsCall, JobsChanged, JobsCounts, JobsHeld, JobsId, JobsJob, JobsKept, JobsList,
-    JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork, method,
+    Empty, Handle, Hello, JobsAnswer, JobsCalendar, JobsCall, JobsChanged, JobsCounts, JobsHeld, JobsId, JobsJob,
+    JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork,
+    method,
 };
 use crate::{Options, Store};
 
@@ -541,6 +542,26 @@ fn a_watch_the_client_cancels_or_its_server_leaves_ends_with_why() {
     assert_eq!(client.pipe.streams(), 0, "every stream ended once");
     drop(client);
     store.close().unwrap();
+}
+
+// contract: JOB-18, JOB-20
+#[test]
+fn a_call_gives_its_job_a_dedupe_of_a_calendar_and_a_keep_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "crawl");
+    let day = JobsCalendar { calendar: "day".to_owned(), time_zone: "Europe/Moscow".to_owned() };
+    let crawl = JobsCall { dedupe_calendar: Some(day.clone()), ..job(handle, "crawl:1", "1") };
+    assert!(add(&mut client, &crawl));
+    let push = JobsCall { keep: Some(0), ..job(handle, "push:1", "2") };
+    assert!(add(&mut client, &push));
+    let both = JobsCall { dedupe: Some(60_000), dedupe_calendar: Some(day), ..job(handle, "both", "3") };
+    let refused = client.call::<JobsChanged>(method::JOBS_ADD, &both).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+    let nowhere = JobsCalendar { calendar: "day".to_owned(), time_zone: "Mars/Olympus".to_owned() };
+    let open = JobsQueueOpen { name: "other".to_owned(), dedupe_calendar: Some(nowhere), ..JobsQueueOpen::default() };
+    let refused = client.call::<Handle>(method::JOBS_QUEUE_OPEN, &open).unwrap_err();
+    assert!(refused.message.contains("no such zone"), "{}", refused.message);
 }
 
 #[test]

@@ -40,7 +40,19 @@ from .config import Config
 from .directory import Directory, open_directory
 from .errors import InvalidError
 from .instruments import Instruments
-from .jobs import Backoff, Concurrency, Outcome, Queue, QueueOptions, Run, Schedule, Worker, open_queue, open_schedule
+from .jobs import (
+    Backoff,
+    Concurrency,
+    Dedupe,
+    Outcome,
+    Queue,
+    QueueOptions,
+    Run,
+    Schedule,
+    Worker,
+    open_queue,
+    open_schedule,
+)
 from .kv import Bucket, Counters, Parts, bucket_open, counters_open
 from .limits import Quota, RateLimit, quota_open, rate_limit_open
 from .locks import Lock, Semaphore
@@ -198,7 +210,7 @@ class Store:
         timeout: Duration | None = None,
         concurrency: int | Concurrency | None = None,
         rate: str | None = None,
-        dedupe: Duration | None = None,
+        dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,
@@ -214,7 +226,7 @@ class Store:
         timeout: Duration | None = None,
         concurrency: int | Concurrency | None = None,
         rate: str | None = None,
-        dedupe: Duration | None = None,
+        dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,
@@ -229,7 +241,7 @@ class Store:
         timeout: Duration | None = None,
         concurrency: int | Concurrency | None = None,
         rate: str | None = None,
-        dedupe: Duration | None = None,
+        dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,

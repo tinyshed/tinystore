@@ -3416,6 +3416,59 @@ impl Message for JobsConcurrency {
     }
 }
 
+/// A span of a local calendar in a time zone: a done job holds its id until
+/// the day, week or month it was done in ends.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsCalendar {
+    /// Day, week or month.
+    pub(crate) calendar: String,
+    /// An IANA name, UTC among them.
+    pub(crate) time_zone: String,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsCalendar {
+    const NAME: &'static str = "jobs.Calendar";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.calendar = codec::str(r, "calendar")?,
+                2 => message.time_zone = codec::str(r, "timeZone")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.calendar.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.calendar);
+        }
+        if !self.time_zone.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.time_zone);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.calendar.len()
+            + 1 + 5 + self.time_zone.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.calendar.is_empty()
+            && self.time_zone.is_empty()
+    }
+}
+
 /// The wait before a retry: initial, doubling each time up to max.
 #[cfg(feature = "jobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -3536,7 +3589,7 @@ pub(crate) struct JobsQueueOpen {
     pub(crate) rate: Option<JobsRate>,
     /// How long a done job's id stays taken. Milliseconds.
     pub(crate) dedupe: Option<u64>,
-    /// How long a failed job stays: a week when absent. Milliseconds.
+    /// How long a failed job stays: a week when absent; 0 not at all. Milliseconds.
     pub(crate) keep: Option<u64>,
     /// Ten million when absent.
     pub(crate) max_waiting: Option<u64>,
@@ -3544,6 +3597,8 @@ pub(crate) struct JobsQueueOpen {
     pub(crate) database: Option<u64>,
     /// Each group's starts, beside the queue's rate.
     pub(crate) group_rate: Option<JobsRate>,
+    /// In the place of dedupe: until the local unit a job was done in ends.
+    pub(crate) dedupe_calendar: Option<JobsCalendar>,
 }
 
 #[cfg(feature = "jobs")]
@@ -3566,6 +3621,7 @@ impl Message for JobsQueueOpen {
                 9 => message.max_waiting = Some(codec::uint(r, "maxWaiting")?),
                 10 => message.database = Some(codec::uint(r, "database")?),
                 11 => message.group_rate = Some(JobsRate::read(r)?),
+                12 => message.dedupe_calendar = Some(JobsCalendar::read(r)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -3618,6 +3674,10 @@ impl Message for JobsQueueOpen {
             map.field(out, 11);
             codec::write_message(out, group_rate);
         }
+        if let Some(dedupe_calendar) = &self.dedupe_calendar {
+            map.field(out, 12);
+            codec::write_message(out, dedupe_calendar);
+        }
         map.close(out);
     }
 
@@ -3634,6 +3694,7 @@ impl Message for JobsQueueOpen {
             + self.max_waiting.map_or(0, |_| 10)
             + self.database.map_or(0, |_| 10)
             + self.group_rate.as_ref().map_or(0, |group_rate| 1 + group_rate.size())
+            + self.dedupe_calendar.as_ref().map_or(0, |dedupe_calendar| 1 + dedupe_calendar.size())
     }
 
     fn is_zero(&self) -> bool {
@@ -3648,6 +3709,7 @@ impl Message for JobsQueueOpen {
             && self.max_waiting.is_none()
             && self.database.is_none()
             && self.group_rate.is_none()
+            && self.dedupe_calendar.is_none()
     }
 }
 
@@ -3763,6 +3825,12 @@ pub(crate) struct JobsCall {
     pub(crate) every: Option<u64>,
     pub(crate) cron: Option<String>,
     pub(crate) time_zone: Option<String>,
+    /// This job's own, in the place of its queue's; not 0. Milliseconds.
+    pub(crate) dedupe: Option<u64>,
+    /// This job's own, in the place of dedupe.
+    pub(crate) dedupe_calendar: Option<JobsCalendar>,
+    /// This job's own once it failed for good; 0 not at all. Milliseconds.
+    pub(crate) keep: Option<u64>,
 }
 
 #[cfg(feature = "jobs")]
@@ -3783,6 +3851,9 @@ impl Message for JobsCall {
                 7 => message.every = Some(codec::uint(r, "every")?),
                 8 => message.cron = Some(codec::str(r, "cron")?),
                 9 => message.time_zone = Some(codec::str(r, "timeZone")?),
+                10 => message.dedupe = Some(codec::uint(r, "dedupe")?),
+                11 => message.dedupe_calendar = Some(JobsCalendar::read(r)?),
+                14 => message.keep = Some(codec::uint(r, "keep")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -3827,6 +3898,18 @@ impl Message for JobsCall {
             map.field(out, 9);
             codec::write_str(out, time_zone);
         }
+        if let Some(dedupe) = &self.dedupe {
+            map.field(out, 10);
+            codec::write_uint(out, dedupe);
+        }
+        if let Some(dedupe_calendar) = &self.dedupe_calendar {
+            map.field(out, 11);
+            codec::write_message(out, dedupe_calendar);
+        }
+        if let Some(keep) = &self.keep {
+            map.field(out, 14);
+            codec::write_uint(out, keep);
+        }
         map.close(out);
     }
 
@@ -3841,6 +3924,9 @@ impl Message for JobsCall {
             + self.every.map_or(0, |_| 10)
             + self.cron.as_ref().map_or(0, |cron| 1 + 5 + cron.len())
             + self.time_zone.as_ref().map_or(0, |time_zone| 1 + 5 + time_zone.len())
+            + self.dedupe.map_or(0, |_| 10)
+            + self.dedupe_calendar.as_ref().map_or(0, |dedupe_calendar| 1 + dedupe_calendar.size())
+            + self.keep.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -3853,6 +3939,9 @@ impl Message for JobsCall {
             && self.every.is_none()
             && self.cron.is_none()
             && self.time_zone.is_none()
+            && self.dedupe.is_none()
+            && self.dedupe_calendar.is_none()
+            && self.keep.is_none()
     }
 }
 
@@ -13734,6 +13823,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "Empty" => Empty::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
         "jobs.Concurrency" => JobsConcurrency::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "jobs")]
+        "jobs.Calendar" => JobsCalendar::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
         "jobs.Backoff" => JobsBackoff::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]

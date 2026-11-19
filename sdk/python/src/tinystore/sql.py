@@ -46,7 +46,7 @@ from ._wire.protocol import (
 from .blobs import Files, FilesOptions, Size, WhenFull, files_open
 from .channels import Channel, TxChannel
 from .errors import InvalidError, OutcomeUnknownError, error_of
-from .jobs import Adding, Backoff, Concurrency, Job, Queue, QueueOptions, adding_in, open_queue
+from .jobs import Adding, Backoff, Concurrency, Dedupe, Job, Queue, QueueOptions, adding_in, open_queue
 from .kv import Bucket, Parts, bucket_open
 from .records import Appending, Events, TxEvents, appending_in, events_open
 from .search import Fields, Hybrid, KeyboardLayout, TableIndex, Vectors, drop_index, index_open
@@ -891,7 +891,7 @@ class Database:
         timeout: Duration | None = None,
         concurrency: int | Concurrency | None = None,
         rate: str | None = None,
-        dedupe: Duration | None = None,
+        dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,
@@ -907,7 +907,7 @@ class Database:
         timeout: Duration | None = None,
         concurrency: int | Concurrency | None = None,
         rate: str | None = None,
-        dedupe: Duration | None = None,
+        dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,
@@ -922,7 +922,7 @@ class Database:
         timeout: Duration | None = None,
         concurrency: int | Concurrency | None = None,
         rate: str | None = None,
-        dedupe: Duration | None = None,
+        dedupe: Duration | Dedupe | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,

@@ -10,7 +10,7 @@ pub mod aio;
 pub mod backup;
 #[cfg(feature = "blobs")]
 pub mod blobs;
-#[cfg(any(feature = "metrics", feature = "records"))]
+#[cfg(any(feature = "metrics", feature = "records", feature = "jobs"))]
 mod calendar;
 #[cfg(any(feature = "store", feature = "mcp"))]
 mod cancel;
@@ -101,7 +101,7 @@ pub(crate) mod wire;
 #[doc(hidden)]
 pub use wire::client;
 
-#[cfg(any(feature = "metrics", feature = "records"))]
+#[cfg(any(feature = "metrics", feature = "records", feature = "jobs"))]
 pub use calendar::Calendar;
 #[cfg(any(feature = "store", feature = "mcp"))]
 pub use cancel::CancellationToken;
