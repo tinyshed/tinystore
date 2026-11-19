@@ -18,7 +18,7 @@ import {
 	newStoreLogger,
 } from './logger.ts'
 import type { Stream } from './session.ts'
-import { type Calendar, type Duration, type DurationText, ms } from './time.ts'
+import { type Calendar, type Duration, type DurationText, keepSpelled, ms } from './time.ts'
 import { currentTrace, type Trace } from './trace.ts'
 import {
 	Empty,
@@ -651,7 +651,7 @@ export class AllEvents extends Reads {
 		const answer = await this.ask('records.streams', () => Empty.encode({}))
 		return (RecordsStreams.decode(answer).streams ?? []).map(stream => ({
 			name: stream.name ?? '',
-			keep: spelled(stream.keep ?? 0),
+			keep: keepSpelled(stream.keep ?? 0),
 			retainedFrom: dateOf(stream.retainedFrom ?? 0n),
 			newest: dateOf(stream.newest ?? 0n),
 		}))
@@ -1130,19 +1130,4 @@ function mapValues<T, U>(
 	read: (value: T) => U,
 ): Record<string, U> {
 	return Object.fromEntries(Object.entries(map ?? {}).map(([key, value]) => [key, read(value)]))
-}
-
-/** Milliseconds as a span is written: '30d', '12h', '90s', '250ms'. */
-function spelled(millis: number): DurationText {
-	for (const [unit, size] of [
-		['d', 86_400_000],
-		['h', 3_600_000],
-		['m', 60_000],
-		['s', 1000],
-	] as const) {
-		if (millis >= size && millis % size === 0) {
-			return `${millis / size}${unit}` as DurationText
-		}
-	}
-	return `${millis}ms` as DurationText
 }

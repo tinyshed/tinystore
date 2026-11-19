@@ -69,8 +69,12 @@ const units: Record<string, number> = {
 }
 
 /**
- * A duration's milliseconds; each unit once, largest first: 1h30m, not
- * 90m30m. It takes any text, since text cast as a Duration reaches it too.
+ * A duration's milliseconds, read as the store reads one: each unit once,
+ * largest first, 1h30m, not 90m30m. Text it cannot read, a negative number
+ * and one that is not finite are InvalidError. It takes any text, since text
+ * cast as a Duration reaches it too.
+ *
+ *     ms('60d') // 5184000000
  */
 export function ms(d: Duration | string): number {
 	if (typeof d === 'number') {
@@ -118,6 +122,24 @@ export function spelled(milliseconds: number): DurationText {
 		}
 	}
 	return text as DurationText
+}
+
+/**
+ * Milliseconds as what a stream or a metric keeps is written: its largest
+ * whole unit, '30d', '12h', '90s', '250ms', where spelled would give 1m30s.
+ */
+export function keepSpelled(millis: number): DurationText {
+	for (const [unit, size] of [
+		['d', 86_400_000],
+		['h', 3_600_000],
+		['m', 60_000],
+		['s', 1000],
+	] as const) {
+		if (millis >= size && millis % size === 0) {
+			return `${millis / size}${unit}` as DurationText
+		}
+	}
+	return `${millis}ms` as DurationText
 }
 
 /** A moment's unix milliseconds. */

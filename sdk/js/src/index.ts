@@ -240,7 +240,7 @@ export {
 	type Status,
 	Store,
 } from './store.ts'
-export type { Calendar, Duration, DurationText, Time } from './time.ts'
+export { type Calendar, type Duration, type DurationText, ms, spelled, type Time } from './time.ts'
 export { type Trace, withTrace } from './trace.ts'
 export type { Tx, TxBucket, TxCounters } from './tx.ts'
 export type { Key } from './wire/codec.ts'

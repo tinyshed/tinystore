@@ -23,14 +23,15 @@ import {
 	int,
 	list,
 	live,
+	ms,
 	oneOf,
 	optional,
 	required,
 	Secret,
 	type Store,
 	secret,
+	spelled,
 } from '../src/index.ts'
-import { ms, spelled } from '../src/time.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
 const vectors = JSON.parse(
@@ -61,6 +62,7 @@ describe('what every language reads alike', () => {
 		}
 	})
 
+	// ms and spelled come from the package's root, the parser the store's own calls use
 	test('a duration reads and spells back as the core reads one', () => {
 		for (const [text, want] of vectors.spans) {
 			if (want === null) {
@@ -71,6 +73,10 @@ describe('what every language reads alike', () => {
 			}
 		}
 		expect(spelled(5_400_000)).toBe('1h30m')
+		expect(ms('60d')).toBe(5_184_000_000)
+		for (const refused of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(() => ms(refused), String(refused)).toThrow(InvalidError)
+		}
 	})
 
 	test('a secret prints as *** wherever it goes, and reveal gives it', () => {

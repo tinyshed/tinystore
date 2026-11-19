@@ -1001,6 +1001,27 @@ type Time = Date | number
 
 A moment: a Date, or unix milliseconds.
 
+## ms
+
+```ts
+function ms(d: Duration | string): number
+```
+
+A duration's milliseconds, read as the store reads one: each unit once,
+largest first, 1h30m, not 90m30m. Text it cannot read, a negative number
+and one that is not finite are InvalidError. It takes any text, since text
+cast as a Duration reaches it too.
+
+    ms('60d') // 5184000000
+
+## spelled
+
+```ts
+function spelled(milliseconds: number): DurationText
+```
+
+Milliseconds as a duration is written, largest units first: 5_400_000 is 1h30m, 0 is 0s.
+
 ## Key
 
 ```ts

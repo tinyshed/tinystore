@@ -236,7 +236,21 @@ config app: app.toml: port: 70000 is above 65535
 ```
 
 A duration is written `'1h30m'`, `'250ms'`, of `w`, `d`, `h`, `m`, `s` and
-`ms`. A list is one setting: a later layer gives it whole, never merged by
+`ms`. Python, Go and Rust give it as their own duration type. TypeScript gives
+it as its text, and the package's `ms` reads it with the parser the store
+uses, so `'60d'` means the same to the program and to the store:
+
+```ts
+import { ms, spelled } from '@tinyshed/tinystore'
+
+ms('60d') // 5184000000, as the store reads a duration() setting's text
+spelled(5_400_000) // '1h30m'
+```
+
+`ms` throws `InvalidError` for text it cannot read, a negative number or one
+that is not finite.
+
+A list is one setting: a later layer gives it whole, never merged by
 index. What relates two settings, `min` below `max`, is
 [`validate`](explain.md)'s.
 

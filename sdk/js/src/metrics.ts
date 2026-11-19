@@ -21,7 +21,15 @@ import {
 	type TimerOptions,
 } from './instruments.ts'
 import { ConnectionLostError, type Stream } from './session.ts'
-import { type Calendar, type Duration, type DurationText, ms, type Time, unixMs } from './time.ts'
+import {
+	type Calendar,
+	type Duration,
+	type DurationText,
+	keepSpelled,
+	ms,
+	type Time,
+	unixMs,
+} from './time.ts'
 import {
 	Empty,
 	MetricsAggregateAsked,
@@ -527,7 +535,7 @@ export class Metrics {
 			seriesCount: name.seriesCount ?? 0,
 			unit: name.unit ?? '',
 			help: name.help ?? '',
-			keep: spelled(name.keep ?? 0),
+			keep: keepSpelled(name.keep ?? 0),
 			retainedFrom: new Date(name.retainedFrom ?? 0),
 			newest: new Date(name.newest ?? 0),
 		}))
@@ -920,18 +928,4 @@ function joined(a: Float64Array, b: Float64Array): Float64Array {
 	out.set(a)
 	out.set(b, a.length)
 	return out
-}
-
-function spelled(millis: number): DurationText {
-	for (const [unit, size] of [
-		['d', 86_400_000],
-		['h', 3_600_000],
-		['m', 60_000],
-		['s', 1000],
-	] as const) {
-		if (millis >= size && millis % size === 0) {
-			return `${millis / size}${unit}` as DurationText
-		}
-	}
-	return `${millis}ms` as DurationText
 }
