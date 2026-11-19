@@ -595,17 +595,33 @@ class Metrics:
         await self._link.run("write", lambda c: c.session.call(methods["metrics.flush"], Empty.encode()))
 
     def counter(
-        self, name: str, *, unit: str | None = None, help: str | None = None, keep: Duration | None = None
+        self,
+        name: str,
+        *,
+        unit: str | None = None,
+        help: str | None = None,
+        keep: Duration | None = None,
+        max_series: int | None = None,
     ) -> Counter:
-        """A total that only goes up, which the store keeps: processes counting into one series count into one total."""
-        declared = self._instruments.declare(name, "counter", unit=unit, help_=help, keep=keep)
+        """A total that only goes up, which the store keeps: processes counting into one series count into one total.
+
+        ``max_series`` is the sets of labels it holds at once, 1 to 2000, 2000 unless given: a new one past them
+        counts into its series of ``__overflow``, said once in TinyStore's lines.
+        """
+        declared = self._instruments.declare(name, "counter", unit=unit, help_=help, keep=keep, max_series=max_series)
         return Counter(self._instruments, declared, {})
 
     def gauge(
-        self, name: str, *, unit: str | None = None, help: str | None = None, keep: Duration | None = None
+        self,
+        name: str,
+        *,
+        unit: str | None = None,
+        help: str | None = None,
+        keep: Duration | None = None,
+        max_series: int | None = None,
     ) -> Gauge:
         """A value that goes up and down: a queue's length, a temperature."""
-        declared = self._instruments.declare(name, "gauge", unit=unit, help_=help, keep=keep)
+        declared = self._instruments.declare(name, "gauge", unit=unit, help_=help, keep=keep, max_series=max_series)
         return Gauge(self._instruments, declared, {})
 
     def gauge_func(
@@ -636,9 +652,12 @@ class Metrics:
         buckets: Sequence[float] | Literal["exponential"] | None = None,
         help: str | None = None,
         keep: Duration | None = None,
+        max_series: int | None = None,
     ) -> Timer:
         """How many things took how long: their count, sum and longest in milliseconds, and their spread."""
-        declared = self._instruments.declare(name, "timer", help_=help, keep=keep, buckets=buckets)
+        declared = self._instruments.declare(
+            name, "timer", help_=help, keep=keep, buckets=buckets, max_series=max_series
+        )
         return Timer(self._instruments, declared, {})
 
     def histogram(
@@ -649,9 +668,12 @@ class Metrics:
         unit: str | None = None,
         help: str | None = None,
         keep: Duration | None = None,
+        max_series: int | None = None,
     ) -> Histogram:
         """A timer of numbers that are not durations: a response's size in bytes."""
-        declared = self._instruments.declare(name, "histogram", unit=unit, help_=help, keep=keep, buckets=buckets)
+        declared = self._instruments.declare(
+            name, "histogram", unit=unit, help_=help, keep=keep, buckets=buckets, max_series=max_series
+        )
         return Histogram(self._instruments, declared, {})
 
     async def _counted(self, query: Mapping[str, object]) -> None:

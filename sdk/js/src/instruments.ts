@@ -27,6 +27,8 @@ export interface InstrumentOptions {
 	help?: string | undefined
 	/** how long its name's samples stay, as ingest takes it */
 	keep?: Duration | undefined
+	/** the sets of labels it holds at once, 1 to 2000, 2000 unless given; past them, its series of __overflow, said once */
+	maxSeries?: number | undefined
 }
 
 /** A timer's or a histogram's upper bounds, ascending, or the store's grid. */
@@ -35,6 +37,8 @@ export type Buckets = readonly number[] | 'exponential'
 export interface TimerOptions {
 	help?: string | undefined
 	keep?: Duration | undefined
+	/** the sets of labels it holds at once, 1 to 2000, 2000 unless given; a timer's set is one, whatever it writes */
+	maxSeries?: number | undefined
 	/** the upper bounds of its spread, to which the store adds +Inf, or 'exponential' */
 	buckets?: Buckets | undefined
 }
@@ -43,7 +47,7 @@ export interface HistogramOptions extends InstrumentOptions {
 	buckets?: Buckets | undefined
 }
 
-export interface GaugeFuncOptions extends InstrumentOptions {
+export interface GaugeFuncOptions extends Omit<InstrumentOptions, 'maxSeries'> {
 	/** the set of labels its function reads; another set of the name takes a function of its own */
 	labels?: InstrumentLabels | undefined
 }
@@ -56,7 +60,7 @@ export type InstrumentLabels<L extends string = string> = { readonly [K in L]?: 
 
 type Form = 'counter' | 'gauge' | 'timer' | 'histogram'
 
-/** The sets of labels an instrument holds; past them it counts into the series of __overflow. */
+/** The sets of labels an instrument holds at most, and unless its maxSeries says fewer; past them it counts into __overflow. */
 const mostSets = 2000
 const sendEvery = 1000
 /** How often a gauge's function is read. */
@@ -80,6 +84,8 @@ interface Declared {
 	keep: number | undefined
 	bounds: number[] | undefined
 	exponential: boolean
+	/** the sets of labels it holds at once */
+	maxSeries: number
 	sets: Map<string, LabelSet>
 	overflow: LabelSet | undefined
 	/** the store refused it: its calls change nothing, said once */
@@ -231,8 +237,14 @@ export class Instruments {
 		if (held !== undefined) {
 			return held
 		}
-		if (instrument.sets.size >= mostSets) {
-			instrument.overflow ??= this.#labelled(instrument, {}, true)
+		if (instrument.sets.size >= instrument.maxSeries) {
+			if (instrument.overflow === undefined) {
+				instrument.overflow = this.#labelled(instrument, {}, true)
+				sayOwn('warn', 'metrics instrument past its sets of labels, counting into __overflow', {
+					instrument: instrument.name,
+					maxSeries: instrument.maxSeries,
+				})
+			}
 			return instrument.overflow
 		}
 		const set = this.#labelled(instrument, labels, false)
@@ -662,6 +674,7 @@ function encode(batch: Batch, opened: Opened): Uint8Array {
 				keep: instrument.keep,
 				bounds: instrument.bounds,
 				exponential: instrument.exponential,
+				maxSeries: instrument.maxSeries === mostSets ? undefined : instrument.maxSeries,
 			})
 		}
 		if (!opened.sets.has(set.id)) {
@@ -698,8 +711,14 @@ function toldOf(
 	name: string,
 	form: Form,
 	options: HistogramOptions,
-): Pick<Declared, 'unit' | 'help' | 'keep' | 'bounds' | 'exponential'> {
+): Pick<Declared, 'unit' | 'help' | 'keep' | 'bounds' | 'exponential' | 'maxSeries'> {
 	checkName(name)
+	const maxSeries = options.maxSeries ?? mostSets
+	if (!Number.isInteger(maxSeries) || maxSeries < 1 || maxSeries > mostSets) {
+		throw new InvalidError(
+			`metrics ${name}: maxSeries ${maxSeries}, where 1 to ${mostSets} sets of labels`,
+		)
+	}
 	if (options.unit !== undefined && bytes(options.unit) > 32) {
 		throw new InvalidError(`metrics ${name}: a unit of 32 bytes at most`)
 	}
@@ -715,7 +734,14 @@ function toldOf(
 		throw new InvalidError(`metrics ${name}: buckets are a timer's or a histogram's`)
 	}
 	if (buckets === 'exponential') {
-		return { unit: options.unit, help: options.help, keep, bounds: undefined, exponential: true }
+		return {
+			unit: options.unit,
+			help: options.help,
+			keep,
+			bounds: undefined,
+			exponential: true,
+			maxSeries,
+		}
 	}
 	return {
 		unit: options.unit,
@@ -723,6 +749,7 @@ function toldOf(
 		keep,
 		bounds: buckets === undefined ? undefined : checkedBounds(name, buckets),
 		exponential: false,
+		maxSeries,
 	}
 }
 
@@ -744,6 +771,7 @@ function sameOptions(held: Declared, told: ReturnType<typeof toldOf>): boolean {
 		held.help === told.help &&
 		held.keep === told.keep &&
 		held.exponential === told.exponential &&
+		held.maxSeries === told.maxSeries &&
 		JSON.stringify(held.bounds) === JSON.stringify(told.bounds)
 	)
 }

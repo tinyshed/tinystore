@@ -244,6 +244,41 @@ fn the_overflow_is_a_group_of_its_own() {
     assert_eq!(halves + overflowed, 2003.0, "the groups add up to the total");
 }
 
+// contract: MET-29
+#[test]
+fn max_series_bounds_the_sets_of_labels_and_counts_past_it_into_the_overflow() {
+    let f = fixture();
+    let stats = f.metrics();
+    let people = stats.counter("op_people").max_series(3).open().unwrap();
+    for user in 0..5 {
+        people.with(&[("user", &user.to_string())]).inc();
+    }
+    stats.flush().unwrap();
+    assert_eq!(f.engine().totals.sets_held("op_people"), 3);
+    let total = |query: crate::metrics::Query| {
+        let groups = query.since(HOUR).by(&["user"]).aggregate(Op::Last).unwrap().groups;
+        groups.iter().map(|group| (group.labels.clone(), group.buckets[0].value.exact().unwrap())).collect::<Vec<_>>()
+    };
+    let groups = total(stats.query().name("op_people"));
+    assert_eq!(groups.len(), 4, "three users and the overflow: {groups:?}");
+    let overflow = groups.iter().find(|(labels, _)| labels.contains_key("__overflow")).unwrap();
+    assert_eq!(overflow.1, 2.0, "the two sets past the bound, counted, not dropped");
+    // a timer's set is one, whatever series it writes
+    let took = stats.timer("took_ms").max_series(1).open().unwrap();
+    took.with(&[("fn", "a")]).record(Duration::from_millis(1));
+    took.with(&[("fn", "b")]).record(Duration::from_millis(1));
+    assert_eq!(f.engine().totals.sets_held("took_ms"), 1);
+    // a bound is the instrument's while the store is open, and 1 to 2000
+    let other = stats.counter("op_people").max_series(4).open().unwrap_err();
+    assert!(other.kind() == ErrorKind::Invalid && other.to_string().contains("max_series 4"), "{other}");
+    assert!(stats.counter("op_people").open().is_err(), "unless given it is 2000, another bound");
+    for sets in [0, 2001] {
+        assert_eq!(stats.counter("bounded").max_series(sets).open().unwrap_err().kind(), ErrorKind::Invalid);
+    }
+    stats.counter("defaulted").max_series(2000).open().unwrap();
+    stats.counter("defaulted").open().unwrap();
+}
+
 #[test]
 fn a_series_nothing_was_sent_to_for_an_hour_ends_and_a_call_begins_another_run() {
     let f = fixture();

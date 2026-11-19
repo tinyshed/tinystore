@@ -8514,6 +8514,8 @@ pub(crate) struct MetricsInstrument {
     pub(crate) bounds: Option<Vec<f64>>,
     /// A timer's spread on the store's grid.
     pub(crate) exponential: bool,
+    /// The sets of labels it holds at once, 1 to 2000, 2000 unless given.
+    pub(crate) max_series: Option<u64>,
 }
 
 #[cfg(feature = "metrics")]
@@ -8533,6 +8535,7 @@ impl Message for MetricsInstrument {
                 6 => message.keep = Some(codec::uint(r, "keep")?),
                 7 => message.bounds = Some(codec::list(r, "bounds", codec::float)?),
                 8 => message.exponential = codec::bool(r, "exponential")?,
+                9 => message.max_series = Some(codec::uint(r, "maxSeries")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -8573,6 +8576,10 @@ impl Message for MetricsInstrument {
             map.field(out, 8);
             codec::write_bool(out, &self.exponential);
         }
+        if let Some(max_series) = &self.max_series {
+            map.field(out, 9);
+            codec::write_uint(out, max_series);
+        }
         map.close(out);
     }
 
@@ -8586,6 +8593,7 @@ impl Message for MetricsInstrument {
             + self.keep.map_or(0, |_| 10)
             + self.bounds.as_ref().map_or(0, |bounds| 1 + codec::list_size(bounds, |_| 9))
             + 2
+            + self.max_series.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -8597,6 +8605,7 @@ impl Message for MetricsInstrument {
             && self.keep.is_none()
             && self.bounds.is_none()
             && !self.exponential
+            && self.max_series.is_none()
     }
 }
 

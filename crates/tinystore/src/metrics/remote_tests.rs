@@ -18,7 +18,16 @@ fn values(f: &Fixture, name: &str, labels: &[(&str, &str)]) -> Vec<f64> {
 }
 
 fn declared(number: u64, name: &str, form: &str) -> Declared {
-    Declared { number, name: name.to_owned(), form: form.to_owned(), unit: None, help: None, keep: None, buckets: None }
+    Declared {
+        number,
+        name: name.to_owned(),
+        form: form.to_owned(),
+        unit: None,
+        help: None,
+        keep: None,
+        buckets: None,
+        max_series: None,
+    }
 }
 
 fn set(number: u64, instrument: u64, labels: &[(&str, &str)]) -> Set {

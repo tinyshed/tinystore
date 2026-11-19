@@ -184,10 +184,40 @@ stats.gauge_func("queue_depth", move || sms.depth()).labels(&[("queue", "sms")])
 
 ## How many series
 
-- An instrument takes at most 2,000 sets of labels between two sends. A new
-  set past them counts into the series `{ __overflow: 'true' }`, said once, so
-  a label holding a user's id costs no memory past the bound and the total
-  stays whole.
+- An instrument takes at most 2,000 sets of labels between two sends, or
+  the fewer its `maxSeries` says. A new set past them counts into the series
+  `{ __overflow: 'true' }`, so a label holding a user's id costs no memory
+  past the bound and the total stays whole.
+- The first set past the bound is said once, a `warn` line in TinyStore's
+  own lines, where every SDK prints its own: `metrics instrument past its
+  sets of labels, counting into __overflow`, with the instrument's name. In
+  Rust it is a `tracing` line of the target `tinystore`.
+
+```ts
+const people = store.metrics.counter('op_people', { keep: '90d', maxSeries: 200 })
+```
+
+```python
+people = store.metrics.counter("op_people", keep="90d", max_series=200)
+```
+
+```go
+people, err := metrics.OpenCounter(store, "op_people", metrics.Keep(90*24*time.Hour), metrics.MaxSeries(200))
+```
+
+```rust
+let people = stats.counter("op_people").keep(Duration::from_hours(90 * 24)).max_series(200).open()?;
+```
+
+- `maxSeries` is 1 to 2,000, 2,000 unless given. A timer's set of labels is
+  one, however many series it writes. The SDK holds it on its side, and the
+  store on its own, since several processes count into one total there.
+  Opening the instrument again with another `maxSeries` while the store is
+  open fails with an invalid error, as other options do.
+- The bound counts the sets held now. A set nothing called for an hour is
+  let go, so a label that takes a value per visitor can still pile up far
+  more stored series over a month: `names()` gives each name's
+  `seriesCount`, which an admin page can watch.
 - A counter's or a timer's series that nothing sent for an hour leaves the
   store's memory; sent again, it starts a new run with its zero.
 - A store caps its series too, as [How many
@@ -257,12 +287,13 @@ opens its store with `background: false` has no 15-second write.
 
 ## Options
 
-| Option    | Unless given | Does                                                        |
-|-----------|--------------|-------------------------------------------------------------|
-| `unit`    | none         | the unit of its values: `'bytes'`, `'%'`; a timer's is `ms` |
-| `help`    | none         | a line on what it means                                     |
-| `keep`    | the name's   | how long the name's samples stay, 30 days unless set        |
-| `buckets` | none         | a timer's or a histogram's upper bounds, ascending          |
+| Option      | Unless given | Does                                                        |
+|-------------|--------------|-------------------------------------------------------------|
+| `unit`      | none         | the unit of its values: `'bytes'`, `'%'`; a timer's is `ms` |
+| `help`      | none         | a line on what it means                                     |
+| `keep`      | the name's   | how long the name's samples stay, 30 days unless set        |
+| `buckets`   | none         | a timer's or a histogram's upper bounds, ascending          |
+| `maxSeries` | 2000         | the sets of labels it holds at once, 1 to 2000              |
 
 ## See also
 

@@ -326,6 +326,25 @@ async def test_a_read_sees_what_the_programs_instruments_counted_with_no_flush(s
     assert await last(store.metrics, "read_back_ms_count") == {"{}": 1}
 
 
+# contract: MET-29
+async def test_max_series_counts_past_its_sets_into_the_overflow_and_says_so_once(
+    store: tinystore.Store, capsys: pytest.CaptureFixture[str]
+) -> None:
+    people = store.metrics.counter("op_people", max_series=2)
+    for user in range(1, 6):
+        people.labels(user=user).inc()
+    said = [line for line in capsys.readouterr().err.splitlines() if "counting into __overflow" in line]
+    assert len(said) == 1 and "op_people" in said[0], said
+    groups = (await store.metrics.aggregate(name="op_people", since="1h", op="last", by=["user"])).groups
+    overflow = [group for group in groups if "__overflow" in group.labels]
+    assert (len(groups), overflow[0].buckets[0].value) == (3, 3)
+    with pytest.raises(tinystore.InvalidError):
+        store.metrics.counter("op_people", max_series=3)
+    for sets in (0, 2001):
+        with pytest.raises(tinystore.InvalidError):
+            store.metrics.counter("op_bounded", max_series=sets)
+
+
 # contract: MET-10
 async def test_an_instrument_the_store_refuses_fails_the_next_flush_and_keeps_no_other_out(
     store: tinystore.Store,

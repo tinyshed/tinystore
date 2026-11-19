@@ -767,6 +767,7 @@ fn batch_of(batch: MetricsBatch) -> Result<Batch, Failure> {
             help: declared.help,
             keep: declared.keep.map(Duration::from_millis),
             buckets,
+            max_series: declared.max_series.map(|sets| usize::try_from(sets).unwrap_or(usize::MAX)),
         })
     });
     let sets = batch.sets.into_iter().map(|set| Set {

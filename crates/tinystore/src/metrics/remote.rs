@@ -57,6 +57,8 @@ pub(crate) struct Declared {
     pub(crate) help: Option<String>,
     pub(crate) keep: Option<Duration>,
     pub(crate) buckets: Option<Buckets>,
+    /// The sets of labels it holds at once, which the store holds it to too.
+    pub(crate) max_series: Option<usize>,
 }
 
 /// A set of labels of an instrument, by its stream's numbers, or its series

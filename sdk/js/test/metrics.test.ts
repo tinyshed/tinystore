@@ -514,6 +514,35 @@ for (const way of ways) {
 			expect(await last(store, 'read_back_ms_count')).toEqual({ '{}': 1 })
 		})
 
+		// contract: MET-29
+		test('maxSeries counts past its sets into __overflow and says so once in TinyStore lines', async () => {
+			const told: string[] = []
+			const write = process.stderr.write
+			process.stderr.write = ((text: string) => told.push(text) > 0) as typeof process.stderr.write
+			const people = store.metrics.counter('op_people', { maxSeries: 2 })
+			try {
+				for (let user = 1; user <= 5; user++) {
+					people.with({ user }).inc()
+				}
+			} finally {
+				process.stderr.write = write
+			}
+			const said = told.filter(line => line.includes('counting into __overflow'))
+			expect(said.length).toBe(1)
+			expect(said[0]).toContain('op_people')
+			const { groups } = await store.metrics.aggregate({
+				name: 'op_people',
+				since: '1h',
+				op: 'last',
+				by: ['user'],
+			})
+			const overflow = groups.find(group => '__overflow' in group.labels)
+			expect([groups.length, overflow?.buckets[0]?.value]).toEqual([3, 3])
+			expect(() => store.metrics.counter('op_people', { maxSeries: 3 })).toThrow(InvalidError)
+			expect(() => store.metrics.counter('op_bounded', { maxSeries: 0 })).toThrow(InvalidError)
+			expect(() => store.metrics.counter('op_bounded', { maxSeries: 2001 })).toThrow(InvalidError)
+		})
+
 		test('an instrument the store refuses fails the next flush, writes nothing and keeps no other out', async () => {
 			await store.metrics.ingest({
 				name: 'taken',

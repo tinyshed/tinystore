@@ -23,7 +23,8 @@ import (
 // second; see send.go.
 
 const (
-	// mostSets is the sets of labels an instrument holds; past them it counts into the series of __overflow.
+	// mostSets is the sets of labels an instrument holds at most, and unless
+	// its MaxSeries says fewer; past them it counts into the series of __overflow.
 	mostSets = 2000
 	// idle is how long a counter's or a timer's set of labels stays without a call.
 	idle       = time.Hour
@@ -47,6 +48,7 @@ type told struct {
 	keep        *uint64
 	bounds      []float64
 	exponential bool
+	maxSeries   *int
 	labels      Labels
 	at          *time.Time
 	refused     error
@@ -61,6 +63,19 @@ func Help(text string) Option { return optionFunc(func(t *told) { t.help = &text
 
 // Unit is the unit of its values, 32 bytes at most: "bytes", "%"; a timer's is ms.
 func Unit(text string) Option { return optionFunc(func(t *told) { t.unit = &text }) }
+
+// MaxSeries is the sets of labels an instrument holds at once, 1 to 2000,
+// 2000 unless given: a new set past them counts into its series of
+// __overflow, said once in TinyStore's lines. A timer's set is one, whatever
+// series it writes.
+func MaxSeries(sets int) Option {
+	return optionFunc(func(t *told) {
+		if sets < 1 || sets > mostSets {
+			t.refused = core.Errorf(core.Invalid, "MaxSeries %d, where 1 to %d sets of labels", sets, mostSets)
+		}
+		t.maxSeries = &sets
+	})
+}
 
 // Keep is how long the name's samples stay, kept in the file with it: 30 days
 // unless a name was given one.

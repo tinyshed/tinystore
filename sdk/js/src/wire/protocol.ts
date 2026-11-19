@@ -8886,6 +8886,8 @@ export const MetricsInstrument = message(
 		bounds: [7, list(float)],
 		/** a timer's spread on the store's grid */
 		exponential: [8, bool],
+		/** the sets of labels it holds at once, 1 to 2000, 2000 unless given */
+		maxSeries: [9, uint],
 	},
 	{
 		write(w, v) {
@@ -8934,6 +8936,11 @@ export const MetricsInstrument = message(
 				w.bool(v.exponential)
 				n++
 			}
+			if (v.maxSeries !== undefined) {
+				w.field(9)
+				w.uint(v.maxSeries)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -8945,6 +8952,7 @@ export const MetricsInstrument = message(
 			let $keep: number | undefined
 			let $bounds: number[] | undefined
 			let $exponential: boolean | undefined
+			let $maxSeries: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -8977,6 +8985,9 @@ export const MetricsInstrument = message(
 					case 8:
 						$exponential = r.bool()
 						break
+					case 9:
+						$maxSeries = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -8991,6 +9002,7 @@ export const MetricsInstrument = message(
 				keep: $keep,
 				bounds: $bounds,
 				exponential: $exponential,
+				maxSeries: $maxSeries,
 			}
 		},
 	},

@@ -9730,6 +9730,8 @@ type MetricsInstrument struct {
 	Bounds *[]float64 `wire:"7,bounds"`
 	// a timer's spread on the store's grid
 	Exponential bool `wire:"8,exponential"`
+	// the sets of labels it holds at once, 1 to 2000, 2000 unless given
+	MaxSeries *uint64 `wire:"9,maxSeries"`
 }
 
 func (m MetricsInstrument) Write(w *Writer) {
@@ -9778,6 +9780,11 @@ func (m MetricsInstrument) Write(w *Writer) {
 		w.Bool(m.Exponential)
 		n++
 	}
+	if m.MaxSeries != nil {
+		w.Uint(9)
+		w.Uint(*m.MaxSeries)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -9811,6 +9818,9 @@ func (m *MetricsInstrument) Read(r *Reader) {
 			m.Bounds = &v
 		case 8:
 			m.Exponential = r.Bool()
+		case 9:
+			v := r.Uint()
+			m.MaxSeries = &v
 		default:
 			r.Skip()
 		}
@@ -9827,7 +9837,8 @@ func (m MetricsInstrument) IsZero() bool {
 		m.Help == nil &&
 		m.Keep == nil &&
 		m.Bounds == nil &&
-		!m.Exponential
+		!m.Exponential &&
+		m.MaxSeries == nil
 }
 
 // MetricsSet is the schema's metrics.Set.

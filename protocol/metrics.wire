@@ -239,6 +239,7 @@ message metrics.Instrument {
   6 keep: duration?
   7 bounds: [float]?    # a timer's or a histogram's upper bounds, ascending
   8 exponential: bool   # a timer's spread on the store's grid
+  9 maxSeries: uint?    # the sets of labels it holds at once, 1 to 2000, 2000 unless given
 }
 
 # A set of labels of an instrument, by a number the stream gives it, or its

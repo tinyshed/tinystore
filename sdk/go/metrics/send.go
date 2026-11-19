@@ -39,8 +39,10 @@ type declared struct {
 	keep        *uint64
 	bounds      []float64
 	exponential bool
-	sets        map[string]*set
-	overflow    *set
+	// maxSeries is the sets of labels it holds at once
+	maxSeries int
+	sets      map[string]*set
+	overflow  *set
 	// refused says the store refused it: its calls change nothing, said once
 	refused bool
 	// reads are a gauge's functions, one a set of labels; nil for any other instrument
@@ -140,9 +142,16 @@ func (in *instruments) declare(name string, f form, opts []Option, read bool) (*
 	})
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	maxSeries := mostSets
+	if t.maxSeries != nil {
+		if read {
+			return nil, core.Errorf(core.Invalid, "metrics %s: MaxSeries is a counter's, a gauge's, a timer's or a histogram's", name)
+		}
+		maxSeries = *t.maxSeries
+	}
 	if held, ok := in.declared[name]; ok {
 		alike := held.form == f && sameValue(held.unit, t.unit) && sameValue(held.help, t.help) && sameValue(held.keep, t.keep) &&
-			sameBounds(held.bounds, t.bounds) && held.exponential == t.exponential && (held.reads != nil) == read
+			sameBounds(held.bounds, t.bounds) && held.exponential == t.exponential && held.maxSeries == maxSeries && (held.reads != nil) == read
 		if !alike {
 			return nil, core.Errorf(core.Invalid, "metrics %s: another instrument or other options than it has while the store is open", name)
 		}
@@ -151,7 +160,7 @@ func (in *instruments) declare(name string, f form, opts []Option, read bool) (*
 	in.ids++
 	d := &declared{
 		in: in, id: in.ids, name: name, form: f, unit: t.unit, help: t.help, keep: t.keep,
-		bounds: t.bounds, exponential: t.exponential, sets: map[string]*set{},
+		bounds: t.bounds, exponential: t.exponential, maxSeries: maxSeries, sets: map[string]*set{},
 	}
 	if read {
 		d.reads = map[string]*gaugeRead{}
@@ -197,10 +206,11 @@ func (in *instruments) setOf(d *declared, labels Labels) *set {
 	if held, ok := d.sets[key]; ok {
 		return held
 	}
-	if len(d.sets) >= mostSets {
+	if len(d.sets) >= d.maxSeries {
 		if d.overflow == nil {
 			in.ids++
 			d.overflow = &set{id: in.ids, instrument: d, labels: Labels{}, overflow: true, touched: time.Now()}
+			core.SayOwn("WARN", "metrics instrument past its sets of labels, counting into __overflow", "instrument", d.name, "maxSeries", d.maxSeries)
 		}
 		return d.overflow
 	}
@@ -746,6 +756,10 @@ func (in *instruments) encode(b *batch, o *opened) []byte {
 			}
 			if d.bounds != nil {
 				declared.Bounds = &d.bounds
+			}
+			if d.maxSeries != mostSets {
+				sets := uint64(d.maxSeries)
+				declared.MaxSeries = &sets
 			}
 			message.Instruments = append(message.Instruments, declared)
 		}

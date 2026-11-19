@@ -32,7 +32,7 @@ use super::names::checked_keep;
 #[cfg(feature = "wire")]
 use super::remote::Declared;
 use super::series::{Kind, Labels};
-use super::totals::{Form, Instrument, LOCAL, Read, Slot, Told};
+use super::totals::{Form, Instrument, LOCAL, MOST_SETS, Read, Slot, Told};
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
 
@@ -73,6 +73,7 @@ pub struct Builder<T> {
     unit: Option<String>,
     keep: Option<Duration>,
     buckets: Option<Buckets>,
+    max_series: Option<usize>,
     read: Option<Read>,
     /// The set of labels a gauge's function reads.
     labels: Labels,
@@ -91,6 +92,7 @@ impl<T> fmt::Debug for Builder<T> {
             .field("unit", &self.unit)
             .field("keep", &self.keep)
             .field("buckets", &self.buckets)
+            .field("max_series", &self.max_series)
             .finish()
     }
 }
@@ -148,6 +150,7 @@ impl<T> Builder<T> {
             unit: None,
             keep: None,
             buckets: None,
+            max_series: None,
             read: None,
             labels: Labels::new(),
             owner: LOCAL,
@@ -219,6 +222,23 @@ macro_rules! buckets {
 }
 buckets!(Timer, Histogram);
 
+macro_rules! max_series {
+    ($($made:ty),*) => {$(
+        impl Builder<$made> {
+            /// The sets of labels it holds at once, 1 to 2000, 2000 unless
+            /// given: a new set past them counts into its series of
+            /// `__overflow`, said once, so that a label that takes a value a
+            /// user stays bounded and its groups still add up. A timer's set
+            /// is one, whatever series it writes.
+            pub fn max_series(mut self, sets: usize) -> Self {
+                self.max_series = Some(sets);
+                self
+            }
+        }
+    )*};
+}
+max_series!(Counter, Gauge, Timer, Histogram);
+
 impl Builder<Counter> {
     pub fn open(mut self) -> Result<Counter> {
         let instrument = self.opened()?;
@@ -283,6 +303,7 @@ impl Engine {
         builder.unit.clone_from(&declared.unit);
         builder.keep = declared.keep;
         builder.buckets.clone_from(&declared.buckets);
+        builder.max_series = declared.max_series;
         builder.opened()
     }
 
@@ -294,6 +315,12 @@ impl Engine {
             refuse_the_stores_own(&builder.name)?;
         }
         let bounds = builder.buckets.as_ref().map(Bounds::of).transpose()?;
+        let most_sets = match builder.max_series {
+            Some(sets) if !(1..=MOST_SETS).contains(&sets) => {
+                return Err(Error::invalid(format!("max_series {sets}: 1 to {MOST_SETS} sets of labels")));
+            }
+            sets => sets.unwrap_or(MOST_SETS),
+        };
         check_description(builder)?;
         let keep = builder.keep.map(checked_keep).transpose()?;
         let written = builder.form.written(&builder.name, bounds.is_some());
@@ -308,9 +335,9 @@ impl Engine {
         let instrument = match builder.read.take() {
             Some(read) => {
                 self.totals.reader(&builder.name, &builder.labels, read)?;
-                Arc::new(Instrument::new(&builder.name, Form::Gauge, None))
+                Arc::new(Instrument::new(&builder.name, Form::Gauge, None, MOST_SETS))
             }
-            None => self.totals.instrument(&builder.name, builder.form, bounds.clone())?,
+            None => self.totals.instrument(&builder.name, builder.form, bounds.clone(), most_sets)?,
         };
         self.describe_written(builder, &written, bounds.as_ref());
         Ok(instrument)

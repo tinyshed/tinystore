@@ -7288,6 +7288,10 @@ def _write_metrics_instrument(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(8)
         w.bool(x)
         n += 1
+    if (x := v.get("max_series")) is not None:
+        w.uint(9)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -7314,6 +7318,8 @@ def _read_metrics_instrument(r: Reader) -> dict[str, Any]:
                 read["bounds"] = items0
             case 8:
                 read["exponential"] = r.bool()
+            case 9:
+                read["max_series"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -7335,6 +7341,8 @@ MetricsInstrument = Message(
         "bounds": (7, list_(float_)),
         # a timer's spread on the store's grid
         "exponential": (8, bool_),
+        # the sets of labels it holds at once, 1 to 2000, 2000 unless given
+        "max_series": (9, uint),
     },
     _write_metrics_instrument,
     _read_metrics_instrument,

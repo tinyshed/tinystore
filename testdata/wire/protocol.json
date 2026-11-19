@@ -4394,6 +4394,9 @@
         "keep": {
           "uint": "1500"
         },
+        "maxSeries": {
+          "uint": "907"
+        },
         "name": {
           "str": "name"
         },
@@ -4404,7 +4407,7 @@
           "str": "unit"
         }
       },
-      "hex": "88016b02a46e616d6503a4666f726d04a4756e697405a468656c7006cd05dc0791cb3ff800000000000008c3",
+      "hex": "89016b02a46e616d6503a4666f726d04a4756e697405a468656c7006cd05dc0791cb3ff800000000000008c309cd038b",
       "message": "metrics.Instrument",
       "name": "metrics.Instrument with every field"
     },
@@ -4556,6 +4559,9 @@
                 "keep": {
                   "uint": "1500"
                 },
+                "maxSeries": {
+                  "uint": "907"
+                },
                 "name": {
                   "str": "name"
                 },
@@ -4597,7 +4603,7 @@
           ]
         }
       },
-      "hex": "85016b029188016b02a46e616d6503a4666f726d04a4756e697405a468656c7006cd05dc0791cb3ff800000000000008c3039184016b02cccf0381a161a66c6162656c7304c3049188016b02cb3ff800000000000003cb3ff800000000000004cd019705cb3ff800000000000006cb3ff80000000000000791cd02c30881a161cd032705c3",
+      "hex": "85016b029189016b02a46e616d6503a4666f726d04a4756e697405a468656c7006cd05dc0791cb3ff800000000000008c309cd038b039184016b02cccf0381a161a66c6162656c7304c3049188016b02cb3ff800000000000003cb3ff800000000000004cd019705cb3ff800000000000006cb3ff80000000000000791cd02c30881a161cd032705c3",
       "message": "metrics.Batch",
       "name": "metrics.Batch with every field"
     },

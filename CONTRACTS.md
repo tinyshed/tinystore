@@ -250,6 +250,7 @@ These contracts are what does not.
 - **MET-26** An aggregate given `fill` MUST answer, for every group it answers, every bucket of the range that retention keeps, an empty one with no samples and no value, never a zero; one with no start, with `limit`, or of more buckets a group than an answer holds MUST be refused before anything is read.
 - **MET-27** A bucket of a calendar MUST carry the local date its span begins on, in the aggregate's time zone; a bucket of `every` none.
 - **MET-28** A walk of an aggregate's pages MUST yield each group once, its buckets whole and in order, its parts from the pages it spans joined; a page read by hand keeps `more`.
+- **MET-29** An instrument given `maxSeries` MUST count a new set of labels past it into `__overflow`, and the first overflow MUST be said once where the program's TinyStore lines go, in every SDK; another `maxSeries` for an instrument the store holds MUST be refused `invalid`.
 
 ### Search
 

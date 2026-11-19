@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -496,6 +497,43 @@ func TestAReadSeesWhatTheProgramsInstrumentsCountedWithNoFlush(t *testing.T) {
 		ways.Must(metrics.OpenTimer(store, "read_back_ms")).Record(5 * time.Millisecond)
 		if got := last(t, store, "read_back_ms_count"); got["null"]+got["{}"] != 1 {
 			t.Fatalf("a timer's count %v", got)
+		}
+	})
+}
+
+// contract: MET-29
+func TestMaxSeriesCountsPastItsSetsIntoTheOverflowAndSaysSoOnce(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		people := ways.Must(metrics.OpenCounter(store, "op_people", metrics.MaxSeries(2)))
+		read, write := ways.Must2(os.Pipe())
+		stderr := os.Stderr
+		os.Stderr = write
+		for user := 1; user <= 5; user++ {
+			people.With("user", user).Inc()
+		}
+		os.Stderr = stderr
+		_ = write.Close()
+		said := ways.Must(io.ReadAll(read))
+		if lines := strings.Count(string(said), "counting into __overflow"); lines != 1 || !strings.Contains(string(said), "op_people") {
+			t.Fatalf("said %d times: %s", lines, said)
+		}
+		query := metrics.Query{Name: "op_people", Since: time.Hour, Op: metrics.Last, By: []string{"user"}}
+		groups := ways.Must(metrics.Aggregate(ctx, store, query)).Groups
+		overflowed := 0.0
+		for _, group := range groups {
+			if _, ok := group.Labels["__overflow"]; ok {
+				overflowed = *group.Buckets[0].Value
+			}
+		}
+		if len(groups) != 3 || overflowed != 3 {
+			t.Fatalf("%d groups, %v past the bound: %+v", len(groups), overflowed, groups)
+		}
+		_, err := metrics.OpenCounter(store, "op_people", metrics.MaxSeries(3))
+		is(t, err, tinystore.ErrInvalid)
+		for _, sets := range []int{0, 2001} {
+			_, err := metrics.OpenCounter(store, "op_bounded", metrics.MaxSeries(sets))
+			is(t, err, tinystore.ErrInvalid)
 		}
 	})
 }

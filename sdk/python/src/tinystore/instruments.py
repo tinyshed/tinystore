@@ -67,6 +67,8 @@ class _Declared:
     keep: int | None
     bounds: list[float] | None
     exponential: bool
+    max_series: int = _MOST_SETS
+    """the sets of labels it holds at once"""
     sets: dict[str, _Set] = field(default_factory=dict[str, "_Set"])
     overflow: _Set | None = None
     refused: bool = False
@@ -200,6 +202,7 @@ class _Told:
     keep: int | None
     bounds: list[float] | None
     exponential: bool
+    max_series: int
 
 
 def _told_of(
@@ -209,6 +212,7 @@ def _told_of(
     help_: str | None,
     keep: Duration | None,
     buckets: Sequence[float] | Literal["exponential"] | None,
+    max_series: int | None = None,
 ) -> _Told:
     if not name or len(name.encode()) > 4096:
         raise InvalidError(f"metrics name {name!r}: 1 to 4096 bytes of UTF-8")
@@ -221,9 +225,12 @@ def _told_of(
         raise InvalidError(f"metrics {name}: keep 0, where a name keeps its samples 1ms at least")
     if buckets is not None and form not in ("timer", "histogram"):
         raise InvalidError(f"metrics {name}: buckets are a timer's or a histogram's")
+    most = _MOST_SETS if max_series is None else max_series
+    if isinstance(most, bool) or not isinstance(most, int) or not 1 <= most <= _MOST_SETS:  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise InvalidError(f"metrics {name}: max_series {most!r}, where 1 to {_MOST_SETS} sets of labels")
     if buckets == "exponential":
-        return _Told(unit, help_, kept, None, True)
-    return _Told(unit, help_, kept, None if buckets is None else _bounds_of(name, buckets), False)
+        return _Told(unit, help_, kept, None, True, most)
+    return _Told(unit, help_, kept, None if buckets is None else _bounds_of(name, buckets), False, most)
 
 
 def exponential_buckets(start: float, factor: float, count: int) -> list[float]:
@@ -298,18 +305,20 @@ class Instruments:
         help_: str | None = None,
         keep: Duration | None = None,
         buckets: Sequence[float] | Literal["exponential"] | None = None,
+        max_series: int | None = None,
         read: bool = False,
     ) -> _Declared:
         """An instrument of name, made the first time; another form or other options than it has are refused."""
-        told = _told_of(name, form, unit, help_, keep, buckets)
+        told = _told_of(name, form, unit, help_, keep, buckets, max_series)
         held = self._declared.get(name)
         if held is not None:
-            same = (held.unit, held.help, held.keep, held.bounds, held.exponential) == (
+            same = (held.unit, held.help, held.keep, held.bounds, held.exponential, held.max_series) == (
                 told.unit,
                 told.help,
                 told.keep,
                 told.bounds,
                 told.exponential,
+                told.max_series,
             )
             if held.form != form or not same or read != (held.reads is not None):
                 raise InvalidError(
@@ -319,7 +328,16 @@ class Instruments:
         self._ids += 1
         reads: dict[str, _GaugeRead] | None = {} if read else None
         declared = _Declared(
-            self._ids, name, form, told.unit, told.help, told.keep, told.bounds, told.exponential, reads=reads
+            self._ids,
+            name,
+            form,
+            told.unit,
+            told.help,
+            told.keep,
+            told.bounds,
+            told.exponential,
+            told.max_series,
+            reads=reads,
         )
         self._declared[name] = declared
         self._by_id[declared.id] = declared
@@ -345,9 +363,14 @@ class Instruments:
         held = instrument.sets.get(key)
         if held is not None:
             return held
-        if len(instrument.sets) >= _MOST_SETS:
+        if len(instrument.sets) >= instrument.max_series:
             if instrument.overflow is None:
                 instrument.overflow = self._labelled(instrument, {}, True)
+                say_own(
+                    "warn",
+                    "metrics instrument past its sets of labels, counting into __overflow",
+                    {"instrument": instrument.name, "max_series": instrument.max_series},
+                )
             return instrument.overflow
         made = self._labelled(instrument, labels, False)
         instrument.sets[key] = made
@@ -730,6 +753,7 @@ def _encode(batch: _Batch, opened: _Opened) -> bytes:
                     "keep": instrument.keep,
                     "bounds": instrument.bounds,
                     "exponential": instrument.exponential or None,
+                    "max_series": None if instrument.max_series == _MOST_SETS else instrument.max_series,
                 }
             )
         if set_.id not in opened.sets:

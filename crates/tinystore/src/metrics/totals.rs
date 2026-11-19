@@ -30,8 +30,9 @@ use super::series::{Kind, Labels};
 use crate::sync::lock;
 use crate::{Error, Result};
 
-/// The sets of labels an instrument holds at most; a new one past them
-/// counts into its series of `__overflow`.
+/// The sets of labels an instrument holds at most, and unless its
+/// `max_series` says fewer; a new one past them counts into its series of
+/// `__overflow`.
 pub(super) const MOST_SETS: usize = 2000;
 /// How long a counter's, a timer's or a histogram's series may go without a
 /// call before its run ends and its slot is freed.
@@ -416,6 +417,8 @@ pub(super) struct Instrument {
     pub(super) name: String,
     pub(super) form: Form,
     pub(super) bounds: Option<Bounds>,
+    /// The sets of labels it holds at once, its `max_series`.
+    most_sets: usize,
     sets: Mutex<Sets>,
     /// A call changed a slot since a write collected them.
     changed: Arc<AtomicBool>,
@@ -434,11 +437,12 @@ struct Sets {
 }
 
 impl Instrument {
-    pub(super) fn new(name: &str, form: Form, bounds: Option<Bounds>) -> Instrument {
+    pub(super) fn new(name: &str, form: Form, bounds: Option<Bounds>, most_sets: usize) -> Instrument {
         Instrument {
             name: name.to_owned(),
             form,
             bounds,
+            most_sets,
             sets: Mutex::default(),
             changed: Arc::default(),
             said_overflow: AtomicBool::new(false),
@@ -487,7 +491,7 @@ impl Instrument {
         if let Some(slot) = sets.by_labels.get(&kept) {
             return Ok(Arc::clone(slot));
         }
-        if sets.by_labels.len() >= MOST_SETS {
+        if sets.by_labels.len() >= self.most_sets {
             return self.overflow(&mut sets);
         }
         let slot = Arc::new(self.made(kept.clone())?);
@@ -509,7 +513,7 @@ impl Instrument {
         }
         if !self.said_overflow.swap(true, Ordering::AcqRel) {
             let name = &self.name;
-            let why = format!("past {MOST_SETS} sets of labels, counting into __overflow");
+            let why = format!("past {} sets of labels, counting into __overflow", self.most_sets);
             tracing::warn!(target: "tinystore", "metrics {name}: {why}; said once");
         }
         let slot = Arc::new(self.made(Kept::overflow(&self.name))?);
@@ -670,10 +674,16 @@ impl Totals {
         }
     }
 
-    /// The instrument of `name`, made the first time; another form or
-    /// other buckets than it has, or a name another instrument writes, is
-    /// refused.
-    pub(super) fn instrument(&self, name: &str, form: Form, bounds: Option<Bounds>) -> Result<Arc<Instrument>> {
+    /// The instrument of `name`, made the first time; another form, other
+    /// buckets or another `max_series` than it has, or a name another
+    /// instrument writes, is refused.
+    pub(super) fn instrument(
+        &self,
+        name: &str,
+        form: Form,
+        bounds: Option<Bounds>,
+        most_sets: usize,
+    ) -> Result<Arc<Instrument>> {
         let mut registry = lock(&self.registry);
         if let Some(held) = registry.instruments.get(name) {
             if held.form != form {
@@ -686,11 +696,17 @@ impl Totals {
             if held.bounds != bounds {
                 return Err(Error::invalid("buckets other than it has while the store is open"));
             }
+            if held.most_sets != most_sets {
+                let held = held.most_sets;
+                return Err(Error::invalid(format!(
+                    "max_series {most_sets}, where it holds {held} sets of labels while the store is open"
+                )));
+            }
             return Ok(Arc::clone(held));
         }
         let written = form.written(name, bounds.is_some());
         registry.claim(name, &written)?;
-        let instrument = Arc::new(Instrument::new(name, form, bounds));
+        let instrument = Arc::new(Instrument::new(name, form, bounds, most_sets));
         registry.instruments.insert(name.to_owned(), Arc::clone(&instrument));
         Ok(instrument)
     }
