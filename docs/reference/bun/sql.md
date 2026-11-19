@@ -225,7 +225,8 @@ again by their words, vectors or both, each hit's value its row as
 `all` reads it. The table owns the rows and the index follows them:
 every change of a row, by any statement, trigger or migration, reaches
 it in the commit that makes it, and one by a process beside the store
-within a second.
+within a second. Change it by opening it with other options under the
+same name, and never version its name.
 
     const articles = db.searchIndex<Article>('articles_search', { table: 'articles', fields: { title: 2, body: 1 } })
 

@@ -54,6 +54,15 @@ let result = articles.search("хлеба").filter(eq("author_id", &42)).run()?;
 - A `total` is exact up to 10,000, and past it says "at least 10,000",
   never an estimate (contract SRCH-18).
 
+## Changing an index
+
+Change an index by opening it with other options under the same name, and
+never version its name. A weight or the layouts change at once; a field or
+a filter added is read beside the index, which answers as before until the
+new one switches in ([Rebuilds](rebuilds.md)). Only what the store cannot
+make again needs another name: vectors of a new model, or a table's index of
+another table or key.
+
 ## Listing what it holds
 
 An index finds; it does not list. A search with no words and no vector, a

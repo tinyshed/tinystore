@@ -450,6 +450,9 @@ An index of documents of one type by id, found again by their words, vectors or 
     articles = store.index("articles", Article, fields={"title": 2, "body": 1})
     result = await articles.search("как испечь хлеб")
 
+Change an index by opening it with other options under the same name,
+and never version its name.
+
 Opening an index with other settings than it holds changes it, and
 one that needs every document read again does so beside it, the old
 rows answering until the new ones switch in; ``rebuild="manual"``

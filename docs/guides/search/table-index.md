@@ -237,8 +237,11 @@ transaction wrote once the transaction commits, so search after it returns.
 ## Settings and dropping
 
 The index's fields, filters, weights and vectors change as a store's index's
-do: open it with other settings, and it reads the table again beside itself
-while it answers. See [Rebuilds](rebuilds.md).
+do: open it with other settings under the same name, and it reads the table
+again beside itself while it answers. Never version an index's name for
+this. See [Rebuilds](rebuilds.md). Another table or key is refused, since
+its documents would be another table's: open another name for it, and drop
+the old one.
 
 ```ts
 await db.dropSearchIndex('articles_search') // true: its triggers off the table, its rows dropped
@@ -259,12 +262,17 @@ db.drop_search_index("articles_search")?;
 A drop runs in a transaction of its own. Inside `db.tx` it fails with an
 invalid error and changes nothing, so drop the index after the transaction.
 
-If the table is dropped or renamed while its index exists, for example by a
-SQLite shell beside the store, the index can no longer read the table's rows.
-Writes to the rest of the database go on, and the store logs each row that it
-leaves out of the index. A write to the renamed table fails with an invalid
-error that names the index, so drop the index and open a new one on the new
-name.
+A table a migration drops takes its index with it: the next time an index of
+that database opens, or one is dropped, the store drops each index whose
+table is gone and logs it once (contract SRCH-21). A migration that rebuilds
+a table by SQLite's twelve steps, a new table copied and renamed, leaves the
+table there, and its index is read again whole.
+
+If the table is renamed while its index exists, for example by a SQLite shell
+beside the store, the index can no longer read the table's rows. Writes to
+the rest of the database go on, and the store logs each row that it leaves
+out of the index. A write to the renamed table fails with an invalid error
+that names the index, so drop the index and open a new one on the new name.
 
 ## Async Rust
 

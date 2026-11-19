@@ -402,7 +402,7 @@ impl Settings {
             table.map_or_else(|| "documents of its own".to_owned(), |(name, key)| format!("table {name} by {key}"))
         };
         Err(Error::invalid(format!(
-            "the index follows {}, not {}: drop it to make one that does",
+            "the index follows {}, not {}: open another name, or drop it to make one that does",
             shown(kept),
             shown(asked)
         )))
@@ -450,14 +450,15 @@ impl Settings {
             _ if self.table.is_some() => self.change_column(wanted, documents, (said, rebuild))?,
             (Some(kept), Some(dimensions)) if kept.dimensions != dimensions => {
                 return Err(Error::invalid(format!(
-                    "vectors of {dimensions} dimensions where the index keeps {}: they are the program's model's, \
-                     and the store has nothing to make new ones from",
+                    "vectors of {dimensions} dimensions where the index holds {}: the store cannot make your \
+                     model's vectors; open another name, fill it, and drop this one",
                     kept.dimensions
                 )));
             }
             (Some(kept), None) => {
                 return Err(Error::invalid(format!(
-                    "opened without vectors, an index that keeps vectors of {} dimensions would lose them",
+                    "opened without vectors, an index that holds vectors of {} dimensions would lose them, and the \
+                     store cannot make them again; open another name, fill it, and drop this one",
                     kept.dimensions
                 )));
             }

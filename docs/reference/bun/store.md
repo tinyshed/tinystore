@@ -248,7 +248,8 @@ vectors the program's model gives them, or by both:
     const { hits } = await articles.search('как испечь хлеб')
 
 Opening an index with other settings than it holds changes it, and
-never waits for the work a change needs.
+never waits for the work a change needs: change an index by opening it
+with other options under the same name, and never version its name.
 
 ### Store.reindex
 

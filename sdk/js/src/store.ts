@@ -321,7 +321,8 @@ export class Store implements AsyncDisposable {
 	 *     const { hits } = await articles.search('как испечь хлеб')
 	 *
 	 * Opening an index with other settings than it holds changes it, and
-	 * never waits for the work a change needs.
+	 * never waits for the work a change needs: change an index by opening it
+	 * with other options under the same name, and never version its name.
 	 */
 	index<T = unknown>(name: string, options?: IndexOptions): SearchIndex<T> {
 		return new SearchIndex<T>(this.#link, name, indexOpen(name, options))

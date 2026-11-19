@@ -13,6 +13,7 @@ use super::engine::{FILE, InFiles, Search};
 use super::index::{Found, Hit, Index, Rebuild, SearchCall};
 use super::open::{OpenIndex, Status};
 use super::read::{Answer, Query, Ranked};
+use super::rebuild::read_current;
 use super::settings::{Settings, Table, Wanted};
 use super::table;
 use crate::engine::{Host, SharedFile};
@@ -29,6 +30,7 @@ const PENDING: Duration = Duration::from_secs(1);
 /// the store, and noting one walks those held, so they are held in bounds.
 const GONE_ROWS: usize = 1024;
 
+const HAS_TABLE: &str = "select exists (select 1 from sqlite_schema where type = 'table' and name = ?1)";
 const READ_COLUMNS: &str = "select name, pk from pragma_table_info(?1)";
 /// The columns of each unique index of a table that is not partial, an
 /// index's together.
@@ -45,6 +47,11 @@ impl Search {
             let owner = shared.owner().to_owned();
             let search = Search::start(store, Arc::clone(shared.file()), Some(owner.clone()), None)?;
             shared.file().settle_with(Arc::downgrade(&search) as Weak<dyn Settle>);
+            // A drop that cannot run now, inside a transaction of the file,
+            // runs at the file's next start.
+            if let Err(error) = search.drop_orphans() {
+                tracing::warn!(target: "tinystore", "search in {owner}: indexes of tables gone left: {error}");
+            }
             InFiles::of(store)?.keep(&search);
             let weak = Arc::downgrade(&search);
             store.every(&format!("search in {owner}: pending keys"), PENDING, move || {
@@ -61,6 +68,32 @@ impl Search {
     fn settle_beside(&self) -> Result<()> {
         if !self.file.is_copy() && self.file.read(table::any_pending)? {
             self.file.transaction(|_| Ok::<(), Error>(()))?;
+        }
+        Ok(())
+    }
+
+    /// Drops each table's index of this file whose table is gone, as when a
+    /// migration dropped it, and says so once in the log: an index nobody
+    /// can open again holds nothing its table does not. A table a migration
+    /// rebuilt by SQLite's twelve steps is there again under its name, and
+    /// keeps its index, read again whole at its open.
+    fn drop_orphans(&self) -> Result<()> {
+        let names: Vec<String> = self.list()?.into_iter().map(|listed| listed.name).collect();
+        let gone = self.file.read(|connection| {
+            let mut gone = Vec::new();
+            for name in names {
+                let Some(current) = read_current(connection, &name)? else { continue };
+                let Some(table) = &current.serving.settings.table else { continue };
+                if !has_table(connection, &table.name)? {
+                    gone.push((name, table.name.clone()));
+                }
+            }
+            Ok::<_, Error>(gone)
+        })?;
+        for (name, table) in gone {
+            if self.drop_index(&name)? {
+                tracing::info!(target: "tinystore", "search in {}: index {name} dropped: table {table} is gone", self.place());
+            }
         }
         Ok(())
     }
@@ -91,6 +124,12 @@ impl Search {
         drop(gone);
         self.wake();
     }
+}
+
+fn has_table(connection: &Connection, table: &str) -> Result<bool> {
+    let failed = |error| sql_error(format!("look for table {table}"), error);
+    let mut select = connection.prepare_cached(HAS_TABLE).map_err(failed)?;
+    select.query_row([table], |row| row.get(0)).map_err(failed)
 }
 
 /// The table `wanted` names as the database holds it: its key the column

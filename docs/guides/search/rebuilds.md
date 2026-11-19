@@ -1,6 +1,7 @@
 # Rebuilds
 
-An index is changed by opening it with other settings. A weight changes at
+An index is changed by opening it with other settings under the same name:
+never put a version in an index's name. A weight changes at
 once; a new field or filter is read from the documents beside the index,
 which answers and takes writes meanwhile, and switches in when ready. No
 search ever sees a half-built index.
@@ -53,9 +54,14 @@ the index serves now, which `status()` says.
 | `recall` added or removed                              | clusters built or dropped in the background; searches stay exact |
 | `vectors` added                                        | at once: documents have none until they are set again            |
 | the vectors' dimensions, `vectors` left out            | `invalid`: the store cannot make your model's vectors            |
+| a table's index's table or key                         | `invalid`: open another name, and drop the old one               |
 
 A weight is read by each search as it runs, which is why it is free. A field
 added needs every document's words, which is why it is read again.
+
+New vector dimensions mean a new model, whose vectors only the program can
+make: open another name, fill it, and drop the old one once it answers. The
+error says so.
 
 ## While it rebuilds
 

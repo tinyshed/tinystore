@@ -150,7 +150,9 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     /// added to an index that holds documents by reading them again beside
     /// it, in the background, the index answering as before until then.
     /// Vectors of other dimensions, or none where it keeps some, are
-    /// refused. Opening never waits for the work a change needs.
+    /// refused. Opening never waits for the work a change needs. Change an
+    /// index by opening it with other options under the same name, and never
+    /// version its name.
     pub fn open(self) -> Result<Index<T>> {
         self.opened(false)
     }

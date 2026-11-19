@@ -788,3 +788,23 @@ fn a_key_of_several_columns_is_unique_together_and_a_table_without_one_is_told_s
     assert!(keyless.to_string().contains("a row without a key"), "a null in its key fails its write: {keyless}");
     assert_eq!(ids(&index.search("bread").run().unwrap()), [r#"["x",1]"#]);
 }
+
+// contract: SRCH-21
+#[test]
+fn a_table_a_migration_dropped_drops_its_index_at_the_file_s_next_start_and_says_so() {
+    let f = fixture();
+    drop(f.articles());
+    f.insert(1, "bread", "");
+    f.store.close().unwrap();
+    let store = Store::open(f.dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let dropped = "drop table articles; create table notes (id integer primary key, title text not null);";
+    let migrations = [("0001_articles.sql", ARTICLES), ("0002_notes.sql", dropped)];
+    let db = store.database("app").migrations(migrations).open().unwrap();
+    let notes = db.search_index::<IgnoredAny>("articles_search").table("notes").field("title", 1.0).open();
+    let notes = notes.expect("a new index of the name: the one of the table gone was dropped");
+    db.exec("insert into notes (id, title) values (7, 'rye')").unwrap();
+    search::maintain(&store).unwrap();
+    notes.ready().unwrap();
+    assert_eq!(ids(&notes.search("rye").run().unwrap()), ["7"]);
+    assert!(notes.search("bread").run().unwrap().hits.is_empty(), "nothing of the dropped one's");
+}

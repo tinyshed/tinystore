@@ -127,7 +127,7 @@ Index is documents of one type by id, or a table's rows, found again by their wo
 func OpenIndex[T any](home tinystore.Home, name string, opts ...Option) (*Index[T], error)
 ```
 
-OpenIndex opens an index on the store, or a table's index on a database with Table. It opens at its first call; its error is a name or an option it refuses.
+OpenIndex opens an index on the store, or a table's index on a database with Table. It opens at its first call; its error is a name or an option it refuses. Change an index by opening it with other options under the same name, and never version its name.
 
 ### Index.Delete
 
