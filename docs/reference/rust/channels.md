@@ -72,6 +72,17 @@ Hands `value` to every subscriber of this branch, and of the branches
 above it listened to `recursive`, that listens now. It answers once
 the store has the message, not once anyone handled it.
 
+### Channel.subscribers
+
+```rust
+pub fn subscribers(&self) -> Result<usize>
+```
+
+How many subscriptions a message published on this branch now would
+reach: this branch's own, and the `recursive` ones of it and of every
+branch above it, in every process that reaches the store. Without
+`under` it counts the root's, not every branch's.
+
 ### Channel.recursive
 
 ```rust
@@ -303,6 +314,16 @@ above it listened to `recursive`, as
 `crate::channels::Channel::publish`. A plain call: the message is
 put in memory, the oldest shed rather than waited for, and nothing is
 awaited.
+
+### aio::channels::Channel.subscribers
+
+```rust
+pub fn subscribers(&self) -> Result<usize>
+```
+
+How many subscriptions a message published on this branch now would
+reach, as `crate::channels::Channel::subscribers`. A plain call: it
+counts what the store holds in memory, and nothing is awaited.
 
 ### aio::channels::Channel.recursive
 

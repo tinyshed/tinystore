@@ -55,6 +55,18 @@ Hands value to every subscriber of this branch that listens now, and of those ab
 
 It answers once the store has the message, not once anyone handled it.
 
+### Channel.subscribers
+
+```python
+async def subscribers() -> int: ...
+```
+
+How many subscriptions a message published on this branch now would reach.
+
+This branch's own, and the recursive ones of it and of every branch
+above it, of every program that reaches the store. Without under it
+counts the root's, not every branch's.
+
 ### Channel.subscribe
 
 ```python

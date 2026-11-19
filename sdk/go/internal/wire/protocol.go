@@ -34,7 +34,10 @@ const (
 	// Answers once the subscription is registered, then sends batches within the
 	// client's credit until it cancels: a client that grants none falls behind.
 	MethodChannelsSubscribe = 0x0a02
-	MethodConfigOpen        = 0x0701
+	// Counts the subscriptions of every connection and of the program that holds
+	// the store: the branch's own and the recursive ones of it and above it.
+	MethodChannelsSubscribers = 0x0a03
+	MethodConfigOpen          = 0x0701
 	// The config's value now, then each time it changes, until the client
 	// cancels: one stream a config a process, whose value every handle and
 	// watcher of it there takes.
@@ -177,6 +180,7 @@ var methodNames = []struct {
 	{"blobs.trim", MethodBlobsTrim},
 	{"channels.publish", MethodChannelsPublish},
 	{"channels.subscribe", MethodChannelsSubscribe},
+	{"channels.subscribers", MethodChannelsSubscribers},
 	{"config.open", MethodConfigOpen},
 	{"config.follow", MethodConfigFollow},
 	{"config.update", MethodConfigUpdate},
@@ -355,6 +359,10 @@ func NewMessage(name string) Message {
 		return &ChannelsSubscribe{}
 	case "channels.Batch":
 		return &ChannelsBatch{}
+	case "channels.Branch":
+		return &ChannelsBranch{}
+	case "channels.Count":
+		return &ChannelsCount{}
 	case "channels.Message":
 		return &ChannelsMessage{}
 	case "config.Open":
@@ -2923,6 +2931,98 @@ func (m *ChannelsBatch) Read(r *Reader) {
 func (m ChannelsBatch) IsZero() bool {
 	return m.Missed == 0 &&
 		len(m.Messages) == 0
+}
+
+// ChannelsBranch is the schema's channels.Branch.
+//
+// A channel's branch, for a count of who listens there.
+type ChannelsBranch struct {
+	Name  string   `wire:"1,name"`
+	Under []string `wire:"2,under"`
+}
+
+func (m ChannelsBranch) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Name != "" {
+		w.Uint(1)
+		w.Str(m.Name)
+		n++
+	}
+	if len(m.Under) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Under))
+		for _, item0 := range m.Under {
+			w.Str(item0)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *ChannelsBranch) Read(r *Reader) {
+	*m = ChannelsBranch{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Name = r.Str()
+		case 2:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Under = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether ChannelsBranch writes as no field at all.
+func (m ChannelsBranch) IsZero() bool {
+	return m.Name == "" &&
+		len(m.Under) == 0
+}
+
+// ChannelsCount is the schema's channels.Count.
+//
+// How many subscriptions a message published on a branch now would reach.
+type ChannelsCount struct {
+	Subscribers uint64 `wire:"1,subscribers"`
+}
+
+func (m ChannelsCount) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Subscribers != 0 {
+		w.Uint(1)
+		w.Uint(m.Subscribers)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *ChannelsCount) Read(r *Reader) {
+	*m = ChannelsCount{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Subscribers = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether ChannelsCount writes as no field at all.
+func (m ChannelsCount) IsZero() bool {
+	return m.Subscribers == 0
 }
 
 // ChannelsMessage is the schema's channels.Message.

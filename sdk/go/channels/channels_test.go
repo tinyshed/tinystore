@@ -95,6 +95,34 @@ func TestASubscriptionTakesItsExactBranchAndRecursiveTheBranchesBelowToo(t *test
 	})
 }
 
+// contract: CHAN-05
+func TestSubscribersCountsWhatAPublishNowWouldReachAndNoneThatStopped(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		live := ways.Must(channels.OpenChannel[string](store, "live"))
+		course := live.Under("course-12")
+		nothing := func(context.Context, channels.Message[string]) error { return nil }
+		if n := ways.Must(course.Subscribers(ctx)); n != 0 {
+			t.Fatalf("nobody listens, yet %d", n)
+		}
+		own := ways.Must(course.Subscribe(ctx, nothing))
+		root := ways.Must(live.Subscribe(ctx, nothing, channels.Recursive()))
+		other := ways.Must(live.Under("course-13").Subscribe(ctx, nothing))
+		if n := ways.Must(course.Subscribers(ctx)); n != 2 {
+			t.Fatalf("its own and the root's recursive one, yet %d", n)
+		}
+		if n := ways.Must(live.Subscribers(ctx)); n != 1 {
+			t.Fatalf("the root's alone, yet %d", n)
+		}
+		ways.Must(0, own.Stop(ctx))
+		if n := ways.Must(course.Subscribers(ctx)); n != 1 {
+			t.Fatalf("none that stopped, yet %d", n)
+		}
+		ways.Must(0, root.Stop(ctx))
+		ways.Must(0, other.Stop(ctx))
+	})
+}
+
 func TestALoopReceivesTheMessagesPublishedFromItsFirstTurnAndLeavingItEndsIt(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

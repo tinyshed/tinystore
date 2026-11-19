@@ -111,6 +111,7 @@ These contracts are what does not.
 - **CHAN-02** A publisher MUST NOT wait for a subscriber; a subscriber that falls behind MUST be told exactly how many messages it missed before the next.
 - **CHAN-03** A message published inside a transaction MUST be handed over after its commit, in commit order, and never after a rollback.
 - **CHAN-04** A handler that fails or a message that does not decode MUST be reported, and the next message MUST follow.
+- **CHAN-05** `subscribers` MUST count every subscription that a publish on that branch at that moment would reach, of every process that reaches the store, and none that stopped.
 
 ### Jobs
 

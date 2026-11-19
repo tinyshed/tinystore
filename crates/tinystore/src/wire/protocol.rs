@@ -2126,6 +2126,98 @@ impl Message for ChannelsBatch {
     }
 }
 
+/// A channel's branch, for a count of who listens there.
+#[cfg(feature = "channels")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ChannelsBranch {
+    pub(crate) name: String,
+    pub(crate) under: Vec<String>,
+}
+
+#[cfg(feature = "channels")]
+impl Message for ChannelsBranch {
+    const NAME: &'static str = "channels.Branch";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.under = codec::list(r, "under", codec::str)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.under.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.under, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::list_size(&self.under, |item| 5 + item.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.under.is_empty()
+    }
+}
+
+/// How many subscriptions a message published on a branch now would reach.
+#[cfg(feature = "channels")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ChannelsCount {
+    pub(crate) subscribers: u64,
+}
+
+#[cfg(feature = "channels")]
+impl Message for ChannelsCount {
+    const NAME: &'static str = "channels.Count";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.subscribers = codec::uint(r, "subscribers")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.subscribers != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.subscribers);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.subscribers == 0
+    }
+}
+
 #[cfg(feature = "channels")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ChannelsMessage {
@@ -12780,6 +12872,10 @@ pub(crate) mod method {
     /// client's credit until it cancels: a client that grants none falls behind.
     #[cfg(feature = "channels")]
     pub(crate) const CHANNELS_SUBSCRIBE: u16 = 0x0a02;
+    /// Counts the subscriptions of every connection and of the program that holds
+    /// the store: the branch's own and the recursive ones of it and above it.
+    #[cfg(feature = "channels")]
+    pub(crate) const CHANNELS_SUBSCRIBERS: u16 = 0x0a03;
     #[cfg(feature = "config")]
     pub(crate) const CONFIG_OPEN: u16 = 0x0701;
     /// The config's value now, then each time it changes, until the client
@@ -13046,6 +13142,8 @@ pub(crate) mod method {
             CHANNELS_PUBLISH => Some(Access::Write),
             #[cfg(feature = "channels")]
             CHANNELS_SUBSCRIBE => Some(Access::Read),
+            #[cfg(feature = "channels")]
+            CHANNELS_SUBSCRIBERS => Some(Access::Read),
             #[cfg(feature = "config")]
             CONFIG_OPEN => Some(Access::Read),
             #[cfg(feature = "config")]
@@ -13293,6 +13391,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("channels.publish", 0x0a01, "call"),
     #[cfg(feature = "channels")]
     ("channels.subscribe", 0x0a02, "download"),
+    #[cfg(feature = "channels")]
+    ("channels.subscribers", 0x0a03, "call"),
     #[cfg(feature = "config")]
     ("config.open", 0x0701, "call"),
     #[cfg(feature = "config")]
@@ -13559,6 +13659,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "channels.Subscribe" => ChannelsSubscribe::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "channels")]
         "channels.Batch" => ChannelsBatch::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "channels")]
+        "channels.Branch" => ChannelsBranch::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "channels")]
+        "channels.Count" => ChannelsCount::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "channels")]
         "channels.Message" => ChannelsMessage::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "config")]

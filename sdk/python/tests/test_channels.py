@@ -69,6 +69,25 @@ async def test_a_subscription_takes_its_exact_branch_and_recursive_the_branches_
         await sub.stop()
 
 
+# contract: CHAN-05
+async def test_subscribers_counts_what_a_publish_now_would_reach_and_none_that_stopped(store: tinystore.Store) -> None:
+    live = store.channel("live", str)
+    course = live.under("course-12")
+    assert await course.subscribers() == 0
+    subs = [
+        await course.subscribe(lambda _: None),
+        await live.subscribe(lambda _: None, recursive=True),
+        await live.under("course-13").subscribe(lambda _: None),
+    ]
+    assert await course.subscribers() == 2
+    assert await live.subscribers() == 1
+    await subs[0].stop()
+    assert await course.subscribers() == 1
+    for sub in subs[1:]:
+        await sub.stop()
+    assert await course.subscribers() == 0
+
+
 async def test_a_loop_receives_the_messages_published_from_its_first_turn_and_break_ends_it(
     store: tinystore.Store,
 ) -> None:

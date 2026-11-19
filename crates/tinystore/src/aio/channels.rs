@@ -93,6 +93,13 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Channel<T> {
         self.channel.publish(value)
     }
 
+    /// How many subscriptions a message published on this branch now would
+    /// reach, as [`crate::channels::Channel::subscribers`]. A plain call: it
+    /// counts what the store holds in memory, and nothing is awaited.
+    pub fn subscribers(&self) -> Result<usize> {
+        self.channel.subscribers()
+    }
+
     /// A loop that takes every branch below this one too.
     pub fn recursive(&self) -> Subscribing<T> {
         Subscribing { subscribing: self.channel.recursive() }

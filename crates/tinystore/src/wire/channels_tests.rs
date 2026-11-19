@@ -4,7 +4,9 @@ use crate::pipe::Capability;
 use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::Message;
 use crate::wire::frame::{Frame, Kind};
-use crate::wire::protocol::{ChannelsBatch, ChannelsPublish, ChannelsSubscribe, Empty, Hello, method};
+use crate::wire::protocol::{
+    ChannelsBatch, ChannelsBranch, ChannelsCount, ChannelsPublish, ChannelsSubscribe, Empty, Hello, method,
+};
 use crate::{Options, Store};
 
 fn publish(client: &mut Client, under: &[&str], value: &str) -> Result<Empty, crate::wire::protocol::Failure> {
@@ -55,6 +57,34 @@ fn a_subscription_answers_once_it_is_registered_then_sends_what_is_published_und
 
     client.write(Frame::new(Kind::Cancel, stream, Vec::new()));
     assert_eq!(answered::<ChannelsBatch>(&client.next_on(stream)).unwrap_err().code, "cancelled");
+}
+
+fn subscribers(client: &mut Client, under: &[&str]) -> u64 {
+    let under = under.iter().map(|owner| (*owner).to_owned()).collect();
+    let branch = ChannelsBranch { name: "chat".to_owned(), under };
+    client.call::<ChannelsCount>(method::CHANNELS_SUBSCRIBERS, &branch).unwrap().subscribers
+}
+
+// contract: CHAN-05
+#[test]
+fn subscribers_count_every_connections_and_the_programs_own_and_none_of_a_connection_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut asking = Client::admitted(&store, Capability::Data);
+    let mut other = Client::admitted(&store, Capability::Data);
+    assert_eq!(subscribers(&mut asking, &["room-7"]), 0);
+    subscribed(&mut other, &["room-7"], false);
+    subscribed(&mut other, &[], true);
+    let own = store.channel::<String>("chat").open().unwrap().under("room-7").subscribe(|_| {}).unwrap();
+    assert_eq!(subscribers(&mut asking, &["room-7"]), 3, "another connection's two and the program's own");
+    assert_eq!(subscribers(&mut asking, &[]), 1, "the root's recursive one alone");
+
+    drop(other);
+    crate::testing::holds_within(crate::testing::PATIENCE, "the gone connection's subscriptions ended", || {
+        subscribers(&mut asking, &["room-7"]) == 1
+    });
+    own.stop();
+    assert_eq!(subscribers(&mut asking, &["room-7"]), 0);
 }
 
 // contract: CHAN-02

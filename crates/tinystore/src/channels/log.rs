@@ -103,6 +103,11 @@ impl Log {
         !state.places.is_empty()
     }
 
+    /// How many subscribers read the log.
+    pub(super) fn readers(&self) -> usize {
+        self.lock().places.len()
+    }
+
     /// Puts a message at the end of the log, drops what is past its bounds,
     /// and gives back the wakes of the subscribers not woken yet.
     pub(super) fn push(&self, message: Arc<Released>) -> Vec<Wake> {

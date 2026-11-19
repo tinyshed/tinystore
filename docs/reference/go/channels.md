@@ -57,6 +57,14 @@ Subscribe calls handler with each message published from now on, one at a time a
 		return nil
 	})
 
+### Channel.Subscribers
+
+```go
+func (c *Channel[T]) Subscribers(ctx context.Context) (int, error)
+```
+
+Subscribers is how many subscriptions a message published on this branch now would reach: this branch's own, and the recursive ones of it and of every branch above it, of every program that reaches the store. Without Under it counts the root's, not every branch's.
+
 ### Channel.Under
 
 ```go

@@ -1073,6 +1073,45 @@
     },
     {
       "fields": {
+        "name": {
+          "str": "name"
+        },
+        "under": {
+          "list": [
+            {
+              "str": "under"
+            }
+          ]
+        }
+      },
+      "hex": "8201a46e616d650291a5756e646572",
+      "message": "channels.Branch",
+      "name": "channels.Branch with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "channels.Branch",
+      "name": "channels.Branch with no field"
+    },
+    {
+      "fields": {
+        "subscribers": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "channels.Count",
+      "name": "channels.Count with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "channels.Count",
+      "name": "channels.Count with no field"
+    },
+    {
+      "fields": {
         "under": {
           "list": [
             {
@@ -6791,6 +6830,7 @@
     "blobs.usage": 1035,
     "channels.publish": 2561,
     "channels.subscribe": 2562,
+    "channels.subscribers": 2563,
     "config.follow": 1794,
     "config.open": 1793,
     "config.reset": 1796,

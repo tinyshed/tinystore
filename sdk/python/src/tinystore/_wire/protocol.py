@@ -43,6 +43,9 @@ methods: dict[str, int] = {
     # Answers once the subscription is registered, then sends batches within the
     # client's credit until it cancels: a client that grants none falls behind.
     "channels.subscribe": 0x0A02,
+    # Counts the subscriptions of every connection and of the program that holds
+    # the store: the branch's own and the recursive ones of it and above it.
+    "channels.subscribers": 0x0A03,
     "config.open": 0x0701,
     # The config's value now, then each time it changes, until the client
     # cancels: one stream a config a process, whose value every handle and
@@ -1911,6 +1914,85 @@ ChannelsSubscribe = Message(
     },
     _write_channels_subscribe,
     _read_channels_subscribe,
+)
+
+
+def _write_channels_branch(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("name")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("under")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_channels_branch(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["name"] = r.str()
+            case 2:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["under"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A channel's branch, for a count of who listens there.
+ChannelsBranch = Message(
+    "channels.Branch",
+    {
+        "name": (1, str_),
+        "under": (2, list_(str_)),
+    },
+    _write_channels_branch,
+    _read_channels_branch,
+)
+
+
+def _write_channels_count(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("subscribers")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_channels_count(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["subscribers"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# How many subscriptions a message published on a branch now would reach.
+ChannelsCount = Message(
+    "channels.Count",
+    {
+        "subscribers": (1, uint),
+    },
+    _write_channels_count,
+    _read_channels_count,
 )
 
 
@@ -11378,6 +11460,8 @@ messages: dict[str, Message] = {
     "blobs.Claim": BlobsClaim,
     "channels.Publish": ChannelsPublish,
     "channels.Subscribe": ChannelsSubscribe,
+    "channels.Branch": ChannelsBranch,
+    "channels.Count": ChannelsCount,
     "channels.Message": ChannelsMessage,
     "config.Open": ConfigOpen,
     "config.Origin": ConfigOrigin,

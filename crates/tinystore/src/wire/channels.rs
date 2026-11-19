@@ -11,7 +11,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::codec::Message;
-use super::protocol::{ChannelsBatch, ChannelsMessage, ChannelsPublish, ChannelsSubscribe, Empty, Failure, method};
+use super::protocol::{
+    ChannelsBatch, ChannelsBranch, ChannelsCount, ChannelsMessage, ChannelsPublish, ChannelsSubscribe, Empty, Failure,
+    method,
+};
 use super::{Link, Route};
 use crate::Store;
 use crate::channels::{Hub, Log, LogKey, remote_branch};
@@ -40,13 +43,20 @@ pub(crate) fn route(called: u16) -> Route {
     }
 }
 
-/// Answers a publish: the store has the message.
+/// Answers a publish, once the store has the message, and a count of who
+/// listens on a branch.
 pub(crate) fn call(store: &Store, called: u16, body: &[u8]) -> Answered {
     match called {
         method::CHANNELS_PUBLISH => {
             let Published { hub, name, branch, value } = published(store, body)?;
             hub.publish(&name, branch, value)?;
             Ok(Empty {}.encode())
+        }
+        method::CHANNELS_SUBSCRIBERS => {
+            let asked = ChannelsBranch::decode(body)?;
+            let (name, branch) = remote_branch(&asked.name, asked.under)?;
+            let subscribers = Hub::of(store)?.subscribers(&name, &branch)?;
+            Ok(ChannelsCount { subscribers: subscribers as u64 }.encode())
         }
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }

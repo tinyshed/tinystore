@@ -74,6 +74,26 @@ for (const way of ways) {
 			}
 		})
 
+		// contract: CHAN-05
+		test('subscribers counts what a publish now would reach, and none that stopped', async () => {
+			const live = store.channel<string>('live')
+			const course = live.under('course-12')
+			expect(await course.subscribers()).toBe(0)
+			const subs = [
+				await course.subscribe(() => {}),
+				await live.subscribe(() => {}, { recursive: true }),
+				await live.under('course-13').subscribe(() => {}),
+			]
+			expect(await course.subscribers()).toBe(2)
+			expect(await live.subscribers()).toBe(1)
+			await subs[0]!.stop()
+			expect(await course.subscribers()).toBe(1)
+			for (const sub of subs.slice(1)) {
+				await sub.stop()
+			}
+			expect(await course.subscribers()).toBe(0)
+		})
+
 		test('a loop receives the messages published from its first turn, and break ends it', async () => {
 			const ticks = store.channel<number>('ticks')
 			const loop = ticks.each()

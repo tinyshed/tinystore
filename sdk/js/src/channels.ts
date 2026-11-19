@@ -14,7 +14,14 @@ import { keyText } from './kv.ts'
 import { sayOwn } from './logger.ts'
 import { ConnectionLostError, Stream } from './session.ts'
 import type { Key } from './wire/codec.ts'
-import { ChannelsBatch, ChannelsPublish, ChannelsSubscribe, methods } from './wire/protocol.ts'
+import {
+	ChannelsBatch,
+	ChannelsBranch,
+	ChannelsCount,
+	ChannelsPublish,
+	ChannelsSubscribe,
+	methods,
+} from './wire/protocol.ts'
 
 /** A message as a subscriber receives it: what was published, and the branch it was published under. */
 export interface Message<T> {
@@ -80,6 +87,22 @@ export class Channel<T> {
 		await this.#link.run('write', connection =>
 			connection.session.call(methods['channels.publish'], body),
 		)
+	}
+
+	/**
+	 * How many subscriptions a message published on this branch now would
+	 * reach: this branch's own, and the recursive ones of it and of every
+	 * branch above it, of every program that reaches the store. Without
+	 * under it counts the root's, not every branch's.
+	 *
+	 *     const watched = (await live.under(courseId).subscribers()) > 0
+	 */
+	async subscribers(): Promise<number> {
+		const body = ChannelsBranch.encode({ name: this.name, under: [...this.branch] })
+		const answer = await this.#link.run('read', connection =>
+			connection.session.call(methods['channels.subscribers'], body),
+		)
+		return Number(ChannelsCount.decode(answer).subscribers ?? 0)
 	}
 
 	/**

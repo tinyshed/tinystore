@@ -28,7 +28,7 @@ from ._connection import check_name
 from ._handles import key_text
 from ._session import ConnectionLostError
 from ._values import from_json, to_json
-from ._wire.protocol import ChannelsBatch, ChannelsPublish, ChannelsSubscribe, methods
+from ._wire.protocol import ChannelsBatch, ChannelsBranch, ChannelsCount, ChannelsPublish, ChannelsSubscribe, methods
 from .errors import ClosedError, UnavailableError
 
 if TYPE_CHECKING:
@@ -88,6 +88,17 @@ class Channel[T]:
         """
         body = publish_body(self.name, self.branch, value)
         await self._link.run("write", lambda c: c.session.call(methods["channels.publish"], body))
+
+    async def subscribers(self) -> int:
+        """How many subscriptions a message published on this branch now would reach.
+
+        This branch's own, and the recursive ones of it and of every branch
+        above it, of every program that reaches the store. Without under it
+        counts the root's, not every branch's.
+        """
+        body = ChannelsBranch.encode(name=self.name, under=list(self.branch))
+        answer = await self._link.run("read", lambda c: c.session.call(methods["channels.subscribers"], body))
+        return ChannelsCount.decode(answer).get("subscribers", 0)
 
     async def subscribe(
         self,

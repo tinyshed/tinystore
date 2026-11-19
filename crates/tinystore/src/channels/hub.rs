@@ -95,6 +95,15 @@ impl Hub {
         Ok(())
     }
 
+    /// How many subscriptions a message published on `branch` now would
+    /// reach, of every process that reaches the store.
+    pub(crate) fn subscribers(&self, channel: &Arc<str>, branch: &[String]) -> Result<usize> {
+        if self.closed() {
+            return Err(Error::closed(format!("channel {channel}")));
+        }
+        Ok(self.logs_reached(channel, branch).iter().map(|log| log.readers()).sum())
+    }
+
     /// The logs a message of `branch` goes to: its own, and the recursive
     /// ones of its ancestors and itself.
     fn logs_reached(&self, channel: &Arc<str>, branch: &[String]) -> Vec<Arc<Log>> {

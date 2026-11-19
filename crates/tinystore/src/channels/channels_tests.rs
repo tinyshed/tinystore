@@ -139,6 +139,32 @@ fn a_message_of_a_transaction_is_handed_over_after_its_commit_and_never_after_a_
     sub.stop();
 }
 
+// contract: CHAN-05
+#[test]
+fn subscribers_are_the_subscriptions_a_publish_now_would_reach_and_none_that_stopped() {
+    let (_dir, store) = opened();
+    let live = store.channel::<u32>("live").open().unwrap();
+    let course = live.under("course-12");
+    assert_eq!(course.subscribers().unwrap(), 0, "nobody listens");
+    let subs = [
+        course.subscribe(|_| {}).unwrap(),
+        course.subscribe(|_| {}).unwrap(),
+        live.recursive().subscribe(|_| {}).unwrap(),
+        live.under("course-13").subscribe(|_| {}).unwrap(),
+        course.under("page-4").subscribe(|_| {}).unwrap(),
+    ];
+    let each = course.each().unwrap();
+    assert_eq!(course.subscribers().unwrap(), 4, "its own two, its loop, and the root's recursive one");
+    assert_eq!(live.subscribers().unwrap(), 1, "the root's, not every branch's");
+    assert_eq!(course.under("page-4").subscribers().unwrap(), 2, "its own and the root's recursive one");
+
+    subs[0].stop();
+    drop(each);
+    assert_eq!(course.subscribers().unwrap(), 2, "none that stopped");
+    store.close().unwrap();
+    assert_eq!(course.subscribers().unwrap_err().kind(), ErrorKind::Closed);
+}
+
 // contract: CHAN-01
 #[test]
 fn a_dropped_subscription_goes_on_listening_until_the_store_closes() {

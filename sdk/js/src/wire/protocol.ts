@@ -53,6 +53,11 @@ export const methods = {
 	 * client's credit until it cancels: a client that grants none falls behind.
 	 */
 	'channels.subscribe': 0x0a02,
+	/**
+	 * Counts the subscriptions of every connection and of the program that holds
+	 * the store: the branch's own and the recursive ones of it and above it.
+	 */
+	'channels.subscribers': 0x0a03,
 	'config.open': 0x0701,
 	/**
 	 * The config's value now, then each time it changes, until the client
@@ -2323,6 +2328,97 @@ export const ChannelsSubscribe = message(
 			}
 			r.leave()
 			return { name: $name, under: $under, recursive: $recursive }
+		},
+	},
+)
+
+/**
+ * A channel's branch, for a count of who listens there.
+ */
+export const ChannelsBranch = message(
+	'channels.Branch',
+	{
+		name: [1, str],
+		under: [2, list(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.under !== undefined) {
+				w.field(2)
+				w.array(v.under.length)
+				for (const item0 of v.under) {
+					w.str(item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $under: string[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$under = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, under: $under }
+		},
+	},
+)
+
+/**
+ * How many subscriptions a message published on a branch now would reach.
+ */
+export const ChannelsCount = message(
+	'channels.Count',
+	{
+		subscribers: [1, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.subscribers !== undefined) {
+				w.field(1)
+				w.uint(v.subscribers)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $subscribers: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$subscribers = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { subscribers: $subscribers }
 		},
 	},
 )

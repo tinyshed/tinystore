@@ -109,6 +109,15 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Channel<T> {
         self.hub.publish(&self.name, self.branch.clone(), encoded).map_err(|error| error.within(self.shown()))
     }
 
+    /// How many subscriptions a message published on this branch now would
+    /// reach: this branch's own, and the `recursive` ones of it and of every
+    /// branch above it, in every process that reaches the store. Without
+    /// `under` it counts the root's, not every branch's.
+    pub fn subscribers(&self) -> Result<usize> {
+        check_branch(&self.branch).map_err(|error| error.within(self.shown()))?;
+        self.hub.subscribers(&self.name, &self.branch).map_err(|error| error.within(self.shown()))
+    }
+
     /// A subscription that takes every branch below this one too.
     pub fn recursive(&self) -> Subscribing<T> {
         self.subscribing().recursive()

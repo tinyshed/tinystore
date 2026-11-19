@@ -181,6 +181,49 @@ let sub = messages.under(&chat_id).on_missed(move |_| reload(chat_id)).subscribe
 reload(chat_id); // after subscribing, never before
 ```
 
+## Who listens now
+
+`subscribers()` says how many subscriptions a message published on a branch
+now would reach: the branch's own, and the `recursive` ones of it and of every
+branch above it. A loop counts as a subscription. A program that syncs a page
+more often while someone has it open asks at each tick:
+
+```ts
+const live = store.channel<Change>('live')
+
+const watched = (await live.under(courseId).subscribers()) > 0
+setTimeout(sync, watched ? 15_000 : 300_000)
+```
+
+```python
+live = store.channel("live", Change)
+
+watched = await live.under(course_id).subscribers() > 0
+```
+
+```go
+live, err := channels.OpenChannel[Change](store, "live")
+
+n, err := live.Under(courseID).Subscribers(ctx) // an int
+watched := n > 0
+```
+
+```rust
+let live = store.channel::<Change>("live").open()?;
+
+let watched = live.under(course_id).subscribers()? > 0; // a usize
+```
+
+- It counts the subscriptions of every process that reaches the store: the
+  program that holds it, and every client of its sidecar or server (contract
+  CHAN-05). Each node of a [replicated](../../handbook/nodes/copies.md) store
+  counts its own.
+- Without `under`, it counts the root's subscriptions, not every branch's.
+- A subscription stops counting when it stops, or when its connection ends:
+  at once for a closed socket or pipe, and for a peer gone silent over TCP
+  when the session notices. An SDK that connects again subscribes again, so
+  the count dips for that moment.
+
 ## Through a server
 
 Every process connected to one store shares its channels: a message published

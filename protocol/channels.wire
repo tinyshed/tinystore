@@ -20,6 +20,17 @@ message channels.Batch {
   2 messages: [channels.Message]
 }
 
+# A channel's branch, for a count of who listens there.
+message channels.Branch {
+  1 name: str
+  2 under: [str]
+}
+
+# How many subscriptions a message published on a branch now would reach.
+message channels.Count {
+  1 subscribers: uint
+}
+
 message channels.Message {
   1 under: [str]  # the branch it was published under
   2 value: json
@@ -31,3 +42,6 @@ write 0x0a01 channels.publish(channels.Publish)     -> Empty
 # Answers once the subscription is registered, then sends batches within the
 # client's credit until it cancels: a client that grants none falls behind.
 read  0x0a02 channels.subscribe(channels.Subscribe) -> download channels.Batch until Empty
+# Counts the subscriptions of every connection and of the program that holds
+# the store: the branch's own and the recursive ones of it and above it.
+read  0x0a03 channels.subscribers(channels.Branch)  -> channels.Count

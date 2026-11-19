@@ -23,7 +23,7 @@ fn values<T>(messages: Vec<Result<Message<T>>>) -> Vec<T> {
     messages.into_iter().map(|message| message.unwrap().value).collect()
 }
 
-// contract: CHAN-01
+// contract: CHAN-01, CHAN-05
 #[tokio::test]
 async fn each_hears_what_is_published_after_it_in_order_as_the_blocking_loop_does() {
     let dir = tempfile::tempdir().unwrap();
@@ -49,6 +49,8 @@ async fn each_hears_what_is_published_after_it_in_order_as_the_blocking_loop_doe
     chat.under("room-9").publish(&"below".to_owned()).unwrap();
     let message = next(&mut below).await.unwrap().unwrap();
     assert_eq!((message.value.as_str(), message.branch.as_slice()), ("below", ["room-9".to_owned()].as_slice()));
+    let reached = chat.under("room-7").subscribers().unwrap();
+    assert_eq!(reached, 2, "its stream and the recursive one; the blocking loop taken whole has stopped");
     store.close().await.unwrap();
 }
 

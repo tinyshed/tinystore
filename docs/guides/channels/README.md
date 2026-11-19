@@ -53,15 +53,17 @@ sub.stop();
   never after a rollback (contract CHAN-03).
 - A handler that fails is reported, and the next message follows (contract
   CHAN-04).
+- `subscribers()` counts every subscription a publish now would reach, in
+  every process that reaches the store (contract CHAN-05).
 - Not promised: a message nobody listens to, or one before a restart, is
   gone (NOT-02). What must not be lost belongs in a queue.
 
 ## In these guides
 
-| Page                                                  | Covers                                                   |
-|-------------------------------------------------------|----------------------------------------------------------|
-| [Subscriptions and missed messages](subscriptions.md) | `subscribe`, `each`, `recursive`, `onMissed`, reconnects |
-| [Publishing from a transaction](transactions.md)      | `tx.with(channel)` in `db.tx` and `store.tx`             |
+| Page                                                  | Covers                                                                  |
+|-------------------------------------------------------|-------------------------------------------------------------------------|
+| [Subscriptions and missed messages](subscriptions.md) | `subscribe`, `each`, `recursive`, `onMissed`, `subscribers`, reconnects |
+| [Publishing from a transaction](transactions.md)      | `tx.with(channel)` in `db.tx` and `store.tx`                            |
 
 New to Channels? [Live updates](../../handbook/chat/live-updates.md) in the
 Handbook tells every open tab about a new reply.
@@ -88,6 +90,7 @@ while let Some(m) = each.next().await {
 ```
 
 - `publish` is a plain call. It puts the message in memory and never waits.
+  So is `subscribers`, which counts what the store holds in memory.
 - `each()` returns a `Stream` that listens from the call, before its first
   poll. To hear your own message, call it before you publish.
 - A poll takes up to 64 messages from the branch's log and decodes them on

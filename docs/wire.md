@@ -855,10 +855,11 @@ a fence, which a holder hands to others, proves nothing.
 ### channels
 
 <!-- written from protocol/*.wire by `just protocol`: methods of channels -->
-| method   | name               | may   | request              | answer                                  |
-|----------|--------------------|-------|----------------------|-----------------------------------------|
-| `0x0a01` | channels.publish   | write | `channels.Publish`   | `Empty`                                 |
-| `0x0a02` | channels.subscribe | read  | `channels.Subscribe` | download `channels.Batch` until `Empty` |
+| method   | name                 | may   | request              | answer                                  |
+|----------|----------------------|-------|----------------------|-----------------------------------------|
+| `0x0a01` | channels.publish     | write | `channels.Publish`   | `Empty`                                 |
+| `0x0a02` | channels.subscribe   | read  | `channels.Subscribe` | download `channels.Batch` until `Empty` |
+| `0x0a03` | channels.subscribers | read  | `channels.Branch`    | `channels.Count`                        |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/channels.wire`. A subscription answers once the

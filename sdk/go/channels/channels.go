@@ -89,6 +89,26 @@ func (c *Channel[T]) In(tx tinystore.InTx) *Channel[T] {
 	return &in
 }
 
+// Subscribers is how many subscriptions a message published on this branch
+// now would reach: this branch's own, and the recursive ones of it and of
+// every branch above it, of every program that reaches the store. Without
+// Under it counts the root's, not every branch's.
+func (c *Channel[T]) Subscribers(ctx context.Context) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+	body := wire.Encode(&wire.ChannelsBranch{Name: c.name, Under: c.branch})
+	answer, err := c.store.Link.Call(ctx, core.Reading, wire.MethodChannelsSubscribers, body)
+	if err != nil {
+		return 0, err
+	}
+	var count wire.ChannelsCount
+	if err := wire.Decode(answer, &count); err != nil {
+		return 0, core.Wrap(core.Protocol, err, "a count that does not read")
+	}
+	return int(count.Subscribers), nil
+}
+
 // Publish hands value to every subscriber of this branch that listens now,
 // and of those above it that listen recursively. It answers once the store
 // has the message, not once anyone handled it; inside a transaction, once

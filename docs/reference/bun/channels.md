@@ -77,6 +77,19 @@ Hands value to every subscriber of this branch, and of the branches above
 it listened to recursive, that listens now. It answers once the store
 has the message, not once anyone handled it.
 
+### Channel.subscribers
+
+```ts
+subscribers(): Promise<number>
+```
+
+How many subscriptions a message published on this branch now would
+reach: this branch's own, and the recursive ones of it and of every
+branch above it, of every program that reaches the store. Without
+under it counts the root's, not every branch's.
+
+    const watched = (await live.under(courseId).subscribers()) > 0
+
 ### Channel.subscribe
 
 ```ts
