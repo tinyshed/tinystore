@@ -66,17 +66,15 @@ impl Engine {
     /// read sees what the program counted: the write `flush` makes, of
     /// every live total at one time, since the totals share one clock. A
     /// copy's totals are its home's.
-    pub(super) fn write_before_read(&self, name: Option<&str>) -> Result<bool> {
-        if self.file.is_copy() || !self.totals.changed_for(name) {
-            return Ok(false);
+    ///
+    /// It asks only once it holds the turn to write: a write under way took
+    /// the totals, and so cleared what changed, before it commits, and a read
+    /// that asked beside it would read the file without them.
+    pub(super) fn write_before_read(&self, name: Option<&str>) -> Result<()> {
+        if self.file.is_copy() {
+            return Ok(());
         }
-        // a read beside this one may have written them while this one waited
-        let mut wrote = false;
-        self.write_totals_when(|| {
-            wrote = self.totals.changed_for(name);
-            wrote
-        })?;
-        Ok(wrote)
+        self.write_totals_when(|| self.totals.changed_for(name))
     }
 
     fn write_totals_when(&self, wanted: impl FnOnce() -> bool) -> Result<()> {
@@ -287,7 +285,30 @@ fn place(points: &mut [Point], newest: i64) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::metrics::fixture::{HOUR, SECOND, fixture};
+
+    // contract: MET-24
+    #[test]
+    fn a_read_beside_a_write_under_way_waits_for_it_and_reads_to_its_samples() {
+        let f = fixture();
+        let stats = f.metrics();
+        stats.counter("calls").open().unwrap().inc();
+        let engine = f.engine();
+        // a write under way holds the turn, and its samples lie past the read's start
+        let writing = lock(&engine.writing);
+        let reader = f.metrics();
+        let read = std::thread::spawn(move || reader.query().name("calls").since(HOUR).latest().unwrap());
+        std::thread::sleep(Duration::from_millis(50));
+        f.pass(SECOND);
+        engine.write_totals_now().unwrap();
+        drop(writing);
+        let newest = read.join().unwrap();
+        assert_eq!(newest.len(), 1, "the read found the write it waited for");
+        assert_eq!(newest[0].value, 1.0);
+    }
 
     #[test]
     fn a_write_lands_after_what_its_series_holds() {

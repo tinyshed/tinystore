@@ -434,9 +434,10 @@ impl Query {
     /// those of the check named as the engine's. A query that sees the
     /// instruments writes their totals first when it finds one that
     /// changed, and is checked again after, since its range ends at the
-    /// clock and the write's samples lie at it. A page after the first
-    /// writes nothing: it keeps the first page's clock, which a write's
-    /// samples lie past.
+    /// clock and the write's samples lie at it: its own write's, or those of
+    /// a write under way it waited for. A page after the first writes
+    /// nothing: it keeps the first page's clock, which a write's samples lie
+    /// past.
     fn once_checked<C: Send + 'static, T: 'static>(
         &self,
         fresh: Fresh,
@@ -447,8 +448,12 @@ impl Query {
         let query = self.clone();
         let call = move || -> Result<T> {
             let sees = fresh == Fresh::Written && query.after.is_none();
-            let wrote = sees && query.engine.write_before_read(query.name.as_deref())?;
-            let checked = if wrote { check(&query)? } else { checked };
+            let checked = if sees {
+                query.engine.write_before_read(query.name.as_deref())?;
+                check(&query)?
+            } else {
+                checked
+            };
             run(&query.engine, checked)
         };
         Ok(Box::new(move || call().map_err(|error| error.within("metrics"))))
