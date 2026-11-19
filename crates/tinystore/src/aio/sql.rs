@@ -37,9 +37,9 @@
 //! with `returning` does, is queued at the writer by the read that finds it
 //! writes, and from then on it commits as a write does; one the database
 //! knows writes is queued in its first poll. A write is a database's `exec`
-//! and `batch`, and a table's `insert`, `insert_all`, `upsert`, `update` and
-//! `delete`: polled, it commits with its group whether or not its future is
-//! still awaited.
+//! and `batch`, and a table's `insert`, `insert_all`, `upsert`,
+//! `upsert_all`, `update` and `delete`: polled, it commits with its group
+//! whether or not its future is still awaited.
 //!
 //! None commits, syncs the disk or waits on the thread that polls its
 //! future: a commit's lead goes to the store's pool. A call converts its
@@ -482,10 +482,28 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Table<T> {
     /// [`sql::Table::upsert`] does; `None` when the upsert's condition kept
     /// that row.
     pub fn upsert(&self, row: &T, upsert: Upsert) -> impl Future<Output = Result<Option<T>>> + Send + 'static {
-        let written = sql::upsert_sql(self.name(), row, upsert).map(|statement| {
+        let written = sql::upsert_sql(self.name(), std::slice::from_ref(row), upsert).map(|statement| {
             self.query.database.written(statement, Wanted::One, |rows| Ok(rows.decode::<T>()?.into_iter().next()))
         });
         async move { written?.await }
+    }
+
+    /// Upserts rows of one shape as one statement, all of them or none, as
+    /// [`sql::Table::upsert_all`] does. The rows are encoded when the call is
+    /// made.
+    pub fn upsert_all(&self, rows: &[T], upsert: Upsert) -> impl Future<Output = Result<Vec<T>>> + Send + 'static {
+        let statement = upsert
+            .check()
+            .and_then(|()| (!rows.is_empty()).then(|| sql::upsert_sql(self.name(), rows, upsert)).transpose());
+        let written = statement.map(|statement| {
+            statement.map(|statement| self.query.database.written(statement, Wanted::All, Rows::decode::<T>))
+        });
+        async move {
+            match written? {
+                Some(written) => written.await,
+                None => Ok(Vec::new()),
+            }
+        }
     }
 }
 

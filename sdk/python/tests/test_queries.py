@@ -109,6 +109,16 @@ def written(pairs: list[list[Any]]) -> dict[str, Any]:
     return {name: made(value) for name, value in pairs}
 
 
+def upserting(options: dict[str, Any]) -> dict[str, Any]:
+    """An upsert's keywords as a vector's options give them: an absent update names none."""
+    where = options.get("where")
+    return {
+        "conflict": options["conflict"],
+        "update": options.get("update", []),
+        "where": None if where is None else condition_of(where),
+    }
+
+
 async def sent(vector: dict[str, Any]) -> tuple[str, list[Any]]:
     """What a vector's steps and the call it ends in send."""
     recorder = Recorder()
@@ -124,13 +134,10 @@ async def sent(vector: dict[str, Any]) -> tuple[str, list[Any]]:
         await table.insert([dict(row) for row in vector["insert"]])
     elif "upsert" in vector:
         pairs, options = vector["upsert"]
-        where = options.get("where")
-        await table.upsert(
-            dict(pairs),
-            conflict=options["conflict"],
-            update=options["update"],
-            where=None if where is None else condition_of(where),
-        )
+        await table.upsert(dict(pairs), **upserting(options))
+    elif "upserts" in vector:
+        rows, options = vector["upserts"]
+        await table.upsert([dict(pairs) for pairs in rows], **upserting(options))
     elif vector.get("count"):
         await query.count()
     elif "list" in vector:

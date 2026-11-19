@@ -7,10 +7,16 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { CorruptError, InvalidError } from '../src/errors.ts'
-import { literalRows, namesOf, type Query, Table } from '../src/query.ts'
+import { literalRows, namesOf, type Query, Table, type UpsertOptions } from '../src/query.ts'
 import { type Condition, type Done, type Runner, type Sql, type SqlArg, sql } from '../src/sql.ts'
 
 type Step = Record<string, unknown>
+
+interface Upserting {
+	conflict: string
+	update?: string[]
+	where?: unknown
+}
 
 interface Case {
 	name: string
@@ -19,7 +25,8 @@ interface Case {
 	update?: [string, unknown][]
 	delete?: true
 	insert?: [string, unknown][][]
-	upsert?: [[string, unknown][], { conflict: string; update: string[]; where?: unknown }]
+	upsert?: [[string, unknown][], Upserting]
+	upserts?: [[string, unknown][][], Upserting]
 	count?: true
 	list?: { limit: number }
 	text?: string
@@ -119,6 +126,14 @@ function written(values: Record<string, unknown>): Record<string, unknown> {
 	)
 }
 
+/** An upsert's options as a vector gives them; one without update is what a caller without types sends. */
+function upserting(options: Upserting): UpsertOptions<Record<string, unknown>> {
+	return {
+		...options,
+		where: options.where === undefined ? undefined : conditionOf(options.where),
+	} as UpsertOptions<Record<string, unknown>>
+}
+
 /** What a vector's steps and the call it ends in send. */
 async function sent(vector: Case): Promise<{ text: string; values: readonly SqlArg[] }> {
 	const recorder = new Recorder()
@@ -132,11 +147,13 @@ async function sent(vector: Case): Promise<{ text: string; values: readonly SqlA
 		await table.insert(vector.insert.map(row => Object.fromEntries(row)))
 	} else if (vector.upsert !== undefined) {
 		const [pairs, options] = vector.upsert
-		const row = Object.fromEntries(pairs)
-		await table.upsert(row, {
-			...options,
-			where: options.where === undefined ? undefined : conditionOf(options.where),
-		})
+		await table.upsert(Object.fromEntries(pairs), upserting(options))
+	} else if (vector.upserts !== undefined) {
+		const [rows, options] = vector.upserts
+		await table.upsert(
+			rows.map(pairs => Object.fromEntries(pairs)),
+			upserting(options),
+		)
 	} else if (vector.count) {
 		await query.count()
 	} else if (vector.list !== undefined) {

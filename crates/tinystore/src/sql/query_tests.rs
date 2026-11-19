@@ -135,6 +135,17 @@ fn kept(value: &Value) -> Json {
     }
 }
 
+/// An upsert as a vector's options give it: an absent `update` names none.
+fn upsert_of(options: &Json) -> Upsert {
+    let update = options.get("update").and_then(Json::as_array).cloned().unwrap_or_default();
+    let mut asked = Upsert::on([options["conflict"].as_str().unwrap()])
+        .update(update.iter().map(|name| name.as_str().unwrap().to_owned()));
+    if let Some(only_if) = options.get("where") {
+        asked = asked.only_if(condition(only_if));
+    }
+    asked
+}
+
 /// Runs the call a vector ends in, which leaves its statement with `last`.
 fn ran(
     vector: &Json,
@@ -155,13 +166,10 @@ fn ran(
         let rows: Vec<Ordered> = rows.as_array().unwrap().iter().map(ordered).collect();
         table.insert_all(&rows).map(drop)
     } else if let Some(upsert) = vector.get("upsert") {
-        let options = &upsert[1];
-        let update = options["update"].as_array().unwrap().iter().map(|name| name.as_str().unwrap().to_owned());
-        let mut asked = Upsert::on([options["conflict"].as_str().unwrap()]).update(update);
-        if let Some(only_if) = options.get("where") {
-            asked = asked.only_if(condition(only_if));
-        }
-        table.upsert(&ordered(&upsert[0]), asked).map(drop)
+        table.upsert(&ordered(&upsert[0]), upsert_of(&upsert[1])).map(drop)
+    } else if let Some(upserts) = vector.get("upserts") {
+        let rows: Vec<Ordered> = upserts[0].as_array().unwrap().iter().map(ordered).collect();
+        table.upsert_all(&rows, upsert_of(&upserts[1])).map(drop)
     } else if vector.get("count").is_some() {
         query.count().map(drop)
     } else if let Some(page) = vector.get("list") {
@@ -313,6 +321,40 @@ fn an_upsert_sets_only_what_it_names_on_the_row_its_owner_holds() {
     assert_eq!((changed.title.as_str(), changed.done), ("still mine", false), "only the title it named");
     assert!(notes.upsert(&note("u1", 2, "stolen"), owners(2)).unwrap().is_none(), "another's row stays as it is");
     assert_eq!(notes.filter(sql::eq("id", "u1")).one().unwrap().unwrap().title, "still mine");
+}
+
+// contract: SQL-15
+#[test]
+fn an_upsert_of_rows_writes_every_row_or_none_in_one_statement() {
+    let f = fixture();
+    let db = f.store.database("app").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
+    let notes = db.table::<Note>("notes");
+    let owners = |author: i64| Upsert::on(["id"]).update(["title"]).only_if(sql::eq("author_id", &author));
+    notes.insert(&note("u1", 1, "mine")).unwrap();
+    notes.insert(&note("u2", 2, "theirs")).unwrap();
+
+    let rows = [note("u1", 1, "still mine"), note("u2", 1, "stolen"), note("u3", 1, "new")];
+    let written = notes.upsert_all(&rows, owners(1)).unwrap();
+    let titles: Vec<&str> = written.iter().map(|row| row.title.as_str()).collect();
+    assert_eq!(titles, ["still mine", "new"], "every row it wrote, not the one whose owner kept it");
+    assert_eq!(notes.filter(sql::eq("id", "u2")).one().unwrap().unwrap().title, "theirs");
+
+    let broken = [note("u4", 1, "a"), Note { done: true, ..note("u5", 1, "b") }];
+    let refuse_u5 =
+        "create trigger no_u5 before insert on notes when new.id = 'u5' begin select raise(abort, 'no'); end";
+    db.exec(refuse_u5).unwrap();
+    assert_eq!(notes.upsert_all(&broken, owners(1)).unwrap_err().kind(), ErrorKind::Invalid);
+    assert!(notes.filter(sql::eq("id", "u4")).one().unwrap().is_none(), "one statement: none of its rows");
+
+    // a key twice: the rows go in order, so the second sets what the first wrote, held or not
+    let twice = [note("u6", 1, "a"), note("u6", 1, "b")];
+    assert_eq!(notes.upsert_all(&twice, owners(1)).unwrap().len(), 2);
+    let again = [note("u6", 1, "c"), note("u6", 1, "d")];
+    assert_eq!(notes.upsert_all(&again, owners(1)).unwrap().len(), 2);
+    assert_eq!(notes.filter(sql::eq("id", "u6")).one().unwrap().unwrap().title, "d", "the last row's title stays");
+    assert!(notes.upsert_all(&[], owners(1)).unwrap().is_empty(), "no row writes nothing");
+    let unnamed = notes.upsert_all(&[], Upsert::on(["id"])).unwrap_err();
+    assert!(unnamed.to_string().contains("the columns its update sets"), "{unnamed}");
 }
 
 #[test]

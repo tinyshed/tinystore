@@ -455,6 +455,10 @@ async fn a_tables_calls_answer_as_the_blocking_ones_do() {
     assert_eq!(renamed.map(|row| row.title).as_deref(), Some("Buy oat milk"));
     let theirs = Upsert::on(["id"]).update(["title"]).only_if(sql::eq("author_id", &7));
     assert_eq!(notes.upsert(&note("n1", 42, "Not theirs"), theirs).await.unwrap(), None, "its condition kept it");
+    let both = [note("n1", 42, "Buy milk again"), note("n4", 42, "Pay rent")];
+    let upserted = notes.upsert_all(&both, Upsert::on(["id"]).update(["title"])).await.unwrap();
+    assert_eq!(upserted, both, "one statement, every row written");
+    assert!(notes.upsert_all(&[], Upsert::on(["id"])).await.is_err(), "no update named, though no row");
 
     let mine = notes.filter(sql::eq("author_id", &42)).order_by("id", Direction::Desc).limit(2);
     let same = blocking.filter(sql::eq("author_id", &42)).order_by("id", Direction::Desc).limit(2);

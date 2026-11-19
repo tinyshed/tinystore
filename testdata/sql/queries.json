@@ -511,6 +511,79 @@
       ]
     },
     {
+      "name": "rows upserted as one statement, each row's values in turn",
+      "table": "notes",
+      "upserts": [
+        [
+          [
+            [
+              "id",
+              "n1"
+            ],
+            [
+              "title",
+              "Buy milk"
+            ]
+          ],
+          [
+            [
+              "id",
+              "n2"
+            ],
+            [
+              "title",
+              "Call mom"
+            ]
+          ]
+        ],
+        {
+          "conflict": "id",
+          "update": [
+            "title"
+          ]
+        }
+      ],
+      "text": "insert into \"notes\" (\"id\", \"title\") values (?, ?), (?, ?) on conflict (\"id\") do update set \"title\" = excluded.\"title\" returning *",
+      "values": [
+        "n1",
+        "Buy milk",
+        "n2",
+        "Call mom"
+      ]
+    },
+    {
+      "name": "an upsert of rows that names no column to update is refused before it is sent",
+      "table": "notes",
+      "upserts": [
+        [
+          [
+            [
+              "id",
+              "n1"
+            ],
+            [
+              "title",
+              "Buy milk"
+            ]
+          ],
+          [
+            [
+              "id",
+              "n2"
+            ],
+            [
+              "title",
+              "Call mom"
+            ]
+          ]
+        ],
+        {
+          "conflict": "id"
+        }
+      ],
+      "refused": "an upsert names the columns its update sets"
+    },
+    {
       "name": "a count counts every match, without the order and the limit",
       "table": "orders",
       "steps": [

@@ -485,14 +485,7 @@ export class Table<T = Row> extends Query<T> {
 			new Sql(`${statement.text} returning *`, statement.values),
 			'all',
 		)
-		const read: T[] = []
-		for (const values of answered.rows) {
-			const row: Row = {}
-			answered.columns.forEach((column, at) => {
-				row[column] = values[at] ?? null
-			})
-			read.push(await this.read(row))
-		}
+		const read = await this.#rowsOf(answered)
 		return Array.isArray(given) ? read : read[0]!
 	}
 
@@ -500,15 +493,35 @@ export class Table<T = Row> extends Query<T> {
 	 * Inserts a row, or, when its key is taken, sets the columns `update`
 	 * names on the row that holds it, if that row meets `where`. It gives
 	 * back the row as the file keeps it, or undefined when `where` kept it.
+	 * A list of rows is one statement, all of them or none, and gives back
+	 * the rows it wrote, without those whose key `where` kept.
 	 */
-	async upsert(row: Partial<T>, options: UpsertOptions<T>): Promise<T | undefined> {
+	upsert(row: Partial<T>, options: UpsertOptions<T>): Promise<T | undefined>
+	upsert(rows: readonly Partial<T>[], options: UpsertOptions<T>): Promise<T[]>
+	async upsert(
+		given: Partial<T> | readonly Partial<T>[],
+		options: UpsertOptions<T>,
+	): Promise<T | undefined | T[]> {
+		// checked before anything is read of them: a caller without types may leave either out
+		if (options?.conflict === undefined || options.conflict.length === 0) {
+			throw new InvalidError('an upsert names its conflict columns, the key')
+		}
+		if (!Array.isArray(options.update) || options.update.length === 0) {
+			throw new InvalidError('an upsert names the columns its update sets')
+		}
+		const many = Array.isArray(given)
+		const rows = many ? (given as readonly Partial<T>[]) : [given as Partial<T>]
+		if (rows.length === 0) {
+			return []
+		}
 		const conflict = (
 			typeof options.conflict === 'string' ? [options.conflict] : [...options.conflict]
 		).map(identOf)
-		if (options.update.length === 0) {
-			throw new InvalidError('an upsert names the columns its update sets')
-		}
-		const insert = insertOf(this.name, [row as Record<string, unknown>], this.source.types)
+		const insert = insertOf(
+			this.name,
+			rows as readonly Record<string, unknown>[],
+			this.source.types,
+		)
 		const sets = options.update
 			.map(name => `${identOf(name)} = excluded.${identOf(name)}`)
 			.join(', ')
@@ -520,15 +533,25 @@ export class Table<T = Row> extends Query<T> {
 			text += ` where ${where.text}`
 			values.push(...where.values)
 		}
-		const answered = await this.source.runner.rows(new Sql(`${text} returning *`, values), 'one')
-		if (answered.rows.length === 0) {
-			return undefined
+		const answered = await this.source.runner.rows(
+			new Sql(`${text} returning *`, values),
+			many ? 'all' : 'one',
+		)
+		const read = await this.#rowsOf(answered)
+		return many ? read : read[0]
+	}
+
+	/** The rows a write gave back, each as the table's types and schema read it. */
+	async #rowsOf(answered: Awaited<ReturnType<Runner['rows']>>): Promise<T[]> {
+		const read: T[] = []
+		for (const values of answered.rows) {
+			const row: Row = {}
+			answered.columns.forEach((column, at) => {
+				row[column] = values[at] ?? null
+			})
+			read.push(await this.read(row))
 		}
-		const read: Row = {}
-		answered.columns.forEach((column, at) => {
-			read[column] = answered.rows[0]![at] ?? null
-		})
-		return this.read(read)
+		return read
 	}
 }
 

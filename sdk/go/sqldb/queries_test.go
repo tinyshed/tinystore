@@ -39,20 +39,39 @@ func (r *recorder) each(context.Context, Piece, []wire.SqlOrder) iter.Seq2[[]any
 func (r *recorder) describeIt() string { return "sql vectors" }
 
 type vector struct {
-	Name   string            `json:"name"`
-	Table  string            `json:"table"`
-	Steps  []json.RawMessage `json:"steps"`
-	Update [][]any           `json:"update"`
-	Delete bool              `json:"delete"`
-	Insert [][][]any         `json:"insert"`
-	Upsert []json.RawMessage `json:"upsert"`
-	Count  bool              `json:"count"`
-	List   *struct {
+	Name    string            `json:"name"`
+	Table   string            `json:"table"`
+	Steps   []json.RawMessage `json:"steps"`
+	Update  [][]any           `json:"update"`
+	Delete  bool              `json:"delete"`
+	Insert  [][][]any         `json:"insert"`
+	Upsert  []json.RawMessage `json:"upsert"`
+	Upserts []json.RawMessage `json:"upserts"`
+	Count   bool              `json:"count"`
+	List    *struct {
 		Limit int `json:"limit"`
 	} `json:"list"`
 	Text    string `json:"text"`
 	Values  []any  `json:"values"`
 	Refused string `json:"refused"`
+}
+
+// upserting is an upsert's options as a vector gives them: an absent update names none.
+func upserting(t *testing.T, raw json.RawMessage) []UpsertOption {
+	var options map[string]any
+	_ = json.Unmarshal(raw, &options)
+	opts := []UpsertOption{Conflict(options["conflict"].(string))}
+	if update, ok := options["update"].([]any); ok {
+		var names []string
+		for _, u := range update {
+			names = append(names, u.(string))
+		}
+		opts = append(opts, Update(names...))
+	}
+	if where, ok := options["where"].(map[string]any); ok {
+		opts = append(opts, Where(conditionOf(t, where)))
+	}
+	return opts
 }
 
 func conditionOf(t *testing.T, given map[string]any) Condition {
@@ -228,20 +247,18 @@ func TestEveryQueryVectorIsWrittenAlike(t *testing.T) {
 				_, err = r.rows(ctx, Piece{text: statement.text + " returning *", values: statement.values, err: statement.err}, "all")
 			case v.Upsert != nil:
 				var pairs [][]any
-				var options map[string]any
 				_ = json.Unmarshal(v.Upsert[0], &pairs)
-				_ = json.Unmarshal(v.Upsert[1], &options)
-				opts := []UpsertOption{Conflict(options["conflict"].(string))}
-				var update []string
-				for _, u := range options["update"].([]any) {
-					update = append(update, u.(string))
-				}
-				opts = append(opts, Update(update...))
-				if where, ok := options["where"].(map[string]any); ok {
-					opts = append(opts, Where(conditionOf(t, where)))
+				anyTable := OpenTable[any](r, v.Table)
+				_, err = anyTable.Upsert(ctx, orderedRow(pairs), upserting(t, v.Upsert[1])...)
+			case v.Upserts != nil:
+				var given [][][]any
+				_ = json.Unmarshal(v.Upserts[0], &given)
+				rows := make([]any, len(given))
+				for i, pairs := range given {
+					rows[i] = orderedRow(pairs)
 				}
 				anyTable := OpenTable[any](r, v.Table)
-				_, err = anyTable.Upsert(ctx, orderedRow(pairs), opts...)
+				_, err = anyTable.UpsertMany(ctx, rows, upserting(t, v.Upserts[1])...)
 			case v.Count:
 				_, err = q.Count(ctx)
 			case v.List != nil:

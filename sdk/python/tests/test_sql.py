@@ -344,6 +344,27 @@ async def test_an_upsert_sets_only_what_it_names_on_the_row_its_owner_holds(app:
     assert kept is not None and kept.title == "still mine"
 
 
+# contract: SQL-15
+async def test_an_upsert_of_rows_writes_every_row_or_none_in_one_statement(app: tinystore.Database) -> None:
+    notes = app.table("notes", Note)
+    mine: dict[str, Any] = {"conflict": "id", "update": ["title"], "where": {"author_id": 1}}
+    await notes.insert([Note("ul1", 1, "mine"), Note("ul2", 2, "theirs")])
+    written = await notes.upsert(
+        [Note("ul1", 1, "still mine"), Note("ul2", 1, "stolen"), Note("ul3", 1, "new")], **mine
+    )
+    assert [row.title for row in written] == ["still mine", "new"]
+    kept = await notes.where(id="ul2").one()
+    assert kept is not None and kept.title == "theirs"
+    with pytest.raises(tinystore.InvalidError):
+        await notes.upsert(
+            [{"id": "ul4", "author_id": 1, "title": "a"}, {"id": "ul5", "author_id": 1, "title": None}], **mine
+        )
+    assert await notes.where(id="ul4").one() is None
+    assert await notes.upsert([], **mine) == []
+    with pytest.raises(tinystore.InvalidError, match="the columns its update sets"):
+        await notes.upsert([Note("ul6", 1, "a")], conflict="id", update=[])
+
+
 async def test_a_page_reads_after_the_last_row_of_the_one_before_and_only_its_own_query(
     app: tinystore.Database,
 ) -> None:

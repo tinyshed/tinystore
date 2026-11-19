@@ -609,6 +609,14 @@ func (t *Table[T]) Upsert(ctx context.Context, row T, opts ...UpsertOption) (Res
 
 Upsert inserts a row, or, when the columns Conflict names are taken, sets the columns Update names on the row that holds them, when that row meets Where: its Changes is 0 when Where kept it.
 
+### Table.UpsertMany
+
+```go
+func (t *Table[T]) UpsertMany(ctx context.Context, rows []T, opts ...UpsertOption) (Result, error)
+```
+
+UpsertMany upserts rows of one shape as one statement, all of them or none, each as Upsert does one: its Changes is the rows it wrote, without those whose key Where kept. SQLite refuses a list that holds one key twice.
+
 ## Tx
 
 ```go

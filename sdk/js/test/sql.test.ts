@@ -513,6 +513,51 @@ for (const way of ways) {
 			expect((await notes.where({ id: 'up1' }).one())?.title).toBe('still mine')
 		})
 
+		// contract: SQL-15
+		test('an upsert of rows writes every row or none, in one statement', async () => {
+			const notes = app.table<Typed>('notes', { types })
+			const owners = (author: number) =>
+				({ conflict: 'id', update: ['title'] as const, where: { author_id: author } }) as const
+			await notes.insert([
+				{ id: 'ul1', author_id: 1, title: 'mine' },
+				{ id: 'ul2', author_id: 2, title: 'theirs' },
+			])
+			const written = await notes.upsert(
+				[
+					{ id: 'ul1', author_id: 1, title: 'still mine' },
+					{ id: 'ul2', author_id: 1, title: 'stolen' },
+					{ id: 'ul3', author_id: 1, title: 'new' },
+				],
+				owners(1),
+			)
+			expect(written.map(row => row.title)).toEqual(['still mine', 'new'])
+			expect((await notes.where({ id: 'ul2' }).one())?.title).toBe('theirs')
+			const broken = await caught(
+				notes.upsert(
+					[
+						{ id: 'ul4', author_id: 1, title: 'a' },
+						{ id: 'ul5', author_id: 1, title: null as never },
+					],
+					owners(1),
+				),
+			)
+			expect(broken).toBeInstanceOf(InvalidError)
+			expect(await notes.where({ id: 'ul4' }).one()).toBeUndefined()
+			expect(await notes.upsert([], owners(1))).toEqual([])
+			// a caller without types who leaves out update gets the store's error, not a TypeError
+			const unnamed = await caught(
+				notes.upsert(
+					[{ id: 'ul6', author_id: 1, title: 'a' }] as never,
+					{ conflict: ['id'] } as never,
+				),
+			)
+			expect(unnamed).toBeInstanceOf(InvalidError)
+			expect((unnamed as Error).message).toContain('the columns its update sets')
+			expect(await caught(notes.upsert({ id: 'ul6' } as never, undefined as never))).toBeInstanceOf(
+				InvalidError,
+			)
+		})
+
 		test('a page reads after the last row of the one before, and only its own query', async () => {
 			const notes = app.table<Typed>('notes', { types })
 			for (let n = 0; n < 5; n++) {

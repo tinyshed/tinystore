@@ -116,6 +116,18 @@ impl Upsert {
         self.only_if = Some(condition.into());
         self
     }
+
+    /// Refuses an upsert that names no key or no column to update, as every
+    /// SDK does before anything is sent.
+    pub(crate) fn check(&self) -> Result<()> {
+        if self.conflict.is_empty() {
+            return Err(Error::invalid("an upsert names its conflict columns, the key"));
+        }
+        if self.update.is_empty() {
+            return Err(Error::invalid("an upsert names the columns its update sets"));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -246,9 +258,21 @@ impl<T: Serialize + DeserializeOwned> Table<'_, T> {
     /// names on the row that holds it, if that row meets the upsert's
     /// condition; `None` when the condition kept it.
     pub fn upsert(&self, row: &T, upsert: Upsert) -> Result<Option<T>> {
-        let statement = upsert_sql(self.name(), row, upsert)?;
+        let statement = upsert_sql(self.name(), std::slice::from_ref(row), upsert)?;
         let rows: Vec<T> = self.query.runner.rows_of(&statement, Wanted::One)?.decode()?;
         Ok(rows.into_iter().next())
+    }
+
+    /// Upserts rows of one shape as one statement, all of them or none, each
+    /// as [`Table::upsert`] does one. It gives back the rows it wrote as the
+    /// file keeps them, without a row whose key is held by a row the
+    /// condition kept; SQLite refuses a list that holds one key twice.
+    pub fn upsert_all(&self, rows: &[T], upsert: Upsert) -> Result<Vec<T>> {
+        upsert.check()?;
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.query.runner.rows_of(&upsert_sql(self.name(), rows, upsert)?, Wanted::All)?.decode()
     }
 }
 
@@ -731,14 +755,13 @@ pub(crate) fn insert_sql<T: Serialize>(table: &str, rows: &[T]) -> Result<Sql> {
     Ok(Sql::piece(format!("{text} returning *"), values, false))
 }
 
-/// What `upsert` runs: an insert of `row` that, when its key is taken, sets
-/// the columns the upsert names on the row that holds it, and gives back the
-/// row it wrote, or none when the upsert's condition kept the row.
-pub(crate) fn upsert_sql<T: Serialize>(table: &str, row: &T, upsert: Upsert) -> Result<Sql> {
-    if upsert.update.is_empty() {
-        return Err(Error::invalid("an upsert names the columns its update sets"));
-    }
-    let insert = insert_of(table, std::slice::from_ref(row))?;
+/// What `upsert` and `upsert_all` run: an insert of `rows` that, when a
+/// row's key is taken, sets the columns the upsert names on the row that
+/// holds it, and gives back the rows it wrote, without those the upsert's
+/// condition kept.
+pub(crate) fn upsert_sql<T: Serialize>(table: &str, rows: &[T], upsert: Upsert) -> Result<Sql> {
+    upsert.check()?;
+    let insert = insert_of(table, rows)?;
     let (insert_text, mut values, _) = insert.into_parts();
     let conflict = quote_all(&upsert.conflict)?;
     let sets = upsert

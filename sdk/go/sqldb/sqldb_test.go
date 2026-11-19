@@ -413,6 +413,38 @@ func TestATableInsertsUpdatesAndDeletesWhatItsConditionSays(t *testing.T) {
 	})
 }
 
+// contract: SQL-15
+func TestAnUpsertOfRowsWritesEveryRowOrNoneInOneStatement(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		notes := sqldb.OpenTable[Note](db, "notes")
+		row := func(id string, author int64, title string) Note {
+			return Note{ID: id, AuthorID: author, Title: title, Tags: []string{}}
+		}
+		mine := []sqldb.UpsertOption{sqldb.Conflict("id"), sqldb.Update("title"), sqldb.Where(sqldb.Eq{"author_id": 1})}
+		ways.Must(notes.InsertMany(ctx, []Note{row("ul1", 1, "mine"), row("ul2", 2, "theirs")}))
+		written := ways.Must(notes.UpsertMany(ctx, []Note{row("ul1", 1, "still mine"), row("ul2", 1, "stolen"), row("ul3", 1, "new")}, mine...))
+		kept, _ := ways.Must2(notes.Where(sqldb.Eq{"id": "ul2"}).One(ctx))
+		if written.Changes != 2 || kept.Title != "theirs" {
+			t.Fatalf("written %+v kept %+v", written, kept)
+		}
+		ways.Must(db.Exec(ctx, `create trigger no_ul5 before insert on notes when new.id = 'ul5' begin select raise(abort, 'no'); end`))
+		_, err := notes.UpsertMany(ctx, []Note{row("ul4", 1, "a"), row("ul5", 1, "b")}, mine...)
+		is(t, err, tinystore.ErrInvalid)
+		if _, found := ways.Must2(notes.Where(sqldb.Eq{"id": "ul4"}).One(ctx)); found {
+			t.Fatal("one statement: none of its rows")
+		}
+		if none := ways.Must(notes.UpsertMany(ctx, nil, mine...)); none.Changes != 0 {
+			t.Fatalf("none %+v", none)
+		}
+		_, err = notes.UpsertMany(ctx, []Note{row("ul6", 1, "a")}, sqldb.Conflict("id"))
+		if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "the columns its update sets") {
+			t.Fatalf("got %v", err)
+		}
+	})
+}
+
 func TestAPageReadsAfterTheLastRowOfTheOneBeforeAndOnlyItsOwnQuery(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

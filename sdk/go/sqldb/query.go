@@ -1251,6 +1251,21 @@ func (w whereOption) upsert(o *upsertOptions) { o.where = w.c }
 // the columns Update names on the row that holds them, when that row meets
 // Where: its Changes is 0 when Where kept it.
 func (t *Table[T]) Upsert(ctx context.Context, row T, opts ...UpsertOption) (Result, error) {
+	return t.upsert(ctx, []any{row}, "one", opts)
+}
+
+// UpsertMany upserts rows of one shape as one statement, all of them or
+// none, each as Upsert does one: its Changes is the rows it wrote, without
+// those whose key Where kept. SQLite refuses a list that holds one key twice.
+func (t *Table[T]) UpsertMany(ctx context.Context, rows []T, opts ...UpsertOption) (Result, error) {
+	given := make([]any, len(rows))
+	for i, row := range rows {
+		given[i] = row
+	}
+	return t.upsert(ctx, given, "all", opts)
+}
+
+func (t *Table[T]) upsert(ctx context.Context, rows []any, want string, opts []UpsertOption) (Result, error) {
 	var o upsertOptions
 	for _, opt := range opts {
 		opt.upsert(&o)
@@ -1258,10 +1273,16 @@ func (t *Table[T]) Upsert(ctx context.Context, row T, opts ...UpsertOption) (Res
 	if t.parts.err != nil {
 		return Result{}, t.parts.err
 	}
-	if len(o.conflict) == 0 || len(o.update) == 0 {
-		return Result{}, core.Errorf(core.Invalid, "an upsert names its Conflict columns and the columns its Update sets")
+	if len(o.conflict) == 0 {
+		return Result{}, core.Errorf(core.Invalid, "an upsert names its conflict columns, the key")
 	}
-	insert := insertOf(t.name, []any{row})
+	if len(o.update) == 0 {
+		return Result{}, core.Errorf(core.Invalid, "an upsert names the columns its update sets")
+	}
+	if len(rows) == 0 {
+		return Result{}, nil
+	}
+	insert := insertOf(t.name, rows)
 	if insert.err != nil {
 		return Result{}, insert.err
 	}
@@ -1285,7 +1306,7 @@ func (t *Table[T]) Upsert(ctx context.Context, row T, opts ...UpsertOption) (Res
 		values = append(values, condition.values...)
 	}
 	// returning, as every SDK writes it: a row comes back when one was written
-	got, err := t.runner.rows(ctx, Piece{text: text + " returning *", values: values}, "one")
+	got, err := t.runner.rows(ctx, Piece{text: text + " returning *", values: values}, want)
 	return Result{Changes: int64(len(got.rows))}, err
 }
 

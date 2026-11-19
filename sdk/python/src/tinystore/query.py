@@ -377,23 +377,52 @@ class Table[T](Query[T]):
         read = self._rows(answered)
         return read if many else read[0]
 
+    @overload
     async def upsert(
         self,
         row: T | Mapping[str, Any],
+        /,
         *,
         conflict: str | Sequence[str],
         update: Sequence[str],
         where: Condition | None = None,
-    ) -> T | None:
+    ) -> T | None: ...
+    @overload
+    async def upsert(
+        self,
+        rows: Sequence[T | Mapping[str, Any]],
+        /,
+        *,
+        conflict: str | Sequence[str],
+        update: Sequence[str],
+        where: Condition | None = None,
+    ) -> list[T]: ...
+    async def upsert(
+        self,
+        given: Any,
+        /,
+        *,
+        conflict: str | Sequence[str],
+        update: Sequence[str],
+        where: Condition | None = None,
+    ) -> Any:
         """Inserts a row, or, when its key is taken, sets the columns update names on the row that holds it.
 
         It does so when that row meets where, and gives back the row as the
-        file keeps it, or None when where kept it.
+        file keeps it, or None when where kept it. A list of rows is one
+        statement, all of them or none, and gives back the rows it wrote,
+        without those whose key where kept.
         """
-        keys = [ident_of(each) for each in ([conflict] if isinstance(conflict, str) else conflict)]
+        if not conflict:
+            raise InvalidError("an upsert names its conflict columns, the key")
         if not update:
             raise InvalidError("an upsert names the columns its update sets")
-        insert = _insert_of(self.name, [fields_of(row)])
+        many = isinstance(given, list | tuple)
+        rows = cast("Sequence[Any]", given) if many else [given]
+        if not rows:
+            return []
+        keys = [ident_of(each) for each in ([conflict] if isinstance(conflict, str) else conflict)]
+        insert = _insert_of(self.name, [fields_of(row) for row in rows])
         sets = ", ".join(f"{ident_of(name)} = excluded.{ident_of(name)}" for name in update)
         text = f"{insert.text} on conflict ({', '.join(keys)}) do update set {sets}"
         values = list(insert.values)
@@ -402,9 +431,9 @@ class Table[T](Query[T]):
             condition = checked(condition_of(where))
             text += f" where {condition.text}"
             values.extend(condition.values)
-        answered = await self._runner.rows(Sql(f"{text} returning *", tuple(values)), "one")
-        rows = self._rows(answered)
-        return rows[0] if rows else None
+        answered = await self._runner.rows(Sql(f"{text} returning *", tuple(values)), "all" if many else "one")
+        read = self._rows(answered)
+        return read if many else read[0] if read else None
 
 
 _NAME = r'("(?:[^"]|"")+"|[A-Za-z_][\w$]*)'

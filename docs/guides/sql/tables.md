@@ -76,6 +76,7 @@ const user = await users.insert({ email: 'ada@example.com', plan: 'pro' }) // as
 await users.insert([{ email: 'bob@example.com' }, { email: 'eve@example.com' }]) // one write, all or none
 
 await users.upsert({ id: 1, email: 'ada@example.com', plan: 'team' }, { conflict: 'id', update: ['plan'] })
+await users.upsert(fromBilling, { conflict: 'id', update: ['plan', 'seats'] }) // one statement, all or none
 ```
 
 ```python
@@ -83,6 +84,7 @@ user = await users.insert({"email": "ada@example.com", "plan": "pro"})  # as the
 await users.insert([{"email": "bob@example.com"}, {"email": "eve@example.com"}])  # one write, all or none
 
 await users.upsert(User(id=1, email="ada@example.com", plan="team"), conflict="id", update=["plan"])
+await users.upsert(from_billing, conflict="id", update=["plan", "seats"])  # one statement, all or none
 ```
 
 ```go
@@ -90,6 +92,7 @@ user, err := users.Insert(ctx, User{Email: "ada@example.com", Plan: "pro"}) // a
 _, err = users.InsertMany(ctx, []User{{Email: "bob@example.com"}, {Email: "eve@example.com"}})
 
 _, err = users.Upsert(ctx, User{ID: 1, Email: "ada@example.com", Plan: "team"}, sqldb.Conflict("id"), sqldb.Update("plan"))
+_, err = users.UpsertMany(ctx, fromBilling, sqldb.Conflict("id"), sqldb.Update("plan", "seats"))
 ```
 
 ```rust
@@ -97,12 +100,20 @@ let user = users.insert(&User { id: 1, email: "ada@example.com".into(), plan: "p
 users.insert_all(&[bob, eve])?; // one write, all or none
 
 users.upsert(&User { id: 1, email: "ada@example.com".into(), plan: "team".into() }, Upsert::on(["id"]).update(["plan"]))?;
+users.upsert_all(&from_billing, Upsert::on(["id"]).update(["plan", "seats"]))?; // one statement, all or none
 ```
 
 `insert` gives the row back as the file keeps it, with the id SQLite chose
 and the defaults it filled. An upsert inserts the row, or, when the key in
 `conflict` is taken, sets only the columns `update` names on the row that
 holds it.
+
+A list of rows, as `insert` takes, is one statement: every row is written or
+none is (contract SQL-15). The rows go in order, so a key that appears twice
+is set twice and the last row's values stay. It gives back the rows it
+wrote. `update` is still named: name each column a stored row should take
+from the new one. A statement holds at most 32,766 values, so a list of rows
+of 17 columns takes 1,927 rows; split a longer one, for `insert` too.
 
 An upsert can also say whose row it may change, so that an id from a request
 never overwrites another user's row:
