@@ -455,6 +455,21 @@ class _Reads:
                 return
             query["after"] = page.next
 
+    async def delete(self, **query: Unpack[Counted]) -> int:
+        """Deletes every event the query finds, of those appended before the call, and answers how many.
+
+        It takes a where, and no search: what the store keeps only for those events goes with them, a context of their
+        own, their keys and counts, the bytes they lay in. It cannot be undone, and run again it deletes what is left:
+        no poll's cursor moves, and an event's id stays held until the stream's keep passes its time. A backup taken
+        before it, and another node's store, keep the events.
+
+            await store.events().delete(streams=["activity"], where={"userId": 97516})
+        """
+        asked = _query_of(query)
+        return RecordsCount.decode(
+            await self._ask("records.delete", lambda h: RecordsQuery.encode(asked, handle=h))
+        ).get("count", 0)
+
     async def count(self, **query: Unpack[Counted]) -> int:
         """How many events the query finds."""
         asked = _query_of(query)

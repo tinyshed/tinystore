@@ -67,6 +67,7 @@ let page = store.all_events()?.list().since(Duration::from_hours(1)).min_level(L
 | [Traces](traces.md)                               | one request's lines across streams                                                 |
 | [Tail and poll](tail-and-poll.md)                 | live events, and every event once from a cursor                                    |
 | [Other programs' output](other-programs.md)       | another process's lines as events                                                  |
+| [Deleting events](deleting.md)                    | a person's events taken out of every stream, with what was kept only for them      |
 | [Repair](repair.md)                               | `damaged` and `drop`                                                               |
 
 New to Records? [What it is doing](../../handbook/chat/what-it-is-doing.md)

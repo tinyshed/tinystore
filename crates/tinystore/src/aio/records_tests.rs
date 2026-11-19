@@ -102,6 +102,11 @@ async fn awaited_appends_and_reads_answer_as_the_blocking_calls_do_on_the_same_s
     let expected: Vec<Event> = blocking.clone().limit(7).all().map(Result::unwrap).collect();
     assert_eq!((walked.len(), &walked), (32, &expected), "all walks every page as the iterator does");
     assert!(next(&mut all).await.is_none(), "and stays ended");
+
+    // contract: REC-20
+    assert_eq!(spawnable(list.clone().filter("route", "/login").delete()).await.unwrap(), 11);
+    assert_eq!(list.clone().filter("route", "/login").count().await.unwrap(), 0);
+    assert_eq!(list.delete().await.unwrap_err().kind(), crate::ErrorKind::Invalid);
 }
 
 #[tokio::test]

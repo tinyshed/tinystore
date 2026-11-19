@@ -88,6 +88,8 @@ message records.Page {
   2 next: str?           # the page after it; the last page has none
 }
 
+# The events a count found, or a delete deleted: a delete takes a query
+# with a where and no search, newest, limit or after.
 message records.Count {
   1 count: uint
 }
@@ -258,3 +260,4 @@ read  0x050c records.damaged(Empty)                      -> records.Damages
 write 0x050d records.drop(records.Damage)                -> Empty
 read  0x050e records.fields(records.FieldsAsked)         -> records.StreamFields
 read  0x050f records.largest(records.LargestAsked)       -> records.Events
+write 0x0510 records.delete(records.Query)               -> records.Count

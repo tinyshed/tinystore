@@ -24,6 +24,28 @@ use crate::{Error, ErrorKind, Result};
 pub(super) const TRUNCATE: &str = super::given::own!("pragma wal_checkpoint(truncate)");
 const FOREIGN_KEYS_OFF: &str = own!("pragma foreign_keys = off");
 const FOREIGN_KEYS_ON: &str = own!("pragma foreign_keys = on");
+/// What a commit frees is written over with zeros, its pages freed whole
+/// among it; where its page is written anyway; or left as it lay.
+#[cfg(feature = "records")]
+const ZEROED: &str = own!("pragma secure_delete = on");
+#[cfg(feature = "records")]
+const ZEROED_IN_PLACE: &str = own!("pragma secure_delete = fast");
+#[cfg(feature = "records")]
+const LEFT_AS_IT_LAY: &str = own!("pragma secure_delete = off");
+
+/// The writer zeroing all its commits free, till it is dropped and goes back
+/// to what its configuration says.
+#[cfg(feature = "records")]
+struct Zeroed<'f>(&'f File);
+
+#[cfg(feature = "records")]
+impl Drop for Zeroed<'_> {
+    /// A writer left zeroing would only write more; a file closed meanwhile
+    /// has no writer to tell.
+    fn drop(&mut self) {
+        let _ = self.0.set_on_writer(if self.0.config.zero_freed { ZEROED_IN_PLACE } else { LEFT_AS_IT_LAY });
+    }
+}
 
 thread_local! {
     /// The files whose writer this thread holds in a transaction, by address.
@@ -460,6 +482,79 @@ impl File {
         let given = self.write(most, move |tx| vacuum::give_back(tx, pages))?;
         lock(&self.unneeded).given(given);
         Ok(given)
+    }
+
+    /// Runs `work` with every row and page the file's commits free meanwhile
+    /// written over with zeros, its own commits and those beside them; then
+    /// gives back every free page, which may hold what commits before it
+    /// freed whole, and empties the WAL into the file. Once it returns, what
+    /// `work` deleted lies in no free page of a file made `incremental` and
+    /// no frame of its WAL, and in no free space of a page that one zeroing
+    /// in place wrote, as `zero_freed` does.
+    ///
+    /// A reader that still holds the WAL leaves its frames to the next
+    /// checkpoint that empties it, said in the log. A file a node logs keeps
+    /// its WAL for the log, which checkpoints it.
+    #[cfg(feature = "records")]
+    pub(crate) fn zeroing<T>(&self, work: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.refuse_inside_a_transaction("a delete", "would wait for the writer the transaction holds")?;
+        self.refuse_while_polled("a delete")?;
+        if self.is_copy() {
+            return work();
+        }
+        self.set_on_writer(ZEROED)?;
+        let zeroed = Zeroed(self);
+        let done = work().and_then(|done| self.give_back_every_page().map(|()| done));
+        drop(zeroed);
+        if done.is_ok() && logged(&self.capture).is_none() {
+            self.empty_wal()?;
+        }
+        done
+    }
+
+    /// Gives back every free page of a file made `incremental`, in one commit.
+    #[cfg(feature = "records")]
+    fn give_back_every_page(&self) -> Result<()> {
+        let found = self.read(vacuum::Occupancy::read)?;
+        if !found.incremental || found.free == 0 {
+            return Ok(());
+        }
+        let free = found.free;
+        let given = self.write(0, move |tx| vacuum::give_back(tx, free))?;
+        lock(&self.unneeded).given(given);
+        Ok(())
+    }
+
+    /// Sets a pragma of the adapter's own on the writer, between its
+    /// commits, as the store's gate lets this thread take it.
+    #[cfg(feature = "records")]
+    fn set_on_writer(&self, pragma: &str) -> Result<()> {
+        self.refuse_when_closed("a delete")?;
+        let waiting = self.wait_for_the_writer("a delete")?;
+        let writer = self.take_writer();
+        drop(waiting);
+        let set = writer.prepare_cached(pragma).and_then(|mut set| set.query_row([], |_| Ok(())));
+        set.map_err(|error| sql_error(format!("{}: {pragma}", self.describe()), error))
+    }
+
+    /// Copies the whole WAL into the file and cuts it to nothing, on the
+    /// writer held between its commits.
+    #[cfg(feature = "records")]
+    fn empty_wal(&self) -> Result<()> {
+        self.refuse_when_closed("a checkpoint")?;
+        let waiting = self.wait_for_the_writer("a checkpoint")?;
+        let writer = self.take_writer();
+        drop(waiting);
+        let busy = writer.query_row(TRUNCATE, [], |row| row.get::<_, i64>(0));
+        let busy = busy.map_err(|error| sql_error(format!("{}: a checkpoint", self.describe()), error))?;
+        if busy != 0 {
+            tracing::warn!(
+                target: "tinystore",
+                file = %self.describe(),
+                "a reader held the WAL past a delete: its frames go at the next checkpoint that empties it",
+            );
+        }
+        Ok(())
     }
 
     /// Whether a file made without `auto_vacuum` may be vacuumed now: its

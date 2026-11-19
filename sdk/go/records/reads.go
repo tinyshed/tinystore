@@ -287,6 +287,13 @@ func (r reads) count(ctx context.Context, q Query) (int, error) {
 	return int(count.Count), err
 }
 
+// delete is sent again after a lost connection: run again, it deletes what is left.
+func (r reads) delete(ctx context.Context, q Query) (int, error) {
+	var count wire.RecordsCount
+	err := r.query(ctx, wire.MethodRecordsDelete, q, &count)
+	return int(count.Count), err
+}
+
 func (r reads) top(ctx context.Context, key string, q Query) ([]Top, error) {
 	if _, err := q.asked(nil); err != nil {
 		return nil, err

@@ -143,6 +143,9 @@ export interface Query {
 /** A query of every event it finds, for what counts them. */
 export type Counted = Omit<Query, 'newest' | 'limit' | 'after'>
 
+/** A query of every event a delete takes out: one with a `where`, and no `search`. */
+export type Deleted = Omit<Counted, 'search' | 'where'> & { where: Record<string, unknown> }
+
 export interface Page {
 	events: Event[]
 	/** the page after it; the last page has none */
@@ -317,6 +320,25 @@ abstract class Reads {
 			}
 			after = page.next
 		}
+	}
+
+	/**
+	 * Deletes every event the query finds, of those appended before the
+	 * call, and what the store keeps only for them: a context of their own,
+	 * their keys and counts, the bytes they lay in. Answers how many it
+	 * deleted. It cannot be undone, and run again it deletes what is left:
+	 * no poll's cursor moves, and an event's id stays held until the
+	 * stream's keep passes its time. A backup taken before it, and another
+	 * node's store, keep the events.
+	 *
+	 *     await store.events().delete({ streams: ['activity'], where: { userId: 97516 } })
+	 */
+	async delete(query: Deleted): Promise<number> {
+		const asked = queryOf(query)
+		const answer = await this.ask('records.delete', handle =>
+			RecordsQuery.encode({ ...asked, handle }),
+		)
+		return RecordsCount.decode(answer).count ?? 0
 	}
 
 	/** How many events the query finds. */

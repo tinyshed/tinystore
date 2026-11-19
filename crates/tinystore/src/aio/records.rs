@@ -445,6 +445,15 @@ impl List {
         run::read(&self.pool, format!("{}: its field names", self.named), move || list.field_names_prefix(&prefix))
     }
 
+    /// Deletes every event the read finds, as
+    /// [`crate::records::List::delete`] does, and says how many. Once polled
+    /// it runs to its end on the store's pool, whether or not anyone still
+    /// awaits it, as a write does.
+    pub fn delete(&self) -> impl Future<Output = Result<u64>> + Send + 'static {
+        let list = self.list.clone();
+        run::blocking(&self.pool, None, format!("{}: a delete", self.named), move || list.delete())
+    }
+
     /// How many events the read finds. It walks every page of the read on
     /// one thread of the store's pool, several at once while they hold few
     /// events; a drop stops the walk at the page it reads.

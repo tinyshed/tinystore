@@ -135,6 +135,16 @@ type Counted = Omit<Query, 'newest' | 'limit' | 'after'>
 
 A query of every event it finds, for what counts them.
 
+## Deleted
+
+```ts
+type Deleted = Omit<Counted, 'search' | 'where'> & {
+    where: Record<string, unknown>
+}
+```
+
+A query of every event a delete takes out: one with a `where`, and no `search`.
+
 ## Page
 
 ```ts

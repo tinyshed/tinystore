@@ -24,6 +24,15 @@ func (e *Events) All(ctx context.Context, q Query) iter.Seq2[Event, error] {
 // Count is how many events the query finds.
 func (e *Events) Count(ctx context.Context, q Query) (int, error) { return e.reads().count(ctx, q) }
 
+// Delete deletes every event the query finds, of those appended before the
+// call, and what the store keeps only for them: a context of their own,
+// their keys and counts, the bytes they lay in. It answers how many it
+// deleted. It takes a Where, and no Search, Newest, Limit or After. It
+// cannot be undone, and run again it deletes what is left: no poll's cursor
+// moves, and an event's id stays held until the stream's keep passes its
+// time. A backup taken before it, and another node's store, keep the events.
+func (e *Events) Delete(ctx context.Context, q Query) (int, error) { return e.reads().delete(ctx, q) }
+
 // Top is a key's most frequent values and how many events hold each: ten
 // unless Limit asks for more, 1000 at most. The key is a field's or a
 // context's, or stream, name, level or message.
@@ -82,6 +91,14 @@ func (a *AllEvents) All(ctx context.Context, q Query) iter.Seq2[Event, error] {
 
 // Count is how many events the query finds.
 func (a *AllEvents) Count(ctx context.Context, q Query) (int, error) { return a.reads().count(ctx, q) }
+
+// Delete deletes every event the query finds in the streams it names, or in
+// every stream, as a stream's Delete does:
+//
+//	deleted, err := events.Delete(ctx, records.Query{Streams: []string{"activity"}, Where: records.Where{"userId": 97516}})
+func (a *AllEvents) Delete(ctx context.Context, q Query) (int, error) {
+	return a.reads().delete(ctx, q)
+}
 
 // Top is a key's most frequent values and how many events hold each: ten
 // unless Limit asks for more, 1000 at most. The key is a field's or a

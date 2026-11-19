@@ -354,6 +354,12 @@ the WAL is under an eighth of the file: search.db's is 16,000, so that a page
 many sets write again is copied once for several. A file a capture logs and a
 copy run their own, never these.
 
+**A delete that promises no byte behind zeroes what it frees.** records.db's
+writer runs `secure_delete = fast`, which zeroes a freed row only where its
+page is written anyway and so costs no write; a records `delete` turns it `on`
+for its own commits, gives the free pages back and checkpoints `TRUNCATE`, so
+that no page of the file and no frame of the WAL keeps a deleted event.
+
 **A backup is one moment of every file.** For an instant a commit waits at
 the store's gate before it takes its writer, a transaction under way goes on,
 and the backup holds every writer. It never waits for one while it holds

@@ -9,6 +9,10 @@
 //! segment 17, a place in 12 from 400 on   → 12's events 700.., as many as the batch takes
 //! ```
 //!
+//! A cursor counts slots: a delete leaves the slot of each event it took out
+//! as a hole (see `block`), so that a cursor given before it still names the
+//! same next event, and a batch passes the holes among its slots.
+//!
 //! A segment its stream's `keep` removed before the cursor reached it is
 //! counted in `expired`, by the events each held, which the file keeps for
 //! thirty days; past them a segment counts one, so that more than none still
@@ -109,41 +113,54 @@ enum Found {
 }
 
 impl Records {
-    /// A batch: the first segment at the cursor or past it, read in one
-    /// moment of the file, its events built after.
+    /// A batch: the first segment at the cursor or past it that holds an
+    /// event there, each read in one moment of the file, its events built
+    /// after. The slots a delete left as holes hold none, so a batch of them
+    /// alone is passed, and the next read on, with what keep removed on the
+    /// way counted.
     fn poll(&self, from: Option<(i64, i64)>, limit: usize) -> Result<PollBatch> {
-        let (segment, offset) = from.unwrap_or((0, 0));
-        let fetched = match self.fetch_batch((segment, offset), from.is_some(), limit)? {
-            Found::Batch(fetched) => fetched,
-            // without a cursor, the next segment's: a poll from it counts only what keep removes after
-            Found::Nothing { next } => {
-                let cursor = if from.is_some() { format!("{segment}:{offset}") } else { format!("{next}:0") };
-                return Ok(PollBatch { events: Vec::new(), cursor, expired: 0 });
+        let (mut at, mut counted, mut expired) = (from.unwrap_or((0, 0)), from.is_some(), 0);
+        loop {
+            let fetched = match self.fetch_batch(at, counted, limit)? {
+                Found::Batch(fetched) => fetched,
+                // without a cursor, the next segment's: a poll from it counts only what keep removes after
+                Found::Nothing { next } => {
+                    let cursor = if counted { format!("{}:{}", at.0, at.1) } else { format!("{next}:0") };
+                    return Ok(PollBatch { events: Vec::new(), cursor, expired });
+                }
+            };
+            expired += fetched.expired;
+            let events = self.events_of(&fetched)?;
+            // the slots taken, holes among them: a cursor names a slot
+            let read = fetched.skip + (fetched.to - fetched.from);
+            let after = if read < fetched.count { (fetched.segment, read) } else { (fetched.segment + 1, 0) };
+            if !events.is_empty() {
+                return Ok(PollBatch { events, cursor: format!("{}:{}", after.0, after.1), expired });
             }
-        };
+            (at, counted) = (after, true);
+        }
+    }
+
+    /// The events of a batch's slots, its holes passed.
+    fn events_of(&self, fetched: &Fetched) -> Result<Vec<Event>> {
         // the bodies fetched and the events built of them hold the store's memory, as a read's do
         let fetched_bytes = fetched.row.len() + fetched.blocks.iter().map(|(.., body)| body.len()).sum::<usize>();
-        let events = (fetched.to - fetched.from).max(0) as u64;
+        let slots = (fetched.to - fetched.from).max(0) as u64;
         let _held =
-            self.memory.reserve_for_read(fetched_bytes as u64 + events * EVENT_HELD, "records: a poll", PATIENCE)?;
+            self.memory.reserve_for_read(fetched_bytes as u64 + slots * EVENT_HELD, "records: a poll", PATIENCE)?;
         let name = self.name_of(fetched.stream);
         let mut codec = Codec::default();
         let within = |error: Error| self.met((Part::Segment, fetched.holder), &name, error);
         let schema = Schema::parse(&fetched.row, &mut codec).map_err(within)?;
-        let mut events = Vec::with_capacity((fetched.to - fetched.from) as usize);
+        let mut events = Vec::with_capacity(slots as usize);
         for (begins, block, body) in &fetched.blocks {
-            let parsed = block::parse(&schema, (*block, body), &mut codec).map_err(within)?;
+            let parsed = block::parse_slots(&schema, (*block, body), &mut codec).map_err(within)?;
             let (low, high) =
                 ((fetched.from - begins).max(0) as usize, (fetched.to - begins).min(parsed.len() as i64) as usize);
-            events.extend(parsed.into_iter().take(high).skip(low).map(|(_, event)| event.into_event(&name)));
+            let taken = parsed.into_iter().take(high).skip(low).flatten();
+            events.extend(taken.map(|(_, event)| event.into_event(&name)));
         }
-        let read = fetched.skip + events.len() as i64;
-        let cursor = if read < fetched.count {
-            format!("{}:{read}", fetched.segment)
-        } else {
-            format!("{}:0", fetched.segment + 1)
-        };
-        Ok(PollBatch { events, cursor, expired: fetched.expired })
+        Ok(events)
     }
 
     fn fetch_batch(&self, (segment, offset): (i64, i64), counted: bool, limit: usize) -> Result<Found> {

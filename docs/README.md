@@ -182,6 +182,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Traces](guides/records/traces.md)
 - [Tail and poll](guides/records/tail-and-poll.md)
 - [Other programs' output](guides/records/other-programs.md)
+- [Deleting events](guides/records/deleting.md)
 - [Repair](guides/records/repair.md)
 
 ### Metrics

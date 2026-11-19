@@ -317,16 +317,25 @@ impl AllEvents {
     }
 }
 
+/// The times of a stream's rows that reach past `?2`: of a segment a delete
+/// left holes in, its blocks', which hold its events alone, since its own
+/// span keeps the times of its holes for keep.
 const TIMES_HELD: &str = "select min(first_at), max(last_at) from
     (select first_at, last_at from heads where stream = ?1 and last_at >= ?2
-     union all select first_at, last_at from segments where stream = ?1 and holder is null and last_at >= ?2)";
+     union all select first_at, last_at from segments as s where stream = ?1 and holder is null and last_at >= ?2
+        and not exists (select 1 from segments as p where (p.id = s.id or p.holder = s.id) and p.erased > 0)
+     union all select b.first_at, b.last_at from blocks as b where b.segment in
+        (select s.id from segments as s where stream = ?1 and holder is null and last_at >= ?2
+            and exists (select 1 from segments as p where (p.id = s.id or p.holder = s.id) and p.erased > 0)))";
 /// The events of a stream's rows that `TIMES_HELD` reads, and what the head
 /// rows' bodies, the segments' with their blocks' and the events' ids weigh.
-/// A merge's places hold none of either: their holder counts and keeps them.
+/// A merge's places hold none of either: their holder counts and keeps them,
+/// less the holes a delete left among their slots.
 #[cfg(feature = "client")]
 const EVENTS_HELD: &str = "select coalesce(sum(events), 0), coalesce(sum(bytes), 0) from
     (select count as events, size as bytes from heads where stream = ?1 and last_at >= ?2
-     union all select s.held, length(s.body) + (select coalesce(sum(b.size), 0) from blocks as b where b.segment = s.id)
+     union all select s.held - (select sum(p.erased) from segments as p where p.id = s.id or p.holder = s.id),
+        length(s.body) + (select coalesce(sum(b.size), 0) from blocks as b where b.segment = s.id)
         from segments as s where s.stream = ?1 and s.holder is null and s.last_at >= ?2
      union all select 0, coalesce(sum(octet_length(id)), 0) from event_ids where stream = ?1)";
 

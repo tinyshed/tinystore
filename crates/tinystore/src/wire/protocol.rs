@@ -9660,6 +9660,8 @@ impl Message for RecordsPage {
     }
 }
 
+/// The events a count found, or a delete deleted: a delete takes a query
+/// with a where and no search, newest, limit or after.
 #[cfg(feature = "records")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RecordsCount {
@@ -13606,6 +13608,8 @@ pub(crate) mod method {
     pub(crate) const RECORDS_FIELDS: u16 = 0x050e;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_LARGEST: u16 = 0x050f;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_DELETE: u16 = 0x0510;
     #[cfg(feature = "search")]
     pub(crate) const SEARCH_OPEN: u16 = 0x0b01;
     #[cfg(feature = "search")]
@@ -13870,6 +13874,8 @@ pub(crate) mod method {
             RECORDS_FIELDS => Some(Access::Read),
             #[cfg(feature = "records")]
             RECORDS_LARGEST => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_DELETE => Some(Access::Write),
             #[cfg(feature = "search")]
             SEARCH_OPEN => Some(Access::Read),
             #[cfg(feature = "search")]
@@ -14127,6 +14133,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("records.fields", 0x050e, "call"),
     #[cfg(feature = "records")]
     ("records.largest", 0x050f, "call"),
+    #[cfg(feature = "records")]
+    ("records.delete", 0x0510, "call"),
     #[cfg(feature = "search")]
     ("search.open", 0x0b01, "call"),
     #[cfg(feature = "search")]

@@ -43,6 +43,22 @@ pub(crate) fn fixture_of(records: &[u8], at: SystemTime) -> Fixture {
     Fixture { dir, store, clock }
 }
 
+/// records.db as v0.1.0 (f11772d3) wrote and closed it, every block of
+/// version 2. Four rounds an hour apart from 1_800_000_000 s, each packed an
+/// hour on: api appends `api-r-0` at the round before's time, from round 1
+/// on, and `api-r-a`, web `web-r`, then api `api-r-c`, at the round's time;
+/// round 0 adds api's `late-0`, a minute behind. api's first four segments
+/// merged into segment 1, and web's into 3. At the close `wait-api`,
+/// `wait-web` and the late `wait-late` wait in their heads.
+const V0_1_0: &[u8] = include_bytes!("../../../../testdata/records/v0.1.0.db");
+/// Where v0.1.0's clock stood when it closed the file: four hours on.
+const V0_1_0_CLOSED: Duration = Duration::from_secs(1_800_014_400);
+
+/// A store on records.db as v0.1.0 left it, on a clock where it left it.
+pub(crate) fn released() -> Fixture {
+    fixture_of(V0_1_0, UNIX_EPOCH + V0_1_0_CLOSED)
+}
+
 fn open(dir: &Path, clock: &Arc<TestClock>) -> Store {
     Store::open(dir, Options { clock: Some(clock.clone()), background: false, ..Options::default() }).unwrap()
 }

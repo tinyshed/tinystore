@@ -33,7 +33,7 @@ fn mixed() -> Vec<Kept> {
 fn block_of(events: &[Kept], codec: &mut Codec) -> (Schema, Row) {
     let (schema, ids) = Schema::of(events);
     let arrivals: Vec<i64> = (0..events.len() as i64).collect();
-    let row = encode(&schema, (events, &arrivals), [&ids.names, &ids.shapes, &ids.contexts], codec).unwrap();
+    let row = encode(&schema, (events, &arrivals, &[]), [&ids.names, &ids.shapes, &ids.contexts], codec).unwrap();
     (schema, row)
 }
 
@@ -64,7 +64,7 @@ fn a_block_gives_back_each_events_arrival_with_it_in_the_order_it_holds_them() {
     let arrivals: Vec<i64> = (0..events.len() as i64)
         .map(|place| if place < 20 { 5 << 10 | place } else { 3 << 10 | (30 - place) })
         .collect();
-    let row = encode(&schema, (&events, &arrivals), [&ids.names, &ids.shapes, &ids.contexts], &mut codec).unwrap();
+    let row = encode(&schema, (&events, &arrivals, &[]), [&ids.names, &ids.shapes, &ids.contexts], &mut codec).unwrap();
     let read = parse(&schema, (9, &row.body), &mut codec).unwrap();
     assert_eq!(read, arrivals.into_iter().zip(events).collect::<Vec<_>>());
 }
@@ -77,7 +77,7 @@ fn arrivals_appended_in_the_order_of_their_times_take_a_few_bytes_a_block() {
     // head rows of a thousand events each, 7 and 8
     let arrivals: Vec<i64> =
         (0..1024).map(|place| super::head::arrival(7 + place / 1000, place as usize % 1000)).collect();
-    let row = encode(&schema, (&events, &arrivals), [&ids.names, &ids.shapes, &ids.contexts], &mut codec).unwrap();
+    let row = encode(&schema, (&events, &arrivals, &[]), [&ids.names, &ids.shapes, &ids.contexts], &mut codec).unwrap();
     let written = columns_of(&schema, &row.body).unwrap()[ARRIVALS].len();
     assert!(written <= 24, "{written} bytes");
     let read: Vec<i64> = parse(&schema, (1, &row.body), &mut codec).unwrap().into_iter().map(|(at, _)| at).collect();
@@ -97,9 +97,9 @@ fn a_block_of_version_2_gives_its_events_the_arrivals_of_where_they_lie_below_ev
     let read = parse(&schema, (9, &hex(VERSION_2_BLOCK)), &mut codec).unwrap();
     assert_eq!(read, [(9 * 1024 - (1 << 62), events[0].clone()), (9 * 1024 + 1 - (1 << 62), events[1].clone())]);
     assert!(read.iter().all(|(arrival, _)| *arrival < super::head::arrival(1, 0)));
-    // the same events written now are of version 4, which keeps their arrivals
+    // the same events written now are of version 5, which keeps their arrivals
     let (_, ids) = Schema::of(&events);
-    let row = encode(&schema, (&events, &[7, 3]), [&ids.names, &ids.shapes, &ids.contexts], &mut codec).unwrap();
+    let row = encode(&schema, (&events, &[7, 3], &[]), [&ids.names, &ids.shapes, &ids.contexts], &mut codec).unwrap();
     assert_eq!(row.body[0], VERSION);
     assert_eq!(parse(&schema, (9, &row.body), &mut codec).unwrap()[1].0, 3);
 }
@@ -125,6 +125,57 @@ fn a_block_of_version_3_reads_as_it_was_written_its_events_without_ids() {
     let at = row.len() - 4;
     row[at..].copy_from_slice(&sum.to_le_bytes());
     assert_eq!(Schema::parse(&row, &mut codec).unwrap_err().kind(), ErrorKind::Corrupt);
+}
+
+/// `request` with the id `r-1` and `signup`, at 1 and 2 ns with arrivals
+/// 1025 and 1026, and the row of their segment, as v0.10.0 (752b3cfb) wrote
+/// them.
+const VERSION_4_BLOCK: &str = "04020b060706060000000000000e000201000102821000020100000000010001020000010001\
+    020101000004722d310a00000100005e8f4327";
+const VERSION_2_SEGMENT_WITH_IDS: &str = "020016020772657175657374067369676e75700002400000009b504805";
+
+// contract: REC-01
+#[test]
+fn a_block_of_version_4_reads_as_it_was_written_its_slots_without_a_hole() {
+    let events = [NewEvent::new("request").id("r-1").kept(1), NewEvent::new("signup").kept(2)];
+    let mut codec = Codec::default();
+    let schema = Schema::parse(&hex(VERSION_2_SEGMENT_WITH_IDS), &mut codec).unwrap();
+    let read = parse(&schema, (9, &hex(VERSION_4_BLOCK)), &mut codec).unwrap();
+    assert_eq!(read, [(1025, events[0].clone()), (1026, events[1].clone())]);
+    let slots = parse_slots(&schema, (9, &hex(VERSION_4_BLOCK)), &mut codec).unwrap();
+    assert_eq!(slots, read.into_iter().map(Some).collect::<Vec<_>>());
+    // the tests' writer of the releases before writes their bytes
+    let (_, ids) = Schema::of(&events);
+    let row = encode(&schema, (&events, &[1025, 1026], &[]), [&ids.names, &ids.shapes, &ids.contexts], &mut codec);
+    assert_eq!(written_as(&schema, &row.unwrap().body, VERSION_4), hex(VERSION_4_BLOCK));
+    let events = [NewEvent::new("request").kept(1), NewEvent::new("signup").kept(2)];
+    let (schema, ids) = Schema::of(&events);
+    let row = encode(&schema, (&events, &[1025, 1026], &[]), [&ids.names, &ids.shapes, &ids.contexts], &mut codec);
+    assert_eq!(written_as(&schema, &row.unwrap().body, VERSION_3), hex(VERSION_3_BLOCK));
+}
+
+// contract: REC-21
+#[test]
+fn a_block_keeps_its_holes_where_its_events_were_and_counts_them_among_its_slots() {
+    let mut codec = Codec::default();
+    let events = mixed();
+    let (schema, ids) = Schema::of(&events);
+    let arrivals: Vec<i64> = (0..events.len() as i64).collect();
+    let holes = [0, 3, 4, events.len() + 2];
+    let ids = [&ids.names[..], &ids.shapes[..], &ids.contexts[..]];
+    let row = encode(&schema, (&events, &arrivals, &holes), ids, &mut codec).unwrap();
+    assert_eq!((row.body[0], row.count), (VERSION, events.len() + holes.len()));
+    let slots = parse_slots(&schema, (1, &row.body), &mut codec).unwrap();
+    let mut live = arrivals.into_iter().zip(events.clone());
+    let expected: Vec<Slot> =
+        (0..row.count).map(|slot| if holes.contains(&slot) { None } else { live.next() }).collect();
+    assert_eq!(slots, expected);
+    assert_eq!(events_of(&schema, &row.body, &mut codec).unwrap(), events, "a read passes the holes");
+    // a hole past the slots, or out of order, is refused
+    for broken in [&[0, events.len() + holes.len()][..], &[3, 1]] {
+        let row = encode(&schema, (&events, &(0..events.len() as i64).collect::<Vec<_>>(), broken), ids, &mut codec);
+        assert_eq!(parse_slots(&schema, (1, &row.unwrap().body), &mut codec).unwrap_err().kind(), ErrorKind::Corrupt);
+    }
 }
 
 fn hex(text: &str) -> Vec<u8> {
@@ -249,7 +300,7 @@ fn a_corpus_by_its_columns() {
             for events in super::super::pack::cut(&segment) {
                 let to = from + events.len();
                 let ids = [&ids.names[from..to], &ids.shapes[from..to], &ids.contexts[from..to]];
-                let row = encode(&schema, (events, &arrivals[from..to]), ids, &mut codec).unwrap();
+                let row = encode(&schema, (events, &arrivals[from..to], &[]), ids, &mut codec).unwrap();
                 for (slot, column) in columns_of(&schema, &row.body).unwrap().into_iter().enumerate() {
                     slots[slot.min(FIXED)] += column.len();
                     if let (true, Some(kind)) = (slot >= FIXED, column.first()) {

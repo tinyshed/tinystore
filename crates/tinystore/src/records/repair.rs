@@ -83,9 +83,9 @@ const DROP_HEAD_ROW: &str = "delete from heads where id = ?1";
 const SEGMENT_BODY: &str = "select body, weight from segments where id = ?1 and holder is null";
 const SEGMENT_BLOCKS: &str = "select id, body from blocks where segment = ?1 order by id";
 /// What a segment dropped held, its places' among them, for the polls
-/// behind it, as expiry notes what it removes.
+/// behind it, as expiry notes what it removes, its holes left out.
 const NOTE_DROPPED: &str = "insert or replace into expired (segment, events, at)
-    select id, count, ?2 from segments where id = ?1 or holder = ?1";
+    select id, count - erased, ?2 from segments where id = ?1 or holder = ?1";
 const DROP_SEGMENT: [(&str, &str); 6] = [
     ("delete from block_traces where block in (select id from blocks where segment = ?1)", "blocks' traces"),
     ("delete from block_filters where block in (select id from blocks where segment = ?1)", "blocks' filters"),

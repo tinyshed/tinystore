@@ -74,7 +74,7 @@ pub fn rows(bytes: &[u8]) {
         corrupt_or_read(Schema::parse(&sealed(version, bytes), &mut codec));
     }
     let (schema, _) = Schema::of(&seeds());
-    for version in [block::VERSION, block::VERSION_3, block::VERSION_2] {
+    for version in [block::VERSION, block::VERSION_4, block::VERSION_3, block::VERSION_2] {
         corrupt_or_read(block::parse(&schema, (1, &sealed(version, bytes)), &mut codec));
     }
 }

@@ -14,6 +14,10 @@
 //! rows made places in one commit, so a read finds each event once, before
 //! and after.
 //!
+//! A merge carries a member's slots whole, the holes a delete left among
+//! them too (see `block`), so that each place still counts the slots it
+//! named, and keeps the members' span, holes' times among it, for keep.
+//!
 //! A merge puts its members' events one member after another and sorts none,
 //! each with its arrival: a member's events stay one range of the holder's,
 //! which its place and a poll's cursor name (REC-07). Where one member ends
@@ -32,7 +36,7 @@ use rusqlite::params;
 use super::block;
 use super::engine::{Records, execute};
 use super::head::Codec;
-use super::pack::{HELD, Made, PATIENCE, SEGMENT_EVENTS, insert_blocks, insert_keys, made_of, rows_of_blocks};
+use super::pack::{HELD, Made, PATIENCE, SEGMENT_EVENTS, insert_blocks, insert_keys, made_of_slots, rows_of_blocks};
 use super::repair::Part;
 use super::segment::Schema;
 use crate::sqlite::sql_error;
@@ -65,8 +69,9 @@ const SMALL: &str = "select id, first_at, last_at, held, weight
     from segments where stream = ?1 and holder is null and held < ?2 and weight < ?3 order by id";
 const MEMBER_ROW: &str = "select body from segments where id = ?1 and holder is null";
 const MEMBER_BLOCKS: &str = "select id, body from blocks where segment = ?1 order by id";
-/// A member's blocks with their filters, and what it held.
-const DROP_MEMBER: [&str; 4] = [
+/// A segment's blocks with their filters, and what it held: a merge's
+/// member's, or a holder's a delete writes again.
+pub(super) const DROP_MEMBER: [&str; 4] = [
     "delete from block_traces where block in (select id from blocks where segment = ?1)",
     "delete from block_filters where block in (select id from blocks where segment = ?1)",
     "delete from blocks where segment = ?1",
@@ -135,19 +140,14 @@ impl Records {
         let _held = self.memory.reserve(weight * HELD, "records: merging segments", PATIENCE)?;
         let members = self.members(run)?;
         let mut codec = Codec::default();
-        let (mut arrivals, mut events) = (Vec::new(), Vec::new());
+        let mut slots = Vec::new();
         let name = self.name_of(stream);
         for (member, read) in run.iter().zip(&members) {
             let within = |error: Error| self.met((Part::Segment, member.id), &name, error);
             let schema = Schema::parse(&read.row, &mut codec).map_err(within)?;
-            for (block, body) in &read.blocks {
-                for (arrival, event) in block::parse(&schema, (*block, body), &mut codec).map_err(within)? {
-                    arrivals.push(arrival);
-                    events.push(event);
-                }
-            }
+            slots.extend(block::segment_slots(&schema, &read.blocks, member.held, &mut codec).map_err(within)?);
         }
-        let made = made_of(&events, &arrivals, &mut codec)?;
+        let made = made_of_slots(slots, &mut codec)?;
         self.publish_merge(stream, run, &made)
     }
 
@@ -184,7 +184,10 @@ impl Records {
             .collect();
         let holder_begins = begins.iter().find(|(id, _)| *id == holder).map_or(0, |(_, begin)| *begin);
         let bytes = made.blocks.iter().map(|block| block.body.len()).sum();
-        let (first, last, events, weight) = (made.first, made.last, made.events as i64, made.weight as i64);
+        // the members' slots and their times, holes among them, which keep removes the holder by
+        let first = run.iter().map(|member| member.first).min().unwrap_or_default();
+        let last = run.iter().map(|member| member.last).max().unwrap_or_default();
+        let (events, weight) = (run.iter().map(|member| member.held as i64).sum::<i64>(), made.weight as i64);
         let (shared, keys, blocks) = (made.shared.clone(), made.keys.clone(), rows_of_blocks(made));
         self.file.write(bytes, move |tx| {
             let changed = |id: i64| Error::internal(format!("records: segment {id} changed while it was merged"));

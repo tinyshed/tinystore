@@ -76,6 +76,16 @@ func (a *AllEvents) Damaged(ctx context.Context) ([]Damage, error)
 
 Damaged is what reads met that no longer reads, which Drop removes: each head row and segment with its times.
 
+### AllEvents.Delete
+
+```go
+func (a *AllEvents) Delete(ctx context.Context, q Query) (int, error)
+```
+
+Delete deletes every event the query finds in the streams it names, or in every stream, as a stream's Delete does:
+
+	deleted, err := events.Delete(ctx, records.Query{Streams: []string{"activity"}, Where: records.Where{"userId": 97516}})
+
 ### AllEvents.Drop
 
 ```go
@@ -355,6 +365,14 @@ func (e *Events) Count(ctx context.Context, q Query) (int, error)
 ```
 
 Count is how many events the query finds.
+
+### Events.Delete
+
+```go
+func (e *Events) Delete(ctx context.Context, q Query) (int, error)
+```
+
+Delete deletes every event the query finds, of those appended before the call, and what the store keeps only for them: a context of their own, their keys and counts, the bytes they lay in. It answers how many it deleted. It takes a Where, and no Search, Newest, Limit or After. It cannot be undone, and run again it deletes what is left: no poll's cursor moves, and an event's id stays held until the stream's keep passes its time. A backup taken before it, and another node's store, keep the events.
 
 ### Events.FieldNames
 

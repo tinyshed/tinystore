@@ -170,6 +170,43 @@ for (const way of ways) {
 			])
 		})
 
+		test('delete takes a person’s events out of every stream named, once, and takes a where', async () => {
+			// contract: REC-20
+			// a store of its own: a delete packs what waits, which the poll's test below expects nothing of
+			const own = mkdtempSync(join(tmpdir(), 'tinystore-delete-'))
+			const store = await way.open(own)
+			try {
+				await deleting(store)
+			} finally {
+				await store.close()
+				await way.leave(own)
+				await removed(own)
+			}
+		})
+
+		async function deleting(store: Store): Promise<void> {
+			const activity = store.events('activity')
+			const errors = store.events('client-errors-of-users')
+			for (const userId of [97516, 97517, 97516]) {
+				await activity.append('click', { userId })
+				await errors.append('error', {}, { context: { userId } })
+			}
+			const streams = ['activity', 'client-errors-of-users']
+			expect(await store.events().delete({ streams, where: { userId: 97516 } })).toBe(4)
+			expect(await store.events().delete({ streams, where: { userId: 97516 } })).toBe(0)
+			const later = new Date(Date.now() + 60_000)
+			expect(await activity.delete({ where: { userId: [97516, 97517] }, to: later })).toBe(1)
+			expect(await errors.count()).toBe(1)
+			const refused = [
+				activity.delete({ where: {} }),
+				activity.delete({ where: { userId: 1 }, limit: 1 } as never),
+				activity.delete({ where: { userId: 1 }, search: 'x' } as never),
+			]
+			for (const deleted of refused) {
+				expect(await caught(deleted)).toBeInstanceOf(InvalidError)
+			}
+		}
+
 		test('fill gives a row for every span, and a calendar’s rows their local date', async () => {
 			// contract: REC-16, REC-17
 			const repro = store.events('repro')

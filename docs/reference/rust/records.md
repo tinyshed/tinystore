@@ -1192,6 +1192,32 @@ pub fn newest(self) -> Self
 
 Newest first; oldest first without it.
 
+### List.delete
+
+```rust
+pub fn delete(&self) -> Result<u64>
+```
+
+Deletes every event the read finds, of those appended before the
+call, and what the store keeps only for them: a context of their
+own, their keys and counts, their values in a filter, the bytes they
+lay in. Says how many it deleted. It takes a `where`, and no search,
+newest, limit or after.
+
+A delete is a commit a segment it changes, and cannot be undone: a
+read meanwhile may still find what it has not reached, and a delete
+cut short by a crash or a cancel leaves what it reached deleted, so
+that running it again finishes it. No poll's cursor moves (REC-21),
+and an event's id stays held till the stream's keep passes its time.
+A backup taken before it, and another node's records.db, keep the
+events.
+
+```rust
+let store = tinystore::Store::open("data", Default::default())?;
+let events = store.all_events()?;
+let deleted = events.list().streams(["activity", "client-errors"]).filter("userId", &97516).delete()?;
+```
+
 ### List.limit
 
 ```rust
@@ -2003,6 +2029,17 @@ pub fn field_names_prefix(
 ```
 
 The keys `field_names` gives that begin with `prefix`.
+
+### aio::records::List.delete
+
+```rust
+pub fn delete(&self) -> impl Future<Output = Result<u64>> + Send + 'static
+```
+
+Deletes every event the read finds, as
+`crate::records::List::delete` does, and says how many. Once polled
+it runs to its end on the store's pool, whether or not anyone still
+awaits it, as a write does.
 
 ### aio::records::List.count
 

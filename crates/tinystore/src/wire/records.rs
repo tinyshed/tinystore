@@ -153,6 +153,7 @@ pub(crate) fn call(
         method::RECORDS_DAMAGED => damaged(&reading),
         method::RECORDS_DROP => drop_damage(store, RecordsDamage::decode(body)?),
         method::RECORDS_FIELDS => fields(&reading, &RecordsFieldsAsked::decode(body)?),
+        method::RECORDS_DELETE => delete(&reading, &RecordsQuery::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -280,6 +281,12 @@ fn list(reading: &Reading<'_>, asked: &RecordsQuery) -> Answered {
 
 fn count(reading: &Reading<'_>, asked: &RecordsQuery) -> Answered {
     Ok(RecordsCount { count: query(reading, asked)?.count()? }.encode())
+}
+
+/// Deletes what the query finds: run again after a lost answer, it deletes
+/// what is left of it, none once the first ran.
+fn delete(reading: &Reading<'_>, asked: &RecordsQuery) -> Answered {
+    Ok(RecordsCount { count: query(reading, asked)?.delete()? }.encode())
 }
 
 fn top(reading: &Reading<'_>, asked: &RecordsTopAsked) -> Answered {

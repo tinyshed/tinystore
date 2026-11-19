@@ -174,6 +174,7 @@ export type {
 	AppendOptions,
 	Counted,
 	Damage,
+	Deleted,
 	Event,
 	EventLevel,
 	Events,

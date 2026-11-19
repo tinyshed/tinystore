@@ -148,6 +148,7 @@ methods: dict[str, int] = {
     "records.drop": 0x050D,
     "records.fields": 0x050E,
     "records.largest": 0x050F,
+    "records.delete": 0x0510,
     "search.open": 0x0B01,
     "search.set": 0x0B02,
     "search.setMany": 0x0B03,
@@ -8334,6 +8335,8 @@ def _read_records_count(r: Reader) -> dict[str, Any]:
     return read
 
 
+# The events a count found, or a delete deleted: a delete takes a query
+# with a where and no search, newest, limit or after.
 RecordsCount = Message(
     "records.Count",
     {

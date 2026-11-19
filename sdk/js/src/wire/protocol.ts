@@ -176,6 +176,7 @@ export const methods = {
 	'records.drop': 0x050d,
 	'records.fields': 0x050e,
 	'records.largest': 0x050f,
+	'records.delete': 0x0510,
 	'search.open': 0x0b01,
 	'search.set': 0x0b02,
 	'search.setMany': 0x0b03,
@@ -10222,6 +10223,10 @@ export const RecordsPage = message(
 	},
 )
 
+/**
+ * The events a count found, or a delete deleted: a delete takes a query
+ * with a where and no search, newest, limit or after.
+ */
 export const RecordsCount = message(
 	'records.Count',
 	{

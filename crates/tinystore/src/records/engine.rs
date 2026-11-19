@@ -26,6 +26,7 @@ const MIGRATIONS: &[Migration] = &[
     Migration::of(2, "0002_arrivals.sql", include_str!("migrations/0002_arrivals.sql")),
     Migration::of(3, "0003_ids.sql", include_str!("migrations/0003_ids.sql")),
     Migration::of(4, "0004_counts.sql", include_str!("migrations/0004_counts.sql")),
+    Migration::of(5, "0005_holes.sql", include_str!("migrations/0005_holes.sql")),
 ];
 
 /// records' file in the store's directory.
@@ -144,7 +145,13 @@ impl Records {
             let claim = store.claim(FILE)?;
             // 'os' unless the store says: a log line a commit is not worth a sync
             let durability = store.durability().or(Some(Durability::Os));
-            let config = Config { page_size: 1024, incremental_vacuum: true, ..Config::committing(durability) };
+            // a delete of a person's events leaves none of their bytes behind: see `delete`
+            let config = Config {
+                page_size: 1024,
+                incremental_vacuum: true,
+                zero_freed: true,
+                ..Config::committing(durability)
+            };
             let file = store.open_file(claim.name(), config)?;
             file.migrate("records", MIGRATIONS)?;
             let records = Arc::new(Records {

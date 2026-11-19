@@ -148,6 +148,9 @@ fn configure_writer(connection: &Connection, config: &Config) -> rusqlite::Resul
         Durability::Os => "normal",
     };
     connection.pragma_update(None, "synchronous", synchronous)?;
+    if config.zero_freed {
+        connection.pragma_update(None, "secure_delete", "fast")?;
+    }
     // Without it macOS's fsync leaves the data in the drive's cache.
     if cfg!(target_os = "macos") {
         connection.pragma_update(None, "fullfsync", true)?;

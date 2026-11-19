@@ -1,21 +1,11 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::super::fixture::{DAY, Fixture, carried_by, fixture, fixture_of};
+use super::super::fixture::{DAY, Fixture, carried_by, fixture, released};
 use super::MIGRATIONS;
 use crate::ErrorKind;
 use crate::records::{AllEvents, Event, NewEvent, maintain};
 use crate::sqlite::{Config, File};
 
-/// records.db as v0.1.0 (f11772d3) wrote and closed it, every block of
-/// version 2. Four rounds an hour apart from 1_800_000_000 s, each packed an
-/// hour on: api appends `api-r-0` at the round before's time, from round 1
-/// on, and `api-r-a`, web `web-r`, then api `api-r-c`, at the round's time;
-/// round 0 adds api's `late-0`, a minute behind. api's first four segments
-/// merged into segment 1, and web's into 3. At the close `wait-api`,
-/// `wait-web` and the late `wait-late` wait in their heads.
-const V0_1_0: &[u8] = include_bytes!("../../../../testdata/records/v0.1.0.db");
-/// Where v0.1.0's clock stood when it closed the file: four hours on.
-const V0_1_0_CLOSED: Duration = Duration::from_secs(1_800_014_400);
 /// The time of the fourth round, which wait-api and wait-web share with it.
 const ROUND_3: Duration = Duration::from_secs(1_800_010_800);
 
@@ -55,10 +45,6 @@ const POLLED_BY_V0_1_0: [(&[&str], &str); 9] = [
     (&["api-3-0", "api-3-a", "api-3-c"], "9:0"),
     (&["web-3"], "10:0"),
 ];
-
-fn released() -> Fixture {
-    fixture_of(V0_1_0, UNIX_EPOCH + V0_1_0_CLOSED)
-}
 
 /// Each event as `stream/name`.
 fn shown(events: &[Event]) -> Vec<String> {
@@ -165,11 +151,14 @@ fn what_v0_1_0_packed_is_counted_by_upkeep_and_a_release_before_the_counts_refus
     assert_eq!(fixture.rows("segment_keys where events is null"), 0);
     let path = fixture.dir.path().join("records.db");
     fixture.store.close().unwrap();
-    // v0.5.1 knows three steps, and refuses the file a fourth migrated
-    let file = File::open(&path, Config { page_size: 1024, ..Config::default() }).unwrap();
-    let refused = file.migrate("records", &MIGRATIONS[..3]).unwrap_err();
-    assert!(refused.to_string().contains("a newer program migrated it"), "{refused}");
-    file.close().unwrap();
+    // v0.5.1 knows three steps, and refuses the file a fourth migrated; v0.10.0
+    // four, and refuses the file whose blocks may hold holes
+    for known in [3, 4] {
+        let file = File::open(&path, Config { page_size: 1024, ..Config::default() }).unwrap();
+        let refused = file.migrate("records", &MIGRATIONS[..known]).unwrap_err();
+        assert!(refused.to_string().contains("a newer program migrated it"), "{known}: {refused}");
+        file.close().unwrap();
+    }
 }
 
 #[test]

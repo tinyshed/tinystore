@@ -33,10 +33,12 @@ pub fn maintain(store: &Store) -> Result<Maintenance> {
 }
 
 /// What a stream keeps no longer: the events of its head rows and of its
-/// segments whose newest event is before `?2`, a segment's places with it.
+/// segments whose newest event is before `?2`, a segment's places with it,
+/// each one's slots less its holes.
 const COUNT_EXPIRED: &str = "select
     (select coalesce(sum(count), 0) from heads where stream = ?1 and last_at < ?2),
-    (select coalesce(sum(held), 0) from segments where stream = ?1 and holder is null and last_at < ?2)";
+    (select coalesce(sum(count - erased), 0) from segments where stream = ?1 and (holder is null and last_at < ?2
+        or holder in (select id from segments where stream = ?1 and holder is null and last_at < ?2)))";
 const EXPIRED_HEADS: &str =
     "select late, sum(count), sum(weight) from heads where stream = ?1 and last_at < ?2 group by late";
 const DROP_HEADS: &str = "delete from heads where stream = ?1 and last_at < ?2";
@@ -47,9 +49,10 @@ const TAKE_ID: &str = "insert into segments (stream, count, start, held, weight,
     values (?1, ?2, 0, ?2, 0, x'') returning id";
 const GIVE_UP_ID: &str = "delete from segments where id = ?1";
 const NOTE_EXPIRED_HEADS: &str = "insert into expired (segment, events, at) values (?1, ?2, ?3)";
-/// What each segment a stream keeps no longer held, its places' among them.
+/// What each segment a stream keeps no longer held, its places' among them,
+/// its holes left out: a poll counts what keep removed, never a delete.
 const NOTE_EXPIRED: &str = "insert or replace into expired (segment, events, at)
-    select id, count, ?3 from segments where stream = ?1 and (holder is null and last_at < ?2
+    select id, count - erased, ?3 from segments where stream = ?1 and (holder is null and last_at < ?2
     or holder in (select id from segments where stream = ?1 and holder is null and last_at < ?2))";
 /// How long the file keeps what a segment it removed held, for the polls
 /// behind it.

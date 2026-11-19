@@ -7393,6 +7393,7 @@
     "records.append": 1282,
     "records.count": 1284,
     "records.damaged": 1292,
+    "records.delete": 1296,
     "records.drop": 1293,
     "records.fieldNames": 1288,
     "records.fields": 1294,

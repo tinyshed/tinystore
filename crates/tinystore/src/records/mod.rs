@@ -19,6 +19,7 @@ mod buffer;
 mod carried;
 mod condition;
 mod count;
+mod delete;
 mod engine;
 mod event;
 mod events;

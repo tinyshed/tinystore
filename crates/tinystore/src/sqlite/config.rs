@@ -11,6 +11,11 @@ pub(crate) struct Config {
     /// A new file is made with `auto_vacuum = incremental`, so that it can
     /// give its free pages back to the disk: see `vacuum`.
     pub(crate) incremental_vacuum: bool,
+    /// The writer writes zeros over a row a commit frees wherever its page
+    /// is written anyway, SQLite's `secure_delete = fast`, which costs no
+    /// write: a delete that must leave no byte behind then has only the
+    /// pages freed whole left to clear (see `File::zeroing`).
+    pub(crate) zero_freed: bool,
     /// The page cache of the writer and of each reader, in KiB.
     pub(crate) cache_kib: u32,
     /// The WAL's frames at which a commit asks for a checkpoint off the
@@ -60,6 +65,7 @@ impl Default for Config {
             durability: Durability::Full,
             page_size: 4096,
             incremental_vacuum: false,
+            zero_freed: false,
             cache_kib: 1024,
             checkpoint_at: super::checkpoint::SOFT,
             readers: readers_of_this_machine(),

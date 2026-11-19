@@ -48,6 +48,12 @@ column picks the smallest encoding that gives its values back exactly:
 A value comes back as it was written, byte for byte, as [What an event
 carries](../../guides/records/events.md#what-an-event-carries) shows.
 
+A [delete](../../guides/records/deleting.md) writes a block again without
+the events it takes out, and keeps a hole where each one was: a poll's
+cursor counts places, so every other event stays where a cursor expects it.
+Once a release that deletes opens `records.db`, a release before it refuses
+the file rather than read a hole as damage.
+
 ## Reading only what can match
 
 A query never reads every event. Beside each block, the segment keeps what

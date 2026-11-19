@@ -1,0 +1,11 @@
+-- From here on a delete may take events out of a segment: a block of
+-- version 5 keeps the slot each one held as a hole, so that every other
+-- event keeps its place, and a segment's count, start and held go on
+-- counting slots. erased: how many of a segment's own slots, or a place's,
+-- are holes, so that what a stream holds, what keep removes and what a
+-- poll never read count its events without reading a block. A holder keeps
+-- first_at and last_at of its slots, holes among them, so that keep removes
+-- it when it would have, and the ids of its deleted events stay till then.
+-- A program before this step would read a block of version 5 as damage that
+-- a drop removes, and refuses the file.
+alter table segments add column erased integer not null default 0;

@@ -12,7 +12,7 @@ import io
 import json
 import logging
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -152,6 +152,26 @@ async def test_largest_gives_the_events_of_a_keys_largest_numbers_and_top_reads_
     await errors.append("error", message="TypeError: x")
     await errors.append("error", {"message": "copied"})
     assert await errors.top("message") == [tinystore.Top("TypeError: x", 2), tinystore.Top("copied", 1)]
+
+
+# contract: REC-20
+async def test_delete_takes_a_persons_events_out_of_every_stream_named_once_and_takes_a_where(
+    store: tinystore.Store,
+) -> None:
+    activity, errors = store.events("activity"), store.events("client-errors-of-users")
+    for user_id in (97516, 97517, 97516):
+        await activity.append("click", {"userId": user_id})
+        await errors.append("error", context={"userId": user_id})
+    streams = ["activity", "client-errors-of-users"]
+    assert await store.events().delete(streams=streams, where={"userId": 97516}) == 4
+    assert await store.events().delete(streams=streams, where={"userId": 97516}) == 0
+    later = datetime.now(UTC) + timedelta(minutes=1)
+    assert await activity.delete(where={"userId": [97516, 97517]}, to=later) == 1
+    assert await errors.count() == 1
+    refused: list[dict[str, Any]] = [{}, {"where": {}}, {"where": {"userId": 1}, "search": "x"}]
+    for query in refused:
+        with pytest.raises(tinystore.InvalidError):
+            await activity.delete(**query)
 
 
 # contract: REC-16, REC-17

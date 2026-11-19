@@ -174,6 +174,32 @@ fn largest_answers_the_events_of_a_keys_largest_numbers_and_refuses_a_limit_past
     assert_eq!(largest(1001).unwrap_err().code, "invalid");
 }
 
+// contract: REC-20
+#[test]
+fn a_delete_answers_how_many_it_deleted_once_and_none_sent_again_and_takes_a_where() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let activity = open(&mut client, "activity");
+    let users = [r#"{"userId":97516}"#, r#"{"userId":97517}"#, r#"{"userId":97516}"#];
+    append(&mut client, activity, users.iter().map(|fields| event("click", fields)).collect());
+    let of = |handle: Option<u64>, user: Option<&str>| RecordsQuery {
+        handle,
+        streams: if handle.is_none() { vec!["activity".to_owned()] } else { Vec::new() },
+        r#where: user.map(|user| ("userId".to_owned(), user.to_owned())).into_iter().collect(),
+        ..RecordsQuery::default()
+    };
+    let mut delete = |query: &RecordsQuery| client.call::<RecordsCount>(method::RECORDS_DELETE, query);
+    assert_eq!(delete(&of(None, Some("97516"))).unwrap().count, 2);
+    assert_eq!(delete(&of(None, Some("97516"))).unwrap().count, 0, "a delete sent again deletes nothing more");
+    assert_eq!(delete(&of(Some(activity), None)).unwrap_err().code, "invalid");
+    assert_eq!(
+        delete(&RecordsQuery { limit: Some(1), ..of(Some(activity), Some("97517")) }).unwrap_err().code,
+        "invalid"
+    );
+    let left = client.call::<RecordsCount>(method::RECORDS_COUNT, &of(Some(activity), None)).unwrap();
+    assert_eq!(left.count, 1);
+}
+
 // contract: REC-16, REC-17
 #[test]
 fn an_aggregate_given_fill_answers_every_span_and_a_calendars_rows_their_date() {
@@ -280,6 +306,9 @@ fn a_read_connection_reads_and_gives_no_stream_a_keep_nor_appends() {
     assert_eq!(lines.unwrap_err().code, "permission");
     let damage = RecordsDamage { part: "head row".to_owned(), id: 1, ..RecordsDamage::default() };
     assert_eq!(client.call::<Empty>(method::RECORDS_DROP, &damage).unwrap_err().code, "permission");
+    let mut delete = RecordsQuery { handle: Some(audit), ..RecordsQuery::default() };
+    delete.r#where.insert("user".to_owned(), "1".to_owned());
+    assert_eq!(client.call::<RecordsCount>(method::RECORDS_DELETE, &delete).unwrap_err().code, "permission");
 }
 
 /// Opens a tail of what `asked` finds, the stream open once its RESPONSE came.

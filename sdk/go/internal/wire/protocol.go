@@ -139,6 +139,7 @@ const (
 	MethodRecordsDrop       = 0x050d
 	MethodRecordsFields     = 0x050e
 	MethodRecordsLargest    = 0x050f
+	MethodRecordsDelete     = 0x0510
 	MethodSearchOpen        = 0x0b01
 	MethodSearchSet         = 0x0b02
 	MethodSearchSetMany     = 0x0b03
@@ -275,6 +276,7 @@ var methodNames = []struct {
 	{"records.drop", MethodRecordsDrop},
 	{"records.fields", MethodRecordsFields},
 	{"records.largest", MethodRecordsLargest},
+	{"records.delete", MethodRecordsDelete},
 	{"search.open", MethodSearchOpen},
 	{"search.set", MethodSearchSet},
 	{"search.setMany", MethodSearchSetMany},
@@ -11053,6 +11055,9 @@ func (m RecordsPage) IsZero() bool {
 }
 
 // RecordsCount is the schema's records.Count.
+//
+// The events a count found, or a delete deleted: a delete takes a query
+// with a where and no search, newest, limit or after.
 type RecordsCount struct {
 	Count uint64 `wire:"1,count"`
 }

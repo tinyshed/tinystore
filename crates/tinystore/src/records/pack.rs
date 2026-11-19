@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::block;
+use super::block::{self, Slot};
 use super::bloom::{bloom_of, id_like};
 use super::carried::{KeyRow, Tally};
 use super::engine::{Records, execute, nanos};
@@ -182,7 +182,7 @@ impl Records {
     /// parse → order by time and arrival → make the segment → write it and
     /// remove the rows, in one commit. A row that no longer reads is said
     /// once and left for a drop. Says how many events it packed.
-    fn pack_one(&self, stream: i64, late: bool) -> Result<usize> {
+    pub(super) fn pack_one(&self, stream: i64, late: bool) -> Result<usize> {
         let (rows, weight) = self.oldest_rows(stream, late)?;
         let _held = self.memory.reserve(weight as u64 * HELD, "records: packing a segment", PATIENCE)?;
         let mut codec = Codec::default();
@@ -332,16 +332,30 @@ fn ready(head: &Head, now: i64, wait: Duration) -> bool {
 /// A segment of `events`, which are in the order of their times, each with
 /// its arrival in `arrivals`: what its blocks share, and the blocks.
 pub(super) fn made_of(events: &[Kept], arrivals: &[i64], codec: &mut Codec) -> Result<Made> {
-    let (Some(first), Some(last)) = (events.first(), events.last()) else {
+    if events.is_empty() {
         return Err(Error::internal("records: a segment of no event"));
-    };
+    }
+    made_with_holes(events, arrivals, &[], codec)
+}
+
+/// A segment of `events` as `made_of` makes one, among whose slots `holes`
+/// hold none, in their order: each block keeps the holes from its first
+/// event's slot to the next block's, the first those before it and the last
+/// those after it. A segment of holes alone has no block, its slots counted
+/// by its row and its places'.
+///
+/// ```text
+/// slots   _ a b _ _ c d _      blocks of two events
+/// blocks  [_ a b _ _] [c d _]  holes 0 3 4, and 2
+/// ```
+pub(super) fn made_with_holes(events: &[Kept], arrivals: &[i64], holes: &[usize], codec: &mut Codec) -> Result<Made> {
     if arrivals.len() != events.len() {
         return Err(Error::internal("records: a segment whose events and arrivals differ in number"));
     }
     let (schema, ids) = Schema::of(events);
     let mut made = Made {
-        first: first.at,
-        last: last.at,
+        first: events.first().map_or(0, |event| event.at),
+        last: events.last().map_or(0, |event| event.at),
         events: events.len(),
         weight: events.iter().map(Kept::weight).sum(),
         shared: schema.encode(codec)?,
@@ -349,15 +363,58 @@ pub(super) fn made_of(events: &[Kept], arrivals: &[i64], codec: &mut Codec) -> R
         blocks: Vec::new(),
         blooms: Vec::new(),
     };
-    let mut from = 0;
-    for events in cut(events) {
+    if events.is_empty() {
+        return Ok(made);
+    }
+    let blocks = cut(events);
+    let starts = slots_begin(&blocks, holes);
+    let (mut from, mut hole) = (0, 0);
+    for (index, events) in blocks.into_iter().enumerate() {
         let to = from + events.len();
+        let (begins, ends) = (starts[index], starts.get(index + 1).copied().unwrap_or(usize::MAX));
+        let mut own = Vec::new();
+        while hole < holes.len() && holes[hole] < ends {
+            own.push(holes[hole] - begins);
+            hole += 1;
+        }
         let ids = [&ids.names[from..to], &ids.shapes[from..to], &ids.contexts[from..to]];
-        made.blocks.push(block::encode(&schema, (events, &arrivals[from..to]), ids, codec)?);
+        made.blocks.push(block::encode(&schema, (events, &arrivals[from..to], &own), ids, codec)?);
         made.blooms.push(blooms_of(events));
         from = to;
     }
     Ok(made)
+}
+
+/// A segment of `slots`, whose events are in the order of their times, as
+/// `made_with_holes` makes one: a merge's members one after another, or a
+/// holder a delete took events out of.
+pub(super) fn made_of_slots(slots: Vec<Slot>, codec: &mut Codec) -> Result<Made> {
+    let (mut events, mut arrivals, mut holes) = (Vec::new(), Vec::new(), Vec::new());
+    for (place, slot) in slots.into_iter().enumerate() {
+        match slot {
+            Some((arrival, event)) => {
+                arrivals.push(arrival);
+                events.push(event);
+            }
+            None => holes.push(place),
+        }
+    }
+    made_with_holes(&events, &arrivals, &holes, codec)
+}
+
+/// The slot each block begins at among a segment's: the first block's at
+/// the first, every other's at its first event's, past the holes before it.
+fn slots_begin(blocks: &[&[Kept]], holes: &[usize]) -> Vec<usize> {
+    let (mut starts, mut events, mut passed) = (Vec::with_capacity(blocks.len()), 0, 0);
+    for (index, block) in blocks.iter().enumerate() {
+        // the event `events` lies at slot `events + passed` once every hole before it is passed
+        while passed < holes.len() && holes[passed] <= events + passed {
+            passed += 1;
+        }
+        starts.push(if index == 0 { 0 } else { events + passed });
+        events += block.len();
+    }
+    starts
 }
 
 /// The names of a segment's events, the keys of their fields and the keys

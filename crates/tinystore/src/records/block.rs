@@ -15,6 +15,7 @@
 //! spans      of the events that have one, eight bytes each
 //! whole      the fields of the events whose shape has no columns, as an object's JSON
 //! ids        of the events that have one
+//! holes      the slots of the block that hold no event, which a delete left
 //! then a column a key: the values of the events whose shape has the key
 //! ```
 //!
@@ -34,6 +35,17 @@
 //! ```
 //!
 //! Versions 2 and 3, which v0.1.1 and those before it wrote, have no ids.
+//!
+//! A block counts slots, not events: a segment's places and a poll's cursor
+//! name events by where they lie among the slots, and a delete leaves the
+//! slot of each event it takes out as a hole, so that every other event
+//! keeps its place. Version 5 writes the holes; versions 2 to 4, which
+//! v0.10.0 and those before it wrote, have none.
+//!
+//! ```text
+//! slots   a b c d e      a delete of b and d
+//! block   a c e          holes 1 3: a cursor at slot 3 still has e next
+//! ```
 
 use std::collections::BTreeSet;
 
@@ -49,7 +61,9 @@ use crate::compress::varint::{Reader, put_count, put_int};
 use crate::{Error, Result};
 
 /// A block's first byte, which no head row has.
-pub(super) const VERSION: u8 = 4;
+pub(super) const VERSION: u8 = 5;
+/// v0.10.0's blocks, which have no holes and read forever.
+pub(super) const VERSION_4: u8 = 4;
 /// v0.1.1's blocks, which have no ids and read forever.
 pub(super) const VERSION_3: u8 = 3;
 /// v0.1.0's blocks, which have no arrivals either.
@@ -66,18 +80,25 @@ const TRACES: usize = 7;
 const SPANS: usize = 8;
 const WHOLE: usize = 9;
 const IDS: usize = 10;
+const HOLES: usize = 11;
 /// The columns every block has before its keys'.
-const FIXED: usize = 11;
+const FIXED: usize = 12;
 
 /// The text a block's columns may expand to, all together.
 const BLOCK_TEXT: usize = 4 << 20;
+/// The holes a block holds at most: a segment's slots.
+const MOST_HOLES: usize = super::pack::SEGMENT_EVENTS;
+
+/// A slot of a block: an event with its arrival, or the hole a delete left.
+pub(super) type Slot = Option<(i64, Kept)>;
 
 /// The block of `events`, which are in the order of their times, each with
-/// its arrival in `arrivals`; `ids` say which of the segment's names, shapes
-/// and contexts each has.
+/// its arrival in `arrivals`, and of `holes`, the places among its slots
+/// that hold none, in their order; `ids` say which of the segment's names,
+/// shapes and contexts each event has.
 pub(super) fn encode(
     schema: &Schema,
-    (events, arrivals): (&[Kept], &[i64]),
+    (events, arrivals, holes): (&[Kept], &[i64], &[usize]),
     ids: [&[i64]; 3],
     codec: &mut Codec,
 ) -> Result<Row> {
@@ -105,6 +126,7 @@ pub(super) fn encode(
     put_texts(&mut columns[WHOLE], &whole.iter().map(String::as_str).collect::<Vec<_>>(), codec)?;
     let ids: Vec<&str> = events.iter().filter_map(|event| event.id.as_deref()).collect();
     put_texts(&mut columns[IDS], &ids, codec)?;
+    put_holes(&mut columns[HOLES], holes);
 
     let mut values: Vec<(Vec<&str>, Vec<i64>)> = vec![Default::default(); schema.columns];
     for (place, event) in events.iter().enumerate() {
@@ -117,17 +139,70 @@ pub(super) fn encode(
         put_values(&mut columns[FIXED + column], values, times, codec)?;
     }
 
-    let mut body = vec![VERSION];
-    put_count(&mut body, events.len() as u64);
-    put_count(&mut body, columns.len() as u64);
-    columns.iter().for_each(|column| put_count(&mut body, column.len() as u64));
-    columns.iter().for_each(|column| body.extend_from_slice(column));
-    let sum = crc32(&body);
-    body.extend_from_slice(&sum.to_le_bytes());
+    let body = framed(VERSION, events.len(), &columns);
     let (first, last) = (events.first().map_or(0, |event| event.at), events.last().map_or(0, |event| event.at));
     let levels = events.iter().filter_map(|event| event.level).fold(0, |bits, level| bits | level.bit());
     let weight = events.iter().map(Kept::weight).sum();
-    Ok(Row { first, last, levels, count: events.len(), weight, body })
+    Ok(Row { first, last, levels, count: events.len() + holes.len(), weight, body })
+}
+
+/// A block row of `count` events and their columns, as `Opened::of` reads one.
+fn framed<C: AsRef<[u8]>>(version: u8, count: usize, columns: &[C]) -> Vec<u8> {
+    let mut body = vec![version];
+    put_count(&mut body, count as u64);
+    put_count(&mut body, columns.len() as u64);
+    columns.iter().for_each(|column| put_count(&mut body, column.as_ref().len() as u64));
+    columns.iter().for_each(|column| body.extend_from_slice(column.as_ref()));
+    let sum = crc32(&body);
+    body.extend_from_slice(&sum.to_le_bytes());
+    body
+}
+
+/// The block `body` as a release before wrote it, for the tests of what one
+/// wrote: of version 4, without the column of holes, and of version 3
+/// without the ids' too. The block holds no hole, nor an id for version 3.
+#[cfg(test)]
+pub(super) fn written_as(schema: &Schema, body: &[u8], version: u8) -> Vec<u8> {
+    let opened = Opened::of(schema, body).unwrap();
+    assert!(opened.holes.is_empty(), "a release before wrote no hole");
+    let mut columns = opened.columns;
+    columns.remove(HOLES);
+    match version {
+        VERSION_4 => {}
+        VERSION_3 => {
+            assert!(columns[IDS].is_empty(), "v0.1.1 wrote no id");
+            columns.remove(IDS);
+        }
+        _ => panic!("version {version}, which no test writes"),
+    }
+    framed(version, opened.count, &columns)
+}
+
+/// Holes as how many and their places; of none, nothing.
+fn put_holes(out: &mut Vec<u8>, holes: &[usize]) {
+    if holes.is_empty() {
+        return;
+    }
+    put_count(out, holes.len() as u64);
+    put_ints(out, &holes.iter().map(|place| *place as i64).collect::<Vec<_>>());
+}
+
+/// The holes `put_holes` wrote in a block of `count` events: each a place
+/// among its slots, in their order.
+fn read_holes(column: &[u8], count: usize) -> Result<Vec<usize>> {
+    if column.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut reader = Reader::new(column);
+    let holes = reader.count(MOST_HOLES);
+    let places = read_ints(&mut reader, holes);
+    reader.finish()?;
+    let slots = (count + holes) as i64;
+    let in_order = places.windows(2).all(|pair| pair[0] < pair[1]);
+    if holes == 0 || places.len() != holes || !in_order || places.iter().any(|place| !(0..slots).contains(place)) {
+        return Err(Error::corrupt("a block's holes, which are not places among its slots in their order"));
+    }
+    Ok(places.into_iter().map(|place| place as usize).collect())
 }
 
 /// Arrivals as the first and the steps from each to the next. Events appended
@@ -158,11 +233,14 @@ fn read_arrivals(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
 }
 
 /// A block's columns, checked and not read yet: those of version 2 with no
-/// arrivals, and of versions 2 and 3 with no ids, which read as empty.
+/// arrivals, of versions 2 and 3 with no ids and of versions 2 to 4 with no
+/// holes, which read as empty. `count` is its events, and `holes` the slots
+/// beside them.
 struct Opened<'b> {
     count: usize,
     columns: Vec<&'b [u8]>,
     has_arrivals: bool,
+    holes: Vec<usize>,
 }
 
 impl<'b> Opened<'b> {
@@ -171,16 +249,18 @@ impl<'b> Opened<'b> {
         let Some((framed, sum)) = body.split_last_chunk::<4>() else {
             return Err(Error::corrupt("a block shorter than its checksum"));
         };
-        let (has_arrivals, has_ids) = match framed.first() {
-            Some(&VERSION) => (true, true),
-            Some(&VERSION_3) => (true, false),
-            Some(&VERSION_2) => (false, false),
+        let (has_arrivals, has_ids, has_holes) = match framed.first() {
+            Some(&VERSION) => (true, true, true),
+            Some(&VERSION_4) => (true, true, false),
+            Some(&VERSION_3) => (true, false, false),
+            Some(&VERSION_2) => (false, false, false),
             _ => return Err(Error::corrupt("a block's version")),
         };
         if crc32(framed) != u32::from_le_bytes(*sum) {
             return Err(Error::corrupt("a block's checksum"));
         }
-        let written = FIXED - usize::from(!has_arrivals) - usize::from(!has_ids) + schema.columns;
+        let missing = [has_arrivals, has_ids, has_holes].iter().filter(|has| !**has).count();
+        let written = FIXED - missing + schema.columns;
         let mut reader = Reader::new(&framed[1..]);
         let count = reader.count(ROW_EVENTS);
         if reader.count(written) != written {
@@ -198,7 +278,11 @@ impl<'b> Opened<'b> {
         if !has_ids {
             columns.insert(IDS, &[]);
         }
-        Ok(Opened { count, columns, has_arrivals })
+        if !has_holes {
+            columns.insert(HOLES, &[]);
+        }
+        let holes = read_holes(columns[HOLES], count)?;
+        Ok(Opened { count, columns, has_arrivals, holes })
     }
 
     /// Each event's arrival: the block's own, or one made of where it lies
@@ -277,6 +361,39 @@ impl<'b> Opened<'b> {
 pub(super) fn parse(schema: &Schema, (block, body): (i64, &[u8]), codec: &mut Codec) -> Result<Vec<(i64, Kept)>> {
     let opened = Opened::of(schema, body)?;
     rebuild(schema, &opened, block, codec, None)
+}
+
+/// The `held` slots of a segment's blocks, each with its id, in their order:
+/// a segment of holes alone has no block, and its row counts its slots.
+pub(super) fn segment_slots(
+    schema: &Schema,
+    blocks: &[(i64, Vec<u8>)],
+    held: usize,
+    codec: &mut Codec,
+) -> Result<Vec<Slot>> {
+    let mut slots = Vec::with_capacity(held);
+    for (block, body) in blocks {
+        slots.extend(parse_slots(schema, (*block, body), codec)?);
+    }
+    match slots.len() {
+        0 => slots.resize_with(held, || None),
+        read if read != held => return Err(Error::corrupt("a segment whose blocks hold other than its slots")),
+        _ => {}
+    }
+    Ok(slots)
+}
+
+/// The slots of the block `block` in their order: each event with its
+/// arrival, and a hole where a delete took one out.
+pub(super) fn parse_slots(schema: &Schema, (block, body): (i64, &[u8]), codec: &mut Codec) -> Result<Vec<Slot>> {
+    let opened = Opened::of(schema, body)?;
+    let mut events = rebuild(schema, &opened, block, codec, None)?.into_iter();
+    let mut holes = opened.holes.iter().peekable();
+    let slots = (0..opened.count + opened.holes.len()).map(|place| match holes.next_if_eq(&&place) {
+        Some(_) => None,
+        None => events.next(),
+    });
+    Ok(slots.collect())
 }
 
 /// The events of the block `block` that `keep` keeps, every one without it,

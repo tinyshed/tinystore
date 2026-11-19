@@ -263,6 +263,38 @@ func TestLargestGivesTheEventsOfAKeysLargestNumbersAndTopReadsTheMessage(t *test
 	})
 }
 
+// contract: REC-20
+func TestDeleteTakesAPersonsEventsOutOfEveryStreamNamedOnceAndTakesAWhere(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		activity := ways.Must(records.OpenEvents(store, "activity"))
+		errs := ways.Must(records.OpenEvents(store, "client-errors-of-users"))
+		for _, user := range []int{97516, 97517, 97516} {
+			ways.Must(activity.Append(ctx, "click", records.Fields{"userId": user}))
+			ways.Must(errs.AppendMany(ctx, []records.Event{{Name: "error", Context: records.Fields{"userId": user}}}))
+		}
+		every := ways.Must(records.OpenAllEvents(store))
+		of := records.Query{Streams: []string{"activity", "client-errors-of-users"}, Where: records.Where{"userId": 97516}}
+		if deleted := ways.Must(every.Delete(ctx, of)); deleted != 4 {
+			t.Fatalf("deleted %d", deleted)
+		}
+		if again := ways.Must(every.Delete(ctx, of)); again != 0 {
+			t.Fatalf("deleted again %d", again)
+		}
+		listed := records.Query{Where: records.Where{"userId": []int{97516, 97517}}, To: time.Now().Add(time.Minute)}
+		if deleted := ways.Must(activity.Delete(ctx, listed)); deleted != 1 {
+			t.Fatalf("deleted %d of a list", deleted)
+		}
+		if left := ways.Must(errs.Count(ctx, records.Query{})); left != 1 {
+			t.Fatalf("left %d", left)
+		}
+		for _, refused := range []records.Query{{}, {Where: records.Where{"userId": 1}, Limit: 1}, {Where: records.Where{"userId": 1}, Search: "x"}} {
+			_, err := activity.Delete(ctx, refused)
+			is(t, err, tinystore.ErrInvalid)
+		}
+	})
+}
+
 // contract: REC-16, REC-17
 func TestFillGivesARowForEverySpanAndACalendarsRowsTheirLocalDate(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {

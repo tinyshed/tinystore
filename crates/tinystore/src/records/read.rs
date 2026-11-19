@@ -84,7 +84,7 @@ pub(super) struct Query {
 
 impl Query {
     /// Whether an event meets every condition but the range.
-    fn keeps(&self, event: &Kept) -> bool {
+    pub(super) fn keeps(&self, event: &Kept) -> bool {
         let named = self.names.is_empty() || self.names.contains(&event.name);
         let grave = self.min_level.is_none_or(|least| event.level.is_some_and(|level| level >= least));
         let traced = self.trace_id.is_none_or(|trace| event.trace_id == Some(trace));
@@ -101,6 +101,27 @@ impl Query {
     /// The events a page holds.
     pub(super) fn page_events(&self) -> usize {
         self.limit.unwrap_or(PAGE_EVENTS)
+    }
+
+    /// Refuses what a delete cannot take: a read with no `where`, which would
+    /// delete every event of its range, as SQL-09 refuses a delete with no
+    /// condition; a phrase, too loose for what cannot be undone; and an
+    /// order, a page's limit or its `next`, which a delete of every event the
+    /// read finds has no use for.
+    pub(super) fn deletes(&self) -> Result<()> {
+        if let Some(refused) = &self.refused {
+            return Err(Error::invalid(refused.clone()));
+        }
+        if self.filters.is_empty() {
+            return Err(Error::invalid("a delete without a where, which would delete every event of its range"));
+        }
+        if self.search.is_some() {
+            return Err(Error::invalid("a delete takes no search: a phrase may find more than a person's events"));
+        }
+        if self.newest || self.limit.is_some() || self.after.is_some() {
+            return Err(Error::invalid("a delete takes no newest, limit or after: it deletes every event it finds"));
+        }
+        Ok(())
     }
 }
 
@@ -217,6 +238,32 @@ impl List {
     pub fn newest(mut self) -> Self {
         self.query.newest = true;
         self
+    }
+
+    /// Deletes every event the read finds, of those appended before the
+    /// call, and what the store keeps only for them: a context of their
+    /// own, their keys and counts, their values in a filter, the bytes they
+    /// lay in. Says how many it deleted. It takes a `where`, and no search,
+    /// newest, limit or after.
+    ///
+    /// A delete is a commit a segment it changes, and cannot be undone: a
+    /// read meanwhile may still find what it has not reached, and a delete
+    /// cut short by a crash or a cancel leaves what it reached deleted, so
+    /// that running it again finishes it. No poll's cursor moves (REC-21),
+    /// and an event's id stays held till the stream's keep passes its time.
+    /// A backup taken before it, and another node's records.db, keep the
+    /// events.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// let store = tinystore::Store::open("data", Default::default())?;
+    /// let events = store.all_events()?;
+    /// let deleted = events.list().streams(["activity", "client-errors"]).filter("userId", &97516).delete()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn delete(&self) -> Result<u64> {
+        self.records.delete(self.stream.as_ref(), &self.query).map_err(|error| self.within(error))
     }
 
     /// The events of a page: 1000, and 10,000 at most.
@@ -410,7 +457,7 @@ pub(super) struct Asked {
     levels: i64,
     /// The streams read, by id: each one's name, and the time before which
     /// it keeps nothing.
-    streams: HashMap<i64, (Arc<str>, i64)>,
+    pub(super) streams: HashMap<i64, (Arc<str>, i64)>,
     /// Their ids as SQLite takes a list, when they are not every stream.
     only: Option<String>,
 }
@@ -551,6 +598,9 @@ const SEGMENT_BODY: &str = "select body from segments where id = ?1";
 /// as many of each as its limit, rather than every key of every segment.
 const SEGMENTS_WITHIN: &str = "select id from segments where holder is null and last_at >= ?1 and first_at <= ?2
     and (?3 is null or stream in (select value from json_each(?3)))";
+/// A segment's blocks that reach into a range, as `rows_of!` picks them.
+const HOLDER_BLOCKS: &str = "select id, stream, first_at, last_at, count, size, segment from blocks
+    where segment = ?1 and last_at >= ?2 and first_at <= ?3 and (?4 = 0 or levels & ?4 != 0)";
 const SEGMENT_KEYS: &str = "select key from segment_keys where segment = ?1 and kind = ?2 and key >= ?3 order by key";
 const HEAD_BODIES: &str = "select id, stream, count, body from heads where last_at >= ?1 and first_at <= ?2
     and (?3 is null or stream in (select value from json_each(?3)))";
@@ -809,6 +859,34 @@ impl Passing<'_> {
     }
 }
 
+impl Records {
+    /// The segments of a delete's streams whose events may meet `query` in
+    /// `first` to `last`, as a read passes blocks: by the keys a segment
+    /// holds, then by its blocks' times, levels and filters. A segment of
+    /// holes alone has no block, and none is found.
+    pub(super) fn holders_matching(&self, asked: &Asked, query: &Query, (first, last): (i64, i64)) -> Result<Vec<i64>> {
+        let failed = |error| sql_error("find the segments a delete reaches", error);
+        self.file.read(|connection| {
+            let mut within = connection.prepare_cached(SEGMENTS_WITHIN).map_err(failed)?;
+            let holders = within.query_map(params![first, last, asked.only], |row| row.get::<_, i64>(0));
+            let holders: Vec<i64> = holders.and_then(Iterator::collect).map_err(failed)?;
+            let mut passing = Passing { query, connection, segments: HashMap::new() };
+            let mut blocks = connection.prepare_cached(HOLDER_BLOCKS).map_err(failed)?;
+            let mut found = Vec::new();
+            for holder in holders {
+                let mut rows = blocks.query(params![holder, first, last, asked.levels]).map_err(failed)?;
+                while let Some(block) = picked(&mut rows, Kind::Block)? {
+                    if passing.may_find(&block)? {
+                        found.push(holder);
+                        break;
+                    }
+                }
+            }
+            Ok(found)
+        })
+    }
+}
+
 /// Walks the rows of a read's range by their index alone, from the end the
 /// read begins at, the heads' and the blocks' merged by that end, while
 /// `each` says to go on.
@@ -869,7 +947,7 @@ fn body_by(connection: &Connection, sql: &str, id: i64) -> Result<Vec<u8>> {
 
 /// The range a read asks for, both ends in it: a page's `next`, or the
 /// query's own span.
-fn range(query: &Query, now: i64) -> Result<(i64, i64)> {
+pub(super) fn range(query: &Query, now: i64) -> Result<(i64, i64)> {
     if let Some(after) = &query.after {
         let ends = after.split_once('~').and_then(|(first, last)| Some((first.parse().ok()?, last.parse().ok()?)));
         return ends.ok_or_else(|| Error::invalid(format!("after {after:?}, which is no page's next")));
