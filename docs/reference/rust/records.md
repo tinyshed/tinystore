@@ -260,7 +260,7 @@ pub struct Row {
     pub by: BTreeMap<String, Value>,
     pub stats: BTreeMap<String, Stats>,
     pub distinct: BTreeMap<String, u64>,
-    pub date: Option<String>,
+    pub date: Option<LocalDate>,
 }
 ```
 

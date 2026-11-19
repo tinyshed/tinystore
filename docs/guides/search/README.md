@@ -117,23 +117,23 @@ Ask for `total` to know how many documents a search finds under its
 a chip, and whether a next page exists.
 
 ```ts
-const found = await people.search({ text: 'иванов', where: { role: 'teacher' }, limit: 20, total: true })
-found.total // { count: 340, atLeast: false }
+const teachers = await people.search({ text: 'иванов', where: { role: 'teacher' }, limit: 20, total: true })
+teachers.total // { count: 340, atLeast: false }
 ```
 
 ```python
-found = await people.search("иванов", where={"role": "teacher"}, limit=20, total=True)
-found.total  # Total(count=340, at_least=False)
+teachers = await people.search("иванов", where={"role": "teacher"}, limit=20, total=True)
+teachers.total  # Total(count=340, at_least=False)
 ```
 
 ```go
-found, err := people.Search(ctx, "иванов", search.Where{"role": "teacher"}, search.Limit(20), search.Total())
-found.Total // &search.Counted{Count: 340, AtLeast: false}; nil without search.Total()
+teachers, err := people.Search(ctx, "иванов", search.Where{"role": "teacher"}, search.Limit(20), search.Total())
+teachers.Total // &search.Counted{Count: 340, AtLeast: false}; nil without search.Total()
 ```
 
 ```rust
-let found = people.search("иванов").filter(eq("role", "teacher")).limit(20).total().run()?;
-found.total // Some(Total { count: 340, at_least: false })
+let teachers = people.search("иванов").filter(eq("role", "teacher")).limit(20).total().run()?;
+teachers.total // Some(Total { count: 340, at_least: false })
 ```
 
 - `count` is exact up to 10,000. Past that the search stops counting and

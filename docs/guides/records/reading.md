@@ -161,12 +161,12 @@ api.list().since(day).filter("userId", &[7, 12, 31]).filter("route", Prefix("/ad
 api.list().since(day).filter("tags", &[["a", "b"]]).page()?; // the list ["a", "b"] itself
 ```
 
-| A key's condition        | Finds an event whose value there is                       |
-|--------------------------|-----------------------------------------------------------|
-| a value: `'drafts.get'`  | that value, by the JSON it was written as                 |
-| a list: `[7, 12, 31]`    | any of them, 1 to 1,000 values                            |
-| `{ not: 'test' }`        | none of them, a value or a list, or an event without key  |
-| `{ prefix: '/admin' }`   | a text that starts with it; a number or a bool never does |
+| A key's condition         | Finds an event whose value there is                       |
+|---------------------------|-----------------------------------------------------------|
+| a value: `'drafts.get'`   | that value, by the JSON it was written as                 |
+| a list: `[7, 12, 31]`     | any of them, 1 to 1,000 values                            |
+| `{ not: 'test' }`         | none of them, a value or a list, or an event without key  |
+| `{ prefix: '/admin' }`    | a text that starts with it; a number or a bool never does |
 | a list in a list: `[[…]]` | that list, or that object, itself                         |
 
 - Go writes `records.OneOf(…)`, `records.Not(…)` and `records.Prefix(…)`,
