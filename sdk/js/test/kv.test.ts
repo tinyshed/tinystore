@@ -199,6 +199,20 @@ for (const way of ways) {
 				expect(all).toEqual(Array.from({ length: 25 }, (_, i) => i))
 			})
 
+			// contract: KV-15
+			test('count is how many keys all walks, the branch its own, an expired key not counted', async () => {
+				const uploads = store.bucket<number>('upload-slots')
+				expect(await uploads.count()).toBe(0)
+				await uploads.set('a', 1)
+				await uploads.set('gone', 2, { expiresAt: Date.now() - 1000 })
+				await uploads.under('u1').set('b', 3)
+				await uploads.under('u1').set('c', 4)
+				expect(await uploads.count()).toBe(1)
+				expect(await uploads.under('u1').count()).toBe(2)
+				await uploads.under('u1').clear()
+				expect(await uploads.under('u1').count()).toBe(0)
+			})
+
 			test('ttl and idle are one or the other, and a duration is checked before anything leaves', () => {
 				expect(() => store.bucket('both', { ttl: '1h', idle: '1h' })).toThrow(InvalidError)
 				store.bucket('spelled', { idle: '2w3d4h5m6s7ms' })

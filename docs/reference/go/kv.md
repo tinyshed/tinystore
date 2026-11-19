@@ -162,6 +162,14 @@ func (b *Bucket[T]) Clear(ctx context.Context) error
 
 Clear removes this branch's keys and every branch under it, at once however many.
 
+### Bucket.Count
+
+```go
+func (b *Bucket[T]) Count(ctx context.Context) (int64, error)
+```
+
+Count is how many keys All would walk now: this branch's own, not those of the branches under it. An expired key not yet swept and a cleared one are not counted, and an idle key is counted without being renewed. A large branch is counted in several reads, so a key written meanwhile may or may not be. Inside a transaction it is refused as Invalid.
+
 ### Bucket.Create
 
 ```go

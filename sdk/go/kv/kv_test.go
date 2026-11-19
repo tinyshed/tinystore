@@ -271,6 +271,36 @@ func TestClearEmptiesABranchAndThoseUnderIt(t *testing.T) {
 	})
 }
 
+// contract: KV-15
+func TestCountIsHowManyKeysAllWalksTheBranchItsOwnAnExpiredKeyNotCounted(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		uploads := ways.Must(kv.OpenBucket[int64](store, "upload-slots"))
+		if n := ways.Must(uploads.Count(ctx)); n != 0 {
+			t.Fatalf("an empty bucket counts %d", n)
+		}
+		check(t, uploads.Set(ctx, "a", 1))
+		check(t, uploads.Set(ctx, "gone", 2, kv.ExpiresAt(time.Now().Add(-time.Second))))
+		check(t, uploads.Under("u1").Set(ctx, "b", 3))
+		check(t, uploads.Under("u1").Set(ctx, "c", 4))
+		if n := ways.Must(uploads.Count(ctx)); n != 1 {
+			t.Fatalf("the root's own live keys count %d", n)
+		}
+		if n := ways.Must(uploads.Under("u1").Count(ctx)); n != 2 {
+			t.Fatalf("a branch counts %d", n)
+		}
+		check(t, uploads.Under("u1").Clear(ctx))
+		if n := ways.Must(uploads.Under("u1").Count(ctx)); n != 0 {
+			t.Fatalf("a cleared branch counts %d", n)
+		}
+		err := store.Tx(ctx, func(tx *tinystore.Tx) error {
+			_, err := uploads.In(tx).Count(ctx)
+			return err
+		})
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestListReadsAPageInTheOrderOfTheKeysAndAllWalksEveryPage(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

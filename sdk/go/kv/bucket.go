@@ -510,6 +510,31 @@ func (b *Bucket[T]) Reseal(ctx context.Context) (uint64, error) {
 	return resealed.Count, nil
 }
 
+// Count is how many keys All would walk now: this branch's own, not those of
+// the branches under it. An expired key not yet swept and a cleared one are
+// not counted, and an idle key is counted without being renewed. A large
+// branch is counted in several reads, so a key written meanwhile may or may
+// not be. Inside a transaction it is refused as Invalid.
+func (b *Bucket[T]) Count(ctx context.Context) (int64, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
+	if b.tx != nil {
+		return 0, core.Errorf(core.Invalid, "a count reads a snapshot at a time, never inside a transaction")
+	}
+	answer, err := b.via.Call(ctx, b.opener, wire.MethodKvCount, func(handle uint64) []byte {
+		return wire.Encode(&wire.KvBranch{Handle: handle, Under: b.under})
+	}, core.Reading)
+	if err != nil {
+		return 0, err
+	}
+	var count wire.KvCount
+	if err := decode(answer, &count); err != nil {
+		return 0, err
+	}
+	return count.Value, nil
+}
+
 // List is one page of this branch's own keys, in the byte order of their
 // text: "10" before "9".
 func (b *Bucket[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error) {

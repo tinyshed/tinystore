@@ -272,6 +272,18 @@ The same bucket seen from the branch `owner` names under this one:
 pub fn has(&self, key: impl Key) -> Result<bool>
 ```
 
+### Bucket.count
+
+```rust
+pub fn count(&self) -> Result<u64>
+```
+
+How many keys `all` would walk now: this branch's own live keys, not
+those of the branches under it. An expired key not yet swept and a
+cleared one are not counted, and an idle key is counted without being
+renewed. It reads 65,536 keys a snapshot and holds none between
+them, so a key written meanwhile may or may not be counted.
+
 ### Bucket.delete
 
 ```rust
@@ -1168,6 +1180,15 @@ pub fn list(
 
 One page of this branch's own keys, after `after` when it continues
 another, as `crate::kv::Bucket::list` reads it.
+
+### aio::kv::Bucket.count
+
+```rust
+pub fn count(&self) -> impl Future<Output = Result<u64>> + Send + 'static
+```
+
+How many keys `all` would walk now, as `crate::kv::Bucket::count`
+counts them.
 
 ### aio::kv::Bucket.all
 

@@ -101,6 +101,7 @@ Every call that reads, writes or waits is the blocking call with `.await`:
 | `states.update(&key, change)?`         | `states.update(&key, change).await?`         |
 | `sessions.key(&key).ttl(day).set(&s)?` | `sessions.key(&key).ttl(day).set(&s).await?` |
 | `targets.list(100, None)?`             | `targets.list(100, None).await?`             |
+| `targets.count()?`                     | `targets.count().await?`                     |
 | `for entry in sessions.all()`          | `while let Some(entry) = all.next().await`   |
 | `attempts.add(&ip, 1)?`                | `attempts.add(&ip, 1).await?`                |
 | `api.allow(&user_id)?`                 | `api.allow(&user_id).await?`                 |
@@ -134,17 +135,17 @@ Counters, rate limits, quotas and `once` cross the same way.
 
 ## In these guides
 
-| Page                              | Covers                                                   |
-|-----------------------------------|----------------------------------------------------------|
-| [Expiry](expiry.md)               | `ttl`, `idle`, `expiresAt`, `expire`                     |
-| [Versions](versions.md)           | `entry`, `ifVersion`, and `update`, which loses no write |
-| [Branches](branches.md)           | `list`, `all` and `under`: keys listed, a page's entries |
-| [Encrypted buckets](encrypted.md) | values sealed with the store's key                       |
-| [Counters](counters.md)           | totals by key, in memory or written every add            |
-| [Rate limits](rate-limits.md)     | a smooth rate with a burst, `allow`, `peek`, `reset`     |
-| [Quotas](quotas.md)               | uses in windows that reset, `refund`                     |
-| [Once](once.md)                   | requests sent twice, and memos                           |
-| [Transactions](transactions.md)   | `store.tx`: reads that decide what to write              |
+| Page                              | Covers                                                      |
+|-----------------------------------|-------------------------------------------------------------|
+| [Expiry](expiry.md)               | `ttl`, `idle`, `expiresAt`, `expire`                        |
+| [Versions](versions.md)           | `entry`, `ifVersion`, and `update`, which loses no write    |
+| [Branches](branches.md)           | `list`, `all`, `count` and `under`: keys listed and counted |
+| [Encrypted buckets](encrypted.md) | values sealed with the store's key                          |
+| [Counters](counters.md)           | totals by key, in memory or written every add               |
+| [Rate limits](rate-limits.md)     | a smooth rate with a burst, `allow`, `peek`, `reset`        |
+| [Quotas](quotas.md)               | uses in windows that reset, `refund`                        |
+| [Once](once.md)                   | requests sent twice, and memos                              |
+| [Transactions](transactions.md)   | `store.tx`: reads that decide what to write                 |
 
 New to KV? [Sessions and limits](../../handbook/chat/sessions-and-limits.md)
 in the Handbook signs users in with codes, sessions, a rate limit, a quota and

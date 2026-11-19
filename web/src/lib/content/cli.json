@@ -1,7 +1,7 @@
 {
   "commands": [
     {
-      "does": "what the store holds, who serves it, how its node stands",
+      "does": "what the store holds, who serves it, how its node stands; --names counts each bucket's keys",
       "examples": [
         "tinystore status ./data",
         "tinystore status ./data --names",

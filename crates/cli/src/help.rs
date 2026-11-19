@@ -47,7 +47,7 @@ const JSON: Flag = flag("--json", "", "one JSON document, for scripts");
 pub(crate) const STATUS: Command = Command {
     name: "status",
     takes: "[dir]",
-    does: "what the store holds, who serves it, how its node stands",
+    does: "what the store holds, who serves it, how its node stands; --names counts each bucket's keys",
     flags: &[
         flag("--names", "", "each bucket, queue, set of files, stream, metric and index, with its count and bytes"),
         JSON,

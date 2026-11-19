@@ -75,6 +75,7 @@ methods: dict[str, int] = {
     "kv.clear": 0x0109,
     "kv.list": 0x010A,
     "kv.reseal": 0x010B,
+    "kv.count": 0x010C,
     "kv.counters.open": 0x0110,
     "kv.counters.add": 0x0111,
     "kv.counters.get": 0x0112,
@@ -4356,7 +4357,7 @@ def _read_kv_branch(r: Reader) -> dict[str, Any]:
     return read
 
 
-# A branch of a handle, for a clear.
+# A branch of a handle, for a clear, a reseal or a count.
 KvBranch = Message(
     "kv.Branch",
     {
@@ -4548,6 +4549,7 @@ def _read_kv_count(r: Reader) -> dict[str, Any]:
     return read
 
 
+# A counter's value, or how many keys a branch holds.
 KvCount = Message(
     "kv.Count",
     {

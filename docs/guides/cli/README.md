@@ -28,39 +28,39 @@ tinystore kv ./data set flags beta on --ttl 1h
 
 ## Every command
 
-| Group   | Command                               | Does                                                              |
-|---------|---------------------------------------|-------------------------------------------------------------------|
-| Look    | `status [dir]`                        | what the store holds, who serves it, how its node stands          |
-|         | `logs [dir]`                          | the application's logs; new ones as they arrive with `-f`         |
-|         | `kv [dir] get <bucket> <key>`         | one value; `list <bucket> [branch]` for a bucket's keys           |
-|         | `jobs [dir] list <queue>`             | a queue's jobs, with their state                                  |
-|         | `files [dir] list <set>`              | a set's files; `get <set> <path> <file>` writes one to a path     |
-|         | `sql [dir] <db> "<query>"`            | a query's rows; reads only unless `--write`                       |
-|         | `search list [dir]`                   | the store's search indexes; `drop <dir> <name>` drops one         |
-|         | `metrics [dir] read <name>`           | a metric's samples; `names` and `aggregate` beside it             |
-|         | `events [dir] list <stream>`          | a stream's events                                                 |
-| Write   | `kv <dir> set <bucket> <key> <v>`     | set a key's value; `delete` deletes one                           |
-|         | `jobs <dir> add <queue> <json>`       | add a job; `cancel <queue> <id>` cancels one                      |
-|         | `files <dir> put <set> <path> <f>`    | write a local file; `delete <set> <path>` deletes one             |
-|         | `config <dir> update <cfg> <p=v>`     | change a config's live settings; `reset`, and `explain` beside    |
-|         | `channels <dir> publish <ch> <json>`  | hand a message to whoever listens; `subscribe <ch>` listens       |
-|         | `metrics <dir> ingest`                | Prometheus text on stdin, a stream with `-f`; `replace` a range   |
-|         | `events <dir> append <stream>`        | an event, or each line of a program's output                      |
-| Run     | `serve <dir>`                         | share the store with programs here and elsewhere                  |
-|         | `stop <dir>`                          | stop the server of a directory, its work finished                 |
-|         | `backup <dir> <zip>`                  | the whole store in one checked zip, while it runs                 |
-|         | `restore <zip> <dir>`                 | a backup into an empty directory                                  |
-|         | `verify <zip>`                        | check a backup as a restore would, writing nothing                |
-|         | `mcp [dir]`                           | let an AI agent read the store, and write what `--write` names    |
-|         | `token new [admin\|data\|read]`       | a token line for `serve`'s `--tokens`                             |
-|         | `lock <dir> hold <lock> <key> -- <c>` | run a command while it holds a key of a lock                      |
-|         | `completion <shell>`                  | the lines that give bash, zsh, fish or PowerShell Tab completion  |
-| Nodes   | `node status [dir]`                   | the node's files, its links and how far behind its copies are     |
-|         | `node promote <dir> [file]`           | make a copy the home, once its old home is gone                   |
-|         | `node demote <dir> [file]`            | make an old home's files copies again                             |
-|         | `witness <dir> --listen <host:port>`  | a draft: decide which node writes a file when its home goes quiet |
-| Develop | `migrate <dir> <db> <migrations>`     | apply a database's migration files                                |
-|         | `schema <dir> [db]`                   | a database's tables, columns and indexes                          |
+| Group   | Command                               | Does                                                                     |
+|---------|---------------------------------------|--------------------------------------------------------------------------|
+| Look    | `status [dir]`                        | what the store holds, who serves it; `--names` counts each bucket's keys |
+|         | `logs [dir]`                          | the application's logs; new ones as they arrive with `-f`                |
+|         | `kv [dir] get <bucket> <key>`         | one value; `list <bucket> [branch]` for a bucket's keys                  |
+|         | `jobs [dir] list <queue>`             | a queue's jobs, with their state                                         |
+|         | `files [dir] list <set>`              | a set's files; `get <set> <path> <file>` writes one to a path            |
+|         | `sql [dir] <db> "<query>"`            | a query's rows; reads only unless `--write`                              |
+|         | `search list [dir]`                   | the store's search indexes; `drop <dir> <name>` drops one                |
+|         | `metrics [dir] read <name>`           | a metric's samples; `names` and `aggregate` beside it                    |
+|         | `events [dir] list <stream>`          | a stream's events                                                        |
+| Write   | `kv <dir> set <bucket> <key> <v>`     | set a key's value; `delete` deletes one                                  |
+|         | `jobs <dir> add <queue> <json>`       | add a job; `cancel <queue> <id>` cancels one                             |
+|         | `files <dir> put <set> <path> <f>`    | write a local file; `delete <set> <path>` deletes one                    |
+|         | `config <dir> update <cfg> <p=v>`     | change a config's live settings; `reset`, and `explain` beside           |
+|         | `channels <dir> publish <ch> <json>`  | hand a message to whoever listens; `subscribe <ch>` listens              |
+|         | `metrics <dir> ingest`                | Prometheus text on stdin, a stream with `-f`; `replace` a range          |
+|         | `events <dir> append <stream>`        | an event, or each line of a program's output                             |
+| Run     | `serve <dir>`                         | share the store with programs here and elsewhere                         |
+|         | `stop <dir>`                          | stop the server of a directory, its work finished                        |
+|         | `backup <dir> <zip>`                  | the whole store in one checked zip, while it runs                        |
+|         | `restore <zip> <dir>`                 | a backup into an empty directory                                         |
+|         | `verify <zip>`                        | check a backup as a restore would, writing nothing                       |
+|         | `mcp [dir]`                           | let an AI agent read the store, and write what `--write` names           |
+|         | `token new [admin\|data\|read]`       | a token line for `serve`'s `--tokens`                                    |
+|         | `lock <dir> hold <lock> <key> -- <c>` | run a command while it holds a key of a lock                             |
+|         | `completion <shell>`                  | the lines that give bash, zsh, fish or PowerShell Tab completion         |
+| Nodes   | `node status [dir]`                   | the node's files, its links and how far behind its copies are            |
+|         | `node promote <dir> [file]`           | make a copy the home, once its old home is gone                          |
+|         | `node demote <dir> [file]`            | make an old home's files copies again                                    |
+|         | `witness <dir> --listen <host:port>`  | a draft: decide which node writes a file when its home goes quiet        |
+| Develop | `migrate <dir> <db> <migrations>`     | apply a database's migration files                                       |
+|         | `schema <dir> [db]`                   | a database's tables, columns and indexes                                 |
 
 `tinystore` alone prints this list; `tinystore help <command>` or
 `<command> --help` prints one command with its flags and an example, and

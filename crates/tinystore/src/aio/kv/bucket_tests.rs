@@ -138,6 +138,21 @@ async fn all_streams_every_key_of_a_branch_a_page_at_a_time_as_the_blocking_iter
     f.store.close().unwrap();
 }
 
+// contract: KV-15
+#[tokio::test]
+async fn a_count_awaited_is_the_blocking_count() {
+    let f = fixture();
+    let store = awaited(&f);
+    let targets = store.bucket::<i64>("targets").open().unwrap();
+    targets.blocking().under("eu").set("berlin", &1).unwrap();
+    targets.blocking().under("eu").set("paris", &2).unwrap();
+    targets.blocking().set("tokyo", &3).unwrap();
+    assert_eq!(targets.under("eu").count().await.unwrap(), 2);
+    assert_eq!(targets.count().await.unwrap(), 1, "the root's own keys");
+    store.close().await.unwrap();
+    assert_eq!(targets.count().await.unwrap_err().kind(), ErrorKind::Closed);
+}
+
 #[tokio::test]
 async fn a_stream_ends_with_closed_once_its_store_closes() {
     let f = fixture();

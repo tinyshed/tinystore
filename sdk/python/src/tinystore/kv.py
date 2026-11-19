@@ -274,6 +274,23 @@ class Bucket[T]:
         )
         return KvResealed.decode(answer).get("count", 0)
 
+    async def count(self) -> int:
+        """How many keys ``all`` would walk now: this branch's own, not those of the branches under it.
+
+        An expired key not yet swept and a cleared one are not counted, and an
+        idle key is counted without being renewed. A large branch is counted in
+        several reads, so a key written meanwhile may or may not be.
+        """
+        under = under_field(self._parts.under)
+        answer = await self._via.call(
+            methods["kv.bucket.open"],
+            self._parts.opener,
+            methods["kv.count"],
+            lambda handle: KvBranch.encode(handle=handle, under=under),
+            "read",
+        )
+        return KvCount.decode(answer).get("value", 0)
+
     async def list(self, *, limit: int | None = None, after: Key | None = None) -> Page[T]:
         """One page of this branch's own keys, in the byte order of their text: "10" before "9"."""
         under = under_field(self._parts.under)

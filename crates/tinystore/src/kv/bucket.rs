@@ -30,6 +30,10 @@ const CLEAR_BOUND: usize = 10_000;
 /// Keys a page holds at most.
 pub const PAGE_KEYS: usize = 1000;
 
+/// Keys a count reads in one snapshot, so that a large branch holds no reader
+/// for long.
+const COUNT_KEYS: usize = 1 << 16;
+
 /// An idle key is renewed once a thirtieth of its term has passed since it
 /// last was, and before its read returns when it has less than a minute left.
 const REFRESHES: i64 = 30;
@@ -488,6 +492,27 @@ impl<V> Bucket<V> {
         }
         let (id, path, now) = (self.scope.id, self.scope.path(&key)?, self.scope.now());
         self.scope.read(&key, |connection| cells::has(connection, id, &path, now))
+    }
+
+    /// How many keys `all` would walk now: this branch's own live keys, not
+    /// those of the branches under it. An expired key not yet swept and a
+    /// cleared one are not counted, and an idle key is counted without being
+    /// renewed. It reads 65,536 keys a snapshot and holds none between
+    /// them, so a key written meanwhile may or may not be counted.
+    pub fn count(&self) -> Result<u64> {
+        let (mut after, past) = self.scope.branch()?.own_keys_after(None);
+        let (id, now) = (self.scope.id, self.scope.now());
+        let mut counted = 0;
+        loop {
+            let read = |connection: &Connection| cells::count(connection, id, (&after, &past), now, COUNT_KEYS);
+            let (keys, last) =
+                self.scope.kv.file().read(read).map_err(|error| error.within(self.scope.shown_branch()))?;
+            counted += keys as u64;
+            match last {
+                Some(last) if keys == COUNT_KEYS => after = last,
+                _ => return Ok(counted),
+            }
+        }
     }
 
     /// Removes `key` and says whether a live key was there.

@@ -66,6 +66,7 @@ const (
 	MethodKvClear          = 0x0109
 	MethodKvList           = 0x010a
 	MethodKvReseal         = 0x010b
+	MethodKvCount          = 0x010c
 	MethodKvCountersOpen   = 0x0110
 	MethodKvCountersAdd    = 0x0111
 	MethodKvCountersGet    = 0x0112
@@ -205,6 +206,7 @@ var methodNames = []struct {
 	{"kv.clear", MethodKvClear},
 	{"kv.list", MethodKvList},
 	{"kv.reseal", MethodKvReseal},
+	{"kv.count", MethodKvCount},
 	{"kv.counters.open", MethodKvCountersOpen},
 	{"kv.counters.add", MethodKvCountersAdd},
 	{"kv.counters.get", MethodKvCountersGet},
@@ -6101,7 +6103,7 @@ func (m KvResealed) IsZero() bool {
 
 // KvBranch is the schema's kv.Branch.
 //
-// A branch of a handle, for a clear.
+// A branch of a handle, for a clear, a reseal or a count.
 type KvBranch struct {
 	Handle uint64   `wire:"1,handle"`
 	Under  []string `wire:"2,under"`
@@ -6349,6 +6351,8 @@ func (m KvCountersOpen) IsZero() bool {
 }
 
 // KvCount is the schema's kv.Count.
+//
+// A counter's value, or how many keys a branch holds.
 type KvCount struct {
 	Value int64 `wire:"1,value"`
 }

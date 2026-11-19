@@ -87,6 +87,7 @@ export const methods = {
 	'kv.clear': 0x0109,
 	'kv.list': 0x010a,
 	'kv.reseal': 0x010b,
+	'kv.count': 0x010c,
 	'kv.counters.open': 0x0110,
 	'kv.counters.add': 0x0111,
 	'kv.counters.get': 0x0112,
@@ -5371,7 +5372,7 @@ export const KvResealed = message(
 )
 
 /**
- * A branch of a handle, for a clear.
+ * A branch of a handle, for a clear, a reseal or a count.
  */
 export const KvBranch = message(
 	'kv.Branch',
@@ -5616,6 +5617,9 @@ export const KvCountersOpen = message(
 	},
 )
 
+/**
+ * A counter's value, or how many keys a branch holds.
+ */
 export const KvCount = message(
 	'kv.Count',
 	{

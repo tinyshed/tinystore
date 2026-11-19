@@ -205,6 +205,22 @@ async def test_list_reads_a_page_in_the_order_of_the_keys_and_all_walks_every_pa
     assert [e.value async for e in pages.all(limit=7)] == list(range(25))
 
 
+# contract: KV-15
+async def test_count_is_how_many_keys_all_walks_the_branch_its_own_an_expired_key_not_counted(
+    store: tinystore.Store,
+) -> None:
+    uploads = store.bucket("upload-slots", int)
+    assert await uploads.count() == 0
+    await uploads.set("a", 1)
+    await uploads.set("gone", 2, expires_at=soon(seconds=-1))
+    await uploads.under("u1").set("b", 3)
+    await uploads.under("u1").set("c", 4)
+    assert await uploads.count() == 1
+    assert await uploads.under("u1").count() == 2
+    await uploads.under("u1").clear()
+    assert await uploads.under("u1").count() == 0
+
+
 async def test_ttl_and_idle_are_one_or_the_other_and_a_span_is_checked_before_anything_leaves(
     store: tinystore.Store,
 ) -> None:

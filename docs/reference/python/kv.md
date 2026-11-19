@@ -200,6 +200,18 @@ the store's options. A value sealed with a key the store does not hold
 stops it with an InvalidError that names the key, and a reseal after
 the key is given goes on.
 
+### Bucket.count
+
+```python
+async def count() -> int: ...
+```
+
+How many keys ``all`` would walk now: this branch's own, not those of the branches under it.
+
+An expired key not yet swept and a cleared one are not counted, and an
+idle key is counted without being renewed. A large branch is counted in
+several reads, so a key written meanwhile may or may not be.
+
 ### Bucket.list
 
 ```python

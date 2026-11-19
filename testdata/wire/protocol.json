@@ -6812,6 +6812,7 @@
     "kv.allow": 290,
     "kv.bucket.open": 257,
     "kv.clear": 265,
+    "kv.count": 268,
     "kv.counters.add": 273,
     "kv.counters.clear": 276,
     "kv.counters.delete": 275,

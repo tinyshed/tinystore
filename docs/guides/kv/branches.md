@@ -2,8 +2,8 @@
 
 A branch is the part of a KV bucket that belongs to one owner: one user's
 sessions, one team's flags. `under(owner)` gives the bucket seen from the
-branch. A branch can be listed a page at a time and cleared in one call,
-however many keys it holds.
+branch. A branch can be listed a page at a time, counted, and cleared in one
+call, however many keys it holds.
 
 ```ts
 const sessions = store.bucket<Session>('sessions', { idle: '30d' })
@@ -75,6 +75,43 @@ version and when it expires. Two keys of a bucket of targets, one set with a
 - Every call works on a branch: `get`, `set`, `take`, `create`, `expire`,
   `delete`, `entry`.
 
+## How many keys
+
+`count()` says how many keys `all()` would walk now: the branch's own keys,
+not those of the branches under it. On the bucket itself it counts the root's
+keys.
+
+```ts
+const left = await uploads.count() // 1834
+const mine = await sessions.under(userId).count() // one user's sessions
+```
+
+```python
+left = await uploads.count()  # 1834
+mine = await sessions.under(user_id).count()  # one user's sessions
+```
+
+```go
+left, err := uploads.Count(ctx) // int64
+mine, err := sessions.Under(userID).Count(ctx)
+```
+
+```rust
+let left = uploads.count()?; // u64
+let mine = sessions.under(user_id).count()?;
+```
+
+- An expired key is not counted, even before it is deleted from the file, and
+  neither is a cleared one (contract KV-15). Counting an `idle` key does not
+  keep it alive.
+- It reads every key of the branch, so its cost grows with the branch. A large
+  branch is counted in several reads of 65,536 keys, so a key written during
+  the count may or may not be counted.
+- `count` is not a call of a transaction: `In(tx)` in Go refuses it
+  `invalid`, and a transaction's bucket in the other languages has no `count`.
+- `tinystore status ./data --names` counts every bucket whole, every branch
+  included, beside the program that runs it.
+
 ## Async Rust
 
 With the `async` feature, `aio`'s buckets read pages the same way, and you
@@ -89,6 +126,7 @@ let store = Store::open("data", Options::default())?;
 let sessions = store.bucket::<Session>("sessions").open()?;
 
 let page = sessions.under(user_id).list(100, None).await?;
+let keys = sessions.under(user_id).count().await?;
 let mut all = sessions.under(user_id).all(); // a Stream of Result<Entry<Session>>
 while let Some(entry) = all.next().await {
     let entry = entry?;

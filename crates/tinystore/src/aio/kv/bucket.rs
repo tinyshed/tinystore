@@ -173,6 +173,14 @@ impl<V: Value> Bucket<V> {
         run::read(&self.pool, what, move || bucket.list(limit, after.as_deref()))
     }
 
+    /// How many keys `all` would walk now, as [`crate::kv::Bucket::count`]
+    /// counts them.
+    pub fn count(&self) -> impl Future<Output = Result<u64>> + Send + 'static {
+        let bucket = self.bucket.clone();
+        let what = named(bucket.scope.shown_branch(), "a count");
+        run::read(&self.pool, what, move || bucket.count())
+    }
+
     /// Every key of this branch, a page at a time, as a `Stream`. No
     /// snapshot is held between pages, so a slow loop keeps no reader, and a
     /// key written meanwhile may or may not be met. Dropped, it stops the

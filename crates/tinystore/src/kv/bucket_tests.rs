@@ -526,6 +526,62 @@ fn a_large_clear_hides_its_keys_at_once_and_maintenance_deletes_them() {
     assert!(items.under("small").has("a").unwrap());
 }
 
+// contract: KV-15
+#[test]
+fn a_count_is_the_keys_all_walks_and_never_an_expired_or_a_cleared_one() {
+    let f = fixture();
+    let sessions = f.store.bucket::<i64>("sessions").open().unwrap();
+    assert_eq!(sessions.count().unwrap(), 0, "an empty bucket");
+    sessions.set("a", &1).unwrap();
+    sessions.set("b", &2).unwrap();
+    sessions.key("short").ttl(SECOND).set(&3).unwrap();
+    sessions.under(42).set("phone", &4).unwrap();
+    sessions.under(42).under("old").set("tablet", &5).unwrap();
+    assert_eq!(sessions.count().unwrap(), 3, "the root's own keys, not its branches'");
+    assert_eq!(sessions.under(42).count().unwrap(), 1);
+
+    f.clock.advance(2 * SECOND);
+    assert_eq!(f.rows("_tinystore_kv_cells"), 5, "the expired key is not swept yet");
+    assert_eq!(sessions.count().unwrap(), 2);
+    assert_eq!(sessions.count().unwrap(), sessions.all().count() as u64);
+
+    sessions.under(42).clear().unwrap();
+    assert_eq!(sessions.under(42).count().unwrap(), 0, "a cleared branch");
+
+    let idle = f.store.bucket::<i64>("idle").idle(MINUTE).open().unwrap();
+    idle.set("a", &1).unwrap();
+    f.clock.advance(MINUTE - SECOND);
+    assert_eq!(idle.count().unwrap(), 1);
+    f.clock.advance(2 * SECOND);
+    assert_eq!(idle.count().unwrap(), 0, "a count renews no idle key");
+}
+
+// contract: KV-15
+#[test]
+fn a_count_of_a_branch_past_one_read_goes_on_and_counts_none_a_large_clear_hid() {
+    let f = fixture();
+    let items = f.store.bucket::<i64>("items").open().unwrap();
+    let (kv, id) = (Kv::of(&f.store).unwrap(), items.scope.id);
+    let big = Branch::default().under("big").unwrap();
+    let revision = kv.revision();
+    kv.file()
+        .transaction(|tx| -> Result<()> {
+            for n in 0..COUNT_KEYS + 3 {
+                let version = next_version(&revision, tx)?;
+                cells::put(tx, id, &big.path(&n.to_string())?, (version, None), &Raw::Int(1), None)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(items.under("big").count().unwrap(), COUNT_KEYS as u64 + 3);
+
+    items.under("big").clear().unwrap();
+    assert_eq!(f.rows("_tinystore_kv_branches"), 1, "marked, its rows still there");
+    assert_eq!(items.under("big").count().unwrap(), 0);
+    items.under("big").set("7", &2).unwrap();
+    assert_eq!(items.under("big").count().unwrap(), 1, "a key written after the clear is a new key");
+}
+
 // contract: KV-03
 #[test]
 fn a_clear_marked_again_at_an_earlier_version_keeps_hidden_what_the_later_mark_hid() {

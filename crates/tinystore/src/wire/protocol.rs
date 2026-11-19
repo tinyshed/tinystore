@@ -5126,7 +5126,7 @@ impl Message for KvResealed {
     }
 }
 
-/// A branch of a handle, for a clear.
+/// A branch of a handle, for a clear, a reseal or a count.
 #[cfg(feature = "kv")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct KvBranch {
@@ -5355,6 +5355,7 @@ impl Message for KvCountersOpen {
     }
 }
 
+/// A counter's value, or how many keys a branch holds.
 #[cfg(feature = "kv")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct KvCount {
@@ -12841,6 +12842,8 @@ pub(crate) mod method {
     #[cfg(feature = "kv")]
     pub(crate) const KV_RESEAL: u16 = 0x010b;
     #[cfg(feature = "kv")]
+    pub(crate) const KV_COUNT: u16 = 0x010c;
+    #[cfg(feature = "kv")]
     pub(crate) const KV_COUNTERS_OPEN: u16 = 0x0110;
     #[cfg(feature = "kv")]
     pub(crate) const KV_COUNTERS_ADD: u16 = 0x0111;
@@ -13102,6 +13105,8 @@ pub(crate) mod method {
             #[cfg(feature = "kv")]
             KV_RESEAL => Some(Access::Write),
             #[cfg(feature = "kv")]
+            KV_COUNT => Some(Access::Read),
+            #[cfg(feature = "kv")]
             KV_COUNTERS_OPEN => Some(Access::Read),
             #[cfg(feature = "kv")]
             KV_COUNTERS_ADD => Some(Access::Write),
@@ -13346,6 +13351,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("kv.list", 0x010a, "call"),
     #[cfg(feature = "kv")]
     ("kv.reseal", 0x010b, "call"),
+    #[cfg(feature = "kv")]
+    ("kv.count", 0x010c, "call"),
     #[cfg(feature = "kv")]
     ("kv.counters.open", 0x0110, "call"),
     #[cfg(feature = "kv")]

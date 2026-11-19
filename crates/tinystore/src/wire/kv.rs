@@ -92,6 +92,11 @@ pub(crate) fn call(
             let branch = KvBranch::decode(body)?;
             Ok(KvResealed { count: handles.bucket(branch.handle, &branch.under)?.reseal()? }.encode())
         }
+        method::KV_COUNT => {
+            let branch = KvBranch::decode(body)?;
+            let keys = handles.bucket(branch.handle, &branch.under)?.count()?;
+            Ok(KvCount { value: i64::try_from(keys).unwrap_or(i64::MAX) }.encode())
+        }
         method::KV_PEEK => limit(handles, called, KvCall::decode(body)?),
         method::KV_ONCE_GET => {
             let call = KvCall::decode(body)?;
@@ -121,6 +126,7 @@ pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body
             let rows = call_on_branch(tx, &bucket.scope, read)?;
             page(bucket.keyed(rows)?, &list, limit, max_body)
         }
+        method::KV_COUNT => Err(Failure::invalid("a count reads a snapshot at a time, never inside a transaction")),
         _ => key_call_in(handles, tx, called, &KvCall::decode(body)?),
     }
 }
@@ -698,3 +704,7 @@ fn wrong(handle: u64, opened: &Opened, wanted: &str) -> Failure {
     };
     Failure::invalid(format!("handle {handle} is {opened}, not {wanted}"))
 }
+
+#[cfg(test)]
+#[path = "kv_tests.rs"]
+mod tests;

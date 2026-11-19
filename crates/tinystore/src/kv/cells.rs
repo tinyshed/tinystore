@@ -57,6 +57,14 @@ const SELECT_PAGE: &str = concat!(
     hidden!(),
     " order by c.path limit cast(?5 as integer)"
 );
+/// How many of a branch's own live cells lie in a range, `?5` at most, and
+/// the last of them, which the next count starts after.
+const COUNT_PAGE: &str = concat!(
+    "select count(*), max(path) from (select c.path as path from _tinystore_kv_cells as c
+        where c.bucket = ?1 and c.path > ?2 and c.path < ?3 and (c.expires is null or c.expires > ?4) and not ",
+    hidden!(),
+    " order by c.path limit cast(?5 as integer))"
+);
 const UPSERT: &str = "insert into _tinystore_kv_cells as c (bucket, path, version, expires, value, spill)
     values (?1, ?2, ?3, ?4, ?5, ?6)
     on conflict (bucket, path) do update set
@@ -333,6 +341,26 @@ pub(crate) fn page(
         rows.collect()
     };
     read().map_err(|error| sql_error("a page", error))
+}
+
+/// How many live cells lie in `(after, past)`, `limit` at most, and the path
+/// of the last of them.
+pub(crate) fn count(
+    connection: &Connection,
+    bucket: i64,
+    range: (&[u8], &[u8]),
+    now: i64,
+    limit: usize,
+) -> Result<(usize, Option<Vec<u8>>)> {
+    let (after, past) = range;
+    connection
+        .prepare_cached(COUNT_PAGE)
+        .and_then(|mut count| {
+            count.query_row(params![bucket, after, past, now, limit as i64], |row| {
+                Ok((row.get::<_, i64>(0)? as usize, row.get(1)?))
+            })
+        })
+        .map_err(|error| sql_error("a count", error))
 }
 
 /// Deletes every cell in `[from, past)` when there are at most `bound` of

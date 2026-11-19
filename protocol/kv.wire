@@ -52,7 +52,7 @@ message kv.Resealed {
   1 count: uint
 }
 
-# A branch of a handle, for a clear.
+# A branch of a handle, for a clear, a reseal or a count.
 message kv.Branch {
   1 handle: uint
   2 under: [key]
@@ -80,6 +80,7 @@ message kv.CountersOpen {
   3 flushEvery: duration?    # kept in memory and written every span; each add written when absent
 }
 
+# A counter's value, or how many keys a branch holds.
 message kv.Count {
   1 value: int64
 }
@@ -182,6 +183,7 @@ write 0x0108 kv.expire(kv.Call)            -> kv.Found
 write 0x0109 kv.clear(kv.Branch)           -> Empty
 read  0x010a kv.list(kv.List)              -> kv.Page
 write 0x010b kv.reseal(kv.Branch)          -> kv.Resealed
+read  0x010c kv.count(kv.Branch)           -> kv.Count
 
 read  0x0110 kv.counters.open(kv.CountersOpen) -> Handle
 write 0x0111 kv.counters.add(kv.Call)          -> kv.Count

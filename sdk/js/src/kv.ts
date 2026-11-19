@@ -297,6 +297,25 @@ export class Bucket<T> {
 		return KvResealed.decode(answer).count ?? 0
 	}
 
+	/**
+	 * How many keys `all` would walk now: this branch's own, not those of the
+	 * branches under it. An expired key not yet swept and a cleared one are
+	 * not counted, and an idle key is counted without being renewed. A large
+	 * branch is counted in several reads, so a key written meanwhile may or
+	 * may not be.
+	 */
+	async count(): Promise<number> {
+		const under = underField(this.#under)
+		const answer = await this.#via.call(
+			methods['kv.bucket.open'],
+			this.#open,
+			methods['kv.count'],
+			handle => KvBranch.encode({ handle, under }),
+			'read',
+		)
+		return Number(KvCount.decode(answer).value ?? 0)
+	}
+
 	/** One page of this branch's own keys, in the byte order of their text: `"10"` before `"9"`. */
 	async list(options?: { limit?: number | undefined; after?: Key | undefined }): Promise<Page<T>> {
 		const under = underField(this.#under)
