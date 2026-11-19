@@ -15,7 +15,7 @@ examples on this page show only Rust for that reason.
 
 ```toml
 [dependencies]
-tinystore = { version = "0.10", features = ["async"] }
+tinystore = { version = "0.11", features = ["async"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 

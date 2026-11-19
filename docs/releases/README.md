@@ -4,6 +4,11 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.11.0](v0.11.0.md)** · 19 November 2026\
+  Jobs that upsert, end and run now, a search's total and the rows of a
+  query, any of a list in a log's `where`, every bucket of a chart, a
+  person's events deleted, a store for each test, and the command line
+  writing to an embedded store.
 - **[TinyStore 0.10.0](v0.10.0.md)** · 17 November 2026\
   A set of files as a cache: a term from the last read, a ceiling that
   evicts or refuses, one conversion for many requests with `getOrCreate`,
