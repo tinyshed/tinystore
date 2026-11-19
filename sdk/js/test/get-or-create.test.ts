@@ -88,12 +88,15 @@ for (const way of ways) {
 		test("a throw is the caller's own error, every waiting call's conflict, and the next call runs again", async () => {
 			const pages = store.files('failing')
 			const { opened, open } = gate()
+			// the second call waits for the first to hold the key, not for a time a slow runner may pass
+			const started = gate()
 			class Parse extends Error {}
 			const failing = pages.getOrCreate('bad.pdf', async () => {
+				started.open()
 				await opened
 				throw new Parse('the document does not parse')
 			})
-			await sleep(100)
+			await started.opened
 			const waiting = pages.getOrCreate('bad.pdf', () => ({ data: 'never' }))
 			await sleep(200)
 			open()
