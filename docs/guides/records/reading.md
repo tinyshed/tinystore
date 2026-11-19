@@ -324,8 +324,10 @@ let hourly = store
   each local day, week from Monday or month in place of `every`, as
   [metrics' days](../metrics/aggregates.md#days-in-a-time-zone) do.
 - `aggregate` gives a row for each span of `every` and each value of the keys
-  in `by`, with its `count`. A span without events has no row. `at` is where
-  a row's span begins, counted from 1970 in UTC.
+  in `by`, with its `count`. A span without events has no row, unless the
+  aggregate asks for `fill`. `at` is where a row's span begins, counted from
+  1970 in UTC. A row of a calendar also has `date`, the local date its span
+  begins on.
 - `stats` names fields, and a row gives each one's `samples`, `sum`, `min`,
   `max` and `avg` over the events whose value there is a number. `distinct`
   gives how many different values a field has.
@@ -333,6 +335,46 @@ let hourly = store
 - An answer is whole or an error: past 10,000 rows, or 64 MiB of different
   values held for `top` or `distinct`, it is `limit`, never a smaller answer.
   Ask for a shorter range or a wider `every`.
+
+## Every span, and its local date
+
+A chart wants a row for every hour, and a calendar's day by its own date.
+`fill` gives a row for every span of the range, an empty one with `count: 0`,
+and a calendar's row carries `date`:
+
+```ts
+const days = await api.aggregate({ names: ['call'], since: '30d', calendar: 'day', timeZone: 'Europe/Moscow', fill: true })
+// [{ at, date: '2026-10-21', count: 0, by: {}, stats: {}, distinct: {} }, …, { at, date: '2026-11-19', count: 14, … }]
+```
+
+```python
+days = await api.aggregate(names=["call"], since="30d", calendar="day", time_zone="Europe/Moscow", fill=True)
+# [Row(at=…, count=0, …, date=datetime.date(2026, 10, 21)), …]
+```
+
+```go
+days, err := api.Aggregate(ctx, records.Query{Names: []string{"call"}, Since: 30 * 24 * time.Hour,
+	Calendar: tinystore.Day, TimeZone: "Europe/Moscow", Fill: true}) // days[0].Date == "2026-10-21"
+```
+
+```rust
+let days = api.list().names(["call"]).since(Duration::from_hours(30 * 24))
+    .aggregate(&Aggregate::new().calendar(Calendar::Day, "Europe/Moscow").fill())?; // days[0].date: Some("2026-10-21")
+```
+
+- The range is what the stream keeps of it: nothing is filled before its
+  `keep`, nor past now when the query gives no `to`. The spans that cut the
+  range at either end get their rows too.
+- `fill` needs a start, `since` or `from`. Without one it is `invalid`.
+- With `by`, every span gets a row for each value of the keys that the
+  answer holds. A filled row has `count: 0`, no `stats`, and 0 for each
+  `distinct`. With `by` and no events at all, there is no row to fill.
+- Filled rows count toward the 10,000 rows of an aggregate, and more spans
+  than that are refused before anything is read.
+- `date` is `YYYY-MM-DD`: a day's own date, a week's Monday, a month's first.
+  It is a `datetime.date` in Python and text elsewhere. Rows of `every` have
+  none, since a span of UTC needs no time zone.
+- A server of a release before `fill` refuses it as `unimplemented`.
 
 ## The largest numbers
 

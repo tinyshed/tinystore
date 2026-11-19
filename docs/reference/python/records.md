@@ -70,6 +70,7 @@ class Row:
     by: dict[str, Any]
     stats: dict[str, Stats]
     distinct: dict[str, int]
+    date: date | None = None  # the local date a calendar's row begins on: a week's Monday, a month's first; None without a calendar
 ```
 
 A row of an aggregate: a span of every and a value of each key of by, with its count.

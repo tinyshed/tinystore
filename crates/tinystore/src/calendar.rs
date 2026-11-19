@@ -78,6 +78,22 @@ impl Zoned {
         start.and_then(|start| i64::try_from(start.as_nanosecond()).ok()).unwrap_or(at)
     }
 
+    /// Where the bucket that begins at `start` ends, the next one's start,
+    /// in nanoseconds since 1970; the end of time past what it can reach.
+    #[cfg(feature = "records")]
+    pub(crate) fn end_nanos(&self, start: i64) -> i64 {
+        let end = Timestamp::from_nanosecond(i128::from(start)).ok().and_then(|start| self.end(start));
+        end.and_then(|end| i64::try_from(end.as_nanosecond()).ok()).unwrap_or(i64::MAX)
+    }
+
+    /// The local date of the instant `at`, in nanoseconds since 1970, as
+    /// ISO 8601 writes it: `2026-11-19`.
+    #[cfg(feature = "records")]
+    pub(crate) fn date_nanos(&self, at: i64) -> Option<String> {
+        let at = Timestamp::from_nanosecond(i128::from(at)).ok()?;
+        Some(at.to_zoned(self.zone.clone()).date().to_string())
+    }
+
     /// Where the bucket that holds `at` begins, both in milliseconds since
     /// 1970; `at` itself for a time the calendar cannot reach.
     #[cfg(any(feature = "metrics", feature = "jobs"))]
@@ -104,7 +120,7 @@ impl Zoned {
         self.midnight(first)
     }
 
-    #[cfg(any(feature = "metrics", feature = "jobs"))]
+    #[cfg(any(feature = "metrics", feature = "jobs", feature = "records"))]
     fn end(&self, start: Timestamp) -> Option<Timestamp> {
         let day = start.to_zoned(self.zone.clone()).date();
         let next = match self.unit {

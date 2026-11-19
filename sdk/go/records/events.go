@@ -99,6 +99,9 @@ type Row struct {
 	By       map[string]any
 	Stats    map[string]Stats
 	Distinct map[string]int
+	// Date is the local date a calendar's row begins on, "2026-11-19": a
+	// week's Monday, a month's first; "" without a calendar.
+	Date string
 }
 
 // Stream is a stream with events: what it keeps, where that begins, and its

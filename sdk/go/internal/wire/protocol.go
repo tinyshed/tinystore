@@ -11248,6 +11248,8 @@ type RecordsAggregateAsked struct {
 	Calendar *string `wire:"6,calendar"`
 	// an IANA name, UTC among them, which calendar takes
 	TimeZone *string `wire:"7,timeZone"`
+	// a row for every span of the range the stream keeps, an empty one counting 0
+	Fill bool `wire:"8,fill"`
 }
 
 func (m RecordsAggregateAsked) Write(w *Writer) {
@@ -11297,6 +11299,11 @@ func (m RecordsAggregateAsked) Write(w *Writer) {
 		w.Str(*m.TimeZone)
 		n++
 	}
+	if m.Fill {
+		w.Uint(8)
+		w.Bool(m.Fill)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11340,6 +11347,8 @@ func (m *RecordsAggregateAsked) Read(r *Reader) {
 		case 7:
 			v := r.Str()
 			m.TimeZone = &v
+		case 8:
+			m.Fill = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -11355,7 +11364,8 @@ func (m RecordsAggregateAsked) IsZero() bool {
 		len(m.Stats) == 0 &&
 		len(m.Distinct) == 0 &&
 		m.Calendar == nil &&
-		m.TimeZone == nil
+		m.TimeZone == nil &&
+		!m.Fill
 }
 
 // RecordsStats is the schema's records.Stats.
@@ -11440,6 +11450,8 @@ type RecordsRow struct {
 	By       map[string]string       `wire:"3,by"`
 	Stats    map[string]RecordsStats `wire:"4,stats"`
 	Distinct map[string]uint64       `wire:"5,distinct"`
+	// a calendar's row: the local date its span begins on, 2026-11-19
+	Date *string `wire:"6,date"`
 }
 
 func (m RecordsRow) Write(w *Writer) {
@@ -11480,6 +11492,11 @@ func (m RecordsRow) Write(w *Writer) {
 			w.Str(name0)
 			w.Uint(m.Distinct[name0])
 		}
+		n++
+	}
+	if m.Date != nil {
+		w.Uint(6)
+		w.Str(*m.Date)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -11525,6 +11542,9 @@ func (m *RecordsRow) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Distinct = v
+		case 6:
+			v := r.Str()
+			m.Date = &v
 		default:
 			r.Skip()
 		}
@@ -11538,7 +11558,8 @@ func (m RecordsRow) IsZero() bool {
 		m.Count == 0 &&
 		len(m.By) == 0 &&
 		len(m.Stats) == 0 &&
-		len(m.Distinct) == 0
+		len(m.Distinct) == 0 &&
+		m.Date == nil
 }
 
 // RecordsRows is the schema's records.Rows.

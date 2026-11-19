@@ -9878,6 +9878,8 @@ pub(crate) struct RecordsAggregateAsked {
     pub(crate) calendar: Option<String>,
     /// An IANA name, UTC among them, which calendar takes.
     pub(crate) time_zone: Option<String>,
+    /// A row for every span of the range the stream keeps, an empty one counting 0.
+    pub(crate) fill: bool,
 }
 
 #[cfg(feature = "records")]
@@ -9896,6 +9898,7 @@ impl Message for RecordsAggregateAsked {
                 5 => message.distinct = codec::list(r, "distinct", codec::str)?,
                 6 => message.calendar = Some(codec::str(r, "calendar")?),
                 7 => message.time_zone = Some(codec::str(r, "timeZone")?),
+                8 => message.fill = codec::bool(r, "fill")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -9932,6 +9935,10 @@ impl Message for RecordsAggregateAsked {
             map.field(out, 7);
             codec::write_str(out, time_zone);
         }
+        if self.fill {
+            map.field(out, 8);
+            codec::write_bool(out, &self.fill);
+        }
         map.close(out);
     }
 
@@ -9944,6 +9951,7 @@ impl Message for RecordsAggregateAsked {
             + 1 + codec::list_size(&self.distinct, |item| 5 + item.len())
             + self.calendar.as_ref().map_or(0, |calendar| 1 + 5 + calendar.len())
             + self.time_zone.as_ref().map_or(0, |time_zone| 1 + 5 + time_zone.len())
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -9954,6 +9962,7 @@ impl Message for RecordsAggregateAsked {
             && self.distinct.is_empty()
             && self.calendar.is_none()
             && self.time_zone.is_none()
+            && !self.fill
     }
 }
 
@@ -10041,6 +10050,8 @@ pub(crate) struct RecordsRow {
     pub(crate) by: BTreeMap<String, String>,
     pub(crate) stats: BTreeMap<String, RecordsStats>,
     pub(crate) distinct: BTreeMap<String, u64>,
+    /// A calendar's row: the local date its span begins on, 2026-11-19.
+    pub(crate) date: Option<String>,
 }
 
 #[cfg(feature = "records")]
@@ -10057,6 +10068,7 @@ impl Message for RecordsRow {
                 3 => message.by = codec::names(r, "by", codec::str)?,
                 4 => message.stats = codec::names(r, "stats", codec::message::<RecordsStats>)?,
                 5 => message.distinct = codec::names(r, "distinct", codec::uint)?,
+                6 => message.date = Some(codec::str(r, "date")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10085,6 +10097,10 @@ impl Message for RecordsRow {
             map.field(out, 5);
             codec::write_names(out, &self.distinct, codec::write_uint);
         }
+        if let Some(date) = &self.date {
+            map.field(out, 6);
+            codec::write_str(out, date);
+        }
         map.close(out);
     }
 
@@ -10095,6 +10111,7 @@ impl Message for RecordsRow {
             + 1 + codec::names_size(&self.by, |item| 5 + item.len())
             + 1 + codec::names_size(&self.stats, codec::message_size)
             + 1 + codec::names_size(&self.distinct, |_| 9)
+            + self.date.as_ref().map_or(0, |date| 1 + 5 + date.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -10103,6 +10120,7 @@ impl Message for RecordsRow {
             && self.by.is_empty()
             && self.stats.is_empty()
             && self.distinct.is_empty()
+            && self.date.is_none()
     }
 }
 

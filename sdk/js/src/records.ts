@@ -169,6 +169,8 @@ export interface Row {
 	by: Record<string, unknown>
 	stats: Record<string, Stats>
 	distinct: Record<string, number>
+	/** the local date a calendar's row begins on, '2026-11-19': a week's Monday, a month's first */
+	date?: string
 }
 
 export interface Aggregate extends Counted {
@@ -184,6 +186,8 @@ export interface Aggregate extends Counted {
 	stats?: readonly string[]
 	/** fields whose different values a row counts */
 	distinct?: readonly string[]
+	/** a row for every span of the range the stream keeps, an empty one counting 0; it needs since or from */
+	fill?: boolean
 }
 
 export interface StreamInfo {
@@ -355,7 +359,7 @@ abstract class Reads {
 
 	/** A row for each span of `every` and each value of the keys of `by`, with its count. */
 	async aggregate(query: Aggregate = {}): Promise<Row[]> {
-		const { every, calendar, timeZone, by, stats, distinct, ...counted } = query
+		const { every, calendar, timeZone, by, stats, distinct, fill, ...counted } = query
 		const asked = queryOf(counted)
 		const answer = await this.ask('records.aggregate', handle =>
 			RecordsAggregateAsked.encode({
@@ -366,6 +370,7 @@ abstract class Reads {
 				by: by === undefined ? undefined : [...by],
 				stats: stats === undefined ? undefined : [...stats],
 				distinct: distinct === undefined ? undefined : [...distinct],
+				fill,
 			}),
 		)
 		return (RecordsRows.decode(answer).rows ?? []).map(row => ({
@@ -380,6 +385,7 @@ abstract class Reads {
 				avg: kept.avg ?? 0,
 			})),
 			distinct: mapValues(row.distinct, count => count),
+			...(row.date === undefined ? {} : { date: row.date }),
 		}))
 	}
 

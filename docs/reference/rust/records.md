@@ -223,6 +223,16 @@ pub fn distinct<S: Into<String>>(self, keys: impl IntoIterator<Item = S>) -> Sel
 
 How many different values each field has.
 
+### Aggregate.fill
+
+```rust
+pub fn fill(self) -> Self
+```
+
+A row for every span of the range the stream keeps, of each value of
+`by` the answer has, an empty one counting 0: the read needs a start,
+`since` or `from`, and the rows, filled ones too, are 10,000 at most.
+
 ## Number
 
 ```rust
@@ -250,6 +260,7 @@ pub struct Row {
     pub by: BTreeMap<String, Value>,
     pub stats: BTreeMap<String, Stats>,
     pub distinct: BTreeMap<String, u64>,
+    pub date: Option<String>,
 }
 ```
 

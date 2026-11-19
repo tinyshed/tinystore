@@ -89,6 +89,9 @@ pub struct Row {
     pub stats: BTreeMap<String, Stats>,
     /// How many different values each field `distinct` named has.
     pub distinct: BTreeMap<String, u64>,
+    /// The local date a calendar's span begins on, `2026-11-19`: a week's
+    /// Monday, a month's first; none without a calendar.
+    pub date: Option<String>,
 }
 
 /// What `aggregate` makes rows of: spans of `every` or of a calendar, the
@@ -100,6 +103,7 @@ pub struct Aggregate {
     by: Vec<String>,
     stats: Vec<String>,
     distinct: Vec<String>,
+    fill: bool,
 }
 
 impl Aggregate {
@@ -139,6 +143,14 @@ impl Aggregate {
     /// How many different values each field has.
     pub fn distinct<S: Into<String>>(mut self, keys: impl IntoIterator<Item = S>) -> Self {
         self.distinct.extend(keys.into_iter().map(Into::into));
+        self
+    }
+
+    /// A row for every span of the range the stream keeps, of each value of
+    /// `by` the answer has, an empty one counting 0: the read needs a start,
+    /// `since` or `from`, and the rows, filled ones too, are 10,000 at most.
+    pub fn fill(mut self) -> Self {
+        self.fill = true;
         self
     }
 }
@@ -216,12 +228,17 @@ impl List {
     pub fn aggregate(&self, aggregate: &Aggregate) -> Result<Vec<Row>> {
         let spans = Spans::of(aggregate)?;
         let (first, _) = self.span()?;
+        let filled =
+            if aggregate.fill { self.kept_span()?.map(|kept| spans.within(kept, first)).transpose()? } else { None };
         let mut rows = Rows { asked: aggregate, rows: HashMap::new(), held: Held::default() };
         for event in self.walk("aggregate")? {
             let event = event?;
             rows.add(spans.start(unix_nanos(event.at), first), &event)?;
         }
-        Ok(rows.finish())
+        if let Some(starts) = filled {
+            rows.fill(&starts)?;
+        }
+        Ok(rows.finish(&spans))
     }
 }
 
@@ -255,6 +272,41 @@ impl Spans {
             Spans::Calendar(zoned) => zoned.start_nanos(at),
         }
     }
+
+    /// Where every span of the range from `kept`'s first to its last begins,
+    /// the spans that cut it included: refused before a read once they are
+    /// more than an aggregate's rows. `first` is the one row's start.
+    fn within(&self, (from, to): (i64, i64), first: i64) -> Result<Vec<i64>> {
+        let mut starts = Vec::new();
+        let mut at = self.start(from, first);
+        while at <= to {
+            if starts.len() == MOST_ROWS {
+                return Err(past_rows());
+            }
+            starts.push(at);
+            at = match self {
+                Spans::Range => break,
+                Spans::Every(every) => at.saturating_add(*every),
+                Spans::Calendar(zoned) => zoned.end_nanos(at),
+            };
+        }
+        Ok(starts)
+    }
+
+    /// The local date a calendar's span that begins at `start` begins on.
+    fn date(&self, start: i64) -> Option<String> {
+        match self {
+            Spans::Calendar(zoned) => zoned.date_nanos(start),
+            Spans::Range | Spans::Every(_) => None,
+        }
+    }
+}
+
+/// An aggregate's answer past the rows it gives, which no smaller answer
+/// stands for.
+fn past_rows() -> Error {
+    let refused = format!("past the {MOST_ROWS} rows an aggregate gives: ask a shorter range or a wider every");
+    AGGREGATE_ROWS.refuse(MOST_ROWS as u64 + 1, refused)
 }
 
 impl AllEvents {
@@ -503,6 +555,18 @@ struct Filling {
     distinct: Vec<HashSet<String>>,
 }
 
+impl Filling {
+    /// A row of no event yet, of the values `by` of its keys.
+    fn empty(asked: &Aggregate, by: Vec<Value>) -> Filling {
+        Filling {
+            by,
+            count: 0,
+            stats: asked.stats.iter().map(|_| Summing::default()).collect(),
+            distinct: asked.distinct.iter().map(|_| HashSet::new()).collect(),
+        }
+    }
+}
+
 /// A field's numbers in a row, summed as they come.
 #[derive(Default)]
 struct Summing {
@@ -519,16 +583,10 @@ impl Rows<'_> {
         let by: Vec<Value> = self.asked.by.iter().map(|key| value_of(event, key).unwrap_or(Value::Null)).collect();
         let key = (at, Value::Array(by.clone()).to_string());
         if !self.rows.contains_key(&key) && self.rows.len() == MOST_ROWS {
-            let refused = format!("past the {MOST_ROWS} rows an aggregate gives: ask a shorter range or a wider every");
-            return Err(AGGREGATE_ROWS.refuse(MOST_ROWS as u64 + 1, refused));
+            return Err(past_rows());
         }
         let asked = self.asked;
-        let row = self.rows.entry(key).or_insert_with(|| Filling {
-            by,
-            count: 0,
-            stats: asked.stats.iter().map(|_| Summing::default()).collect(),
-            distinct: asked.distinct.iter().map(|_| HashSet::new()).collect(),
-        });
+        let row = self.rows.entry(key).or_insert_with(|| Filling::empty(asked, by));
         row.count += 1;
         for (summing, key) in row.stats.iter_mut().zip(&asked.stats) {
             if let Some(number) = value_of(event, key).as_ref().and_then(number) {
@@ -545,12 +603,36 @@ impl Rows<'_> {
         Ok(())
     }
 
-    fn finish(self) -> Vec<Row> {
+    /// Gives every span that begins at one of `starts` a row of each value
+    /// of `by` the rows hold, an empty one where none is: with no `by`, the
+    /// one value of none.
+    fn fill(&mut self, starts: &[i64]) -> Result<()> {
+        let mut values: HashMap<String, Vec<Value>> =
+            self.rows.iter().map(|((_, json), filling)| (json.clone(), filling.by.clone())).collect();
+        if self.asked.by.is_empty() {
+            values.entry(Value::Array(Vec::new()).to_string()).or_default();
+        }
+        for (json, by) in values {
+            for at in starts {
+                let key = (*at, json.clone());
+                if !self.rows.contains_key(&key) {
+                    if self.rows.len() == MOST_ROWS {
+                        return Err(past_rows());
+                    }
+                    self.rows.insert(key, Filling::empty(self.asked, by.clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self, spans: &Spans) -> Vec<Row> {
         let asked = self.asked;
         let mut rows: Vec<((i64, String), Filling)> = self.rows.into_iter().collect();
         rows.sort_by(|(a, _), (b, _)| a.cmp(b));
         let row = |((at, _), filling): ((i64, String), Filling)| Row {
             at: crate::clock::from_unix_nanos(at),
+            date: spans.date(at),
             count: filling.count,
             by: asked.by.iter().cloned().zip(filling.by).collect(),
             stats: asked

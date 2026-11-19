@@ -57,6 +57,9 @@ type Query struct {
 	Stats []string
 	// Distinct is fields whose different values a row counts.
 	Distinct []string
+	// Fill gives a row for every span of the range the stream keeps, an
+	// empty one counting 0; it needs Since or From.
+	Fill bool
 	// Prefix narrows the keys FieldNames gives.
 	Prefix string
 }
@@ -341,7 +344,7 @@ func (r reads) aggregate(ctx context.Context, q Query) ([]Row, error) {
 	}
 	answer, err := r.ask(ctx, wire.MethodRecordsAggregate, func(handle *uint64) []byte {
 		asked, _ := q.asked(handle)
-		message := wire.RecordsAggregateAsked{Query: asked, Every: every, By: q.By, Stats: q.Stats, Distinct: q.Distinct}
+		message := wire.RecordsAggregateAsked{Query: asked, Every: every, By: q.By, Stats: q.Stats, Distinct: q.Distinct, Fill: q.Fill}
 		message.Calendar, message.TimeZone = core.CalendarOf(string(q.Calendar), q.TimeZone)
 		return wire.Encode(&message)
 	})
@@ -377,6 +380,9 @@ func rowOf(row wire.RecordsRow) (Row, error) {
 	}
 	for key, count := range row.Distinct {
 		out.Distinct[key] = int(count)
+	}
+	if row.Date != nil {
+		out.Date = *row.Date
 	}
 	return out, nil
 }

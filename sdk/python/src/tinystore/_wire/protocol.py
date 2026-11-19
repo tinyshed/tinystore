@@ -8516,6 +8516,10 @@ def _write_records_aggregate_asked(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(7)
         w.str(x)
         n += 1
+    if (x := v.get("fill")) is not None:
+        w.uint(8)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8544,6 +8548,8 @@ def _read_records_aggregate_asked(r: Reader) -> dict[str, Any]:
                 read["calendar"] = r.str()
             case 7:
                 read["time_zone"] = r.str()
+            case 8:
+                read["fill"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -8563,6 +8569,8 @@ RecordsAggregateAsked = Message(
         "calendar": (6, str_),
         # an IANA name, UTC among them, which calendar takes
         "time_zone": (7, str_),
+        # a row for every span of the range the stream keeps, an empty one counting 0
+        "fill": (8, bool_),
     },
     _write_records_aggregate_asked,
     _read_records_aggregate_asked,
@@ -8664,6 +8672,10 @@ def _write_records_row(w: Writer, v: Mapping[str, Any]) -> None:
             w.str(name0)
             w.uint(x[name0])
         n += 1
+    if (x := v.get("date")) is not None:
+        w.uint(6)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8700,6 +8712,8 @@ def _read_records_row(r: Reader) -> dict[str, Any]:
                     named0[name0] = r.uint()
                 r.leave()
                 read["distinct"] = named0
+            case 6:
+                read["date"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -8715,6 +8729,8 @@ RecordsRow = Message(
         "by": (3, names(str_)),
         "stats": (4, names(RecordsStats)),
         "distinct": (5, names(uint)),
+        # a calendar's row: the local date its span begins on, 2026-11-19
+        "date": (6, str_),
     },
     _write_records_row,
     _read_records_row,

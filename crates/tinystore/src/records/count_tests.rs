@@ -291,6 +291,60 @@ fn what_a_count_holds_of_different_values_is_bounded_in_bytes_and_a_sum_past_128
     assert_eq!(summing.add(Number::Integer(1)).unwrap_err().kind(), ErrorKind::Limit);
 }
 
+// contract: REC-16, REC-17
+#[test]
+fn fill_gives_a_row_for_every_span_of_the_range_and_a_calendars_rows_their_local_date() {
+    let fixture = fixture();
+    // 2027-01-12 00:00 in Moscow, a Tuesday three days before the fixture's clock
+    let midnight = std::time::UNIX_EPOCH + Duration::from_secs(1_799_701_200);
+    let orders = fixture.events("orders");
+    orders.append_all((0..48).map(|hour| NewEvent::new("order").at(midnight + HOUR * hour))).unwrap();
+    let rows = |list: List, asked: Aggregate| {
+        let rows = list.aggregate(&asked).unwrap();
+        rows.iter().map(|row| (row.at, row.count, row.date.clone())).collect::<Vec<_>>()
+    };
+    let around = || orders.list().from(midnight - DAY).to(midnight + 3 * DAY);
+    let day = |n: u32, count: u64, date: &str| (midnight - DAY + DAY * n, count, Some(date.to_owned()));
+    let days = rows(around(), Aggregate::new().calendar(Calendar::Day, "Europe/Moscow").fill());
+    assert_eq!(
+        days,
+        [day(0, 0, "2027-01-11"), day(1, 24, "2027-01-12"), day(2, 24, "2027-01-13"), day(3, 0, "2027-01-14")]
+    );
+    // without fill a span without events has no row, and a calendar's row its date all the same
+    assert_eq!(rows(around(), Aggregate::new().calendar(Calendar::Day, "Europe/Moscow")).len(), 2);
+    let weeks = rows(around(), Aggregate::new().calendar(Calendar::Week, "Europe/Moscow").fill());
+    assert_eq!(weeks, [(midnight - DAY, 48, Some("2027-01-11".to_owned()))], "a week from its Monday");
+    let months = rows(around(), Aggregate::new().calendar(Calendar::Month, "Europe/Moscow"));
+    assert_eq!(months[0].2.as_deref(), Some("2027-01-01"));
+    // every has no date, a UTC span needing no zone
+    assert!(rows(around(), Aggregate::new().every(DAY).fill()).iter().all(|(_, _, date)| date.is_none()));
+    // a by fills every value the answer has; the whole range is one row, empty or not
+    let hours = orders.list().from(midnight - 2 * HOUR).to(midnight + HOUR);
+    let by = hours.clone().aggregate(&Aggregate::new().every(HOUR).by(["name"]).stats(["n"]).distinct(["n"]).fill());
+    let by = by.unwrap();
+    assert_eq!(by.iter().map(|row| row.count).collect::<Vec<_>>(), [0, 0, 1]);
+    assert!(by[0].stats.is_empty() && by[0].distinct["n"] == 0 && by[0].by["name"] == json!("order"));
+    let before = orders.list().from(midnight - 2 * HOUR).to(midnight);
+    assert_eq!(rows(before.clone(), Aggregate::new().fill()), [(midnight - 2 * HOUR, 0, None)]);
+    assert!(rows(before, Aggregate::new().by(["name"]).fill()).is_empty(), "no value of by to fill");
+}
+
+// contract: REC-16
+#[test]
+fn fill_needs_a_start_keeps_to_what_the_stream_keeps_and_is_bounded_before_the_read() {
+    let fixture = fixture();
+    let short = fixture.store.events("short").keep(DAY).open().unwrap();
+    short.append_all([NewEvent::new("call")]).unwrap();
+    let refused = short.list().aggregate(&Aggregate::new().every(HOUR).fill()).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+    // a range from three days back fills from the day the stream keeps, up to now
+    let rows = short.list().since(3 * DAY).aggregate(&Aggregate::new().every(HOUR).fill()).unwrap();
+    assert!((24..=25).contains(&rows.len()), "{} rows", rows.len());
+    assert_eq!(rows.iter().map(|row| row.count).sum::<u64>(), 1);
+    let seconds = short.list().since(DAY).aggregate(&Aggregate::new().every(SECOND).fill()).unwrap_err();
+    assert_eq!(seconds.kind(), ErrorKind::Limit, "{seconds}");
+}
+
 #[test]
 fn calendar_rows_begin_at_local_midnight_and_every_and_a_calendar_together_are_refused() {
     let fixture = fixture();

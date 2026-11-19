@@ -170,6 +170,29 @@ for (const way of ways) {
 			])
 		})
 
+		test('fill gives a row for every span, and a calendar’s rows their local date', async () => {
+			// contract: REC-16, REC-17
+			const repro = store.events('repro')
+			await repro.append('call', { op: 'a' })
+			const hours = await repro.aggregate({ names: ['call'], since: '6h', every: '1h', fill: true })
+			expect(hours.length).toBeGreaterThanOrEqual(6)
+			expect(hours.map(row => row.count).reduce((a, b) => a + b)).toBe(1)
+			expect(hours.every(row => row.date === undefined)).toBe(true)
+			const days = await repro.aggregate({
+				since: '3d',
+				calendar: 'day',
+				timeZone: 'Europe/Moscow',
+				fill: true,
+			})
+			expect(days.length).toBeGreaterThanOrEqual(3)
+			for (const row of days) {
+				expect(row.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+			}
+			expect(await caught(repro.aggregate({ every: '1h', fill: true }))).toBeInstanceOf(
+				InvalidError,
+			)
+		})
+
 		test('a condition given as undefined is InvalidError, never a condition left out', async () => {
 			const api = store.events('api')
 			expect(await caught(api.list({ traceId: undefined as unknown as string }))).toBeInstanceOf(

@@ -174,6 +174,35 @@ fn largest_answers_the_events_of_a_keys_largest_numbers_and_refuses_a_limit_past
     assert_eq!(largest(1001).unwrap_err().code, "invalid");
 }
 
+// contract: REC-16, REC-17
+#[test]
+fn an_aggregate_given_fill_answers_every_span_and_a_calendars_rows_their_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let api = open(&mut client, "api");
+    append(&mut client, api, vec![event("call", r#"{"op":"a"}"#)]);
+    let hours = RecordsAggregateAsked {
+        query: RecordsQuery { handle: Some(api), since: Some(6 * 3_600_000), ..RecordsQuery::default() },
+        every: Some(3_600_000),
+        fill: true,
+        ..RecordsAggregateAsked::default()
+    };
+    let rows: RecordsRows = client.call(method::RECORDS_AGGREGATE, &hours).unwrap();
+    assert!((6..=7).contains(&rows.rows.len()), "{} rows", rows.rows.len());
+    assert_eq!(rows.rows.iter().map(|row| row.count).sum::<u64>(), 1);
+    assert!(rows.rows.iter().all(|row| row.date.is_none()));
+    let days = RecordsAggregateAsked {
+        calendar: Some("day".to_owned()),
+        time_zone: Some("Europe/Moscow".to_owned()),
+        every: None,
+        ..hours.clone()
+    };
+    let rows: RecordsRows = client.call(method::RECORDS_AGGREGATE, &days).unwrap();
+    assert!(rows.rows.iter().all(|row| row.date.as_ref().is_some_and(|date| date.len() == 10)), "{:?}", rows.rows);
+    let unbounded = RecordsAggregateAsked { query: RecordsQuery { since: None, ..hours.query.clone() }, ..hours };
+    assert_eq!(client.call::<RecordsRows>(method::RECORDS_AGGREGATE, &unbounded).unwrap_err().code, "invalid");
+}
+
 #[test]
 fn every_stream_says_what_it_keeps_and_the_keys_its_events_hold() {
     let dir = tempfile::tempdir().unwrap();

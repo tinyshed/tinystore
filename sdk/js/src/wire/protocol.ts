@@ -10413,6 +10413,8 @@ export const RecordsAggregateAsked = message(
 		calendar: [6, str],
 		/** an IANA name, UTC among them, which calendar takes */
 		timeZone: [7, str],
+		/** a row for every span of the range the stream keeps, an empty one counting 0 */
+		fill: [8, bool],
 	},
 	{
 		write(w, v) {
@@ -10462,6 +10464,11 @@ export const RecordsAggregateAsked = message(
 				w.str(v.timeZone)
 				n++
 			}
+			if (v.fill !== undefined) {
+				w.field(8)
+				w.bool(v.fill)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -10472,6 +10479,7 @@ export const RecordsAggregateAsked = message(
 			let $distinct: string[] | undefined
 			let $calendar: string | undefined
 			let $timeZone: string | undefined
+			let $fill: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -10513,6 +10521,9 @@ export const RecordsAggregateAsked = message(
 					case 7:
 						$timeZone = r.str()
 						break
+					case 8:
+						$fill = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -10526,6 +10537,7 @@ export const RecordsAggregateAsked = message(
 				distinct: $distinct,
 				calendar: $calendar,
 				timeZone: $timeZone,
+				fill: $fill,
 			}
 		},
 	},
@@ -10617,6 +10629,8 @@ export const RecordsRow = message(
 		by: [3, names(str)],
 		stats: [4, names(RecordsStats)],
 		distinct: [5, names(uint)],
+		/** a calendar's row: the local date its span begins on, 2026-11-19 */
+		date: [6, str],
 	},
 	{
 		write(w, v) {
@@ -10647,6 +10661,11 @@ export const RecordsRow = message(
 				writeNames(w, v.distinct, uint.write)
 				n++
 			}
+			if (v.date !== undefined) {
+				w.field(6)
+				w.str(v.date)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -10655,6 +10674,7 @@ export const RecordsRow = message(
 			let $by: Record<string, string> | undefined
 			let $stats: Record<string, Read<typeof RecordsStats.fields>> | undefined
 			let $distinct: Record<string, number> | undefined
+			let $date: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -10672,12 +10692,15 @@ export const RecordsRow = message(
 					case 5:
 						$distinct = readNames(r, uint.read)
 						break
+					case 6:
+						$date = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { at: $at, count: $count, by: $by, stats: $stats, distinct: $distinct }
+			return { at: $at, count: $count, by: $by, stats: $stats, distinct: $distinct, date: $date }
 		},
 	},
 )

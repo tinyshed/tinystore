@@ -5303,6 +5303,9 @@
         "every": {
           "uint": "1500"
         },
+        "fill": {
+          "bool": true
+        },
         "query": {
           "fields": {
             "after": {
@@ -5390,7 +5393,7 @@
           "str": "timeZone"
         }
       },
-      "hex": "87018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802cd05dc0391a262790491a573746174730591a864697374696e637406a863616c656e64617207a874696d655a6f6e65",
+      "hex": "88018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802cd05dc0391a262790491a573746174730591a864697374696e637406a863616c656e64617207a874696d655a6f6e6508c3",
       "message": "records.AggregateAsked",
       "name": "records.AggregateAsked with every field"
     },
@@ -5443,6 +5446,9 @@
         "count": {
           "uint": "207"
         },
+        "date": {
+          "str": "date"
+        },
         "distinct": {
           "names": {
             "a": {
@@ -5474,7 +5480,7 @@
           }
         }
       },
-      "hex": "8501cf18d75b8423f4e24002cccf0381a161a77b2261223a317d0481a16185016b02a77b2261223a317d03a77b2261223a317d04a77b2261223a317d05cb3ff80000000000000581a161cd01fb",
+      "hex": "8601cf18d75b8423f4e24002cccf0381a161a77b2261223a317d0481a16185016b02a77b2261223a317d03a77b2261223a317d04a77b2261223a317d05cb3ff80000000000000581a161cd01fb06a464617465",
       "message": "records.Row",
       "name": "records.Row with every field"
     },
@@ -5502,6 +5508,9 @@
                 },
                 "count": {
                   "uint": "207"
+                },
+                "date": {
+                  "str": "date"
                 },
                 "distinct": {
                   "names": {
@@ -5538,7 +5547,7 @@
           ]
         }
       },
-      "hex": "8101918501cf18d75b8423f4e24002cccf0381a161a77b2261223a317d0481a16185016b02a77b2261223a317d03a77b2261223a317d04a77b2261223a317d05cb3ff80000000000000581a161cd01fb",
+      "hex": "8101918601cf18d75b8423f4e24002cccf0381a161a77b2261223a317d0481a16185016b02a77b2261223a317d03a77b2261223a317d04a77b2261223a317d05cb3ff80000000000000581a161cd01fb06a464617465",
       "message": "records.Rows",
       "name": "records.Rows with every field"
     },

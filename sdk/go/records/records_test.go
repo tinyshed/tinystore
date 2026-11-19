@@ -263,6 +263,37 @@ func TestLargestGivesTheEventsOfAKeysLargestNumbersAndTopReadsTheMessage(t *test
 	})
 }
 
+// contract: REC-16, REC-17
+func TestFillGivesARowForEverySpanAndACalendarsRowsTheirLocalDate(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		repro := ways.Must(records.OpenEvents(store, "repro"))
+		ways.Must(repro.Append(ctx, "call", records.Fields{"op": "a"}))
+		hours := ways.Must(repro.Aggregate(ctx, records.Query{Names: []string{"call"}, Since: 6 * time.Hour, Every: time.Hour, Fill: true}))
+		total := 0
+		for _, row := range hours {
+			total += row.Count
+			if row.Date != "" {
+				t.Fatalf("a row of every with a date %q", row.Date)
+			}
+		}
+		if len(hours) < 6 || total != 1 {
+			t.Fatalf("%d rows counting %d", len(hours), total)
+		}
+		days := ways.Must(repro.Aggregate(ctx, records.Query{Since: 72 * time.Hour, Calendar: tinystore.Day, TimeZone: "Europe/Moscow", Fill: true}))
+		for _, row := range days {
+			if _, err := time.Parse(time.DateOnly, row.Date); err != nil {
+				t.Fatalf("a day's date %q: %v", row.Date, err)
+			}
+		}
+		if len(days) < 3 {
+			t.Fatalf("%d days", len(days))
+		}
+		_, err := repro.Aggregate(ctx, records.Query{Every: time.Hour, Fill: true})
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestCountsAKeysTopValuesAndRowsOfASpanWithTheirStats(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

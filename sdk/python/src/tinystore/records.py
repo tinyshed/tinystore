@@ -18,7 +18,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, cast, overload
 
 from ._connection import check_name, piece_of
@@ -142,6 +142,8 @@ class Row:
     by: dict[str, Any]
     stats: dict[str, Stats]
     distinct: dict[str, int]
+    date: date | None = None
+    """the local date a calendar's row begins on: a week's Monday, a month's first; None without a calendar"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +282,8 @@ class Aggregated(Counted, total=False):
     """fields whose numbers a row sums"""
     distinct: Sequence[str]
     """fields whose different values a row counts"""
+    fill: bool
+    """a row for every span of the range the stream keeps, an empty one counting 0; it needs since or from_"""
 
 
 def _nanos(at: datetime, what: str) -> int:
@@ -477,6 +481,7 @@ class _Reads:
         every, by = query.pop("every", None), query.pop("by", None)
         calendar, time_zone = query.pop("calendar", None), query.pop("time_zone", None)
         stats, distinct = query.pop("stats", None), query.pop("distinct", None)
+        fill = query.pop("fill", None)
         asked = _query_of(query)
         answer = await self._ask(
             "records.aggregate",
@@ -488,6 +493,7 @@ class _Reads:
                 by=None if by is None else list(by),
                 stats=None if stats is None else list(stats),
                 distinct=None if distinct is None else list(distinct),
+                fill=fill,
             ),
         )
         return [
@@ -506,6 +512,7 @@ class _Reads:
                     for key, kept in row.get("stats", {}).items()
                 },
                 distinct=dict(row.get("distinct", {})),
+                date=None if "date" not in row else date.fromisoformat(row["date"]),
             )
             for row in RecordsRows.decode(answer).get("rows", [])
         ]

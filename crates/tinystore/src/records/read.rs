@@ -273,6 +273,20 @@ impl List {
         range(&self.query, self.records.now()).map_err(|error| self.within(error))
     }
 
+    /// The range an aggregate fills, both ends in it: from the read's start,
+    /// cut to what its streams keep, to its end or to now without one; none
+    /// when they keep nothing of it. A read without a start fills nothing,
+    /// since a range from 1970 has no first span to fill, and is refused.
+    pub(super) fn kept_span(&self) -> Result<Option<(i64, i64)>> {
+        if self.query.since.is_none() && self.query.from.is_none() {
+            return Err(self.within(Error::invalid("fill takes a range with a start: since or from")));
+        }
+        let asked = self.records.asked(self.stream.as_ref(), &self.query).map_err(|error| self.within(error))?;
+        let now = self.records.now();
+        let ended = |last: i64| if self.query.to.is_some() { last } else { last.min(now) };
+        Ok(asked.map(|asked| (asked.first, ended(asked.last))).filter(|(first, last)| first <= last))
+    }
+
     /// Nothing yet of the store's memory, for what a count holds to grow.
     pub(super) fn nothing_held(&self) -> crate::Reservation {
         self.records.memory.nothing()

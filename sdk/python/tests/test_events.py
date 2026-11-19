@@ -11,7 +11,7 @@ import asyncio
 import io
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -152,6 +152,21 @@ async def test_largest_gives_the_events_of_a_keys_largest_numbers_and_top_reads_
     await errors.append("error", message="TypeError: x")
     await errors.append("error", {"message": "copied"})
     assert await errors.top("message") == [tinystore.Top("TypeError: x", 2), tinystore.Top("copied", 1)]
+
+
+# contract: REC-16, REC-17
+async def test_fill_gives_a_row_for_every_span_and_a_calendars_rows_their_local_date(store: tinystore.Store) -> None:
+    repro = store.events("repro")
+    await repro.append("call", {"op": "a"})
+    hours = await repro.aggregate(names=["call"], since="6h", every="1h", fill=True)
+    assert len(hours) >= 6
+    assert sum(row.count for row in hours) == 1
+    assert all(row.date is None for row in hours)
+    days = await repro.aggregate(since="3d", calendar="day", time_zone="Europe/Moscow", fill=True)
+    assert len(days) >= 3
+    assert all(isinstance(row.date, date) for row in days)
+    with pytest.raises(tinystore.InvalidError):
+        await repro.aggregate(every="1h", fill=True)
 
 
 async def test_a_condition_given_as_none_is_invalid_never_a_condition_left_out(store: tinystore.Store) -> None:

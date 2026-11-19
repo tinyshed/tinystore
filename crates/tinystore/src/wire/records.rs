@@ -301,6 +301,9 @@ fn aggregate(reading: &Reading<'_>, asked: RecordsAggregateAsked) -> Answered {
     if let Some((unit, zone)) = Calendar::asked(asked.calendar.as_deref(), asked.time_zone.as_deref())? {
         aggregate = aggregate.calendar(unit, zone);
     }
+    if asked.fill {
+        aggregate = aggregate.fill();
+    }
     let rows = query(reading, &asked.query)?.aggregate(&aggregate)?;
     let rows = rows.into_iter().map(|row| RecordsRow {
         at: unix_nanos(row.at),
@@ -308,6 +311,7 @@ fn aggregate(reading: &Reading<'_>, asked: RecordsAggregateAsked) -> Answered {
         by: row.by.into_iter().map(|(key, value)| (key, value.to_string())).collect(),
         stats: row.stats.into_iter().map(|(key, stats)| (key, stats_of(stats))).collect(),
         distinct: row.distinct,
+        date: row.date,
     });
     Ok(RecordsRows { rows: rows.collect() }.encode())
 }

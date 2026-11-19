@@ -178,6 +178,8 @@ interface Row {
     by: Record<string, unknown>
     stats: Record<string, Stats>
     distinct: Record<string, number>
+    /** the local date a calendar's row begins on, '2026-11-19': a week's Monday, a month's first */
+    date?: string
 }
 ```
 
@@ -197,6 +199,8 @@ interface Aggregate extends Counted {
     stats?: readonly string[]
     /** fields whose different values a row counts */
     distinct?: readonly string[]
+    /** a row for every span of the range the stream keeps, an empty one counting 0; it needs since or from */
+    fill?: boolean
 }
 ```
 

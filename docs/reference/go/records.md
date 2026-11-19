@@ -675,6 +675,9 @@ type Query struct {
 	Stats []string
 	// Distinct is fields whose different values a row counts.
 	Distinct []string
+	// Fill gives a row for every span of the range the stream keeps, an
+	// empty one counting 0; it needs Since or From.
+	Fill bool
 	// Prefix narrows the keys FieldNames gives.
 	Prefix string
 }
@@ -696,6 +699,9 @@ type Row struct {
 	By       map[string]any
 	Stats    map[string]Stats
 	Distinct map[string]int
+	// Date is the local date a calendar's row begins on, "2026-11-19": a
+	// week's Monday, a month's first; "" without a calendar.
+	Date string
 }
 ```
 

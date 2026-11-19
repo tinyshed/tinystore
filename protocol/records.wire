@@ -127,6 +127,7 @@ message records.AggregateAsked {
   5 distinct: [str]
   6 calendar: str?       # day, week or month: rows of a calendar in timeZone, in place of every
   7 timeZone: str?       # an IANA name, UTC among them, which calendar takes
+  8 fill: bool           # a row for every span of the range the stream keeps, an empty one counting 0
 }
 
 # A field's numbers in a row: a sum, a min and a max are JSON numbers, an
@@ -145,6 +146,7 @@ message records.Row {
   3 by: {json}
   4 stats: {records.Stats}
   5 distinct: {uint}
+  6 date: str?           # a calendar's row: the local date its span begins on, 2026-11-19
 }
 
 message records.Rows {
