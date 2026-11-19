@@ -180,7 +180,7 @@ export type Op =
 	| Percentile
 
 /** An aggregate: a query cut into buckets of every, each one exact value of op, by groups. */
-export interface AggregateQuery<O extends Op = Op> extends Query {
+export interface AggregateQuery<O extends Op = Op, F extends boolean = boolean> extends Query {
 	/** the buckets' span, counted from 1970 in UTC; the range is one bucket without it */
 	every?: Duration | undefined
 	/** buckets of a calendar in timeZone, in place of every: 'day' begins each at a local midnight */
@@ -196,6 +196,8 @@ export interface AggregateQuery<O extends Op = Op> extends Query {
 	estimate?: boolean | undefined
 	/** a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused */
 	skipNaN?: boolean | undefined
+	/** every bucket of the range retention keeps, one without samples with samples 0 and no value; with since or from, not limit */
+	fill?: F | undefined
 }
 
 /** What every bucket of an aggregate says of itself. */
@@ -211,6 +213,8 @@ interface Spanned {
 	partial: boolean
 	/** its first step began before the bucket before it: a whole bucket between had no samples */
 	gap: boolean
+	/** a calendar's bucket's local date, '2026-11-19': a week's Monday, a month's first; none for every */
+	date?: string
 }
 
 /** A bucket of count … last: its one exact value. */
@@ -231,15 +235,22 @@ export interface PercentileBucket extends Spanned {
 	estimate?: number
 }
 
-/** A bucket of an aggregate of op: a value, or what a percentile gives. */
-export type Bucket<O extends Op = Op> = O extends Percentile ? PercentileBucket : ValueBucket
+/** A bucket an aggregate given fill may answer empty: samples 0 and no value, which is no zero. */
+export type Filled<B extends Spanned> = Omit<B, 'value'> & { value?: number }
 
-export interface Aggregate<O extends Op = Op> {
+/** A bucket of an aggregate of op: a value, or what a percentile gives; one of fill may be empty. */
+export type Bucket<O extends Op = Op, F extends boolean = false> = true extends F
+	? Filled<Answered<O>>
+	: Answered<O>
+
+type Answered<O extends Op> = O extends Percentile ? PercentileBucket : ValueBucket
+
+export interface Aggregate<O extends Op = Op, F extends boolean = false> {
 	name: string
 	/** the labels by kept or without left */
 	labels: Labels
-	/** a bucket without samples is left out, and so is one of NaN alone */
-	buckets: Bucket<O>[]
+	/** a bucket without samples is left out, and so is one of NaN alone, unless the query gave fill */
+	buckets: Bucket<O, F>[]
 	/** a page cut the group here: the page its next reads begins with the rest of its buckets */
 	more: boolean
 }
@@ -248,8 +259,9 @@ export interface Aggregate<O extends Op = Op> {
  * One page of an aggregate: its groups, and next while there is more,
  * walked as a SeriesPage is. A page ends between two whole buckets.
  */
-export interface AggregatePage<O extends Op = Op> extends AsyncIterable<Aggregate<O>> {
-	groups: Aggregate<O>[]
+export interface AggregatePage<O extends Op = Op, F extends boolean = false>
+	extends AsyncIterable<Aggregate<O, F>> {
+	groups: Aggregate<O, F>[]
 	/** where the page after it begins; absent on the last */
 	next?: string
 }
@@ -479,17 +491,19 @@ export class Metrics {
 	 * The buckets of each group of the series the query finds, each one exact
 	 * value of op, rounded once; a bucket of count … last has its value.
 	 */
-	async aggregate<O extends Op>(query: AggregateQuery<O>): Promise<AggregatePage<O>> {
+	async aggregate<O extends Op, F extends boolean = false>(
+		query: AggregateQuery<O, F>,
+	): Promise<AggregatePage<O, F>> {
 		checked('aggregate', query, aggregateFields)
 		await this.#counted(query)
 		const asked = MetricsAggregateAsked.encode(aggregateOf(query))
 		const parts = (await this.#download('metrics.aggregate', asked)).map(part =>
 			MetricsAggregates.decode(part),
 		)
-		const groups: Aggregate<O>[] = []
+		const groups: Aggregate<O, F>[] = []
 		let more = false
 		for (const piece of parts.flatMap(part => part.groups ?? [])) {
-			const buckets = (piece.buckets ?? []).map(bucket => bucketOf(bucket) as Bucket<O>)
+			const buckets = (piece.buckets ?? []).map(bucket => bucketOf(bucket) as Bucket<O, F>)
 			const last = groups.at(-1)
 			if (more && last !== undefined) {
 				last.buckets.push(...buckets)
@@ -505,7 +519,7 @@ export class Metrics {
 			more = piece.more === true
 		}
 		const next = parts.at(-1)?.next
-		const page: { groups: Aggregate<O>[]; next?: string } =
+		const page: { groups: Aggregate<O, F>[]; next?: string } =
 			next === undefined ? { groups } : { groups, next }
 		return walked(
 			page,
@@ -783,6 +797,7 @@ const aggregateFields = Object.keys({
 	without: 0,
 	estimate: 0,
 	skipNaN: 0,
+	fill: 0,
 } satisfies Record<keyof AggregateQuery, 0>)
 
 /**
@@ -851,6 +866,7 @@ function aggregateOf(query: AggregateQuery): Parameters<typeof MetricsAggregateA
 		without: query.without === undefined ? undefined : [...query.without],
 		estimate: query.estimate === true,
 		skipNan: query.skipNaN === true,
+		fill: query.fill === true,
 	}
 }
 
@@ -881,6 +897,9 @@ function bucketOf(bucket: WireBucket): PercentileBucket {
 	}
 	if (bucket.estimate !== undefined) {
 		answer.estimate = bucket.estimate
+	}
+	if (bucket.date !== undefined) {
+		answer.date = bucket.date
 	}
 	return answer
 }

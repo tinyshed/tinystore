@@ -95,10 +95,14 @@ impl Counting<'_> {
     fn groups(&mut self, groups: Vec<TakenGroup>) -> Result<Vec<Aggregate>> {
         let mut answer = Vec::with_capacity(groups.len());
         for TakenGroup { name, labels, members, more } in groups {
+            // what retention keeps of the group: where its name's keep begins, or the range
+            let kept = members.iter().map(|series| series.window).min_by_key(|window| window.from);
             let buckets = self.group(members)?;
-            if !buckets.is_empty() {
-                answer.push(Aggregate { name, labels, buckets, more });
-            }
+            let Some(kept) = kept.filter(|_| !buckets.is_empty()) else { continue };
+            let held = buckets.len();
+            let buckets = self.shape.filled(buckets, (kept.from, kept.to), kept.cutoff, self.asked.now);
+            self.budget.take_answer(buckets.len() - held)?;
+            answer.push(Aggregate { name, labels, buckets, more });
         }
         Ok(answer)
     }

@@ -134,6 +134,7 @@ export {
 	type Damage as MetricsDamage,
 	type Description as MetricsDescription,
 	exponentialBuckets,
+	type Filled,
 	type Gauge,
 	type GaugeFuncOptions,
 	type Histogram,

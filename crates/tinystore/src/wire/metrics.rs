@@ -247,6 +247,9 @@ fn aggregating(metrics: &Metrics, asked: MetricsAggregateAsked) -> Result<Query,
     if asked.skip_nan {
         query = query.skip_nan();
     }
+    if asked.fill {
+        query = query.fill();
+    }
     Ok(query)
 }
 
@@ -522,6 +525,7 @@ fn bucket_of(bucket: crate::metrics::Bucket) -> MetricsBucket {
         skipped: bucket.skipped,
         partial: bucket.partial,
         gap: bucket.gap,
+        date: bucket.date.map(|date| date.to_string()),
         ..MetricsBucket::default()
     };
     match bucket.value {
@@ -529,6 +533,7 @@ fn bucket_of(bucket: crate::metrics::Bucket) -> MetricsBucket {
         Value::Between { lower, upper, estimate } => {
             (out.lower, out.upper, out.estimate) = (Some(lower), Some(upper), estimate);
         }
+        Value::Empty => {}
     }
     out
 }

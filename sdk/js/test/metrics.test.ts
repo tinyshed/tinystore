@@ -301,6 +301,38 @@ for (const way of ways) {
 				groups: [utc],
 			} = await store.metrics.aggregate({ ...range, op: 'sum', every: '1d' })
 			expect(utc?.buckets.map(bucket => bucket.value)).toEqual([1, 1])
+			// contract: MET-27
+			const moscowDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' })
+			expect(local?.buckets.map(bucket => bucket.date)).toEqual([moscowDay.format(midnight)])
+			expect(utc?.buckets.map(bucket => bucket.date)).toEqual([undefined, undefined])
+		})
+
+		// contract: MET-26
+		test('an aggregate given fill answers every bucket of the range, an empty one with no value', async () => {
+			const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000
+			const samples = [hour - 5 * 3_600_000 + 60_000, hour - 3_600_000 + 60_000].map(
+				(at, i) => [at, i + 1] as const,
+			)
+			await store.metrics.ingest({ name: 'filled_errors', kind: 'counter', labels: {}, samples })
+			const query = { name: 'filled_errors', since: '1d', every: '1h', op: 'increase' } as const
+			const sparse = await store.metrics.aggregate(query)
+			expect(sparse.groups[0]?.buckets.length).toBe(2)
+			const { groups } = await store.metrics.aggregate({ ...query, fill: true })
+			const buckets = groups[0]?.buckets ?? []
+			expect(buckets.length).toBe(25)
+			const starts = buckets.map(bucket => bucket.at.getTime())
+			expect(starts.every((at, i) => i === 0 || at - (starts[i - 1] ?? 0) === 3_600_000)).toBe(true)
+			const empty = buckets.filter(bucket => bucket.samples === 0)
+			expect(empty.length).toBe(23)
+			expect(empty.every(bucket => bucket.value === undefined)).toBe(true)
+			// a value an empty bucket may lack is the type's: a chart chooses its zero
+			const drawn: number[] = buckets.map(bucket => bucket.value ?? 0)
+			expect(drawn.length).toBe(25)
+			expect(buckets.filter(bucket => bucket.value !== undefined).length).toBe(2)
+			const unbounded = await caught(
+				store.metrics.aggregate({ name: 'filled_errors', every: '1h', op: 'increase', fill: true }),
+			)
+			expect(unbounded).toBeInstanceOf(InvalidError)
 		})
 
 		// contract: MET-23

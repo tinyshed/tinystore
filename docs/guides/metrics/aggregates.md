@@ -129,7 +129,12 @@ let days = stats
 
 - `calendar` is `day`, `week` or `month`. A week begins on Monday, as ISO 8601
   counts weeks, and a month on its first day, each at local midnight.
-- A bucket's `at` is the instant its local day, week or month begins.
+- A bucket's `at` is the instant its local day, week or month begins, and
+  its `date` the local date it begins on, `'2026-11-19'`: a week's Monday, a
+  month's first. A chart labels it with `date` and does no zone math of its
+  own. A bucket of `every` has no `date`, `every: '1d'` included.
+- `date` is text in TypeScript, Go (`Date`) and Rust (a `LocalDate`, whose
+  `to_string()` is the text), and a `datetime.date` in Python.
 - A day is 23 or 25 hours long on the days the clock moves, and a month is as
   long as it is. A `rate` divides by the seconds its bucket has.
 - `calendar` takes a time zone, and goes in place of `every`. Both at once
@@ -148,7 +153,50 @@ http_requests_total   100 on 1 October, nothing since, 300 at 11:59 on 11 Octobe
 ```
 
 What a counter grew over a gap is counted in the bucket after it, since when
-it grew is not known. A bucket without samples is left out of the answer.
+it grew is not known. A bucket without samples is left out of the answer,
+unless the query asks `fill`.
+
+## Every bucket, with fill
+
+A chart of errors by hour wants every hour of the day, the ones without
+errors too. `fill` gives every bucket of the range:
+
+```ts
+const { groups } = await store.metrics.aggregate({ name: 'errors_total', since: '1d', every: '1h', op: 'increase', fill: true })
+const hours = groups[0]?.buckets.map(hour => hour.value ?? 0) // 25 hours, an empty one drawn as 0
+```
+
+```python
+groups = (await store.metrics.aggregate(name="errors_total", since="1d", every="1h", op="increase", fill=True)).groups
+hours = [hour.value or 0 for hour in groups[0].buckets]
+```
+
+```go
+page, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "errors_total", Since: 24 * time.Hour, Every: time.Hour,
+	Op: metrics.Increase, Fill: true}) // an empty bucket's Value is nil
+```
+
+```rust
+let groups = stats.query().name("errors_total").since(Duration::from_hours(24)).every(Duration::from_hours(1))
+    .fill().aggregate(Op::Increase)?.groups;
+let hours: Vec<f64> = groups[0].buckets.iter().map(|hour| hour.value.exact().unwrap_or(0.0)).collect();
+```
+
+- A bucket without samples comes with `samples: 0` and no `value`
+  (`Value::Empty` in Rust, `nil` in Go, `None` in Python). It is no zero:
+  over an empty hour a counter's process may have been down, and what it grew
+  then is counted in the next bucket that has samples, with its `gap`. The
+  chart picks its zero, `hour.value ?? 0`. In TypeScript `value` is optional
+  in the type of an aggregate given `fill: true`.
+- The range is what retention leaves of it: nothing is filled before the
+  oldest time the name keeps. A bucket the range, the clock or retention cut
+  is `partial`, as any bucket is.
+- A group without a sample in the range is still left out, since nothing
+  names it. Without `every` or `calendar` the range is one bucket, which a
+  group has already.
+- `fill` takes `since` or `from`, since a range from 1970 has no first
+  bucket to fill, and no `limit` yet: both are `invalid`. A range of more
+  than 100,000 buckets a group is a `limit` error before anything is read.
 
 ## NaN from an exporter
 
@@ -407,6 +455,7 @@ let paid = total.value(); // 1.0 for ten amounts of 0.1, where a float sum gives
 | `invalid` | an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket holding an infinity, or a NaN without [`skipNaN`](#nan-from-an-exporter); a counter below zero |
 | `invalid` | samples you hold: series of two names or kinds, or two samples of one series in the same millisecond                                                                             |
 | `limit`   | without `limit`, past 100,000 buckets or a bound of the query, which it names; with it, one bucket or one group that passes a bound                                              |
+| `invalid` | `fill` without `since` or `from`, or with `limit`                                                                                                                                |
 
 ## See also
 

@@ -366,6 +366,7 @@ impl Joined {
             resets: self.resets,
             gap: self.gap,
             partial: self.partial,
+            date: shape.date_of(at),
         }))
     }
 

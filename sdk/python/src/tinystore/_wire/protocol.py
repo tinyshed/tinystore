@@ -6027,6 +6027,10 @@ def _write_metrics_aggregate_asked(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(9)
         w.bool(x)
         n += 1
+    if (x := v.get("fill")) is not None:
+        w.uint(10)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -6057,6 +6061,8 @@ def _read_metrics_aggregate_asked(r: Reader) -> dict[str, Any]:
                 read["time_zone"] = r.str()
             case 9:
                 read["skip_nan"] = r.bool()
+            case 10:
+                read["fill"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -6083,6 +6089,9 @@ MetricsAggregateAsked = Message(
         "time_zone": (8, str_),
         # a NaN sample counts in no bucket, which says how many it passed over: skipped
         "skip_nan": (9, bool_),
+        # every bucket of the range retention keeps, one without samples with no value; with since or from, without
+        # limit
+        "fill": (10, bool_),
     },
     _write_metrics_aggregate_asked,
     _read_metrics_aggregate_asked,
@@ -6132,6 +6141,10 @@ def _write_metrics_bucket(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(10)
         w.uint(x)
         n += 1
+    if (x := v.get("date")) is not None:
+        w.uint(11)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -6160,6 +6173,8 @@ def _read_metrics_bucket(r: Reader) -> dict[str, Any]:
                 read["gap"] = r.bool()
             case 10:
                 read["skipped"] = r.uint()
+            case 11:
+                read["date"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -6186,6 +6201,8 @@ MetricsBucket = Message(
         "gap": (9, bool_),
         # the NaN samples it passed over, with skipNan
         "skipped": (10, uint),
+        # a calendar's: the local date its span begins on, 2026-11-19
+        "date": (11, str_),
     },
     _write_metrics_bucket,
     _read_metrics_bucket,

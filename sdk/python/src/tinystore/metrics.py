@@ -18,6 +18,7 @@ import sys
 from array import array
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date as _date
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
@@ -162,6 +163,8 @@ class AggregateQuery(SeriesQuery, total=False):
     """a timer's percentile also gives a point between its bounds, interpolated: an estimate"""
     skip_nan: bool
     """a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused"""
+    fill: bool
+    """every bucket of the range retention keeps, an empty one with samples 0 and no value; with since or from_"""
 
 
 @dataclass(slots=True)
@@ -212,6 +215,8 @@ class AggregateBucket:
     estimate: float | None = None
     skipped: int = 0
     """the NaN samples it passed over, with skip_nan"""
+    date: _date | None = None
+    """a calendar's bucket's local date: a week's Monday, a month's first; none for every"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +225,7 @@ class Aggregate:
     labels: dict[str, str]
     """the labels by kept or without left"""
     buckets: list[AggregateBucket]
-    """a bucket without samples is left out, and so is one of NaN alone"""
+    """a bucket without samples is left out, and so is one of NaN alone, unless the query gave fill"""
     more: bool = False
     """a page cut the group here: the page its next reads begins with the rest of its buckets"""
 
@@ -722,6 +727,7 @@ def _aggregate_of(query: Mapping[str, Any]) -> dict[str, Any]:
         "without": None if without is None else list(without),
         "estimate": query.get("estimate", False),
         "skip_nan": query.get("skip_nan", False),
+        "fill": query.get("fill", False),
     }
 
 
@@ -738,6 +744,7 @@ def _bucket_of(bucket: dict[str, Any]) -> AggregateBucket:
         upper=None if lower is None else bucket.get("upper", float("inf")),
         estimate=bucket.get("estimate"),
         skipped=bucket.get("skipped", 0),
+        date=None if (day := bucket.get("date")) is None else _date.fromisoformat(day),
     )
 
 

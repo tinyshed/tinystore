@@ -7034,6 +7034,8 @@ pub(crate) struct MetricsAggregateAsked {
     pub(crate) time_zone: Option<String>,
     /// A NaN sample counts in no bucket, which says how many it passed over: skipped.
     pub(crate) skip_nan: bool,
+    /// Every bucket of the range retention keeps, one without samples with no value; with since or from, without limit.
+    pub(crate) fill: bool,
 }
 
 #[cfg(feature = "metrics")]
@@ -7054,6 +7056,7 @@ impl Message for MetricsAggregateAsked {
                 7 => message.calendar = Some(codec::str(r, "calendar")?),
                 8 => message.time_zone = Some(codec::str(r, "timeZone")?),
                 9 => message.skip_nan = codec::bool(r, "skipNan")?,
+                10 => message.fill = codec::bool(r, "fill")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -7098,6 +7101,10 @@ impl Message for MetricsAggregateAsked {
             map.field(out, 9);
             codec::write_bool(out, &self.skip_nan);
         }
+        if self.fill {
+            map.field(out, 10);
+            codec::write_bool(out, &self.fill);
+        }
         map.close(out);
     }
 
@@ -7112,6 +7119,7 @@ impl Message for MetricsAggregateAsked {
             + self.calendar.as_ref().map_or(0, |calendar| 1 + 5 + calendar.len())
             + self.time_zone.as_ref().map_or(0, |time_zone| 1 + 5 + time_zone.len())
             + 2
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -7124,6 +7132,7 @@ impl Message for MetricsAggregateAsked {
             && self.calendar.is_none()
             && self.time_zone.is_none()
             && !self.skip_nan
+            && !self.fill
     }
 }
 
@@ -7147,6 +7156,8 @@ pub(crate) struct MetricsBucket {
     pub(crate) gap: bool,
     /// The NaN samples it passed over, with skipNan.
     pub(crate) skipped: u64,
+    /// A calendar's: the local date its span begins on, 2026-11-19.
+    pub(crate) date: Option<String>,
 }
 
 #[cfg(feature = "metrics")]
@@ -7168,6 +7179,7 @@ impl Message for MetricsBucket {
                 8 => message.partial = codec::bool(r, "partial")?,
                 9 => message.gap = codec::bool(r, "gap")?,
                 10 => message.skipped = codec::uint(r, "skipped")?,
+                11 => message.date = Some(codec::str(r, "date")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -7216,6 +7228,10 @@ impl Message for MetricsBucket {
             map.field(out, 10);
             codec::write_uint(out, &self.skipped);
         }
+        if let Some(date) = &self.date {
+            map.field(out, 11);
+            codec::write_str(out, date);
+        }
         map.close(out);
     }
 
@@ -7231,6 +7247,7 @@ impl Message for MetricsBucket {
             + 2
             + 2
             + 10
+            + self.date.as_ref().map_or(0, |date| 1 + 5 + date.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -7244,6 +7261,7 @@ impl Message for MetricsBucket {
             && !self.partial
             && !self.gap
             && self.skipped == 0
+            && self.date.is_none()
     }
 }
 

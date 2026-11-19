@@ -181,6 +181,27 @@ async def test_a_calendars_buckets_begin_at_the_local_midnight_of_their_time_zon
     assert [(bucket.at, bucket.value) for bucket in local.buckets] == [(midnight, 2)]
     [utc] = (await store.metrics.aggregate(name="orders", from_=midnight, to=end, op="sum", every="1d")).groups
     assert [bucket.value for bucket in utc.buckets] == [1, 1]
+    # contract: MET-27
+    assert [bucket.date for bucket in local.buckets] == [(midnight + timedelta(hours=3)).date()]
+    assert [bucket.date for bucket in utc.buckets] == [None, None]
+
+
+# contract: MET-26
+async def test_an_aggregate_given_fill_answers_every_bucket_of_the_range(store: tinystore.Store) -> None:
+    hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    samples = [(hour - timedelta(hours=5, minutes=-1), 1.0), (hour - timedelta(minutes=59), 2.0)]
+    await store.metrics.ingest(Series(name="filled_errors", kind="counter", labels={}, samples=samples))
+    sparse = (await store.metrics.aggregate(name="filled_errors", since="1d", every="1h", op="increase")).groups
+    assert len(sparse[0].buckets) == 2
+    [group] = (
+        await store.metrics.aggregate(name="filled_errors", since="1d", every="1h", op="increase", fill=True)
+    ).groups
+    assert len(group.buckets) == 25
+    empty = [bucket for bucket in group.buckets if bucket.samples == 0]
+    assert len(empty) == 23
+    assert all(bucket.value is None for bucket in empty)
+    with pytest.raises(tinystore.InvalidError, match="`since` or `from`"):
+        await store.metrics.aggregate(name="filled_errors", every="1h", op="increase", fill=True)
 
 
 # contract: MET-23

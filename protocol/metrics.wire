@@ -65,6 +65,7 @@ message metrics.AggregateAsked {
   7 calendar: str?      # day, week or month: buckets of a calendar in timeZone, in place of every
   8 timeZone: str?      # an IANA name, UTC among them, which calendar takes
   9 skipNan: bool       # a NaN sample counts in no bucket, which says how many it passed over: skipped
+  10 fill: bool         # every bucket of the range retention keeps, one without samples with no value; with since or from, without limit
 }
 
 # A bucket of an aggregate: its value, or a timer's percentile's bounds.
@@ -79,6 +80,7 @@ message metrics.Bucket {
   8 partial: bool       # its value comes from less than its span
   9 gap: bool           # its first step began before the bucket before it
   10 skipped: uint      # the NaN samples it passed over, with skipNan
+  11 date: str?         # a calendar's: the local date its span begins on, 2026-11-19
 }
 
 # A group's buckets, or a part of them: a group longer than a body goes on

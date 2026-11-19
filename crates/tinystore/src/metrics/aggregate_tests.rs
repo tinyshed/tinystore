@@ -475,6 +475,16 @@ fn calendar_days_begin_at_local_midnight_and_add_up_packed_or_not() {
     };
     let local = vec![(midnight, 24.0, false), (midnight + DAY, 24.0, false)];
     assert_eq!(days(f.metrics().query().calendar(Calendar::Day, "Europe/Moscow")), local);
+    // contract: MET-27
+    let dated = f.metrics().query().name("orders").from(midnight).to(midnight + 2 * DAY);
+    let dates = |query: Query| -> Vec<Option<String>> {
+        let answer = query.aggregate(Op::Sum).unwrap().groups;
+        answer[0].buckets.iter().map(|bucket| bucket.date.map(|date| date.to_string())).collect()
+    };
+    let moscow = vec![Some("2027-01-12".to_owned()), Some("2027-01-13".to_owned())];
+    assert_eq!(dates(dated.clone().calendar(Calendar::Day, "Europe/Moscow")), moscow, "the local day, not UTC's");
+    assert_eq!(dates(dated.clone().calendar(Calendar::Month, "Europe/Moscow")), [Some("2027-01-01".to_owned())]);
+    assert_eq!(dates(dated.every(DAY)), [None, None, None], "a bucket of `every` has no date");
     // days of UTC cut at 03:00 in Moscow, as the issue saw them
     let utc: Vec<f64> = days(f.metrics().query().every(DAY)).iter().map(|(_, sum, _)| *sum).collect();
     assert_eq!(utc, [3.0, 24.0, 21.0]);
@@ -594,7 +604,7 @@ fn an_infinity_is_refused_and_only_an_aggregate_skips_nan() {
     assert_eq!(infinity.kind(), ErrorKind::Invalid);
     assert!(infinity.to_string().contains("an aggregate over a NaN or an infinity"), "{infinity}");
     let read = f.metrics().query().name("level").since(HOUR).skip_nan().read().unwrap_err();
-    assert!(read.to_string().contains("`skip_nan` are an aggregate's"), "{read}");
+    assert!(read.to_string().contains("`skip_nan` and `fill` are an aggregate's"), "{read}");
     let to = now - MINUTE;
     let alone = f.metrics().query().name("level").since(HOUR).to(to).skip_nan().aggregate(Op::Count).unwrap();
     assert!(alone.groups.is_empty(), "a bucket of NaN alone has no value, never a zero: {alone:?}");
@@ -644,4 +654,64 @@ fn a_step_from_a_block_that_ends_in_a_nan_begins_at_its_last_finite_sample() {
         let bucket = query.aggregate(Op::Increase).unwrap().groups[0].buckets[0];
         assert_eq!((number(&bucket), bucket.skipped, bucket.partial), (30.0, 0, false), "packed: {packed}");
     }
+}
+
+// contract: MET-26
+#[test]
+fn fill_gives_every_bucket_of_the_range_an_empty_one_without_a_value() {
+    let f = fixture();
+    let now = f.now();
+    // errors at three hours of the last day, and a name the query does not find
+    let errors = Series::counter("errors_total").sample(now - 20 * HOUR, 1.0).sample(now - 19 * HOUR, 3.0);
+    let errors = errors.sample(now - 2 * HOUR - MINUTE, 7.0);
+    f.metrics().ingest(&[errors, Series::gauge("other").sample(now, 1.0)]).unwrap();
+    let day = || f.metrics().query().name("errors_total").since(DAY).every(HOUR);
+    let sparse = day().aggregate(Op::Increase).unwrap().groups;
+    assert_eq!(sparse[0].buckets.len(), 3, "without fill an hour without samples is left out");
+    let filled = day().fill().aggregate(Op::Increase).unwrap().groups;
+    assert_eq!(filled.len(), 1, "a group without samples is still left out");
+    let hours = &filled[0].buckets;
+    assert_eq!(hours.len(), 25, "24 whole hours and the one the clock is in");
+    let starts: Vec<SystemTime> = hours.iter().map(|hour| hour.at).collect();
+    let every_hour: Vec<SystemTime> = (0..25).map(|hour| now - DAY + HOUR * hour).collect();
+    assert_eq!(starts, every_hour);
+    let empty: Vec<&Bucket> = hours.iter().filter(|hour| hour.samples == 0).collect();
+    assert_eq!(empty.len(), 22);
+    assert!(empty.iter().all(|hour| hour.value == Value::Empty && hour.value.exact().is_none()), "no zero");
+    assert!(hours.last().unwrap().partial, "the clock has not reached its end");
+    let before: Vec<f64> = sparse[0].buckets.iter().map(number).collect();
+    let kept: Vec<f64> = hours.iter().filter_map(|hour| hour.value.exact()).collect();
+    assert_eq!(before, kept, "a bucket with samples is what it was, its gap with it");
+    assert!(hours.iter().find(|hour| hour.samples > 0 && hour.at == now - 3 * HOUR).unwrap().gap);
+    // retention clips the range first: nothing is filled before what the name keeps
+    f.metrics().ingest(&[Series::gauge("short").keep(3 * HOUR).sample(now - HOUR, 1.0)]).unwrap();
+    let short = f.metrics().query().name("short").since(DAY).every(HOUR).fill().aggregate(Op::Max).unwrap();
+    let short: Vec<SystemTime> = short.groups[0].buckets.iter().map(|hour| hour.at).collect();
+    assert_eq!(short, [now - 3 * HOUR, now - 2 * HOUR, now - HOUR, now]);
+}
+
+// contract: MET-07, MET-26
+#[test]
+fn a_fill_the_range_cannot_bound_is_refused_before_the_read() {
+    let f = fixture();
+    f.metrics().ingest(&[Series::gauge("cpu").sample(f.now(), 1.0)]).unwrap();
+    let query = || f.metrics().query().name("cpu").every(MINUTE).fill();
+    let refused = |query: Query| query.aggregate(Op::Max).unwrap_err();
+    let unbounded = refused(query());
+    assert!(
+        unbounded.kind() == ErrorKind::Invalid && unbounded.to_string().contains("`since` or `from`"),
+        "{unbounded}"
+    );
+    let paged = refused(query().since(HOUR).limit(10));
+    assert!(paged.kind() == ErrorKind::Invalid && paged.to_string().contains("`limit`"), "{paged}");
+    let year = refused(query().since(365 * DAY));
+    assert_eq!(
+        (year.kind(), year.fact("limit"), year.fact("bound")),
+        (ErrorKind::Limit, Some("answer"), Some("100000"))
+    );
+    let read = f.metrics().query().name("cpu").since(HOUR).fill().read().unwrap_err();
+    assert!(read.to_string().contains("`fill` are an aggregate's"), "{read}");
+    // one bucket without `every`: the group holds it already
+    let whole = f.metrics().query().name("cpu").since(HOUR).fill().aggregate(Op::Max).unwrap().groups;
+    assert_eq!(values(&whole), [1.0]);
 }

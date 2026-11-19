@@ -304,11 +304,42 @@ func TestACalendarsBucketsBeginAtTheLocalMidnightOfTheirTimeZone(t *testing.T) {
 		if buckets := days[0].Buckets; len(buckets) != 1 || !buckets[0].At.Equal(midnight) || *buckets[0].Value != 2 {
 			t.Fatalf("a Moscow day: %+v", buckets)
 		}
+		// contract: MET-27
+		if day := midnight.Add(3 * time.Hour).Format(time.DateOnly); days[0].Buckets[0].Date != day {
+			t.Fatalf("a Moscow day's date %q, where %q", days[0].Buckets[0].Date, day)
+		}
 		utc := query
 		utc.Every = 24 * time.Hour
-		if buckets := ways.Must(metrics.Aggregate(ctx, store, utc)).Groups[0].Buckets; len(buckets) != 2 {
+		if buckets := ways.Must(metrics.Aggregate(ctx, store, utc)).Groups[0].Buckets; len(buckets) != 2 || buckets[0].Date != "" {
 			t.Fatalf("days of UTC: %+v", buckets)
 		}
+	})
+}
+
+// contract: MET-26
+func TestAnAggregateGivenFillAnswersEveryBucketOfTheRange(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		hour := time.Now().Truncate(time.Hour)
+		samples := []metrics.Sample{{At: hour.Add(-5*time.Hour + time.Minute), Value: 1}, {At: hour.Add(-time.Hour + time.Minute), Value: 2}}
+		ways.Must(0, metrics.Ingest(ctx, store, metrics.Series{Name: "filled_errors", Kind: metrics.KindCounter, Samples: samples}))
+		query := metrics.Query{Name: "filled_errors", Since: 24 * time.Hour, Every: time.Hour, Op: metrics.Increase, Fill: true}
+		buckets := ways.Must(metrics.Aggregate(ctx, store, query)).Groups[0].Buckets
+		empty := 0
+		for _, bucket := range buckets {
+			if bucket.Samples == 0 {
+				empty++
+				if bucket.Value != nil {
+					t.Fatalf("an empty bucket of value %v", *bucket.Value)
+				}
+			}
+		}
+		if len(buckets) != 25 || empty != 23 {
+			t.Fatalf("%d buckets, %d empty", len(buckets), empty)
+		}
+		query.Since = 0
+		_, err := metrics.Aggregate(ctx, store, query)
+		is(t, err, tinystore.ErrInvalid)
 	})
 }
 

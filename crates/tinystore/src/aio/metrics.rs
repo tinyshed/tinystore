@@ -362,6 +362,12 @@ impl Query {
         self.with(crate::metrics::Query::skip_nan)
     }
 
+    /// An aggregate gives every bucket of the range that retention keeps,
+    /// as [`crate::metrics::Query::fill`] does.
+    pub fn fill(self) -> Self {
+        self.with(crate::metrics::Query::fill)
+    }
+
     /// The samples of each series the query finds, in its range, whole or a
     /// page of them, as [`crate::metrics::Query::read`] gives them.
     pub fn read(&self) -> impl Future<Output = Result<SeriesPage>> + Send + 'static {

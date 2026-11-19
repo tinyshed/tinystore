@@ -305,6 +305,10 @@ type Query struct {
 	// SkipNaN passes a NaN sample over, counted in its bucket's Skipped
 	// rather than refusing the aggregate; an infinity is still refused.
 	SkipNaN bool
+	// Fill answers every bucket of the range retention keeps, an empty one
+	// with Samples 0 and Value nil, which is no zero; it takes Since or
+	// From, and no Limit.
+	Fill bool
 }
 
 func (q Query) asked() (wire.MetricsQuery, error) {
@@ -359,7 +363,7 @@ func (q Query) asked() (wire.MetricsQuery, error) {
 
 func (q Query) aggregate() (wire.MetricsAggregateAsked, error) {
 	query, err := q.asked()
-	out := wire.MetricsAggregateAsked{Query: query, Estimate: q.Estimate, SkipNan: q.SkipNaN}
+	out := wire.MetricsAggregateAsked{Query: query, Estimate: q.Estimate, SkipNan: q.SkipNaN, Fill: q.Fill}
 	if err != nil {
 		return out, err
 	}
@@ -476,8 +480,8 @@ func Read(ctx context.Context, store *tinystore.Store, q Query) (SeriesPage, err
 
 // plain refuses what only an aggregate takes, for a call that is none.
 func (q Query) plain(call string) error {
-	if q.Every != 0 || q.Calendar != "" || q.TimeZone != "" || q.Op != "" || q.By != nil || q.Without != nil || q.Estimate || q.SkipNaN {
-		return core.Errorf(core.Invalid, "Every, Calendar, TimeZone, Op, By, Without, Estimate and SkipNaN are an aggregate's: %s takes none", call)
+	if q.Every != 0 || q.Calendar != "" || q.TimeZone != "" || q.Op != "" || q.By != nil || q.Without != nil || q.Estimate || q.SkipNaN || q.Fill {
+		return core.Errorf(core.Invalid, "Every, Calendar, TimeZone, Op, By, Without, Estimate, SkipNaN and Fill are an aggregate's: %s takes none", call)
 	}
 	return nil
 }
@@ -558,10 +562,13 @@ type Bucket struct {
 	// Gap says its first step began before the bucket before it: a whole
 	// bucket between had no samples.
 	Gap bool
+	// Date is a calendar's bucket's local date, "2026-11-19": a week's
+	// Monday, a month's first; empty for buckets of Every.
+	Date string
 }
 
 // Group is the buckets of a group of series: a bucket without samples is
-// left out, and so is one of NaN alone.
+// left out, and so is one of NaN alone, unless the query gave Fill.
 type Group struct {
 	Name string
 	// Labels is the labels By kept or Without left.
@@ -672,6 +679,9 @@ func bucketOf(bucket wire.MetricsBucket) Bucket {
 		At: time.UnixMilli(bucket.At).UTC(), Value: bucket.Value, Lower: bucket.Lower, Upper: bucket.Upper,
 		Estimate: bucket.Estimate, Samples: int(bucket.Samples), Resets: int(bucket.Resets),
 		Skipped: int(bucket.Skipped), Partial: bucket.Partial, Gap: bucket.Gap,
+	}
+	if bucket.Date != nil {
+		out.Date = *bucket.Date
 	}
 	if out.Lower != nil && out.Upper == nil {
 		infinity := math.Inf(1)

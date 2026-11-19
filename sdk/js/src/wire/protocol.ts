@@ -7397,6 +7397,8 @@ export const MetricsAggregateAsked = message(
 		timeZone: [8, str],
 		/** a NaN sample counts in no bucket, which says how many it passed over: skipped */
 		skipNan: [9, bool],
+		/** every bucket of the range retention keeps, one without samples with no value; with since or from, without limit */
+		fill: [10, bool],
 	},
 	{
 		write(w, v) {
@@ -7453,6 +7455,11 @@ export const MetricsAggregateAsked = message(
 				w.bool(v.skipNan)
 				n++
 			}
+			if (v.fill !== undefined) {
+				w.field(10)
+				w.bool(v.fill)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -7465,6 +7472,7 @@ export const MetricsAggregateAsked = message(
 			let $calendar: string | undefined
 			let $timeZone: string | undefined
 			let $skipNan: boolean | undefined
+			let $fill: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -7506,6 +7514,9 @@ export const MetricsAggregateAsked = message(
 					case 9:
 						$skipNan = r.bool()
 						break
+					case 10:
+						$fill = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -7521,6 +7532,7 @@ export const MetricsAggregateAsked = message(
 				calendar: $calendar,
 				timeZone: $timeZone,
 				skipNan: $skipNan,
+				fill: $fill,
 			}
 		},
 	},
@@ -7548,6 +7560,8 @@ export const MetricsBucket = message(
 		gap: [9, bool],
 		/** the NaN samples it passed over, with skipNan */
 		skipped: [10, uint],
+		/** a calendar's: the local date its span begins on, 2026-11-19 */
+		date: [11, str],
 	},
 	{
 		write(w, v) {
@@ -7603,6 +7617,11 @@ export const MetricsBucket = message(
 				w.uint(v.skipped)
 				n++
 			}
+			if (v.date !== undefined) {
+				w.field(11)
+				w.str(v.date)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -7616,6 +7635,7 @@ export const MetricsBucket = message(
 			let $partial: boolean | undefined
 			let $gap: boolean | undefined
 			let $skipped: number | undefined
+			let $date: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -7648,6 +7668,9 @@ export const MetricsBucket = message(
 					case 10:
 						$skipped = r.uint()
 						break
+					case 11:
+						$date = r.str()
+						break
 					default:
 						r.skip()
 				}
@@ -7664,6 +7687,7 @@ export const MetricsBucket = message(
 				partial: $partial,
 				gap: $gap,
 				skipped: $skipped,
+				date: $date,
 			}
 		},
 	},

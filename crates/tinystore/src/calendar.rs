@@ -56,6 +56,47 @@ impl Calendar {
     }
 }
 
+/// The local date a calendar's span begins on, as ISO 8601 writes it:
+/// `2026-11-19` for a day, its Monday for a week, its first for a month.
+/// Text held in place, so that a bucket that carries one stays `Copy`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LocalDate([u8; 10]);
+
+impl LocalDate {
+    /// The date as text: `2026-11-19`.
+    pub fn as_str(&self) -> &str {
+        // the bytes are the ASCII its constructor wrote
+        std::str::from_utf8(&self.0).unwrap_or_default()
+    }
+
+    /// A day of the years 0 to 9999, which ISO 8601's ten characters write;
+    /// none for one outside them.
+    #[cfg(feature = "metrics")]
+    fn of(day: Date) -> Option<LocalDate> {
+        let text = format!("{:04}-{:02}-{:02}", day.year(), day.month(), day.day());
+        let bytes: [u8; 10] = text.as_bytes().try_into().ok()?;
+        (day.year() >= 0).then_some(LocalDate(bytes))
+    }
+}
+
+impl std::fmt::Display for LocalDate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::fmt::Debug for LocalDate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
+
+impl PartialEq<&str> for LocalDate {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
 /// Buckets of one unit in one zone.
 #[derive(Clone, Debug)]
 pub(crate) struct Zoned {
@@ -108,6 +149,14 @@ impl Zoned {
     pub(crate) fn end_millis(&self, start: i64) -> i64 {
         let end = Timestamp::from_millisecond(start).ok().and_then(|start| self.end(start));
         end.map_or(i64::MAX, |end| end.as_millisecond())
+    }
+
+    /// The local date the span that begins at `start`, in milliseconds since
+    /// 1970, begins on.
+    #[cfg(feature = "metrics")]
+    pub(crate) fn date_millis(&self, start: i64) -> Option<LocalDate> {
+        let at = Timestamp::from_millisecond(start).ok()?;
+        LocalDate::of(at.to_zoned(self.zone.clone()).date())
     }
 
     fn start(&self, at: Timestamp) -> Option<Timestamp> {
@@ -185,6 +234,21 @@ mod tests {
         // Santiago moved its clock from 00:00 to 01:00 on 2026-09-06: that day begins at 01:00, 23 hours long
         let skipped = buckets(Calendar::Day, "America/Santiago", "2026-09-05T12:00:00Z", 3);
         assert_eq!(skipped, ["2026-09-05T04:00:00Z", "2026-09-06T04:00:00Z", "2026-09-07T03:00:00Z"]);
+    }
+
+    #[test]
+    fn a_span_carries_the_local_date_it_begins_on() {
+        let date = |unit, zone, at: &str| {
+            let zoned = Zoned::of(unit, zone).unwrap();
+            let start = zoned.start_millis(at.parse::<Timestamp>().unwrap().as_millisecond());
+            zoned.date_millis(start).unwrap().to_string()
+        };
+        // 23:30 in UTC is half past two on the next day in Moscow
+        assert_eq!(date(Calendar::Day, "Europe/Moscow", "2026-11-18T23:30:00Z"), "2026-11-19");
+        assert_eq!(date(Calendar::Week, "UTC", "2026-01-01T12:00:00Z"), "2025-12-29", "a week's Monday");
+        assert_eq!(date(Calendar::Month, "Europe/Berlin", "2026-02-10T00:00:00Z"), "2026-02-01", "a month's first");
+        // the day whose midnight Santiago's clock skipped still begins on that day
+        assert_eq!(date(Calendar::Day, "America/Santiago", "2026-09-06T12:00:00Z"), "2026-09-06");
     }
 
     #[test]

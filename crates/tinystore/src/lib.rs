@@ -105,6 +105,8 @@ pub use wire::client;
 
 #[cfg(any(feature = "metrics", feature = "records", feature = "jobs"))]
 pub use calendar::Calendar;
+#[cfg(any(feature = "metrics", feature = "records"))]
+pub use calendar::LocalDate;
 #[cfg(any(feature = "store", feature = "mcp"))]
 pub use cancel::CancellationToken;
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};

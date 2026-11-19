@@ -247,6 +247,8 @@ These contracts are what does not.
 - **MET-23** An aggregate that skips NaN MUST say each bucket's NaN samples it passed over, count them in no value, and refuse an infinity as one that does not skip; a bucket of NaN alone MUST have no value, never a zero, and is left out as a bucket without samples is.
 - **MET-24** A `read`, an `aggregate` or a `latest` MUST see every change the caller's own instruments made before the call, and every change other processes' instruments had delivered to the store before it, without a `flush`; a page after the first MUST keep the first page's clock, and `explain` MUST write nothing.
 - **MET-25** A metrics query field an SDK does not take MUST be refused `invalid`, naming the field, never dropped; a query of no condition at all MUST be refused saying so, not as one of `Not` alone.
+- **MET-26** An aggregate given `fill` MUST answer, for every group it answers, every bucket of the range that retention keeps, an empty one with no samples and no value, never a zero; one with no start, with `limit`, or of more buckets a group than an answer holds MUST be refused before anything is read.
+- **MET-27** A bucket of a calendar MUST carry the local date its span begins on, in the aggregate's time zone; a bucket of `every` none.
 - **MET-28** A walk of an aggregate's pages MUST yield each group once, its buckets whole and in order, its parts from the pages it spans joined; a page read by hand keeps `more`.
 
 ### Search

@@ -46,7 +46,8 @@ use super::rank::Rank;
 use super::series::{Kind, Labels};
 use super::snapshot::Window;
 use super::timer::Part;
-use crate::calendar::{Calendar, Zoned};
+use crate::calendar::{Calendar, LocalDate, Zoned};
+use crate::limits::QUERY_ANSWER;
 use crate::{Error, Result};
 
 /// What a bucket's value is of its samples.
@@ -125,7 +126,8 @@ pub struct Aggregate {
     /// The labels `by` kept or `without` left; none when neither was given,
     /// every series of the name one group.
     pub labels: Labels,
-    /// A bucket without samples is left out, and so is one of NaN alone.
+    /// A bucket without samples is left out, and so is one of NaN alone,
+    /// unless the query asked `fill`.
     pub buckets: Vec<Bucket>,
     /// A page of an aggregate cut the group here: the page its `next` reads
     /// begins with the rest of its buckets.
@@ -160,6 +162,9 @@ pub struct Bucket {
     /// the bucket, and no speed the series ran at, since the step it counts
     /// may have begun before that.
     pub partial: bool,
+    /// A calendar's bucket's local date, the day its span begins on: a
+    /// week's Monday, a month's first. None for buckets of `every`.
+    pub date: Option<LocalDate>,
 }
 
 /// A bucket's answer: one exact number, or where a timer's percentile lies.
@@ -180,6 +185,9 @@ pub enum Value {
         /// last bound the last bound, and none when no bound lies below.
         estimate: Option<f64>,
     },
+    /// A bucket `fill` gave, of no samples: what a series did over it is
+    /// not known, so it is no zero.
+    Empty,
 }
 
 impl Value {
@@ -187,7 +195,7 @@ impl Value {
     pub fn exact(self) -> Option<f64> {
         match self {
             Value::Exact(value) => Some(value),
-            Value::Between { .. } => None,
+            Value::Between { .. } | Value::Empty => None,
         }
     }
 }
@@ -215,6 +223,8 @@ pub(super) struct Asking<'a> {
     pub(super) name: Option<&'a str>,
     pub(super) estimate: bool,
     pub(super) skip_nan: bool,
+    /// Every bucket of the range retention keeps, one without samples empty.
+    pub(super) fill: bool,
 }
 
 /// An aggregate checked: its `op`, its buckets and its groups.
@@ -228,6 +238,7 @@ pub(super) struct Shape {
     name: Option<String>,
     estimate: bool,
     skip_nan: bool,
+    fill: bool,
 }
 
 impl Shape {
@@ -259,7 +270,77 @@ impl Shape {
             (None, None) => Grouping::Name,
         };
         let name = asking.name.map(str::to_owned);
-        Ok(Shape { op, rank, grid, grouping, name, estimate: asking.estimate, skip_nan: asking.skip_nan })
+        let (estimate, skip_nan, fill) = (asking.estimate, asking.skip_nan, asking.fill);
+        Ok(Shape { op, rank, grid, grouping, name, estimate, skip_nan, fill })
+    }
+
+    /// Refuses a `fill` the range cannot bound before the read starts: one
+    /// with no start, whose first bucket is 1970's, one in pages, which do
+    /// not fill yet, and one of more buckets than an answer holds (MET-07).
+    pub(super) fn check_fill(&self, from: i64, to: i64, paged: bool) -> Result<()> {
+        if !self.fill {
+            return Ok(());
+        }
+        if paged {
+            return Err(Error::invalid("`fill` gives the whole range, which pages do not split yet: not with `limit`"));
+        }
+        if from == i64::MIN {
+            return Err(Error::invalid("`fill` fills from the range's start: a query gives it `since` or `from`"));
+        }
+        let most = QUERY_ANSWER.bound;
+        let buckets = self.starts(from, to).take(usize::try_from(most).unwrap_or(usize::MAX) + 1).count() as u64;
+        if buckets > most {
+            let what = format!("`fill` of more than {most} buckets a group: a wider `every`, or a shorter range");
+            return Err(QUERY_ANSWER.refuse(buckets, what));
+        }
+        Ok(())
+    }
+
+    /// A group's buckets with every bucket of `[from, to)` the grid has, one
+    /// it holds none of empty, `partial` as its span gives it (MET-26); the
+    /// range is one bucket without a grid, which a group holds already.
+    pub(super) fn filled(&self, buckets: Vec<Bucket>, (from, to): (i64, i64), cutoff: i64, now: i64) -> Vec<Bucket> {
+        if !self.fill || self.grid.is_none() {
+            return buckets;
+        }
+        let mut held = buckets.into_iter().peekable();
+        let mut out = Vec::new();
+        for at in self.starts(from, to) {
+            if held.peek().is_some_and(|bucket| crate::unix_millis(bucket.at) == at) {
+                out.extend(held.next());
+                continue;
+            }
+            let span = self.span(at, from, to);
+            out.push(Bucket {
+                at: crate::clock::from_unix_millis(at),
+                value: Value::Empty,
+                samples: 0,
+                resets: 0,
+                skipped: 0,
+                gap: false,
+                partial: self.cuts(at, span, cutoff, now),
+                date: self.date_of(at),
+            });
+        }
+        // a bucket the grid does not begin where the fill went, which none should be
+        out.extend(held);
+        out
+    }
+
+    /// Where each bucket of `[from, to)` begins, the one that holds `from`
+    /// first.
+    fn starts(&self, from: i64, to: i64) -> impl Iterator<Item = i64> + '_ {
+        let first = self.bucket_of(from, from);
+        let next = move |at: &i64| self.grid.as_ref().map(|grid| grid.end(*at)).filter(|end| *end > *at);
+        std::iter::successors(Some(first), next).take_while(move |at| *at < to)
+    }
+
+    /// The local date a calendar's bucket that begins at `at` begins on.
+    pub(super) fn date_of(&self, at: i64) -> Option<LocalDate> {
+        match &self.grid {
+            Some(Grid::Calendar(zoned)) => zoned.date_millis(at),
+            _ => None,
+        }
     }
 
     pub(super) fn op(&self) -> Op {

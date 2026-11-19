@@ -149,6 +149,7 @@ pub struct Query {
     without: Option<Vec<String>>,
     estimate: bool,
     skip_nan: bool,
+    fill: bool,
     limit: Option<usize>,
     after: Option<String>,
 }
@@ -167,6 +168,7 @@ impl fmt::Debug for Query {
             .field("without", &self.without)
             .field("estimate", &self.estimate)
             .field("skip_nan", &self.skip_nan)
+            .field("fill", &self.fill)
             .field("limit", &self.limit)
             .field("after", &self.after)
             .finish()
@@ -202,6 +204,7 @@ impl Query {
             without: None,
             estimate: false,
             skip_nan: false,
+            fill: false,
             limit: None,
             after: None,
         }
@@ -288,6 +291,29 @@ impl Query {
         self
     }
 
+    /// An aggregate gives every bucket of the range that retention keeps, a
+    /// bucket without samples [`Value::Empty`](super::Value::Empty), with
+    /// no samples and `partial` as its span gives it: a chart draws every
+    /// hour of a day, an empty one as it chooses. A group without a sample
+    /// is still left out, since nothing names it. It takes `since` or
+    /// `from`, and no `limit`; past 100,000 buckets a group it is `limit`,
+    /// before anything is read.
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # fn f(stats: tinystore::metrics::Metrics) -> tinystore::Result<()> {
+    /// use tinystore::metrics::Op;
+    /// let day = stats.query().name("errors_total").since(Duration::from_hours(24)).every(Duration::from_hours(1));
+    /// let hours = day.fill().aggregate(Op::Increase)?.groups;
+    /// let drawn: Vec<f64> = hours[0].buckets.iter().map(|hour| hour.value.exact().unwrap_or(0.0)).collect();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn fill(mut self) -> Self {
+        self.fill = true;
+        self
+    }
+
     /// A read in pages: each at most this many samples, 100,000 at most, and
     /// its `next` while there is more.
     pub fn limit(mut self, samples: usize) -> Self {
@@ -344,7 +370,12 @@ impl Query {
 
     /// `aggregate` in its two steps, as [`Query::checked_read`] is `read`.
     pub(crate) fn checked_aggregate(&self, op: Op) -> Result<Checked<AggregatePage>> {
-        let check = move |query: &Query| query.shape(op).and_then(|shape| Ok((query.paged(Some(op))?, shape)));
+        let check = move |query: &Query| {
+            let shape = query.shape(op)?;
+            let (asked, paging) = query.paged(Some(op))?;
+            shape.check_fill(asked.from, asked.to, paging.is_some())?;
+            Ok(((asked, paging), shape))
+        };
         let query = self.clone();
         self.once_checked(Fresh::Written, check, move |engine, ((asked, paging), shape)| {
             let (groups, place) = engine.aggregate(&asked, &shape, paging.as_ref())?;
@@ -433,6 +464,7 @@ impl Query {
             name: self.name.as_deref(),
             estimate: self.estimate,
             skip_nan: self.skip_nan,
+            fill: self.fill,
         };
         Shape::of(op, asking)
     }
@@ -440,10 +472,9 @@ impl Query {
     /// Refuses what only an aggregate takes, for a call that is none.
     fn plain(&self, call: &str) -> Result<()> {
         let asks = self.every.is_some() || self.calendar.is_some() || self.by.is_some() || self.without.is_some();
-        if asks || self.estimate || self.skip_nan {
-            return Err(Error::invalid(format!(
-                "`every`, `calendar`, `by`, `without`, `estimate` and `skip_nan` are an aggregate's: {call} takes none"
-            )));
+        if asks || self.estimate || self.skip_nan || self.fill {
+            let fields = "`every`, `calendar`, `by`, `without`, `estimate`, `skip_nan` and `fill`";
+            return Err(Error::invalid(format!("{fields} are an aggregate's: {call} takes none")));
         }
         Ok(())
     }
@@ -492,6 +523,9 @@ impl Query {
         if self.skip_nan {
             // only when given, so that a cursor written before it was goes on
             given.push_str("~skip_nan");
+        }
+        if self.fill {
+            given.push_str("~fill");
         }
         for (label, condition) in &asked.conditions {
             given.push_str(&format!("~{label:?}={condition:?}"));
