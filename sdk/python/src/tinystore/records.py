@@ -315,9 +315,22 @@ def _id_bytes(hex_id: str, size: int, what: str) -> bytes:
     return bytes.fromhex(hex_id)
 
 
+_QUERY_FIELDS = Query.__required_keys__ | Query.__optional_keys__
+"""The fields of a query, which a call takes on top of its own."""
+
+
 def _query_of(query: Mapping[str, Any]) -> dict[str, Any]:
-    """A query as the wire carries it; a condition given as None reads nothing it was not asked."""
+    """A query as the wire carries it.
+
+    A condition given as None reads nothing it was not asked, and a field no query has is refused by name, since one
+    left out would read every event.
+    """
     for key, value in query.items():
+        if key not in _QUERY_FIELDS:
+            near = next((f for f in (f"{key}s", key.removesuffix("s")) if f != key and f in _QUERY_FIELDS), None)
+            raise InvalidError(
+                f"records query: no field `{key}`" + ("" if near is None else f"; did you mean `{near}`?")
+            )
         if value is None:
             raise InvalidError(f"a query's {key} given as None: leave it out to read without it")
     where, conditions = _where_of(query.get("where") or {})

@@ -169,6 +169,17 @@ async def test_fill_gives_a_row_for_every_span_and_a_calendars_rows_their_local_
         await repro.aggregate(every="1h", fill=True)
 
 
+# contract: REC-15
+async def test_a_field_no_query_has_is_invalid_named_never_dropped(store: tinystore.Store) -> None:
+    api = store.events("api")
+    with pytest.raises(tinystore.InvalidError, match=r"records query: no field `name`; did you mean `names`\?"):
+        await api.count(name="request")  # type: ignore[call-arg]
+    with pytest.raises(tinystore.InvalidError, match="did you mean `streams`"):
+        await store.events().list(stream="api")  # type: ignore[call-arg]
+    with pytest.raises(tinystore.InvalidError, match="no field `op`"):
+        await api.aggregate(op="increase")  # type: ignore[call-arg]
+
+
 async def test_a_condition_given_as_none_is_invalid_never_a_condition_left_out(store: tinystore.Store) -> None:
     api = store.events("api")
     with pytest.raises(tinystore.InvalidError):

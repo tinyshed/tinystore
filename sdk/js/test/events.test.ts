@@ -193,6 +193,20 @@ for (const way of ways) {
 			)
 		})
 
+		test('a field no query has is InvalidError, named, never dropped', async () => {
+			// contract: REC-15
+			const api = store.events('api')
+			const named = await caught(api.count({ name: 'request' } as never))
+			expect(named).toBeInstanceOf(InvalidError)
+			expect((named as Error).message).toContain(
+				'records query: no field `name`; did you mean `names`?',
+			)
+			const stream = await caught(store.events().list({ stream: 'api' } as never))
+			expect((stream as Error).message).toContain('did you mean `streams`?')
+			const other = await caught(api.aggregate({ op: 'increase' } as never))
+			expect((other as Error).message).toContain('no field `op`')
+		})
+
 		test('a condition given as undefined is InvalidError, never a condition left out', async () => {
 			const api = store.events('api')
 			expect(await caught(api.list({ traceId: undefined as unknown as string }))).toBeInstanceOf(

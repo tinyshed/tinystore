@@ -119,7 +119,10 @@ as, a number as a number.
 - `search` finds a phrase in the message, the name, and a value at any depth.
   It does not look at keys; `fieldNames` lists those.
 - A condition given as `undefined` is `invalid`, never left out: a trace id
-  that was not there must not read every event.
+  that was not there must not read every event. So is a field no query has,
+  in TypeScript and Python, such as `name` written for `names`: the error
+  names the field, and the one it was likely meant to be. Go and Rust
+  refuse it when the program compiles.
 
 The time, the stream, the level, the trace and a `where` on a value that
 rarely repeats, a request's id, skip the blocks that cannot match, as

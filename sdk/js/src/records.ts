@@ -1026,10 +1026,37 @@ function newEventOf(event: NewEvent, place: number): Parameters<typeof RecordsNe
 	}
 }
 
-/** A query as the wire carries it; a condition given as undefined reads nothing it was not asked. */
+/** The fields of a query, which a call takes on top of its own. */
+const queryFields: ReadonlySet<string> = new Set([
+	'since',
+	'from',
+	'to',
+	'streams',
+	'names',
+	'minLevel',
+	'traceId',
+	'where',
+	'search',
+	'newest',
+	'limit',
+	'after',
+])
+
+/**
+ * A query as the wire carries it; a condition given as undefined reads
+ * nothing it was not asked, and a field no query has is refused by name,
+ * since one left out would read every event.
+ */
 function queryOf(query: Query | undefined): Parameters<typeof RecordsQuery.encode>[0] {
 	const q = query ?? {}
 	for (const [key, value] of Object.entries(q)) {
+		if (!queryFields.has(key)) {
+			const near = [`${key}s`, key.replace(/s$/, '')].find(
+				field => field !== key && queryFields.has(field),
+			)
+			const named = near === undefined ? '' : `; did you mean \`${near}\`?`
+			throw new InvalidError(`records query: no field \`${key}\`${named}`)
+		}
 		if (value === undefined) {
 			throw new InvalidError(`a query's ${key} given as undefined: leave it out to read without it`)
 		}
