@@ -29,7 +29,7 @@ What a server is, as its WELCOME said it to this store's connection.
 ```python
 class Store:
     metrics: Metrics  # Series by name and labels, their reads and aggregates, and the program's instruments.
-    clock: Clock  # The test's clock of a private store opened with ``clock``; on any other, its calls are InvalidError.
+    clock: Clock  # The test's clock of a store opened with ``clock``, private or embedded; on any other, InvalidError.
 ```
 
 The store in a directory, as this process reaches it. Close it once: ``async with`` does.
@@ -634,8 +634,9 @@ cannot be served fails here. A cancel or a timeout around it, such as
 - ``idle``: how long a sidecar this process starts stays once its last
   connection has gone; 30 s unless given, ``"0s"`` for ever. One found
   running keeps its own.
-- ``clock``: runs a private server on a test's clock, starting at this
-  time, which ``store.clock`` moves forward instead of a test waiting.
+- ``clock``: runs the store on a test's clock, starting at this time,
+  which ``store.clock`` moves forward instead of a test waiting; a
+  private or an embedded store's.
 - ``durability``: how far a commit of the store's files goes before it
   returns. Unless given, kv, jobs, files, search and every database commit
   ``"full"``, and records and metrics ``"os"``; given, every file commits

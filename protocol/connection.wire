@@ -46,6 +46,7 @@ message store.Options {
   14 withoutSystem: bool         # with selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's
   15 maxSeries: uint?            # the metrics series the store holds at most; 100,000 when absent
   16 olderEncryptionKeys: [str]  # the files of the store's older keys, which open the values they sealed and seal none
+  17 clock: time?                # a test's clock, starting at this time, which server.clock moves; the system's clock when absent
   18 cli: bool                   # lets the command line write to the store while the program runs, through an endpoint of the user's alone that server/SERVE names
 }
 

@@ -15,11 +15,19 @@ use crate::wire::codec::Message;
 use crate::wire::protocol::StoreOptions;
 use crate::{Durability, Error, ErrorKind, Options, Result, Store, TestClock};
 
-/// The stores this process holds through pipes, by directory, and how many
-/// pipes each has: one store a directory, closed with its last pipe.
-fn stores() -> MutexGuard<'static, HashMap<PathBuf, (Store, usize)>> {
-    static STORES: OnceLock<Mutex<HashMap<PathBuf, (Store, usize)>>> = OnceLock::new();
+/// The stores this process holds through pipes, by directory: one store a
+/// directory, closed with its last pipe.
+fn stores() -> MutexGuard<'static, HashMap<PathBuf, Held>> {
+    static STORES: OnceLock<Mutex<HashMap<PathBuf, Held>>> = OnceLock::new();
     STORES.get_or_init(Mutex::default).lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A store the pipes of this process hold, how many pipes, and the test's
+/// clock it was opened on, which `server.clock` moves over every one of them.
+struct Held {
+    store: Store,
+    pipes: usize,
+    clock: Option<Arc<TestClock>>,
 }
 
 /// An error kind's code as the wire spells it, the same in every SDK's error
@@ -116,13 +124,14 @@ impl Pipe {
     /// another pipe. `options` is the wire's `store.Options`, none of its
     /// bytes for a store as it opens unasked; a store this process holds
     /// already keeps what it was opened with, and one that asks for another
-    /// durability is `Invalid`. `wake` is called when frames become ready
+    /// durability is `Invalid`. Its `clock` opens the store on a test's
+    /// clock, which `server.clock` moves over every pipe of the store. `wake` is called when frames become ready
     /// after the last were taken; a host that reads with a blocking
     /// [`Pipe::recv`] passes none.
     pub fn open(dir: impl AsRef<Path>, options: &[u8], wake: Option<Wake>) -> Result<Pipe> {
         let dir = std::path::absolute(dir.as_ref()).map_err(|error| crate::Error::io("pipe: its directory", error))?;
-        let store = join(&dir, asked(options)?)?;
-        match Session::new(store, Connect { wake, ..Connect::default() }) {
+        let (store, clock) = join(&dir, asked(options)?)?;
+        match Session::new(store, Connect { wake, clock, ..Connect::default() }) {
             Ok(session) => Ok(Pipe { session, dir: Some(dir) }),
             Err(error) => {
                 leave(&dir);
@@ -235,10 +244,12 @@ impl fmt::Debug for Pipe {
 }
 
 /// What a host's options ask of its store: its files' durability, the file
-/// of its encryption key, its metrics, and the node it is.
+/// of its encryption key, its metrics, the node it is, and where a test's
+/// clock starts.
 #[derive(Default)]
 struct Asked {
     durability: Option<Durability>,
+    clock: Option<std::time::SystemTime>,
     #[cfg(feature = "metrics")]
     self_metrics: Option<crate::metrics::SelfMetrics>,
     #[cfg(feature = "metrics")]
@@ -294,6 +305,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
     }
     Ok(Asked {
         durability: durability.transpose()?,
+        clock: asked.clock.map(crate::clock::from_unix_millis),
         #[cfg(feature = "metrics")]
         self_metrics: asked.self_metrics.then_some(crate::metrics::SelfMetrics { system: !asked.without_system }),
         #[cfg(feature = "metrics")]
@@ -307,11 +319,18 @@ fn asked(options: &[u8]) -> Result<Asked> {
     })
 }
 
-/// The store of `dir`, opened as asked, or the one this process has open
-/// already, which is refused when it was opened another way.
-fn join(dir: &Path, asked: Asked) -> Result<Store> {
+/// The store of `dir`, opened as asked, and its test's clock, or the one
+/// this process has open already, which is refused when it was opened
+/// another way. A clock asked of a store open on one joins it as it runs now.
+fn join(dir: &Path, asked: Asked) -> Result<(Store, Option<Arc<TestClock>>)> {
     let mut stores = stores();
-    if let Some((store, pipes)) = stores.get_mut(dir) {
+    if let Some(Held { store, pipes, clock }) = stores.get_mut(dir) {
+        if asked.clock.is_some() != clock.is_some() {
+            let (opened, instead) = if clock.is_some() { ("on", "with") } else { ("without", "without") };
+            return Err(Error::invalid(format!(
+                "pipe: the store is open {opened} a test's clock: open it {instead} one"
+            )));
+        }
         if let Some(durability) = asked.durability
             && store.durability() != Some(durability)
         {
@@ -357,9 +376,11 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
             return Err(Error::invalid("pipe: the store is open without cli, and asked for it"));
         }
         *pipes += 1;
-        return Ok(store.clone());
+        return Ok((store.clone(), clock.clone()));
     }
+    let clock = asked.clock.map(|start| Arc::new(TestClock::new(start)));
     let options = Options {
+        clock: clock.clone().map(|clock| clock as Arc<dyn crate::Clock>),
         durability: asked.durability,
         encryption_key_file: asked.encryption_key_file,
         older_encryption_keys: asked.older_encryption_keys,
@@ -374,14 +395,14 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
         ..Options::default()
     };
     let store = Store::open(dir, options)?;
-    stores.insert(dir.to_path_buf(), (store.clone(), 1));
-    Ok(store)
+    stores.insert(dir.to_path_buf(), Held { store: store.clone(), pipes: 1, clock: clock.clone() });
+    Ok((store, clock))
 }
 
 /// Lets go of a pipe's store, closing it with its last pipe.
 fn leave(dir: &Path) {
     let mut stores = stores();
-    let Some((store, pipes)) = stores.get_mut(dir) else {
+    let Some(Held { store, pipes, .. }) = stores.get_mut(dir) else {
         return;
     };
     *pipes -= 1;

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Literal
 from . import _runtime
 from ._pipe import open_pipe
 from ._session import PROTOCOL, ConnectionLostError, Session, Stream
+from ._time import unix_ms
 from ._wire.protocol import Empty, StoreOptions, methods
 from .errors import ClosedError, InUseError, InvalidError, OutcomeUnknownError, UnavailableError
 
@@ -214,9 +215,9 @@ async def dial(
 
 
 def in_process(
-    directory: str | os.PathLike[str], library: str | None, started: Started
+    directory: str | os.PathLike[str], library: str | None, started: Started, clock: datetime | None = None
 ) -> Callable[[], Awaitable[Connection]]:
-    """The core in this process, through its pipe: no server and no socket."""
+    """The core in this process, through its pipe: no server and no socket; on a test's clock when given."""
     absolute = str(Path(directory).resolve())
     key = started.encryption_key_file
     options = StoreOptions.encode(
@@ -226,6 +227,7 @@ def in_process(
         self_metrics=started.self_metrics,
         without_system=started.self_metrics and not started.system_metrics,
         max_series=started.max_series,
+        clock=None if clock is None else unix_ms(clock, "a clock's start"),
         cli=started.cli,
     )
 

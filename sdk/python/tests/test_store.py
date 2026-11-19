@@ -19,6 +19,7 @@ import pytest
 import tinystore
 from tinystore._connection import start_failure
 from tinystore._session import PROTOCOL
+from tinystore.testing import open_temp
 from ways import BINARY, CORE, SERVED, TOKEN, WAYS, until
 
 LOCAL = [way for way in WAYS if way.name != "a remote server over TCP" and way.ready]
@@ -44,9 +45,34 @@ async def test_a_private_store_runs_on_the_tests_clock(directory: Path) -> None:
         assert await store.clock.advance(timedelta(minutes=30)) == start + timedelta(hours=1, minutes=30)
 
 
-async def test_a_clock_is_a_private_stores_alone(directory: Path) -> None:
-    with pytest.raises(tinystore.InvalidError, match="private"):
+async def test_a_clock_is_a_private_or_an_embedded_stores_alone(directory: Path) -> None:
+    with pytest.raises(tinystore.InvalidError, match="private or an embedded"):
         await tinystore.open(directory, clock=datetime(2026, 10, 9, tzinfo=UTC))
+    with pytest.raises(tinystore.InvalidError, match="private or embedded, not both"):
+        await tinystore.open(directory, private=True, embedded=True)
+
+
+# contract: STORE-12
+@pytest.mark.skipif(not CORE, reason="the core in this process is not built")
+async def test_a_temporary_store_runs_in_this_process_on_its_clock_in_a_directory_its_close_removes() -> None:
+    start = datetime(2026, 11, 19, 9, tzinfo=UTC)
+    async with open_temp(clock=start) as store:
+        directory = store.dir
+        assert directory.name.startswith("tinystore-")
+        assert (directory / "LOCK").exists()
+        codes = store.bucket("codes", int)
+        await codes.set("K7Q2", 42, ttl="15m")
+        assert await store.clock.advance("1h") == start + timedelta(hours=1)
+        assert await codes.get("K7Q2") is None  # expired on the store's clock, in this process
+    assert not directory.exists()
+
+
+@pytest.mark.skipif(not SERVED, reason="no tinystore binary")
+async def test_a_temporary_store_asked_to_be_private_runs_in_a_child_and_goes_with_it() -> None:
+    store = await open_temp(private=True)
+    directory = store.dir
+    await store.close()
+    assert not directory.exists()
 
 
 async def test_cli_is_an_embedded_stores_alone(directory: Path) -> None:

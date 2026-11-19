@@ -19,6 +19,11 @@
 			"bun": "./src/index.ts",
 			"types": "./dist/index.d.ts",
 			"default": "./dist/index.js"
+		},
+		"./testing": {
+			"bun": "./src/testing.ts",
+			"types": "./dist/testing.d.ts",
+			"default": "./dist/testing.js"
 		}
 	},
 	"bin": {

@@ -32,6 +32,10 @@ type Started struct {
 	// MaxSeries is the metrics series the store holds at most, or 0 for the
 	// store's own 100,000.
 	MaxSeries uint64
+	// Clock is where the test's clock of the core in this process starts, or
+	// zero for the system's; a private child takes its own --clock.
+	Clock time.Time
+
 	// CLI is, for the core in this process, an endpoint that lets the
 	// command line write while the program runs.
 	CLI bool

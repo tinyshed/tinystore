@@ -108,7 +108,7 @@ class Store:
         self.metrics = Metrics(link, self._instruments)
         """Series by name and labels, their reads and aggregates, and the program's instruments."""
         self.clock = Clock(link)
-        """The test's clock of a private store opened with ``clock``; on any other, its calls are InvalidError."""
+        """The test's clock of a store opened with ``clock``, private or embedded; on any other, InvalidError."""
 
     @overload
     def bucket[T](
@@ -729,8 +729,9 @@ async def open(
     - ``idle``: how long a sidecar this process starts stays once its last
       connection has gone; 30 s unless given, ``"0s"`` for ever. One found
       running keeps its own.
-    - ``clock``: runs a private server on a test's clock, starting at this
-      time, which ``store.clock`` moves forward instead of a test waiting.
+    - ``clock``: runs the store on a test's clock, starting at this time,
+      which ``store.clock`` moves forward instead of a test waiting; a
+      private or an embedded store's.
     - ``durability``: how far a commit of the store's files goes before it
       returns. Unless given, kv, jobs, files, search and every database commit
       ``"full"``, and records and metrics ``"os"``; given, every file commits
@@ -752,6 +753,40 @@ async def open(
       series past them a LimitError; 100,000 unless given. A sidecar found
       running keeps its own.
     """
+    return await opened_as(
+        Store,
+        directory,
+        private=private,
+        embedded=embedded,
+        library=library,
+        binary=binary,
+        idle=idle,
+        clock=clock,
+        durability=durability,
+        encryption_key_file=encryption_key_file,
+        older_encryption_keys=older_encryption_keys,
+        self_metrics=self_metrics,
+        max_series=max_series,
+    )
+
+
+async def opened_as[S: Store](
+    made: Callable[[Link], S],
+    directory: str | os.PathLike[str],
+    *,
+    private: bool = False,
+    embedded: bool = False,
+    library: str | None = None,
+    binary: str | None = None,
+    idle: Duration | None = None,
+    clock: datetime | None = None,
+    durability: Durability | None = None,
+    encryption_key_file: str | os.PathLike[str] | None = None,
+    older_encryption_keys: Sequence[str | os.PathLike[str]] = (),
+    self_metrics: bool | SelfMetrics = False,
+    max_series: int | None = None,
+) -> S:
+    """Opens as ``open`` does, the store made by ``made``: a test's, which removes its directory at close."""
     where = _directory(directory)
     _check_open(durability, max_series, clock, private=private, embedded=embedded, cli=cli)
     started = _started(
@@ -766,7 +801,7 @@ async def open(
     dial = _dial(where, started, private=private, embedded=embedded, library=library, binary=binary, clock=clock)
     link = Link(asking(dial, where, durability))
     await _reached(link, f"open {directory}")
-    return Store(link)
+    return made(link)
 
 
 def _check_open(
@@ -781,12 +816,12 @@ def _check_open(
     """Refuses what open was given that no store opens with, before anything starts."""
     check_durability(durability, "open")
     check_max_series(max_series)
-    if clock is not None and not private:
-        raise InvalidError("a clock is a private server's: a shared sidecar runs on the system's time")
     if private and embedded:
         raise InvalidError("a store is private or embedded, not both")
     if cli and not embedded:
         raise InvalidError("cli is for an embedded store: a sidecar or a server lets the command line write already")
+    if clock is not None and not private and not embedded:
+        raise InvalidError("a clock is a private or an embedded store's: a shared sidecar runs on the system's time")
 
 
 def _started(
@@ -829,7 +864,7 @@ def _dial(
         return _runtime.find_binary(binary)
 
     if embedded:
-        return in_process(where, library, started)
+        return in_process(where, library, started, clock)
     if private:
         return private_child(where, find, clock, started)
     return sidecar(where, find, started)

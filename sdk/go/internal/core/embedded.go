@@ -80,6 +80,10 @@ func InProcess(directory, library string, started Started) func(context.Context)
 	if started.MaxSeries > 0 {
 		options.MaxSeries = &started.MaxSeries
 	}
+	if !started.Clock.IsZero() {
+		at := started.Clock.UnixMilli()
+		options.Clock = &at
+	}
 	encoded := wire.Encode(&options)
 	return func(ctx context.Context) (*Connection, error) {
 		path, err := FindLibrary(ctx, library)

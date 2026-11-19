@@ -3903,6 +3903,8 @@ type StoreOptions struct {
 	MaxSeries *uint64 `wire:"15,maxSeries"`
 	// the files of the store's older keys, which open the values they sealed and seal none
 	OlderEncryptionKeys []string `wire:"16,olderEncryptionKeys"`
+	// a test's clock, starting at this time, which server.clock moves; the system's clock when absent
+	Clock *int64 `wire:"17,clock"`
 	// lets the command line write to the store while the program runs, through an endpoint of the user's alone that server/SERVE names
 	Cli bool `wire:"18,cli"`
 }
@@ -4002,6 +4004,11 @@ func (m StoreOptions) Write(w *Writer) {
 		}
 		n++
 	}
+	if m.Clock != nil {
+		w.Uint(17)
+		w.Int(*m.Clock)
+		n++
+	}
 	if m.Cli {
 		w.Uint(18)
 		w.Bool(m.Cli)
@@ -4077,6 +4084,9 @@ func (m *StoreOptions) Read(r *Reader) {
 			}
 			r.Leave()
 			m.OlderEncryptionKeys = v
+		case 17:
+			v := r.Int()
+			m.Clock = &v
 		case 18:
 			m.Cli = r.Bool()
 		default:
@@ -4104,6 +4114,7 @@ func (m StoreOptions) IsZero() bool {
 		!m.WithoutSystem &&
 		m.MaxSeries == nil &&
 		len(m.OlderEncryptionKeys) == 0 &&
+		m.Clock == nil &&
 		!m.Cli
 }
 

@@ -2570,6 +2570,10 @@ def _write_store_options(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             w.str(item0)
         n += 1
+    if (x := v.get("clock")) is not None:
+        w.uint(17)
+        w.int(x)
+        n += 1
     if (x := v.get("cli")) is not None:
         w.uint(18)
         w.bool(x)
@@ -2622,6 +2626,8 @@ def _read_store_options(r: Reader) -> dict[str, Any]:
                 items0 = [r.str() for _ in range(r.array())]
                 r.leave()
                 read["older_encryption_keys"] = items0
+            case 17:
+                read["clock"] = r.int()
             case 18:
                 read["cli"] = r.bool()
             case _:
@@ -2668,6 +2674,8 @@ StoreOptions = Message(
         "max_series": (15, uint),
         # the files of the store's older keys, which open the values they sealed and seal none
         "older_encryption_keys": (16, list_(str_)),
+        # a test's clock, starting at this time, which server.clock moves; the system's clock when absent
+        "clock": (17, int_),
         # lets the command line write to the store while the program runs, through an endpoint of the user's alone that
         # server/SERVE names
         "cli": (18, bool_),

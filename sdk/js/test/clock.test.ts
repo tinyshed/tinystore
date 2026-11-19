@@ -2,12 +2,16 @@
 // instead of waiting.
 
 import { expect, test } from 'bun:test'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { InvalidError, open } from '../src/index.ts'
-import { until } from './ways.ts'
+import { openTemp } from '../src/testing.ts'
+import { until, ways } from './ways.ts'
+
+const inProcess = ways[0]!
+const library = process.env.TINYSTORE_LIBRARY
 
 async function caught(promise: Promise<unknown>): Promise<unknown> {
 	return promise.then(
@@ -61,9 +65,43 @@ test('a running worker runs at once a job the moved clock made due', async () =>
 	await worker.stop()
 })
 
-test("a clock is a private store's, and a store on the system's time refuses to move one", async () => {
+test("a clock is a private or an embedded store's, and a store on the system's time refuses to move one", async () => {
 	const shared = open(mkdtempSync(join(tmpdir(), 'tinystore-clock-')), { clock: new Date() })
 	expect(await caught(shared)).toBeInstanceOf(InvalidError)
+	const both = open(mkdtempSync(join(tmpdir(), 'tinystore-clock-')), {
+		private: true,
+		embedded: true,
+	})
+	expect(await caught(both)).toBeInstanceOf(InvalidError)
 	await using plain = await open(mkdtempSync(join(tmpdir(), 'tinystore-clock-')), { private: true })
 	expect(await caught(plain.clock.advance('1h'))).toBeInstanceOf(InvalidError)
 })
+
+// contract: STORE-12
+test.skipIf(!inProcess.ready)(
+	'a temporary store runs in this process on the clock it is given, in a directory its close removes',
+	async () => {
+		const store = await openTemp({ library, clock: new Date('2026-11-19T09:00:00Z') })
+		expect(store.dir).toContain('tinystore-')
+		expect(existsSync(join(store.dir, 'LOCK'))).toBe(true)
+		const codes = store.bucket<number>('codes')
+		await codes.set('K7Q2', 42, { ttl: '15m' })
+		expect((await store.clock.advance('1h')).toISOString()).toBe('2026-11-19T10:00:00.000Z')
+		expect(await codes.get('K7Q2')).toBeUndefined() // expired on the store's clock, in this process
+		await store.close()
+		expect(existsSync(store.dir)).toBe(false)
+	},
+)
+
+test.skipIf(process.env.TINYSTORE_BIN === undefined)(
+	'a temporary store asked to be private runs in a child, and goes with it',
+	async () => {
+		let dir: string
+		{
+			await using store = await openTemp({ private: true, clock: new Date('2026-11-19T09:00:00Z') })
+			dir = store.dir
+			expect((await store.clock.now()).toISOString()).toBe('2026-11-19T09:00:00.000Z')
+		}
+		expect(existsSync(dir)).toBe(false)
+	},
+)

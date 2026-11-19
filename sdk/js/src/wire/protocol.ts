@@ -3111,6 +3111,8 @@ export const StoreOptions = message(
 		maxSeries: [15, uint],
 		/** the files of the store's older keys, which open the values they sealed and seal none */
 		olderEncryptionKeys: [16, list(str)],
+		/** a test's clock, starting at this time, which server.clock moves; the system's clock when absent */
+		clock: [17, int],
 		/** lets the command line write to the store while the program runs, through an endpoint of the user's alone that server/SERVE names */
 		cli: [18, bool],
 	},
@@ -3210,6 +3212,11 @@ export const StoreOptions = message(
 				}
 				n++
 			}
+			if (v.clock !== undefined) {
+				w.field(17)
+				w.int(v.clock)
+				n++
+			}
 			if (v.cli !== undefined) {
 				w.field(18)
 				w.bool(v.cli)
@@ -3234,6 +3241,7 @@ export const StoreOptions = message(
 			let $withoutSystem: boolean | undefined
 			let $maxSeries: number | undefined
 			let $olderEncryptionKeys: string[] | undefined
+			let $clock: number | undefined
 			let $cli: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
@@ -3309,6 +3317,9 @@ export const StoreOptions = message(
 						$olderEncryptionKeys = items0
 						break
 					}
+					case 17:
+						$clock = r.int()
+						break
 					case 18:
 						$cli = r.bool()
 						break
@@ -3334,6 +3345,7 @@ export const StoreOptions = message(
 				withoutSystem: $withoutSystem,
 				maxSeries: $maxSeries,
 				olderEncryptionKeys: $olderEncryptionKeys,
+				clock: $clock,
 				cli: $cli,
 			}
 		},

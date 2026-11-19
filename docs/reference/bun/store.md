@@ -50,9 +50,9 @@ interface OpenOptions {
      */
     idle?: Duration
     /**
-     * Runs a private server on a test's clock, starting at this time, which
+     * Runs the store on a test's clock, starting at this time, which
      * `store.clock` moves forward instead of a test waiting: keys expire, jobs
-     * come due and records age at once. Needs `private`.
+     * come due and records age at once. Needs `private` or `embedded`.
      */
     clock?: Time
     /**

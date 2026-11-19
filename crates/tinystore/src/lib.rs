@@ -82,8 +82,11 @@ pub mod stdout;
 mod store;
 #[cfg(any(feature = "store", feature = "config-load", feature = "mcp"))]
 mod sync;
-#[cfg(all(test, any(feature = "channels", feature = "locks", feature = "jobs", feature = "mcp")))]
-mod testing;
+#[cfg(any(
+    feature = "testing",
+    all(test, any(feature = "channels", feature = "locks", feature = "jobs", feature = "mcp"))
+))]
+pub mod testing;
 mod text;
 #[cfg(all(feature = "async", feature = "store"))]
 mod timer;

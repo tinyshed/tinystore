@@ -72,6 +72,9 @@ typos = ["dep:fst", "dep:levenshtein_automata"]
 # writing or removing and a write offered only as its allow list names it, and
 # tinystore's read tools on its store for the engines built beside it
 mcp = ["typos"]
+# a store for a test, in a directory of its own that its close removes:
+# tinystore::testing::open_temp
+testing = ["store"]
 # the bodies of the fuzz targets in fuzz/, which reach decoders the library
 # keeps to itself
 fuzzing = ["records", "metrics"]

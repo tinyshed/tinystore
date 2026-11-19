@@ -170,7 +170,7 @@ CLI lets the tinystore command line write to this store while the program runs: 
 func Clock(start time.Time) Option
 ```
 
-Clock runs a private server on a test's clock, starting at this time, which store.Clock() moves forward instead of a test waiting.
+Clock runs the store on a test's clock, starting at this time, which store.Clock() moves forward instead of a test waiting; it needs Private or Embedded.
 
 ### Durability
 
@@ -309,7 +309,7 @@ Open opens the store in a directory, and returns once it answers: through the di
 func (s *Store) Clock() *TestClock
 ```
 
-Clock is the test's clock of a private store opened with tinystore.Clock; on any other store its calls are Invalid.
+Clock is the test's clock of a private or embedded store opened with tinystore.Clock; on any other store its calls are Invalid.
 
 ### Store.Close
 
@@ -359,7 +359,7 @@ type TestClock struct {
 }
 ```
 
-TestClock is the clock a private server opened with tinystore.Clock runs on: moving it forward expires keys, makes jobs due and ages records at once.
+TestClock is the clock a private or embedded store opened with tinystore.Clock runs on: moving it forward expires keys, makes jobs due and ages records at once.
 
 ### TestClock.Advance
 

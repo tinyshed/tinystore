@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"tinyshed.org/tinystore/internal/core"
+	"tinyshed.org/tinystore/internal/temp"
 	"tinyshed.org/tinystore/internal/wire"
 )
 
@@ -43,6 +44,13 @@ type options struct {
 	withoutSystem     bool
 	maxSeries         int
 	maxSeriesSet      bool
+	// embeddedUnlessPrivate is tinystoretest's: the core in this process,
+	// unless the test asks for a child
+	embeddedUnlessPrivate bool
+}
+
+func init() {
+	temp.EmbeddedUnlessPrivate = Option(func(o *options) { o.embeddedUnlessPrivate = true })
 }
 
 // Private starts a server of this process's own, a child that lives and dies
@@ -83,8 +91,9 @@ func Idle(d time.Duration) Option {
 	}
 }
 
-// Clock runs a private server on a test's clock, starting at this time,
-// which store.Clock() moves forward instead of a test waiting.
+// Clock runs the store on a test's clock, starting at this time, which
+// store.Clock() moves forward instead of a test waiting; it needs Private or
+// Embedded.
 func Clock(start time.Time) Option { return func(o *options) { o.clock = start } }
 
 // Durability is how far a commit of the store's files goes before it
@@ -154,14 +163,17 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 	if o.durability != "" && o.durability != "full" && o.durability != "os" {
 		return nil, core.Errorf(core.Invalid, "open: durability %q: it is \"full\" or \"os\"", o.durability)
 	}
-	if !o.clock.IsZero() && !o.private {
-		return nil, core.Errorf(core.Invalid, "a clock is a private server's: a shared sidecar runs on the system's time")
+	if o.embeddedUnlessPrivate && !o.private {
+		o.embedded = true
 	}
 	if o.private && o.embedded {
 		return nil, core.Errorf(core.Invalid, "a store is private or embedded, not both")
 	}
 	if o.cli && !o.embedded {
 		return nil, core.Errorf(core.Invalid, "cli is for an embedded store: a sidecar or a server lets the command line write already")
+	}
+	if !o.clock.IsZero() && !o.private && !o.embedded {
+		return nil, core.Errorf(core.Invalid, "a clock is a private or an embedded store's: a shared sidecar runs on the system's time")
 	}
 	if o.maxSeriesSet && o.maxSeries < 1 {
 		return nil, core.Errorf(core.Invalid, "open: MaxSeries %d: a count above 0", o.maxSeries)
@@ -178,6 +190,7 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 	var dial func(context.Context) (*core.Connection, error)
 	switch {
 	case o.embedded:
+		started.Clock = o.clock
 		dial = core.InProcess(directory, o.library, started)
 	case o.private:
 		clock := ""
@@ -338,15 +351,15 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 	return Status{agreed.Server, agreed.Protocol, agreed.Engines, agreed.Capability}, nil
 }
 
-// Clock is the test's clock of a private store opened with tinystore.Clock;
-// on any other store its calls are Invalid.
+// Clock is the test's clock of a private or embedded store opened with
+// tinystore.Clock; on any other store its calls are Invalid.
 func (s *Store) Clock() *TestClock { return s.clock }
 
 // Now is the time on this machine, which a row written now is stamped with.
 func (s *Store) Now() time.Time { return time.Now().UTC() }
 
-// TestClock is the clock a private server opened with tinystore.Clock runs
-// on: moving it forward expires keys, makes jobs due and ages records at once.
+// TestClock is the clock a private or embedded store opened with
+// tinystore.Clock runs on: moving it forward expires keys, makes jobs due and ages records at once.
 type TestClock struct{ link *core.Link }
 
 // Now is the time the server's clock reads.

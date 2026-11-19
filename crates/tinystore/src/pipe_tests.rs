@@ -285,6 +285,36 @@ fn an_embedded_store_refuses_to_stop_and_has_no_clock_to_move() {
     assert_eq!(client.call::<ServerClock>(method::SERVER_CLOCK, &ServerClock::default()).unwrap_err().code, "invalid");
 }
 
+/// A pipe whose options start the store on a test's clock at `at`, in Unix ms.
+fn on_a_clock(dir: &std::path::Path, at: Option<i64>) -> Result<Client> {
+    let options = crate::wire::protocol::StoreOptions { clock: at, ..Default::default() }.encode();
+    let mut client = Client::over(Pipe::open(dir, &options, None)?);
+    client.hello(1).unwrap();
+    Ok(client)
+}
+
+#[test]
+fn an_embedded_store_opened_on_a_clock_moves_it_for_every_pipe_and_refuses_one_without() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut first = on_a_clock(dir.path(), Some(1_790_000_000_000)).unwrap();
+    let moved: ServerClock =
+        first.call(method::SERVER_CLOCK, &ServerClock { advance: Some(3_600_000), at: None }).unwrap();
+    assert_eq!(moved.at, Some(1_790_003_600_000));
+
+    let mut second = on_a_clock(dir.path(), Some(1_000)).unwrap();
+    let read: ServerClock = second.call(method::SERVER_CLOCK, &ServerClock::default()).unwrap();
+    assert_eq!(read.at, Some(1_790_003_600_000), "a second pipe joins the clock as it runs, not at its own start");
+    let Err(without) = on_a_clock(dir.path(), None) else { panic!("a pipe without the clock joined") };
+    assert_eq!(without.kind(), ErrorKind::Invalid, "{without}");
+    assert!(without.to_string().contains("open on a test's clock"), "{without}");
+    drop((first, second));
+
+    let mut plain = on_a_clock(dir.path(), None).unwrap();
+    let Err(with) = on_a_clock(dir.path(), Some(1_000)) else { panic!("a pipe with a clock joined") };
+    assert!(with.to_string().contains("open without a test's clock"), "{with}");
+    assert_eq!(plain.call::<ServerClock>(method::SERVER_CLOCK, &ServerClock::default()).unwrap_err().code, "invalid");
+}
+
 #[test]
 fn reads_sent_together_are_each_answered_though_workers_take_the_crowd() {
     let dir = tempfile::tempdir().unwrap();

@@ -50,8 +50,11 @@ let store = Store::open("./data", Options::default())?; // always the core in th
 - **Embedded** loads the core's library: under Bun the C library, under Node
   its addon, in Python the extension module, in Go the core's library. The
   host's event loop never blocks: every call answers through a completion.
-- **A private child** can run on a test's clock: `clock` sets it, and
-  `store.clock.advance('1h')` moves time instead of the test waiting.
+- **A private child or an embedded store** can run on a test's clock:
+  `clock` sets it, and `store.clock.advance('1h')` moves time instead of the
+  test waiting. A shared sidecar cannot, and `private` with `embedded` is
+  refused. [Testing jobs](jobs/testing.md) opens a store for a test in one
+  line.
 - **A start that fails says why.** A directory that is a file, or sits under
   one, fails with an invalid error in every way, before anything starts:
   `store /srv/data is a file, not a directory` (`InvalidError` in TypeScript

@@ -785,7 +785,7 @@ export function embedded(
 	dir: string,
 	library: () => string,
 	started: Started = {},
-	cli = false,
+	{ clock, cli = false }: { clock?: Date; cli?: boolean } = {},
 ): Dialer {
 	const encryptionKeyFile =
 		started.encryptionKeyFile === undefined ? undefined : resolve(started.encryptionKeyFile)
@@ -813,6 +813,7 @@ export function embedded(
 		withoutSystem: selfMetricsOf(started.selfMetrics)?.system === false,
 		maxSeries: started.maxSeries,
 		cli,
+		clock: clock?.getTime(),
 	})
 	return async dialling => {
 		dialling.waiting('the store opens')

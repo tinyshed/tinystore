@@ -125,9 +125,9 @@ export interface OpenOptions {
 	 */
 	idle?: Duration
 	/**
-	 * Runs a private server on a test's clock, starting at this time, which
+	 * Runs the store on a test's clock, starting at this time, which
 	 * `store.clock` moves forward instead of a test waiting: keys expire, jobs
-	 * come due and records age at once. Needs `private`.
+	 * come due and records age at once. Needs `private` or `embedded`.
 	 */
 	clock?: Time
 	/**
@@ -220,7 +220,7 @@ export interface ConnectOptions {
  */
 export class Store implements AsyncDisposable {
 	readonly metrics: Metrics
-	/** The test's clock of a private store opened with `clock`; on any other, its calls are InvalidError. */
+	/** The test's clock of a private or embedded store opened with `clock`; on any other, its calls are InvalidError. */
 	readonly clock: Clock
 	readonly #link: Link
 	/** the configs open, by what opened them, so that the same open shares one stream */
@@ -580,17 +580,30 @@ export async function open(dir: string, options: OpenOptions = {}): Promise<Stor
 	return openWith(runtime, dir, options)
 }
 
-export async function openWith(
+/** Opens as `open` does, the store made by `make`: a test's store, which removes its directory at close. */
+export async function openMade<S extends Store>(
+	dir: string,
+	options: OpenOptions,
+	make: (link: Link) => S,
+): Promise<S> {
+	return openWith(runtime, dir, options, make)
+}
+
+export async function openWith<S extends Store = Store>(
 	runtime: Runtime,
 	dir: string,
 	options: OpenOptions = {},
-): Promise<Store> {
+	make: (link: Link) => S = link => new Store(link) as S,
+): Promise<S> {
 	checkDirectory(dir)
 	const binary = () => findBinary(runtime, options.binary)
 	const idle = options.idle === undefined ? undefined : ms(options.idle)
-	if (options.clock !== undefined && options.private !== true) {
+	if (options.private === true && options.embedded === true) {
+		throw new InvalidError('a store is private or embedded, not both')
+	}
+	if (options.clock !== undefined && options.private !== true && options.embedded !== true) {
 		throw new InvalidError(
-			"a clock is a private server's: a shared sidecar runs on the system's time",
+			"a clock is a private or an embedded store's: a shared sidecar runs on the system's time",
 		)
 	}
 	if (options.cli === true && options.embedded !== true) {
@@ -612,13 +625,16 @@ export async function openWith(
 	}
 	const dial =
 		options.embedded === true
-			? embedded(runtime, dir, () => findLibrary(runtime, options.library), started, options.cli)
+			? embedded(runtime, dir, () => findLibrary(runtime, options.library), started, {
+					clock,
+					cli: options.cli,
+				})
 			: options.private === true
 				? privateChild(runtime, dir, binary, clock, started)
 				: sidecar(runtime, dir, binary, { idle, ...started })
 	const link = new Link(asking(dial, dir, durability))
 	await reached(link, `open ${dir}`)
-	return new Store(link)
+	return make(link)
 }
 
 /**

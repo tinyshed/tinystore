@@ -111,11 +111,14 @@ happens before any store is open.
 ## Test on a clock you move
 
 Sign-in codes expire after 15 minutes, a reminder runs in an hour, sessions
-end after 30 idle days. A test should not wait for any of that. A private
-store can run on a clock that the test moves:
+end after 30 idle days. A test should not wait for any of that. A store for a
+test runs on a clock that the test moves, in a directory of its own that its
+close removes:
 
 ```ts
-const store = await open(dir, { private: true, clock: new Date('2026-10-09T09:00:00Z') })
+import { openTemp } from '@tinyshed/tinystore/testing'
+
+await using store = await openTemp({ clock: new Date('2026-10-09T09:00:00Z') })
 const codes = store.bucket<number>('sign-in-codes', { ttl: '15m' })
 const reminders = store.queue<Reminder>('reminders')
 
@@ -129,7 +132,9 @@ await codes.get('k7q2') // undefined: the code expired
 ```
 
 ```python
-store = await tinystore.open(dir, private=True, clock=datetime(2026, 10, 9, 9, tzinfo=UTC))
+from tinystore.testing import open_temp
+
+store = await open_temp(clock=datetime(2026, 10, 9, 9, tzinfo=UTC))  # or async with open_temp(...) as store
 codes = store.bucket("sign-in-codes", int, ttl="15m")
 reminders = store.queue("reminders", Reminder)
 
@@ -143,7 +148,7 @@ await codes.get("k7q2")  # None: the code expired
 ```
 
 ```go
-store, err := tinystore.Open(ctx, dir, tinystore.Private(), tinystore.Clock(time.Date(2026, 10, 9, 9, 0, 0, 0, time.UTC)))
+store := tinystoretest.Open(t, tinystore.Clock(time.Date(2026, 10, 9, 9, 0, 0, 0, time.UTC))) // closed and removed with t
 codes, err := kv.OpenBucket[int64](store, "sign-in-codes", kv.TTL(15*time.Minute))
 reminders, err := jobs.OpenQueue[Reminder](store, "reminders")
 
@@ -158,7 +163,7 @@ _, found, err := codes.Get(ctx, "k7q2") // found is false: the code expired
 
 ```rust
 let clock = Arc::new(TestClock::new(start));
-let store = Store::open(&dir, Options { clock: Some(clock.clone()), background: false, ..Options::default() })?;
+let store = tinystore::testing::open_temp(Options { clock: Some(clock.clone()), background: false, ..Options::default() })?;
 let codes = store.bucket::<i64>("sign-in-codes").ttl(Duration::from_mins(15)).open()?;
 let reminders = store.queue::<Reminder>("reminders").open()?;
 
@@ -173,8 +178,8 @@ codes.get("k7q2")?; // None: the code expired
 
 Moving the clock moves every engine together: expiry, jobs, a quota's
 windows and the time of a log line. `runDue` runs what is due and returns,
-so a test checks the result right after. A private store is a server for
-the test alone, so tests run in parallel ([How it
+so a test checks the result right after. Each test's store is its own, so
+tests run in parallel ([How it
 behaves](../../guides/jobs/testing.md#how-it-behaves)).
 
 ## Why this design?

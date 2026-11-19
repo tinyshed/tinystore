@@ -79,9 +79,9 @@ jobs:
             fi
           done
 
-      # the async API's tests among them, which no default feature turns on
+      # the async API's tests and a test's store among them, which no default feature turns on
       - name: Test
-        run: cargo test --workspace --locked --features tinystore/async
+        run: cargo test --workspace --locked --features tinystore/async,tinystore/testing
 
       - name: Test nodes linked through TLS
         run: cargo test -p tinystore --lib --locked --features replication-tls -- replication::link_tests::nodes_linked replication::transport
