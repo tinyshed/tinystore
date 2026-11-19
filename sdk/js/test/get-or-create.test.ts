@@ -91,17 +91,21 @@ for (const way of ways) {
 			// the second call waits for the first to hold the key, not for a time a slow runner may pass
 			const started = gate()
 			class Parse extends Error {}
-			const failing = pages.getOrCreate('bad.pdf', async () => {
-				started.open()
-				await opened
-				throw new Parse('the document does not parse')
-			})
+			// each failure is caught as it is made: node fails a test on a rejection no one held
+			// yet, and the waiting call's conflict may come before the failing call's own end
+			const failing = caught(
+				pages.getOrCreate('bad.pdf', async () => {
+					started.open()
+					await opened
+					throw new Parse('the document does not parse')
+				}),
+			)
 			await started.opened
-			const waiting = pages.getOrCreate('bad.pdf', () => ({ data: 'never' }))
+			const waiting = caught(pages.getOrCreate('bad.pdf', () => ({ data: 'never' })))
 			await sleep(200)
 			open()
-			expect(await caught(failing)).toBeInstanceOf(Parse)
-			const waited = await caught(waiting)
+			expect(await failing).toBeInstanceOf(Parse)
+			const waited = await waiting
 			expect(waited).toBeInstanceOf(ConflictError)
 			expect((waited as Error).message).toContain('the document does not parse')
 			const next = await pages.getOrCreate('bad.pdf', () => ({ data: 'parsed' }))
