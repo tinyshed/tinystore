@@ -10,7 +10,7 @@ message blobs.Open {
   1 name: str           # [a-z0-9][a-z0-9_-]{0,63}
   2 ttl: duration?      # the term of every file written without its own
   3 maxFileSize: uint?  # the largest file a write may leave
-  4 database: uint?     # a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent
+  4 database: uint?     # a database's handle: the files live in its file, and put, head, delete, copy, rename, list and clear join its transactions; blobs.db when absent
   5 idle: duration?     # the term of every file written without its own, from its last get or head; never beside ttl
   6 maxSize: uint?      # the set's ceiling, kept in the set: an open with another is a conflict
   7 whenFull: str?      # evict or refuse, what a write past the ceiling does; kept with it

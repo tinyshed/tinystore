@@ -183,6 +183,7 @@ These contracts are what does not.
 - **BLOB-22** A `getOrCreate`'s result MUST land only while its claim holds the path, and only on an empty path: a `put` of the path meanwhile wins, a `delete` ends the claim, and a run whose claim ran out writes nothing.
 - **BLOB-23** With `when_full` refuse, a write that grows its set past `max_size` MUST fail `limit` and remove nothing.
 - **BLOB-24** `trim` MUST leave its set at most `to` in the eviction's order and keep its ceiling, and MUST be refused on a set whose ceiling refuses.
+- **BLOB-25** A `list` and a `clear` of files kept in a database, inside that database's transaction, MUST see what the transaction wrote and deleted; the `clear` MUST commit with the transaction's rows or not at all, and leave what the transaction writes to the folder after it.
 
 ### Records
 

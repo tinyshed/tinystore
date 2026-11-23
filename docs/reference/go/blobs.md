@@ -451,7 +451,7 @@ Head is what the file at path carries and none of its bytes, and whether there i
 func (f *Files) In(tx tinystore.InTx) *Files
 ```
 
-In is the files inside a database's transaction: their writes, Put, Create, Delete, Copy and Rename, commit with its rows, and Head sees what it wrote. Files kept elsewhere are refused at their first call.
+In is the files inside a database's transaction: their writes, Put, Create, Delete, Copy, Rename and Clear, commit with its rows, and Head and List see what it wrote. Files kept elsewhere are refused at their first call.
 
 ### Files.List
 

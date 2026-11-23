@@ -234,6 +234,46 @@ fn a_delete_a_copy_and_a_create_commit_with_the_rows_too() {
     assert_eq!(error.kind(), ErrorKind::Invalid, "files of blobs.db are outside a database's transaction: {error}");
 }
 
+// contract: BLOB-25
+#[test]
+fn a_folder_is_listed_and_cleared_inside_a_transaction_as_the_transaction_left_it() {
+    let f = fixture();
+    let db = f.app();
+    let packs = db.files("packs").open().unwrap();
+    let paths = |page: crate::blobs::Page| page.files.into_iter().map(|file| file.path).collect::<Vec<_>>();
+    db.tx(|tx| -> Result<()> {
+        let packs = tx.with(&packs);
+        packs.put("brands/icons/youtube.svg", b"<svg/>")?;
+        packs.put("brands/icons/vimeo.svg", bytes(PACKAGE))?;
+        packs.put("flags/fi.svg", b"<svg/>")?;
+        assert_eq!(
+            paths(packs.list().prefix("brands/").page()?),
+            ["brands/icons/vimeo.svg", "brands/icons/youtube.svg"]
+        );
+        tx.exec(sql!("insert into plugins (file) values ('brands')")).map(drop)
+    })
+    .unwrap();
+    // version 2 of the pack holds one icon fewer: the folder is replaced whole
+    db.tx(|tx| -> Result<()> {
+        let brands = packs.folder("brands");
+        let brands = tx.with(&brands);
+        brands.clear()?;
+        assert_eq!(paths(brands.list().page()?), [""; 0], "a list sees the clear before its commit");
+        brands.put("icons/youtube.svg", b"<svg version=\"2\"/>")?;
+        assert_eq!(paths(brands.list().limit(1).page()?), ["icons/youtube.svg"], "and the put after it");
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(paths(packs.list().page().unwrap()), ["brands/icons/youtube.svg", "flags/fi.svg"]);
+    let rolled_back = db.tx(|tx| -> Result<()> {
+        tx.with(&packs).clear()?;
+        Err(Error::invalid("the row it went with was refused"))
+    });
+    assert_eq!(rolled_back.unwrap_err().kind(), ErrorKind::Invalid);
+    assert_eq!(paths(packs.list().page().unwrap()), ["brands/icons/youtube.svg", "flags/fi.svg"], "a clear rolls back");
+    assert_eq!(packs.get("brands/icons/youtube.svg").unwrap().unwrap().read_all().unwrap(), b"<svg version=\"2\"/>");
+}
+
 // contract: DUR-06
 #[test]
 fn bytes_a_crash_left_past_what_the_file_reserved_go_at_the_next_open() {

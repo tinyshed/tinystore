@@ -49,6 +49,9 @@ pub(crate) static PAST_EVERY: LazyLock<String> = LazyLock::new(|| "\u{10ffff}".r
 #[must_use = "a list reads nothing until its page"]
 pub struct List<'f> {
     files: &'f Files,
+    /// The transaction whose writes the page sees, for a list made inside one.
+    #[cfg(feature = "sql")]
+    tx: Option<&'f crate::Transaction<'f>>,
     prefix: String,
     after: Option<String>,
     limit: usize,
@@ -58,7 +61,21 @@ impl Files {
     /// A page of this folder's files and of the folders in it, in the byte
     /// order of their paths: `10.jpg` before `9.jpg`.
     pub fn list(&self) -> List<'_> {
-        List { files: self, prefix: String::new(), after: None, limit: PAGE_FILES }
+        List {
+            files: self,
+            #[cfg(feature = "sql")]
+            tx: None,
+            prefix: String::new(),
+            after: None,
+            limit: PAGE_FILES,
+        }
+    }
+
+    /// [`Files::list`] inside a transaction of the database the files are
+    /// kept in: its page sees what the transaction wrote.
+    #[cfg(feature = "sql")]
+    pub(super) fn list_in<'f>(&'f self, tx: &'f crate::Transaction<'f>) -> List<'f> {
+        List { tx: Some(tx), ..self.list() }
     }
 
     /// Every file of this folder and of the folders in it, a page at a time,
@@ -125,7 +142,7 @@ impl Files {
     /// The folder as an error names it, and what its clear writes in its
     /// transaction: the files deleted, or past [`CLEAR_AT_ONCE`] a mark that
     /// hides them until maintenance deletes them.
-    fn clearing(&self) -> Result<(String, Writing<()>)> {
+    pub(super) fn clearing(&self) -> Result<(String, Writing<()>)> {
         let folder = self.whole_folder()?;
         let blobs = Arc::clone(&self.blobs);
         let (set, prefix) = (self.set, self.folder.prefix().to_owned());
@@ -162,25 +179,35 @@ impl Files {
         self.usable().map(|()| self.folder.prefix().to_owned())
     }
 
-    fn page(&self, prefix: &str, after: Option<&str>, limit: usize) -> Result<Page> {
+    /// A page of the folder as `list` asks for it, read from a snapshot of
+    /// the file, or on the writer of the transaction a list was made in.
+    fn page(&self, list: &List<'_>) -> Result<Page> {
+        let limit = list.limit;
         if limit == 0 || limit > PAGE_FILES {
             return Err(Error::invalid(format!("a page of {limit} files; 1 to {PAGE_FILES}")));
         }
-        let (mut from, to) = self.bounds(prefix)?;
-        if let Some(after) = after {
+        let (mut from, to) = self.bounds(&list.prefix)?;
+        if let Some(after) = &list.after {
             let (past_after, _) = self.folder.range(after)?;
             from = from.max(format!("{past_after}\u{0}"));
         }
         let now = self.blobs.now();
         let wanted = i64::try_from(limit + 1).unwrap_or(i64::MAX);
-        let rows = self.blobs.file.read(|connection| {
+        let read = |connection: &rusqlite::Connection| {
             let mut statement =
                 connection.prepare_cached(SELECT_PAGE).map_err(|error| sql_error("blobs: a folder's page", error))?;
             let rows = statement
                 .query_map(params![self.set, from, to, now, wanted], FileRow::read)
                 .map_err(|error| sql_error("blobs: a folder's page", error))?;
             rows.collect::<rusqlite::Result<Vec<FileRow>>>().map_err(|error| sql_error("blobs: a folder's page", error))
-        })?;
+        };
+        #[cfg(feature = "sql")]
+        let rows = match list.tx {
+            Some(tx) => super::tx::on_file(tx, self, |sql| read(sql))?,
+            None => self.blobs.file.read(read)?,
+        };
+        #[cfg(not(feature = "sql"))]
+        let rows = self.blobs.file.read(read)?;
         let more = rows.len() > limit;
         let files =
             rows.into_iter().take(limit).map(|row| row.info(&self.folder)).collect::<Result<Vec<FileInfo>>>()?;
@@ -210,9 +237,7 @@ impl List<'_> {
 
     pub fn page(self) -> Result<Page> {
         let folder = self.files.whole_folder()?;
-        self.files
-            .page(&self.prefix, self.after.as_deref(), self.limit)
-            .map_err(|error| self.files.fail(&folder, error))
+        self.files.page(&self).map_err(|error| self.files.fail(&folder, error))
     }
 }
 

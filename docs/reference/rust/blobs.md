@@ -983,6 +983,26 @@ pub fn head(&self, path: &str) -> Result<Option<FileInfo>>
 
 What the file at the path carries, as the transaction sees it.
 
+### TxFiles.list
+
+```rust
+pub fn list(&self) -> List<'a>
+```
+
+A page of this folder's files and of the folders in it, as the
+transaction sees them: with what it wrote, without what it deleted.
+
+### TxFiles.clear
+
+```rust
+pub fn clear(&self) -> Result<()>
+```
+
+Removes this folder and every folder in it once the transaction
+commits, with the files it wrote there before; what it writes there
+after stays. A folder is replaced whole by a `clear` and the puts of
+what it holds next: `tx.with(&files.folder("brands")).clear()`.
+
 ### TxFiles.key
 
 ```rust

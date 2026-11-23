@@ -813,6 +813,34 @@ for (const way of ways) {
 			expect(streamed).toBeInstanceOf(InvalidError)
 		})
 
+		// contract: BLOB-25
+		test('a folder is listed and cleared inside a transaction, as the transaction left it', async () => {
+			const packs = app.files('packs')
+			const svg = new TextEncoder().encode('<svg/>')
+			const paths = (page: { files: { path: string }[] }) => page.files.map(file => file.path)
+			await app.tx(async tx => {
+				const brands = tx.with(packs.folder('brands'))
+				await brands.put('icons/youtube.svg', svg)
+				await brands.put('icons/vimeo.svg', svg)
+				expect(paths(await brands.list())).toEqual(['icons/vimeo.svg', 'icons/youtube.svg'])
+			})
+			await app.tx(async tx => {
+				const brands = tx.with(packs.folder('brands'))
+				await brands.clear()
+				expect(paths(await brands.list())).toEqual([])
+				await brands.put('icons/youtube.svg', svg)
+			})
+			expect(paths(await packs.list())).toEqual(['brands/icons/youtube.svg'])
+			const declined = await caught(
+				app.tx(async tx => {
+					await tx.with(packs).clear()
+					throw new Error('declined')
+				}),
+			)
+			expect((declined as Error).message).toBe('declined')
+			expect(paths(await packs.list())).toEqual(['brands/icons/youtube.svg'])
+		})
+
 		test('a transaction refuses a handle kept elsewhere, or one made after it began', async () => {
 			const kept = await caught(app.tx(tx => tx.with(store.bucket<number>('sessions')).set('k', 1)))
 			expect(kept).toBeInstanceOf(InvalidError)

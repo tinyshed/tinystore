@@ -1,6 +1,6 @@
 //! A set of files kept in a database's file, inside the database's
 //! transaction: a file written commits with the rows the transaction writes,
-//! or neither does.
+//! or neither does, and a list or a clear of a folder sees what it wrote.
 //!
 //! The bytes past what stays inline are written to their object before the
 //! row that names them, under a content id the transaction takes in its own
@@ -21,6 +21,7 @@ use super::change::{Condition, Content, Place};
 use super::engine::Blobs;
 use super::files::{FileCall, Files, Options};
 use super::info::FileInfo;
+use super::list::List;
 use super::upload::{INLINE, past_its_bound};
 use crate::sqlite::Ended;
 use crate::transaction::sealed::Sealed;
@@ -72,6 +73,23 @@ impl<'a> TxFiles<'a> {
         let whole = self.files.whole(path)?;
         let read = |sql: &crate::sqlite::Tx<'_>| self.files.head_on(sql, &whole);
         on_file(self.tx, self.files, read).map_err(|error| self.files.fail(&whole, error))
+    }
+
+    /// A page of this folder's files and of the folders in it, as the
+    /// transaction sees them: with what it wrote, without what it deleted.
+    pub fn list(&self) -> List<'a> {
+        self.files.list_in(self.tx)
+    }
+
+    /// Removes this folder and every folder in it once the transaction
+    /// commits, with the files it wrote there before; what it writes there
+    /// after stays. A folder is replaced whole by a `clear` and the puts of
+    /// what it holds next: `tx.with(&files.folder("brands")).clear()`.
+    pub fn clear(&self) -> Result<()> {
+        let (folder, clearing) = self.files.clearing()?;
+        // the bytes it leaves unnamed are maintenance's to remove, as a delete's are
+        let cleared = on_file(self.tx, self.files, |sql| clearing(sql).map(drop));
+        cleared.map_err(|error| self.files.fail(&folder, error))
     }
 
     /// A call on one path inside the transaction, its options before its

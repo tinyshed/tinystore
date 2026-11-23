@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"testing/fstest"
 
@@ -58,6 +59,60 @@ func TestFilesOpenedFromADatabaseCommitWithItsRows(t *testing.T) {
 		})
 		if !errors.Is(err, tinystore.ErrInvalid) {
 			t.Fatalf("an upload inside a transaction: %v", err)
+		}
+	})
+}
+
+// contract: BLOB-25
+func TestAFolderIsListedAndClearedInsideATransactionAsTheTransactionLeftIt(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		app := ways.Must(sqldb.Open(ctx, store, "app", sqldb.Migrations(fstest.MapFS{
+			"0001_plugins.sql": {Data: []byte("create table plugins (file text primary key) strict")},
+		})))
+		packs := ways.Must(blobs.OpenFiles(app, "packs"))
+		paths := func(files *blobs.Files) []string {
+			found := []string{}
+			for _, file := range ways.Must(files.List(ctx)).Files {
+				found = append(found, file.Path)
+			}
+			return found
+		}
+		svg := func() *bytes.Reader { return bytes.NewReader([]byte("<svg/>")) }
+		ways.Must(0, app.Tx(ctx, func(tx *sqldb.Tx) error {
+			brands := packs.Folder("brands").In(tx)
+			if _, err := brands.Put(ctx, "icons/youtube.svg", svg()); err != nil {
+				return err
+			}
+			_, err := brands.Put(ctx, "icons/vimeo.svg", svg())
+			return err
+		}))
+		ways.Must(0, app.Tx(ctx, func(tx *sqldb.Tx) error {
+			brands := packs.Folder("brands").In(tx)
+			if err := brands.Clear(ctx); err != nil {
+				return err
+			}
+			if left := paths(brands); len(left) != 0 {
+				t.Fatalf("a list inside sees the clear: %v", left)
+			}
+			_, err := brands.Put(ctx, "icons/youtube.svg", svg())
+			return err
+		}))
+		if left := paths(packs); !slices.Equal(left, []string{"brands/icons/youtube.svg"}) {
+			t.Fatalf("the folder replaced whole: %v", left)
+		}
+		declined := errors.New("declined")
+		err := app.Tx(ctx, func(tx *sqldb.Tx) error {
+			if err := packs.In(tx).Clear(ctx); err != nil {
+				return err
+			}
+			return declined
+		})
+		if !errors.Is(err, declined) {
+			t.Fatalf("tx %v", err)
+		}
+		if left := paths(packs); !slices.Equal(left, []string{"brands/icons/youtube.svg"}) {
+			t.Fatalf("a clear rolls back: %v", left)
 		}
 	})
 }

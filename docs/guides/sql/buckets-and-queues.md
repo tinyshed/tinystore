@@ -173,15 +173,72 @@ let mut file = packages.get("stripe-1.0.0.js")?.expect("committed with its row")
   names them. If the transaction rolls back, the bytes are removed at once.
   If the process dies before the commit, the bytes stay unnamed, and the next
   open removes them. A row never names bytes that are not there.
-- Inside a transaction, `put`, `create`, `delete`, `copy` and `rename` join
-  it, and `head` sees what it wrote. An upload streams outside a transaction
-  only: inside one, pass the bytes to `put`, which sends them whole. Read a
-  file's bytes after the commit.
+- Inside a transaction, `put`, `create`, `delete`, `copy`, `rename` and
+  `clear` join it, and `head` and `list` see what it wrote. An upload streams
+  outside a transaction only: inside one, pass the bytes to `put`, which
+  sends them whole. Read a file's bytes after the commit.
 - Outside a transaction, the files have every call of [Blobs](../blobs/README.md),
   and they share the database's writer.
 - A backup copies the files' bytes with the rows that name them.
 - A node can't keep a database's files yet: `db.files` fails with an
   `invalid` error on a store that is a node.
+
+### Replace a folder whole
+
+A new version of a pack may hold fewer files than the old one. Clear the
+pack's folder and write its files in the transaction that updates its row:
+readers see the old version until the commit, and then only the new one
+(contract BLOB-25).
+
+```ts
+await db.tx(async tx => {
+	const brands = tx.with(packs.folder('brands'))
+	await brands.clear() // every file the old version left
+	await brands.put('icons/youtube.svg', svg)
+	await tx.exec`update packs set version = 2 where name = 'brands'`
+})
+```
+
+```python
+async def replace(tx: tinystore.SqlTx) -> None:
+    brands = tx.with_(packs.folder("brands"))
+    await brands.clear()  # every file the old version left
+    await brands.put("icons/youtube.svg", svg)
+    await tx.exec("update packs set version = 2 where name = 'brands'")
+
+
+await db.tx(replace)
+```
+
+```go
+err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+	brands := packs.Folder("brands").In(tx)
+	if err := brands.Clear(ctx); err != nil { // every file the old version left
+		return err
+	}
+	if _, err := brands.Put(ctx, "icons/youtube.svg", bytes.NewReader(svg)); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, "update packs set version = 2 where name = 'brands'")
+	return err
+})
+```
+
+```rust
+db.tx(|tx| -> tinystore::Result<()> {
+    let brands = packs.folder("brands");
+    let brands = tx.with(&brands);
+    brands.clear()?; // every file the old version left
+    brands.put("icons/youtube.svg", &svg)?;
+    tx.exec(sql!("update packs set version = 2 where name = 'brands'"))?;
+    Ok(())
+})?;
+```
+
+- `clear` removes the files the folder held and those the transaction wrote
+  there before it. What the transaction writes after it stays.
+- `list` inside the transaction pages the folder as the transaction left it,
+  with `prefix`, `after` and `limit` as outside one.
 
 ## A table's index
 

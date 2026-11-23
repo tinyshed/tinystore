@@ -179,7 +179,7 @@ pub(crate) struct BlobsOpen {
     pub(crate) ttl: Option<u64>,
     /// The largest file a write may leave.
     pub(crate) max_file_size: Option<u64>,
-    /// A database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent.
+    /// A database's handle: the files live in its file, and put, head, delete, copy, rename, list and clear join its transactions; blobs.db when absent.
     pub(crate) database: Option<u64>,
     /// The term of every file written without its own, from its last get or head; never beside ttl. Milliseconds.
     pub(crate) idle: Option<u64>,

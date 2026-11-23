@@ -413,9 +413,27 @@ pub(crate) fn call_in(handles: &Handles, tx: &crate::Transaction<'_>, called: u1
             };
             Ok(info_of(info).encode())
         }
+        method::BLOBS_LIST => {
+            let asked = BlobsList::decode(body)?;
+            let files = handles.at(asked.handle, &asked.folder)?;
+            let mut list = files.in_tx(tx).list().prefix(asked.prefix);
+            if let Some(after) = asked.after {
+                list = list.after(after);
+            }
+            if let Some(limit) = asked.limit {
+                list = list.limit(usize::try_from(limit).unwrap_or(usize::MAX));
+            }
+            let page = list.page()?;
+            Ok(BlobsPage { files: page.files.into_iter().map(info_of).collect(), next: page.next }.encode())
+        }
+        method::BLOBS_CLEAR => {
+            let asked = BlobsFolder::decode(body)?;
+            handles.at(asked.handle, &asked.folder)?.in_tx(tx).clear()?;
+            Ok(Empty {}.encode())
+        }
         other => Err(Failure::invalid(format!(
-            "method {other:#06x} does not run inside a transaction: files join one with put, head, delete, copy \
-             and rename"
+            "method {other:#06x} does not run inside a transaction: files join one with put, head, delete, copy, \
+             rename, list and clear"
         ))),
     }
 }

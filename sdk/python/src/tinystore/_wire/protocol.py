@@ -384,8 +384,8 @@ BlobsOpen = Message(
         "ttl": (2, uint),
         # the largest file a write may leave
         "max_file_size": (3, uint),
-        # a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions;
-        # blobs.db when absent
+        # a database's handle: the files live in its file, and put, head, delete, copy, rename, list and clear join its
+        # transactions; blobs.db when absent
         "database": (4, uint),
         # the term of every file written without its own, from its last get or head; never beside ttl
         "idle": (5, uint),

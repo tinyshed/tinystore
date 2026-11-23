@@ -896,7 +896,7 @@ type BlobsOpen struct {
 	Ttl *uint64 `wire:"2,ttl"`
 	// the largest file a write may leave
 	MaxFileSize *uint64 `wire:"3,maxFileSize"`
-	// a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent
+	// a database's handle: the files live in its file, and put, head, delete, copy, rename, list and clear join its transactions; blobs.db when absent
 	Database *uint64 `wire:"4,database"`
 	// the term of every file written without its own, from its last get or head; never beside ttl
 	Idle *uint64 `wire:"5,idle"`

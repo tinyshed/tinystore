@@ -585,6 +585,41 @@ async def test_files_opened_from_the_database_commit_with_its_rows(app: tinystor
     assert await app.scalar(int, "select count(*) from notes where id = 'p1'") == 1
 
 
+# contract: BLOB-25
+async def test_a_folder_is_listed_and_cleared_inside_a_transaction_as_the_transaction_left_it(
+    app: tinystore.Database,
+) -> None:
+    packs = app.files("packs")
+
+    def paths(page: tinystore.FilePage) -> list[str]:
+        return [file.path for file in page.files]
+
+    async def first(tx: tinystore.SqlTx) -> None:
+        brands = tx.with_(packs.folder("brands"))
+        await brands.put("icons/youtube.svg", b"<svg/>")
+        await brands.put("icons/vimeo.svg", b"<svg/>")
+        assert paths(await brands.list()) == ["icons/vimeo.svg", "icons/youtube.svg"]
+
+    await app.tx(first)
+
+    async def second(tx: tinystore.SqlTx) -> None:
+        brands = tx.with_(packs.folder("brands"))
+        await brands.clear()
+        assert paths(await brands.list()) == []
+        await brands.put("icons/youtube.svg", b"<svg/>")
+
+    await app.tx(second)
+    assert paths(await packs.list()) == ["brands/icons/youtube.svg"]
+
+    async def declined(tx: tinystore.SqlTx) -> None:
+        await tx.with_(packs).clear()
+        raise RuntimeError("declined")
+
+    with pytest.raises(RuntimeError, match="declined"):
+        await app.tx(declined)
+    assert paths(await packs.list()) == ["brands/icons/youtube.svg"]
+
+
 async def test_a_transaction_refuses_a_handle_kept_elsewhere_or_one_made_after_it_began(
     store: tinystore.Store, app: tinystore.Database
 ) -> None:
