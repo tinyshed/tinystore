@@ -60,6 +60,12 @@ pub(super) struct Open {
     values: Vec<f64>,
     /// The sample before its first, which its first step begins at.
     before: Option<f64>,
+    /// Where the steps not yet in `exact` began: a counter's steps without a
+    /// reset between them add up to its last sample less this one, exactly,
+    /// so they are counted once, at a reset or when the bucket [`settles`].
+    ///
+    /// [`settles`]: Open::settled
+    rising_from: Option<f64>,
     pub(super) gap: bool,
     pub(super) partial: bool,
 }
@@ -80,9 +86,30 @@ impl Open {
             exact: Exact::ZERO,
             values: Vec::new(),
             before: None,
+            rising_from: None,
             gap: false,
             partial: false,
         }
+    }
+
+    /// The bucket with every step counted, as a group joins it.
+    pub(super) fn settled(mut self) -> Open {
+        self.settle();
+        self
+    }
+
+    /// Counts the steps since [`Open::rising_from`]: what the counter grew by
+    /// from there to its last sample.
+    fn settle(&mut self) {
+        if let Some(from) = self.rising_from.take() {
+            self.exact.add_float(self.last);
+            self.exact.sub_float(from);
+        }
+    }
+
+    /// Whether what the range leaves of the bucket ends after `at`.
+    pub(super) fn ends_after(&self, at: i64) -> bool {
+        at < self.end
     }
 
     /// Begins its first step at the sample before the bucket.
@@ -125,6 +152,9 @@ impl Open {
             Op::Sum | Op::Avg => self.exact.add(&read(&sums.sum)?),
             Op::Increase | Op::Rate => {
                 self.step(block.first);
+                // the block's own steps come from its summary, so those before it end at its first sample
+                self.last = block.first;
+                self.settle();
                 let increase = read(&sums.increase)?;
                 if increase.is_negative() {
                     return Err(Error::corrupt("a block's increase below zero"));
@@ -154,11 +184,12 @@ impl Open {
     /// its new value where it fell, a reset.
     fn step(&mut self, value: f64) {
         let Some(previous) = (if self.samples == 0 { self.before } else { Some(self.last) }) else { return };
-        self.exact.add_float(value);
         if value < previous {
+            self.settle();
+            self.exact.add_float(value);
             self.resets += 1;
-        } else {
-            self.exact.sub_float(previous);
+        } else if self.rising_from.is_none() {
+            self.rising_from = Some(previous);
         }
     }
 
@@ -453,6 +484,7 @@ mod tests {
         let mut open = Open::new(0, (0, 60_000));
         before.into_iter().for_each(|before| open.step_from(before));
         values.iter().for_each(|value| open.add(*value, op));
+        let open = open.settled();
         let mut joined = Joined::over(&open);
         joined.passes_over(&open);
         joined.join(open, op, Part::Own);

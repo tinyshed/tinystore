@@ -247,13 +247,13 @@ impl Counting<'_> {
             } else {
                 self.points.clear();
                 decode_block(self.zstd, &part.block, &mut self.points)?;
-                self.points.iter().try_for_each(|point| fold.sample(*point))?;
+                fold.samples(&self.points)?;
             }
             self.join(&mut fold, joining)?;
         }
         self.points.clear();
         series.decode_head(self.zstd, &mut self.points)?;
-        self.points.iter().try_for_each(|point| fold.sample(*point))?;
+        fold.samples(&self.points)?;
         fold.close();
         self.join(&mut fold, joining)
     }
@@ -285,8 +285,7 @@ pub(super) fn count_held(shape: &Shape, members: &mut [Held], window: Window, as
     for member in members.iter() {
         joining.begin(&member.found)?;
         let mut fold = Fold::over(shape, &member.found, window, asked);
-        let folded = member.points.iter().try_for_each(|point| fold.sample(*point));
-        folded.map_err(|error| error.within(&member.found.kept))?;
+        fold.samples(&member.points).map_err(|error| error.within(&member.found.kept))?;
         fold.close();
         for bucket in fold.closed.drain(..) {
             joining.join(bucket)?;
@@ -469,6 +468,43 @@ impl<'a> Fold<'a> {
         }
     }
 
+    /// Counts samples in the order of their times. The one that opens a
+    /// bucket is checked against the range and the bucket found for it; those
+    /// after it up to the bucket's end need neither, which is nearly every
+    /// sample of a chart: checking each against the range and finding its
+    /// bucket again took more than counting it.
+    fn samples(&mut self, points: &[Point]) -> Result<()> {
+        let mut rest = points;
+        while let Some((first, after)) = rest.split_first() {
+            self.sample(*first)?;
+            rest = &after[self.run(after)..];
+        }
+        Ok(())
+    }
+
+    /// Counts the samples at the start of `points` that lie in the open
+    /// bucket and that every aggregate takes, and says how many they were:
+    /// the first that ends the bucket, breaks the order of the times, or is
+    /// no finite value a counter may have, is left to [`Fold::sample`].
+    fn run(&mut self, points: &[Point]) -> usize {
+        let (Some(open), Some(mut newest)) = (self.open.as_mut(), self.newest) else { return 0 };
+        let (op, counts) = (self.op, self.kind != Kind::Gauge);
+        let mut taken = 0;
+        for point in points {
+            let refused = !point.value.is_finite() || (counts && point.value < 0.0);
+            if !open.ends_after(point.at) || point.at <= newest || refused {
+                break;
+            }
+            open.add(point.value, op);
+            newest = point.at;
+            taken += 1;
+        }
+        if let Some(last) = points[..taken].last() {
+            (self.newest, self.carried) = (Some(last.at), Some(*last));
+        }
+        taken
+    }
+
     fn sample(&mut self, point: Point) -> Result<()> {
         if point.at >= self.window.to {
             return Ok(());
@@ -555,10 +591,15 @@ impl<'a> Fold<'a> {
     /// closed. A bucket's first step begins at the sample the series carried
     /// into it.
     fn enter(&mut self, at: i64) -> &mut Open {
-        let key = self.shape.bucket_of(at, self.range_from);
-        if self.open.as_ref().is_some_and(|open| open.at != key) {
+        // times only grow, so a sample before the open bucket's end is in it:
+        // finding a calendar's bucket for each sample cost more than counting it
+        if self.open.as_ref().is_some_and(|open| !open.ends_after(at)) {
             self.close();
         }
+        let key = match &self.open {
+            Some(open) => open.at,
+            None => self.shape.bucket_of(at, self.range_from),
+        };
         let (shape, window, range_from, steps) = (self.shape, self.window, self.range_from, Shape::steps(self.op));
         let (trimmed, carried_nan, before, now) = (self.trimmed, self.carried_nan, self.carried, self.now);
         self.open.get_or_insert_with(|| {
@@ -579,6 +620,6 @@ impl<'a> Fold<'a> {
     }
 
     fn close(&mut self) {
-        self.closed.extend(self.open.take());
+        self.closed.extend(self.open.take().map(Open::settled));
     }
 }
