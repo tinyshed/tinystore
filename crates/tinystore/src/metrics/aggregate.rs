@@ -390,6 +390,12 @@ impl Shape {
         matches!(op, Op::Increase | Op::Rate | Op::Delta)
     }
 
+    /// Whether a group's buckets add up from its series in any parts: every
+    /// `op` but a percentile, which ranks the samples of them all at once.
+    pub(super) fn adds(&self) -> bool {
+        !matches!(self.op, Op::Percentile(_))
+    }
+
     /// Whether a block is answered from its summary for a series whose
     /// bucket keeps `op`: it keeps exact sums, every sample of it lies in the
     /// window and in one bucket, and the `op` takes no sample's rank.

@@ -35,7 +35,7 @@ mod chosen;
 mod paging;
 mod sampled;
 
-pub(super) use paging::TakenGroup;
+pub(super) use paging::{PageTaken, TakenGroup, Wide};
 
 /// The decoded clocks a snapshot keeps, since series written together share
 /// theirs.

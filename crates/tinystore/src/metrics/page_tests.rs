@@ -246,7 +246,7 @@ fn a_page_holds_as_many_buckets_of_a_wide_group_as_its_bounds_allow() {
 
 // contract: MET-20
 #[test]
-fn a_group_past_the_series_a_query_finds_is_a_limit_and_the_groups_before_it_are_not() {
+fn a_percentiles_group_past_the_series_a_query_finds_is_a_limit_and_the_groups_before_it_are_not() {
     let f = fixture();
     let now = f.now();
     let host = |zone: &str, host: usize| Series::gauge("up").label("zone", zone).label("host", host).sample(now, 1.0);
@@ -254,15 +254,111 @@ fn a_group_past_the_series_a_query_finds_is_a_limit_and_the_groups_before_it_are
     series.extend((0..5).map(|index| host("a", index)));
     f.metrics().ingest(&series).unwrap();
     let zones = f.metrics().query().name("up").since(HOUR).by(&["zone"]).limit(100);
-    let first = zones.aggregate(Op::Max).unwrap();
+    let median = Op::Percentile(50.0);
+    let first = zones.aggregate(median).unwrap();
     assert_eq!(first.groups.iter().map(|group| group.labels["zone"].as_str()).collect::<Vec<_>>(), ["a"]);
-    let too_many = zones.clone().after(&first.next.unwrap()).aggregate(Op::Max).unwrap_err();
+    let too_many = zones.clone().after(&first.next.unwrap()).aggregate(median).unwrap_err();
     let refused = too_many.to_string();
     assert_eq!((too_many.kind(), too_many.fact("limit")), (ErrorKind::Limit, Some("series")));
     assert!(refused.contains("up{zone=\"b\"}") && refused.contains("a group past 1000 series"), "{refused}");
     assert!(!refused.contains("`limit`"), "a page is not offered pages: {refused}");
-    let one = f.metrics().query().name("up").since(HOUR).limit(100).aggregate(Op::Max).unwrap_err();
+    let one = f.metrics().query().name("up").since(HOUR).limit(100).aggregate(median).unwrap_err();
     assert_eq!(one.fact("limit"), Some("series"), "a name's series are one group without `by`");
+}
+
+/// What a group's buckets add up to: each one's start, value, samples and
+/// resets.
+fn sums(group: &Aggregate) -> Vec<(i64, f64, u64, u64)> {
+    let sum = |bucket: &crate::metrics::Bucket| {
+        (unix_millis(bucket.at), bucket.value.exact().unwrap(), bucket.samples, bucket.resets)
+    };
+    group.buckets.iter().map(sum).collect()
+}
+
+/// Requests counted by 1100 hosts in two halves every 15 seconds, with a
+/// reset each, packed into blocks with a head after them.
+fn wide_traffic(f: &Fixture) {
+    let first = f.now() - 15 * SECOND * 299;
+    let hosts: Vec<Series> = (0..1100u32)
+        .map(|host| {
+            let half = if host % 2 == 0 { "even" } else { "odd" };
+            let mut series = Series::counter("requests_total").label("host", host).label("half", half);
+            let counted = |index: u32| f64::from((index + host) % 250 * (host % 7 + 1));
+            series.extend((0..300).map(|index| (first + 15 * SECOND * index, counted(index))));
+            series
+        })
+        .collect();
+    for part in hosts.chunks(300) {
+        f.metrics().ingest(part).unwrap();
+    }
+    maintain(&f.store).unwrap();
+}
+
+// contract: MET-20
+#[test]
+fn a_group_past_the_series_a_query_finds_adds_up_from_its_parts() {
+    let f = fixture();
+    wide_traffic(&f);
+    let query = f.metrics().query().name("requests_total").since(2 * HOUR).every(10 * MINUTE);
+    for op in [Op::Increase, Op::Count, Op::Last] {
+        assert_eq!(query.aggregate(op).unwrap_err().fact("limit"), Some("series"), "1100 series in one call");
+        let half = |half: &str| sums(&query.clone().filter("half", half).aggregate(op).unwrap().groups[0]);
+        let (even, odd) = (half("even"), half("odd"));
+        let added: Vec<(i64, f64, u64, u64)> = even
+            .iter()
+            .zip(&odd)
+            .map(|(even, odd)| {
+                assert_eq!(even.0, odd.0, "both halves have every bucket");
+                (even.0, even.1 + odd.1, even.2 + odd.2, even.3 + odd.3)
+            })
+            .collect();
+        assert!(added.len() > 5, "{} buckets", added.len());
+        for limit in [100_000, 3] {
+            let pages = aggregate_pages(&query, op, limit);
+            let whole = joined_groups(&pages);
+            assert_eq!(whole.len(), 1, "one group of the name");
+            assert_eq!(sums(&whole[0]), added, "{op} in pages of {limit}");
+            assert_eq!(whole[0].labels.len(), 0);
+        }
+    }
+}
+
+// contract: MET-20
+#[test]
+fn a_wide_group_is_answered_between_the_groups_before_it_and_after_it() {
+    let f = fixture();
+    let now = f.now();
+    let host = |zone: &str, host: usize| Series::gauge("up").label("zone", zone).label("host", host).sample(now, 1.0);
+    let mut series: Vec<Series> = (0..3).map(|index| host("c", index)).collect();
+    series.extend((0..1500).map(|index| host("b", index)));
+    series.extend((0..5).map(|index| host("a", index)));
+    f.metrics().ingest(&series).unwrap();
+    let zones = f.metrics().query().name("up").since(HOUR).by(&["zone"]);
+    let pages = aggregate_pages(&zones, Op::Sum, 100);
+    let held: Vec<Vec<&str>> =
+        pages.iter().map(|page| page.groups.iter().map(|group| group.labels["zone"].as_str()).collect()).collect();
+    assert_eq!(held, [vec!["a"], vec!["b"], vec!["c"]], "the wide group is alone on its page");
+    let total = |zone: usize| sums(&pages[zone].groups[0])[0].1;
+    assert_eq!((total(0), total(1), total(2)), (5.0, 1500.0, 3.0));
+}
+
+// contract: MET-20
+#[test]
+fn a_wide_groups_bucket_no_parts_share_holds_is_taken_whole() {
+    let f = fixture();
+    let first = f.now() - SECOND * 1499;
+    let busy = (0..11u32).map(|host| {
+        let mut series = Series::counter("requests_total").label("host", host);
+        series.extend((0..1500).map(|index| (first + SECOND * index, f64::from(index))));
+        series
+    });
+    f.metrics().ingest(&busy.collect::<Vec<_>>()).unwrap();
+    let quiet = (11..1001u32).map(|host| Series::counter("requests_total").label("host", host).sample(f.now(), 1.0));
+    f.metrics().ingest(&quiet.collect::<Vec<_>>()).unwrap();
+    let query = f.metrics().query().name("requests_total").since(HOUR);
+    let pages = aggregate_pages(&query, Op::Increase, 10);
+    let whole = joined_groups(&pages);
+    assert_eq!(sums(&whole[0]), [(unix_millis(f.now() - HOUR), 11.0 * 1499.0, 11 * 1500 + 990, 0)]);
 }
 
 // contract: MET-17

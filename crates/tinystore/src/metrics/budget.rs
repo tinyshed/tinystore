@@ -89,12 +89,13 @@ impl Budget {
         Ok(())
     }
 
-    /// The refusal of a group whose series alone pass what a query finds:
-    /// a page holds a group whole, since each bucket counts all of them.
+    /// The refusal of a percentile's group whose series alone pass what a
+    /// query finds: a page holds such a group whole, since each bucket ranks
+    /// the samples of them all.
     pub(super) fn too_many(&self, series: usize) -> Error {
         let refused = format!(
-            "a group past {} {}, which no page splits, since a bucket counts every series of its group: group `by` \
-             more labels, or find fewer series",
+            "a group past {} {}, which no page splits, since a percentile ranks every series of its group at once: \
+             group `by` more labels, or find fewer series",
             SERIES.bound, SERIES.name
         );
         SERIES.refuse(series as u64, refused)
@@ -120,6 +121,14 @@ impl Budget {
     /// is given back, so that a bucket alone is tried with the whole bounds.
     pub(super) fn reset(&mut self) {
         *self = Budget { planning: self.planning, paged: self.paged, ..Budget::default() };
+    }
+
+    /// Begins the next part of a group read in parts: each part is bounded
+    /// as a page is, and the buckets they answer together count on.
+    pub(super) fn next_part(&mut self) {
+        let answer = self.answer;
+        self.reset();
+        self.answer = answer;
     }
 
     /// Whether `bytes` more copied and `samples` more decoded stay within

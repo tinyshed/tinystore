@@ -408,10 +408,13 @@ for group in page.all() {
 - A page reads the samples of its own groups alone, 1,000 series at most, so
   pages go past the 1,000 series a query may find one group at a time. A
   timer with 12 bounds, grouped `by` `fn` over 92 functions, is 1,104 series,
-  and its pages hold 83 functions, 996 series, and then 9. A group is never
-  split either: if one group alone has more than 1,000 series, the page that
-  reaches it fails with a `limit` error. Group `by` more labels, or use
-  `where` to find fewer.
+  and its pages hold 83 functions, 996 series, and then 9.
+- A group with more than 1,000 series alone is read in parts, 1,000 series
+  at a time, and is alone on its page. This is how a counter with 5,000
+  series gives one total: ask with `limit`, without `by`. Every `op` but a
+  percentile adds up this way. A percentile ranks the samples of the whole
+  group at once, so for it such a group is still a `limit` error: group `by`
+  more labels, or use `where` to find fewer.
 
 ## Samples you don't store
 

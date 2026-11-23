@@ -2,7 +2,8 @@
 //! query finds: the first groups by name and labels whose series together
 //! are as many as a query finds at most, and the first group after them,
 //! where the next page begins. A bucket counts every series of its group, so
-//! a page holds a group whole or not at all.
+//! a page holds a group whole or not at all; one of more series than a page
+//! holds is its page's first, which an `op` that adds reads in parts.
 //!
 //! Series come in the order of their ids, which is no group's, so a group
 //! stays until series of groups before it push it out:

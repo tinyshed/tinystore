@@ -24,7 +24,7 @@ use super::page::{GroupPlace, Paging};
 use super::query::Asked;
 use super::read::PATIENCE;
 use super::series::{Kind, Labels};
-use super::snapshot::{Taken, TakenGroup, Want, Window, decode_block};
+use super::snapshot::{PageTaken, Taken, TakenGroup, Want, Wide, Window, decode_block};
 use super::timer::Part;
 use super::timestamp::rfc3339;
 use crate::compress::frame::Zstd;
@@ -45,7 +45,10 @@ impl Engine {
         let mut budget = if paging.is_some() { Budget::paged() } else { Budget::default() };
         let (taken, stopped) = match paging {
             None => (grouped(self.take(asked, Want::Buckets(shape), &mut budget)?, shape)?, None),
-            Some(paging) => self.take_groups(asked, shape, paging, &mut budget)?,
+            Some(paging) => match self.take_groups(asked, shape, paging, &mut budget)? {
+                PageTaken::Groups(groups, next) => (groups, next),
+                PageTaken::Wide(group) => return self.wide(asked, shape, paging, &group),
+            },
         };
         let mut held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: an aggregate", PATIENCE)?;
         let mut zstd = self.codecs.take();
@@ -61,6 +64,118 @@ impl Engine {
         let answer = counting.groups(taken);
         self.codecs.give_back(zstd);
         answer.map(|groups| (groups, stopped))
+    }
+}
+
+/// A group of more series than a page holds, counted in parts: its buckets
+/// before `end`, none when no sample was in them, and the first group after
+/// it.
+struct WideCounted {
+    buckets: Option<Vec<Bucket>>,
+    end: i64,
+    after: Option<(String, Labels)>,
+}
+
+/// The parts of a wide group joined: where the first of them ended, the
+/// window of the series whose range begins first, which says what retention
+/// keeps of the group, and the first group after it.
+struct WideJoined {
+    end: i64,
+    kept: Option<Window>,
+    after: Option<(String, Labels)>,
+}
+
+impl Engine {
+    /// A page's first group when it has more series than a page holds, for
+    /// an `op` that adds, alone on its page. Its series are read as many at
+    /// a time as a query finds, each part from a snapshot of its own and
+    /// within a page's bounds, and joined into the same buckets, so that the
+    /// store holds one part's bytes and the group's sums.
+    ///
+    /// ```text
+    /// series by id   part 1 ──────────────╳     stopped inside 10:10's bucket
+    ///                part 2 ───────╳            stopped inside 10:05's
+    /// the page       [10:00 ……)                 10:00's bucket of both; next from 10:05
+    /// ```
+    fn wide(
+        &self,
+        asked: &Asked,
+        shape: &Shape,
+        paging: &Paging,
+        group: &(String, Labels),
+    ) -> Result<(Vec<Aggregate>, Option<GroupPlace>)> {
+        let at = paging.group_from().filter(|place| place.group == *group).map_or(i64::MIN, |place| place.at);
+        let shared = Wide { group, at, to: asked.to, left: Some(paging.limit) };
+        let mut counted = self.wide_counted(asked, shape, shared)?;
+        if counted.buckets.is_none() && counted.end < asked.to {
+            // no part's share held a bucket: the first is taken whole, as a page takes a bucket alone
+            let to = shape.after_buckets(counted.end, 1, asked.to);
+            counted = self.wide_counted(asked, shape, Wide { to, left: None, ..shared })?;
+        }
+        let more = counted.end < asked.to;
+        let next = match counted.after {
+            _ if more => Some(GroupPlace { group: group.clone(), at: counted.end }),
+            after => after.map(|group| GroupPlace { group, at: i64::MIN }),
+        };
+        let (name, labels) = group.clone();
+        let answered = counted.buckets.map(|buckets| Aggregate { name, labels, buckets, more });
+        Ok((answered.into_iter().collect(), next))
+    }
+
+    /// The buckets of a wide group over `wide`, its parts counted one after
+    /// another. A part taken before a later one stopped sooner went past
+    /// where the page ends: its buckets from there on are left out, since a
+    /// bucket of a series counts nothing of the buckets after it.
+    fn wide_counted(&self, asked: &Asked, shape: &Shape, wide: Wide<'_>) -> Result<WideCounted> {
+        let mut zstd = self.codecs.take();
+        let mut budget = Budget::paged();
+        let mut joining = Joining::new(shape);
+        let parts = self.wide_parts(asked, wide, (&mut zstd, &mut budget, &mut joining));
+        self.codecs.give_back(zstd);
+        let WideJoined { end, kept, after } = parts?;
+        let end = joining.cut(end, wide.left);
+        let buckets = joining.answer()?;
+        let Some(kept) = kept.filter(|_| !buckets.is_empty()) else {
+            return Ok(WideCounted { buckets: None, end, after });
+        };
+        let held = buckets.len();
+        let buckets = shape.filled(buckets, (kept.from, end), kept.cutoff, asked.now);
+        budget.take_answer(buckets.len() - held)?;
+        Ok(WideCounted { buckets: Some(buckets), end, after })
+    }
+
+    /// Joins every part of a wide group, each from a snapshot of its own.
+    fn wide_parts(
+        &self,
+        asked: &Asked,
+        wide: Wide<'_>,
+        (zstd, budget, joining): (&mut Zstd, &mut Budget, &mut Joining<'_>),
+    ) -> Result<WideJoined> {
+        let shape = joining.shape;
+        let mut sums = self.memory.reserve_for_read(0, "metrics: an aggregate's buckets", PATIENCE)?;
+        let (mut end, mut from, mut kept, mut after) = (wide.to, i64::MIN, None::<Window>, None);
+        loop {
+            crate::cancel::check(|| "an aggregate".to_owned())?;
+            budget.next_part();
+            let part = self.take_wide(asked, shape, Wide { to: end, ..wide }, from, budget)?;
+            end = end.min(part.end);
+            after = [after, part.after].into_iter().flatten().min();
+            let mut held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: an aggregate", PATIENCE)?;
+            let joined = joining.joined.len();
+            let mut counting =
+                Counting { engine: self, shape, asked, zstd, budget, held: &mut held, points: Vec::new() };
+            for series in &part.members {
+                crate::cancel::check(|| "an aggregate".to_owned())?;
+                kept = kept.filter(|kept| kept.from <= series.window.from).or(Some(series.window));
+                let counted = joining.begin(&series.found).and_then(|()| counting.series(series, joining));
+                counted.map_err(|error| self.met(&series.found, error))?;
+            }
+            sums.grow((joining.joined.len() - joined) as u64 * BUCKET_HELD, "metrics: an aggregate's buckets")?;
+            match part.beyond {
+                Some(next) => from = next,
+                None => return Ok(WideJoined { end, kept, after }),
+            }
+        }
     }
 }
 
@@ -246,6 +361,15 @@ impl<'s> Joining<'s> {
 
     fn holds(&self, at: i64) -> bool {
         self.joined.contains_key(&at)
+    }
+
+    /// Leaves the buckets that begin before `end`, the first `most` of them
+    /// when there are more, and says where those left end.
+    fn cut(&mut self, end: i64, most: Option<usize>) -> i64 {
+        self.joined.retain(|at, _| *at < end);
+        let Some(past) = most.and_then(|most| self.joined.keys().nth(most).copied()) else { return end };
+        self.joined.retain(|at, _| *at < past);
+        past
     }
 
     /// Joins a series' closed bucket into its group's, and gives the bytes

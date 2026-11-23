@@ -54,6 +54,39 @@ pub(in crate::metrics) struct TakenGroup {
     pub(in crate::metrics) more: bool,
 }
 
+/// What a page of an aggregate takes: its groups, and where the page after
+/// it begins; or the name and labels of its first group alone, of more
+/// series than a page holds, which an `op` that adds reads in parts.
+#[derive(Debug)]
+pub(in crate::metrics) enum PageTaken {
+    Groups(Vec<TakenGroup>, Option<GroupPlace>),
+    Wide((String, Labels)),
+}
+
+/// The stretch of a group of more series than a page holds that a part of
+/// its series is taken over.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::metrics) struct Wide<'a> {
+    pub(in crate::metrics) group: &'a (String, Labels),
+    /// Where the page begins in the group.
+    pub(in crate::metrics) at: i64,
+    pub(in crate::metrics) to: i64,
+    /// The buckets with samples the page may hold, each series taken as far
+    /// as its share of a page's bounds goes; none takes the stretch whole.
+    pub(in crate::metrics) left: Option<usize>,
+}
+
+/// One part of such a group: its series among those found from an id on,
+/// each up to `end`, the id the next part's series are found from, and the
+/// first group after it met among them.
+#[derive(Debug)]
+pub(in crate::metrics) struct WidePart {
+    pub(in crate::metrics) members: Vec<Taken>,
+    pub(in crate::metrics) end: i64,
+    pub(in crate::metrics) beyond: Option<i64>,
+    pub(in crate::metrics) after: Option<(String, Labels)>,
+}
+
 /// How far a page lets a series go: a part is taken while what the page
 /// decoded is under `decoded` and what it copies stays within `bytes`, and
 /// always within the query's bounds; on an aggregate's page, while it starts
@@ -123,40 +156,64 @@ impl Engine {
         shape: &Shape,
         paging: &Paging,
         budget: &mut Budget,
-    ) -> Result<(Vec<TakenGroup>, Option<GroupPlace>)> {
+    ) -> Result<PageTaken> {
         let mut paging = paging.clone();
         loop {
-            let (page, next) = self.groups_once(asked, shape, &paging, budget)?;
-            match next {
-                Some(next) if page.is_empty() => {
+            match self.groups_once(asked, shape, &paging, budget)? {
+                PageTaken::Groups(page, Some(next)) if page.is_empty() => {
                     crate::cancel::check(|| "an aggregate".to_owned())?;
                     // the page holds nothing of the groups it passed over
                     budget.reset();
                     paging.from = Start::Group(next);
                 }
-                next => return Ok((page, next)),
+                taken => return Ok(taken),
             }
         }
     }
 
-    /// The groups one snapshot gives a page of an aggregate, and where the
-    /// page after it begins.
-    fn groups_once(
+    /// One part of a group of more series than a page holds: the series of
+    /// the group among as many as a query finds from the id `from` on, from
+    /// a snapshot of its own, so that no read lasts longer than a page's.
+    pub(in crate::metrics) fn take_wide(
         &self,
         asked: &Asked,
         shape: &Shape,
-        paging: &Paging,
+        wide: Wide<'_>,
+        from: i64,
         budget: &mut Budget,
-    ) -> Result<(Vec<TakenGroup>, Option<GroupPlace>)> {
+    ) -> Result<WidePart> {
+        self.snapshot(asked, Want::Buckets(shape), budget, |reading, asked| {
+            let (found, beyond) = matching::find_from(reading.connection, asked, from, reading.budget)?;
+            let (mut members, mut after) = (Vec::new(), None);
+            for series in found {
+                shape.check(&series)?;
+                let group = shape.group_of(&series).map_err(|error| error.within(&series.kept))?;
+                if group == *wide.group {
+                    members.push(series);
+                } else if group > *wide.group && after.as_ref().is_none_or(|after| group < *after) {
+                    after = Some(group);
+                }
+            }
+            let asked = Asked { to: wide.to, ..asked.clone() };
+            let (members, end) = reading.wide_members(self, &members, &asked, shape, wide)?;
+            Ok(WidePart { members, end, beyond, after })
+        })
+    }
+
+    /// The groups one snapshot gives a page of an aggregate, and where the
+    /// page after it begins.
+    fn groups_once(&self, asked: &Asked, shape: &Shape, paging: &Paging, budget: &mut Budget) -> Result<PageTaken> {
         self.snapshot(asked, Want::Buckets(shape), budget, |reading, asked| {
             let most = reading.budget.series_limit();
             let (groups, beyond) = match chosen(reading.connection, asked, shape, paging, most)? {
                 Choice::Groups(groups, beyond) => (groups, beyond),
+                Choice::TooMany(group, _) if shape.adds() => return Ok(PageTaken::Wide(group)),
                 Choice::TooMany(group, series) => return Err(reading.budget.too_many(series).within(named(&group))),
             };
             reading.budget.take_group(groups.values().map(Vec::len).sum())?;
             let beyond = beyond.map(|group| GroupPlace { group, at: i64::MIN });
-            reading.groups_page(self, &groups, asked, shape, paging, beyond)
+            let (page, next) = reading.groups_page(self, &groups, asked, shape, paging, beyond)?;
+            Ok(PageTaken::Groups(page, next))
         })
     }
 }
@@ -301,6 +358,32 @@ impl Reading<'_, '_> {
             return Ok(Paged::Stopped(end));
         }
         Ok(Paged::Ended(Ended { members: ended_at(members, end), end, buckets }))
+    }
+
+    /// The series of one part of a group of more series than a page holds,
+    /// each up to where the part ends: as a page takes a group, by its share
+    /// of the page's bounds, the part ending with none where they held no
+    /// bucket with samples; or whole, where a series past a bound is `limit`.
+    fn wide_members(
+        &mut self,
+        engine: &Engine,
+        found: &[Found],
+        asked: &Asked,
+        shape: &Shape,
+        wide: Wide<'_>,
+    ) -> Result<(Vec<Taken>, i64)> {
+        let Some(left) = wide.left else {
+            let mut members = self.members(engine, found, asked, shape, wide.at);
+            for series in &mut members {
+                let filled = self.fill(series, asked.now, Want::Buckets(shape));
+                filled.map_err(|error| self.met(&series.found, error))?;
+            }
+            return Ok((ended_at(members, asked.to), asked.to));
+        };
+        Ok(match self.group_page(engine, found, asked, shape, (wide.at, left))? {
+            Paged::Ended(ended) => (ended.members, ended.end),
+            Paged::Stopped(end) => (Vec::new(), end),
+        })
     }
 
     /// A group's series, in the order its buckets join them, each over the
