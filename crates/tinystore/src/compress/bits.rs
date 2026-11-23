@@ -108,6 +108,52 @@ impl<'a> BitReader<'a> {
         value
     }
 
+    /// How many 1 bits come next, `most` at most, 63 or fewer; the 0 that
+    /// ends fewer is read with them. They are counted in the word that
+    /// waits, since a rice code read a bit at a time took most of a run's
+    /// decoding.
+    #[inline]
+    pub(crate) fn read_ones(&mut self, most: u32) -> u32 {
+        if self.bits <= most {
+            self.refill();
+        }
+        if self.bits <= most {
+            // the data ends here: a bit at a time, which marks a read past it short
+            let mut ones = 0;
+            while ones < most && self.read(1) == 1 {
+                ones += 1;
+            }
+            return ones;
+        }
+        // no bit is held past `bits`, so the ones counted are all there
+        let ones = (self.held as u64).trailing_ones().min(most);
+        let width = if ones == most { most } else { ones + 1 };
+        self.held >>= width;
+        self.bits -= width;
+        ones
+    }
+
+    /// A rice code of parameter `k` whose bits all wait in one word, read
+    /// with one shift; none for an escape, a longer code, or one the data
+    /// ends in, which [`read_rice`] reads a field at a time.
+    #[inline]
+    fn rice_in_a_word(&mut self, k: u32) -> Option<u64> {
+        if self.bits < 64 {
+            self.refill();
+        }
+        let low = self.held as u64;
+        let ones = low.trailing_ones();
+        let width = ones + 1 + k;
+        if self.bits < 64 || ones >= RICE_ESCAPE || width > 64 {
+            return None;
+        }
+        // the ones and their zero are 32 bits at most, so neither shift is of a whole word
+        let rest = (low >> (ones + 1)) & ((1_u64 << k) - 1);
+        self.held >>= width;
+        self.bits -= width;
+        Some(u64::from(ones) << k | rest)
+    }
+
     /// Loads whole bytes until a word or more waits.
     fn refill(&mut self) {
         while self.bits <= 64 {
@@ -176,10 +222,10 @@ pub(crate) fn write_rice(writer: &mut BitWriter, value: u64, k: u32) {
     expect(dead_code, reason = "records and metrics use it")
 )]
 pub(crate) fn read_rice(reader: &mut BitReader<'_>, k: u32) -> u64 {
-    let mut quotient = 0;
-    while quotient < RICE_ESCAPE && reader.read(1) == 1 {
-        quotient += 1;
+    if let Some(value) = reader.rice_in_a_word(k) {
+        return value;
     }
+    let quotient = reader.read_ones(RICE_ESCAPE);
     if quotient == RICE_ESCAPE { reader.read(64) } else { u64::from(quotient) << k | reader.read(k) }
 }
 
@@ -272,6 +318,60 @@ mod tests {
             let mut reader = BitReader::of(&coded);
             let read: Vec<u64> = (0..values.len()).map(|_| read_rice(&mut reader, k)).collect();
             assert!(!reader.short() && read == values, "k {k}");
+        }
+    }
+
+    #[test]
+    fn a_run_of_ones_reads_as_it_does_a_bit_at_a_time_whole_or_cut_anywhere() {
+        let mut writer = BitWriter::onto(Vec::new());
+        for ones in (0..=40).chain([0, 63, 64, 1, 100, 7]) {
+            (0..ones).for_each(|_| writer.write(1, 1));
+            writer.write(0, 1);
+            writer.write(0b101, 3);
+        }
+        let coded = writer.finish();
+        for cut in 0..=coded.len() {
+            for most in [1, 5, 32, 63] {
+                let (mut counted, mut one_by_one) = (BitReader::of(&coded[..cut]), BitReader::of(&coded[..cut]));
+                for _ in 0..80 {
+                    let mut ones = 0;
+                    while ones < most && one_by_one.read(1) == 1 {
+                        ones += 1;
+                    }
+                    assert_eq!(counted.read_ones(most), ones, "cut at {cut}, {most} at most");
+                    assert_eq!(counted.read(3), one_by_one.read(3), "cut at {cut}, {most} at most");
+                    assert_eq!(counted.short(), one_by_one.short(), "cut at {cut}, {most} at most");
+                }
+                assert_eq!(counted.finished(), one_by_one.finished(), "cut at {cut}, {most} at most");
+            }
+        }
+    }
+
+    #[test]
+    fn a_rice_code_cut_anywhere_reads_as_it_does_a_field_at_a_time() {
+        let values: Vec<u64> =
+            (0..60).map(|n: u64| n.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (n * 7 % 64)).chain([0, u64::MAX]).collect();
+        for k in [0, 1, 7, 11, 31, 32, 33, 62, 63] {
+            let mut writer = BitWriter::onto(Vec::new());
+            values.iter().for_each(|value| write_rice(&mut writer, *value, k));
+            let coded = writer.finish();
+            for cut in 0..=coded.len() {
+                let (mut whole, mut by_field) = (BitReader::of(&coded[..cut]), BitReader::of(&coded[..cut]));
+                for _ in 0..values.len() {
+                    let mut quotient = 0;
+                    while quotient < RICE_ESCAPE && by_field.read(1) == 1 {
+                        quotient += 1;
+                    }
+                    let field = if quotient == RICE_ESCAPE {
+                        by_field.read(64)
+                    } else {
+                        u64::from(quotient) << k | by_field.read(k)
+                    };
+                    assert_eq!(read_rice(&mut whole, k), field, "k {k}, cut at {cut}");
+                    assert_eq!(whole.short(), by_field.short(), "k {k}, cut at {cut}");
+                }
+                assert_eq!(whole.finished(), by_field.finished(), "k {k}, cut at {cut}");
+            }
         }
     }
 

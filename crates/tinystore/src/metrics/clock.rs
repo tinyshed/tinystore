@@ -76,6 +76,19 @@ impl Times {
                 Err(Error::corrupt("a block of one time"))
             };
         }
+        if self.steps.is_empty() {
+            let (span, gaps) = (distance(self.start, self.end), (self.count - 1) as u64);
+            if span == 0 || !span.is_multiple_of(gaps) {
+                return Err(Error::corrupt("an even clock's step"));
+            }
+            // a whole part of the span is no zero, and as many of them as the gaps end at the block's end
+            let (step, mut at) = (span / gaps, self.start);
+            for index in 1..self.count {
+                at = advance(at, step);
+                each(index, at);
+            }
+            return Ok(());
+        }
         let mut at = self.start;
         let mut step_to = |index: usize, delta: u64| -> Result<()> {
             if delta == 0 || delta > distance(at, i64::MAX) {
@@ -85,15 +98,7 @@ impl Times {
             each(index, at);
             Ok(())
         };
-        if self.steps.is_empty() {
-            let (span, gaps) = (distance(self.start, self.end), (self.count - 1) as u64);
-            if span == 0 || !span.is_multiple_of(gaps) {
-                return Err(Error::corrupt("an even clock's step"));
-            }
-            (1..self.count).try_for_each(|index| step_to(index, span / gaps))?;
-        } else {
-            walk_steps(&self.steps, self.count, &mut step_to)?;
-        }
+        walk_steps(&self.steps, self.count, &mut step_to)?;
         if at != self.end {
             return Err(Error::corrupt("a clock that does not end at its block's end"));
         }
