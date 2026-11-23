@@ -274,7 +274,7 @@ fn read_entry(reader: &mut Reader<'_>, times: Times, external: bool) -> Result<B
 /// spelling.
 fn canonical(reader: &mut Reader<'_>) -> Vec<u8> {
     let before = reader.remaining();
-    Exact::read(reader, BLOCK_BITS);
+    Exact::spelled(reader, BLOCK_BITS);
     before[..before.len() - reader.remaining().len()].to_vec()
 }
 

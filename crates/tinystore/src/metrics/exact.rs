@@ -219,37 +219,60 @@ impl Exact {
     /// Reads what [`Exact::put`] wrote, of at most `most_bits`, refusing any
     /// other spelling of the same number.
     pub(super) fn read(reader: &mut Reader<'_>, most_bits: u32) -> Exact {
+        Exact::spelled(reader, most_bits).map_or(Exact::ZERO, |spelling| spelling.value())
+    }
+
+    /// How [`Exact::put`] spelled a number of at most `most_bits`, checked to
+    /// be its one spelling; none for zero, or with the reader failed. A
+    /// directory checks every block's sums and reads few of them: building
+    /// each was a seventh of copying a series out of the file.
+    pub(super) fn spelled<'a>(reader: &mut Reader<'a>, most_bits: u32) -> Option<Spelling<'a>> {
         let bytes = reader.count(most_bits.div_ceil(8) as usize);
         if bytes == 0 {
-            return Exact::ZERO;
+            return None;
         }
         let token = reader.uvarint();
         let zeros = token >> 1;
         let magnitude = reader.take(bytes);
         if magnitude.len() != bytes || zeros >= u64::from(most_bits) {
             reader.fail("an exact sum past its bound");
-            return Exact::ZERO;
+            return None;
         }
         if magnitude[0] == 0 || magnitude[bytes - 1] & 1 == 0 {
             reader.fail("an exact sum not written as its one spelling");
-            return Exact::ZERO;
+            return None;
         }
-        let mut words = [0_u64; WORDS];
-        for (place, byte) in magnitude.iter().rev().enumerate() {
-            words[place / 8] |= u64::from(*byte) << (place % 8 * 8);
-        }
-        let bits = bit_length(&words) + zeros as u32;
+        // its first byte is its highest and no zero, so its bits are those of the bytes below it and its own
+        let bits = (bytes as u32 - 1) * 8 + (8 - magnitude[0].leading_zeros()) + zeros as u32;
         if bits > most_bits {
             reader.fail("an exact sum past its bound");
-            return Exact::ZERO;
+            return None;
         }
-        let mut exact = Exact(shift_left(&words, zeros as u32));
-        if token & 1 == 1 {
-            let positive = exact;
-            exact = Exact::ZERO;
-            exact.sub(&positive);
+        Some(Spelling { magnitude, zeros: zeros as u32, negative: token & 1 == 1 })
+    }
+}
+
+/// A number as [`Exact::put`] spells it: its magnitude's bytes, the highest
+/// first, after the zero bits taken out below them, and its sign.
+pub(super) struct Spelling<'a> {
+    magnitude: &'a [u8],
+    zeros: u32,
+    negative: bool,
+}
+
+impl Spelling<'_> {
+    pub(super) fn value(&self) -> Exact {
+        let mut words = [0_u64; WORDS];
+        for (place, byte) in self.magnitude.iter().rev().enumerate() {
+            words[place / 8] |= u64::from(*byte) << (place % 8 * 8);
         }
-        exact
+        let magnitude = Exact(shift_left(&words, self.zeros));
+        if !self.negative {
+            return magnitude;
+        }
+        let mut negative = Exact::ZERO;
+        negative.sub(&magnitude);
+        negative
     }
 }
 

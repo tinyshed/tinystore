@@ -119,6 +119,10 @@ fn another_spelling_of_the_same_sum_or_one_past_its_bound_is_refused() {
     assert!(refused(&spelled(&[1], top + 1, true)), "more zero bits than a block's sum holds");
     assert!(refused(&spelled(&[3], top, false)), "two bits shifted past the bound");
     assert!(!refused(&spelled(&[1], top, false)), "one bit at the bound's top");
+    assert!(!refused(&spelled(&[1, 1], top - 8, false)), "two bytes whose highest bit is the bound's top");
+    assert!(refused(&spelled(&[1, 1], top - 7, false)), "two bytes a bit past the bound");
+    assert!(refused(&spelled(&[0x80, 1], top - 14, true)), "a high bit of the first byte counted");
+    assert!(!refused(&spelled(&[0x80, 1], top - 15, true)));
 }
 
 #[test]
