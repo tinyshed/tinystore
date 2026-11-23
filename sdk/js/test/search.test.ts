@@ -28,12 +28,17 @@ const ids = (found: SearchFound<unknown>) => found.hits.map(hit => hit.id)
 
 /** A connection to an SQLite file beside the store, through Bun's SQLite under Bun and Node's under Node. */
 async function besides(path: string): Promise<{ exec(sql: string): unknown; close(): unknown }> {
+	let beside: { exec(sql: string): unknown; close(): unknown }
 	if ('Bun' in globalThis) {
 		const { Database } = await import('bun:sqlite')
-		return new Database(path)
+		beside = new Database(path)
+	} else {
+		const { DatabaseSync } = await import('node:sqlite')
+		beside = new DatabaseSync(path)
 	}
-	const { DatabaseSync } = await import('node:sqlite')
-	return new DatabaseSync(path)
+	// the store's writer may hold search.db as this writes: wait for it, as the store's own connections do
+	beside.exec('pragma busy_timeout = 5000')
+	return beside
 }
 
 for (const way of ways) {
