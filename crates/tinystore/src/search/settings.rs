@@ -5,10 +5,12 @@
 //! combines them, and for a table's index the table it follows. They are
 //! kept as JSON in the index's row, and an open that asks for others
 //! changes them. An index without layouts keeps no `layouts`, and a
-//! release before them reads past the key.
+//! release before them reads past the key, as one before `unicode` does past
+//! it: an index without it was read by what those releases were built with.
 //!
 //! ```text
 //! {"fields":[{"path":"title","weight":2.0,"number":0}],"next_field":1,"typo_tolerance":true,"analysis":1,
+//!  "unicode":{"words":[16,0,0],"nfkc":[17,0,0],"letters":[17,0,0]},
 //!  "filters":[{"path":"category","number":0}],"next_filter":1,"layouts":["ru","en"],
 //!  "vectors":{"dimensions":1024,"recall":null},"hybrid":{"vector_weight":0.5,"rerank":false},
 //!  "table":{"name":"articles","key":"id","vector":"embedding"}}
@@ -16,7 +18,7 @@
 
 use serde_json::{Value, json};
 
-use super::analyzer;
+use super::analyzer::{self, Unicode};
 use super::layouts::{self, Layout};
 use super::vectors::MOST_DIMENSIONS;
 use crate::limits::VECTOR_DIMENSIONS;
@@ -48,6 +50,7 @@ pub(crate) struct Settings {
     pub(crate) typo_tolerance: bool,
     pub(crate) layouts: Vec<Layout>,
     pub(crate) analysis: u32,
+    pub(crate) unicode: Unicode,
     pub(crate) vectors: Option<Vectors>,
     pub(crate) hybrid: Hybrid,
     pub(crate) table: Option<Table>,
@@ -310,6 +313,7 @@ impl Settings {
             typo_tolerance: wanted.typo_tolerance,
             layouts: wanted.layouts(),
             analysis: analyzer::VERSION,
+            unicode: Unicode::linked(),
             vectors: wanted.dimensions.map(|dimensions| Vectors { dimensions, recall: wanted.recall }),
             hybrid: Hybrid::of(wanted),
             table: wanted.table.clone(),
@@ -323,7 +327,9 @@ impl Settings {
     /// at once,
     /// a field or a filter removed leaving its keys for a rebuild to drop; a
     /// field or a filter added to an index that holds documents needs them
-    /// read again, as do words read by another release. Other vectors than
+    /// read again, as do words read by another release; words read by
+    /// another Unicode are read again too, but an index rebuilt by hand
+    /// goes on serving them until its `reindex`. Other vectors than
     /// those kept are refused: the store has nothing to make them from, but
     /// a table's index reads them again from their column. Another table or
     /// key for a table's index needs the new table read beside it, the rows
@@ -373,6 +379,12 @@ impl Settings {
         if self.analysis != analyzer::VERSION {
             rebuild.needs("words read by another release".to_owned());
         }
+        if self.unicode != Unicode::linked() {
+            rebuild.cleans("words read by another Unicode".to_owned(), documents);
+            if documents == 0 {
+                changed.unicode = Unicode::linked();
+            }
+        }
         Ok(Changed { settings: changed, said, rebuild: rebuild.asked() })
     }
 
@@ -388,6 +400,7 @@ impl Settings {
             && filters(self) == filters(other)
             && dimensions(self) == dimensions(other)
             && self.analysis == other.analysis
+            && self.unicode == other.unicode
             && self.table == other.table
     }
 
@@ -576,6 +589,7 @@ impl Settings {
             "next_filter": self.next_filter,
             "typo_tolerance": self.typo_tolerance,
             "analysis": self.analysis,
+            "unicode": { "words": self.unicode.words, "nfkc": self.unicode.nfkc, "letters": self.unicode.letters },
             "vectors": vectors,
             "hybrid": { "vector_weight": self.hybrid.vector_weight, "rerank": self.hybrid.rerank },
             "table": self.table.as_ref().map(Table::to_json),
@@ -621,6 +635,7 @@ impl Settings {
             typo_tolerance: settings["typo_tolerance"].as_bool().ok_or_else(broken)?,
             layouts,
             analysis: number(&settings["analysis"])?,
+            unicode: unicode_of(&settings["unicode"]).ok_or_else(broken)?,
             vectors,
             hybrid: Hybrid {
                 vector_weight: hybrid["vector_weight"].as_f64().ok_or_else(broken)?,
@@ -629,6 +644,20 @@ impl Settings {
             table,
         })
     }
+}
+
+/// The Unicode an index's settings name; what the releases before the key
+/// were built with when they name none.
+fn unicode_of(kept: &Value) -> Option<Unicode> {
+    if kept.is_null() {
+        return Some(Unicode::RELEASED);
+    }
+    let version = |key: &str| -> Option<[u32; 3]> {
+        let parts: Vec<u32> =
+            kept[key].as_array()?.iter().map(|part| part.as_u64()?.try_into().ok()).collect::<Option<_>>()?;
+        parts.try_into().ok()
+    };
+    Some(Unicode { words: version("words")?, nfkc: version("nfkc")?, letters: version("letters")? })
 }
 
 impl Hybrid {
@@ -664,6 +693,41 @@ mod tests {
             manual: false,
             table: None,
         }
+    }
+
+    #[test]
+    fn words_read_by_another_unicode_are_read_again_and_no_index_rebuilt_by_hand_is_refused_for_them() {
+        let asked = wanted(&[("title", 1.0)]);
+        let settings = Settings::new(&asked);
+        assert_eq!(settings.unicode, Unicode::linked());
+        let other = Settings { unicode: Unicode { words: [15, 1, 0], ..Unicode::linked() }, ..settings.clone() };
+        assert_eq!(Settings::from_json(&other.to_json()).unwrap(), other, "an index keeps what read its words");
+        let changed = other.change(&asked, 3).unwrap();
+        let read_again = Asked { why: "words read by another Unicode".to_owned(), needed: false };
+        assert_eq!((changed.rebuild, changed.settings.unicode), (Some(read_again), other.unicode));
+        assert!(!other.reads_as(&settings), "rows read beside by this build are not the index's own");
+        let empty = other.change(&asked, 0).unwrap();
+        assert_eq!((empty.rebuild, empty.settings.unicode), (None, Unicode::linked()), "no words to read again");
+    }
+
+    #[test]
+    fn an_index_that_names_no_unicode_was_read_by_what_the_releases_before_the_key_were_built_with() {
+        let settings = Settings::new(&wanted(&[("title", 1.0)]));
+        let mut kept: Value = serde_json::from_str(&settings.to_json()).unwrap();
+        kept.as_object_mut().unwrap().remove("unicode");
+        assert_eq!(Settings::from_json(&kept.to_string()).unwrap().unicode, Unicode::RELEASED);
+        kept["unicode"] = json!({ "words": [16, 0], "nfkc": [17, 0, 0], "letters": [17, 0, 0] });
+        assert!(Settings::from_json(&kept.to_string()).is_err(), "a version of two parts is no version");
+    }
+
+    /// The workspace's lockfile decides what a release reads text by. This
+    /// fails when it moves: every index a release wrote then reads itself
+    /// again at its first open, which the release's notes say before the
+    /// versions here follow.
+    #[test]
+    fn a_release_reads_text_by_the_unicode_the_release_before_it_did() {
+        let (words, nfkc) = (Unicode::linked().words, Unicode::linked().nfkc);
+        assert_eq!((words, nfkc), ([16, 0, 0], [17, 0, 0]));
     }
 
     fn with_vectors(dimensions: usize, vector_weight: Option<f64>, rerank: bool) -> Wanted {

@@ -225,7 +225,7 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   `metrics` facade, whose recorder the metrics engine is, toml and
   yaml-rust2, without its encodings, for a config's files, fst and
   levenshtein_automata for a misspelt name's nearest words, sysinfo, with `system` alone, for the machine among a store's own metrics,
-  unicode-normalization, unicode-segmentation and rust-stemmers, pinned, for
+  unicode-normalization and unicode-segmentation, whose Unicode an index keeps, and rust-stemmers, pinned, for
   a search's words, libc on Unix for the disk's free space and a directory's `openat`, and futures-core,
   with `async` alone, for the `Stream` trait every runtime's stream helpers
   take, a trait with no code to run. With `local` alone, hmac for `SERVE`'s

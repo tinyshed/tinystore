@@ -55,9 +55,19 @@ the index serves now, which `status()` says.
 | `vectors` added                                        | at once: documents have none until they are set again            |
 | the vectors' dimensions, `vectors` left out            | `invalid`: the store cannot make your model's vectors            |
 | a table's index's table or key                         | the new table read beside, then switched in                      |
+| a build that reads text by another Unicode version     | read again in the background, then switched in                   |
 
 A weight is read by each search as it runs, which is why it is free. A field
 added needs every document's words, which is why it is read again.
+
+An index keeps the Unicode version its words were cut by. TinyStore's own
+packages change it only with a release whose notes say so. A Rust program
+that links the crate chooses the versions of `unicode-segmentation` and
+`unicode-normalization` itself, and its compiler brings its own tables: when
+one of them moves to another Unicode version, each index reads itself again
+at its next open. Until it has, a search may miss a word with a letter the
+new version reads differently, and nothing else changes. An index opened
+with `rebuild: 'manual'` keeps serving and waits for `reindex`.
 
 New vector dimensions mean a new model, whose vectors only the program can
 make: open another name, fill it, and drop the old one once it answers. The

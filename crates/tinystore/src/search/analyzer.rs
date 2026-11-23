@@ -25,6 +25,37 @@ use unicode_segmentation::UnicodeSegmentation;
 /// otherwise raises it, and an index of an older one is read again.
 pub(crate) const VERSION: u32 = 1;
 
+/// The Unicode an index's words were read by, each a version as
+/// `[major, minor, patch]`. A later one reads the text of an earlier alike
+/// but for the letters it added and the few it moved, so an index of
+/// another is whole, and reads itself again to find those too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Unicode {
+    /// Of the rules that cut text into words, unicode-segmentation's.
+    pub(crate) words: [u32; 3],
+    /// Of NFKC and the marks, unicode-normalization's.
+    pub(crate) nfkc: [u32; 3],
+    /// Of the letters, the digits and their lower case, the compiler's.
+    pub(crate) letters: [u32; 3],
+}
+
+impl Unicode {
+    /// What every release up to v0.11.0 was built with, which an index that
+    /// names none was read by.
+    pub(crate) const RELEASED: Unicode = Unicode { words: [16, 0, 0], nfkc: [17, 0, 0], letters: [17, 0, 0] };
+
+    /// What this build reads text by.
+    pub(crate) fn linked() -> Unicode {
+        let (words, nfkc, letters) =
+            (unicode_segmentation::UNICODE_VERSION, unicode_normalization::UNICODE_VERSION, char::UNICODE_VERSION);
+        Unicode {
+            words: [words.0 as u32, words.1 as u32, words.2 as u32],
+            nfkc: [nfkc.0.into(), nfkc.1.into(), nfkc.2.into()],
+            letters: [letters.0.into(), letters.1.into(), letters.2.into()],
+        }
+    }
+}
+
 /// A word of normalized text: as written, its stem where that differs, and
 /// where it lies in the text.
 #[derive(Clone, Debug, PartialEq, Eq)]
