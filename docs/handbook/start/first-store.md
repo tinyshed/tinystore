@@ -347,7 +347,7 @@ tinystore status ./data
 ```
 
 ```text
-● ./data  served by tinystore 0.11.0 · pid 15865 · up 4s · durability not set: full, os for records and metrics
+● ./data  served by tinystore 0.12.0 · pid 15865 · up 4s · durability not set: full, os for records and metrics
 
   kv        76 KiB
   jobs     125 KiB

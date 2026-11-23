@@ -380,7 +380,7 @@ and it builds without a C compiler, so a static Linux binary needs no
 
 ```toml
 [dependencies]
-tinystore = { version = "0.11", default-features = false, features = ["config-load"] }
+tinystore = { version = "0.12", default-features = false, features = ["config-load"] }
 ```
 
 `config-load` has everything that `load` reads: files, the environment,

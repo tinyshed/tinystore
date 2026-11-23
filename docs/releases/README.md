@@ -4,6 +4,9 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.12.0](v0.12.0.md)** · 24 November 2026  A total of any number of series, a folder of a database's files replaced
+  whole in one transaction, a day of metrics by the hour in half the time,
+  and nodes with TLS from the release's binaries.
 - **[TinyStore 0.11.0](v0.11.0.md)** · 19 November 2026\
   Jobs that upsert, end and run now, a search's total and the rows of a
   query, any of a list in a log's `where`, every bucket of a chart, a
