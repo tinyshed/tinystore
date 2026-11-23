@@ -20,8 +20,9 @@ path = "src/main.rs"
 # client: the protocol's messages a command that writes sends its server;
 # mcp: the server `tinystore mcp` runs, and the reads its tools share with the
 # commands; local: SERVE, the socket's path and the pipe's, which an embedded
-# store opened with cli publishes too
-tinystore = { workspace = true, features = ["client", "mcp", "local"] }
+# store opened with cli publishes too; replication-tls: a node's links through
+# TLS, the rustls its remote clients are answered with already
+tinystore = { workspace = true, features = ["client", "mcp", "local", "replication-tls"] }
 # the server's sockets and pipes, a private child's stdin, and the blocking pool
 # its stdout is written on; the library itself runs no async runtime
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "io-util", "io-std", "macros", "signal", "sync", "time"] }

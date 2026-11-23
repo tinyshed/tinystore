@@ -317,6 +317,48 @@ fn a_tls_server_answers_over_its_certificate() {
 }
 
 #[test]
+fn a_node_whose_config_gives_tls_starts_and_stops() {
+    let dir = tempfile::tempdir().unwrap();
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+    std::fs::write(dir.path().join("cert.pem"), certified.cert.pem()).unwrap();
+    std::fs::write(dir.path().join("key.pem"), certified.signing_key.serialize_pem()).unwrap();
+    std::fs::write(dir.path().join("token"), ADMIN).unwrap();
+    let config = dir.path().join("node.toml");
+    std::fs::write(
+        &config,
+        "token-file = \"token\"
+[tls]
+cert = \"cert.pem\"
+key = \"key.pem\"
+",
+    )
+    .unwrap();
+    let store = dir.path().join("store");
+    let mut server = Command::new(BINARY)
+        .arg("serve")
+        .arg(&store)
+        .args(["--node-listen", "127.0.0.1:0", "--node-config"])
+        .arg(&config)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let serve = store.join("server").join("SERVE");
+    let begun = Instant::now();
+    while !serve.exists() {
+        if let Some(status) = server.try_wait().unwrap() {
+            let mut said = String::new();
+            server.stderr.take().unwrap().read_to_string(&mut said).unwrap();
+            panic!("the node left with {status}: {said}");
+        }
+        assert!(begun.elapsed() < Duration::from_secs(30), "no SERVE in thirty seconds");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let stop = Command::new(BINARY).arg("stop").arg(&store).output().unwrap();
+    assert!(stop.status.success(), "{}", String::from_utf8_lossy(&stop.stderr));
+    assert_eq!(wait(&mut server), 0);
+}
+
+#[test]
 fn a_connection_that_says_no_hello_ends_with_the_handshakes_time() {
     let dir = tempfile::tempdir().unwrap();
     let (mut server, serve) = remote(dir.path(), "tcp://127.0.0.1:0", &[], &[]);
