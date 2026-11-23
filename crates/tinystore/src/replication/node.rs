@@ -143,6 +143,7 @@ impl Drop for Following {
 
 impl State {
     pub(crate) fn new(dir: &Path, options: Node, keep_free: u64) -> Result<State> {
+        super::check_files(&options)?;
         let tls = super::transport::Tls::of(&options)?;
         let acks = Arc::new(Acks::waiting_for(options.synchronous_with.clone()));
         Ok(State {

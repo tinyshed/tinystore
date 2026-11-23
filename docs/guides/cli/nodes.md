@@ -36,6 +36,12 @@ The config's other keys are `files`, `catalog`, `synchronous`,
 node shows, its key, and the certificates it trusts. A link beyond its own
 machine takes TLS unless `insecure = true`.
 
+`files` names the files a node copies, as `["kv.db", "sql/app.db"]`; without
+it a copy takes every file of its home. `records.db`, `metrics.db` and the
+databases of `local/` are never copied: each node keeps its own, and a
+`files` that names one is refused at the start
+([why](../../handbook/nodes/copies.md#start-two-nodes)).
+
 ## node status
 
 ```sh

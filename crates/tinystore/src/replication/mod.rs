@@ -154,6 +154,16 @@ pub(crate) fn is_node_local(name: &str) -> bool {
     NODE_LOCAL.contains(&name) || crate::engine::is_local(name)
 }
 
+/// Refuses a node told to copy a file that is every node's own. Its home
+/// keeps no log of such a file, so the copy would wait for one that never
+/// comes, its link up and nothing said.
+pub(crate) fn check_files(node: &Node) -> crate::Result<()> {
+    let Some(own) = node.files.iter().flatten().find(|file| is_node_local(file)) else { return Ok(()) };
+    Err(crate::Error::invalid(format!(
+        "a node's files name {own}, which no node copies: records.db, metrics.db and the databases of local/ are          each node's own"
+    )))
+}
+
 /// The directory of a store's logs, beside its engines' files.
 pub(crate) const DIR: &str = "log";
 

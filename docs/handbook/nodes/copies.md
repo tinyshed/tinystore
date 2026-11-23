@@ -50,6 +50,18 @@ and defaults](../production/limits.md#nodes)). The European chat processes
 open `./eu` as they open any store, through its sidecar, so their code does
 not change.
 
+A copy takes every file of its home except three kinds, which are each
+node's own (contract REPL-13):
+
+- `records.db` and `metrics.db`: a node's logs and metrics are what it
+  logged and measured of itself, so a copy keeps its own and writes them.
+- the databases of `local/`, which no backup takes either.
+
+No node keeps a log of these, so none can be copied, and a config whose
+`files` names one is refused when the node starts. To have a store's metrics
+or logs on another machine, take a [backup](../../guides/backup/README.md)
+there, or have the programs write them to one central store over its server.
+
 A Bun or Node program can be a node itself, with its store inside it, and a
 Rust program can too, through `Options::node`. Python and Go have no such
 option: they open a node that `tinystore serve` runs.

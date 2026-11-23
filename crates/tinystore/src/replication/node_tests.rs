@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::entry::{self, Kind, MAGIC};
 use super::*;
-use crate::{Options, Store, sql};
+use crate::{ErrorKind, Options, Store, sql};
 
 pub(super) const FILES: [&str; 7] =
     ["kv.db", "jobs.db", "sql/app.db", "search.db", "blobs/blobs.db", "records.db", "metrics.db"];
@@ -104,6 +104,19 @@ fn a_node_logs_every_file_and_each_log_rebuilds_its_file_across_restarts() {
     write_through_every_engine(&store, 2);
     store.close().unwrap();
     assert_each_log_rebuilds_its_file(dir.path());
+}
+
+// contract: REPL-13
+#[test]
+fn a_node_told_to_copy_a_file_that_is_each_nodes_own_is_refused_at_its_open() {
+    for own in ["metrics.db", "records.db", "local/cache.db"] {
+        let dir = tempfile::tempdir().unwrap();
+        let files = Some(vec!["kv.db".to_owned(), own.to_owned()]);
+        let node = Node { from: vec!["127.0.0.1:1".to_owned()], files, ..Node::default() };
+        let refused = Store::open(dir.path(), Options { node: Some(node), ..Options::default() }).unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+        assert!(refused.to_string().contains(&format!("name {own}, which no node copies")), "{refused}");
+    }
 }
 
 #[test]

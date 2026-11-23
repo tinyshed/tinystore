@@ -295,6 +295,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **REPL-10** A live move MUST hand a file's home over with no commit lost.
 - **REPL-11** A link beyond loopback MUST use TLS unless the node says `insecure`; a node whose token is wrong MUST take nothing.
 - **REPL-12** A counter's add on a copy MUST count once at its home however often it is sent.
+- **REPL-13** A node MUST copy no `records.db`, no `metrics.db` and no database of `local/`, which are each node's own; a node whose `files` name one MUST be refused at its open, naming the file.
 
 ## 6. Wire and SDKs
 
