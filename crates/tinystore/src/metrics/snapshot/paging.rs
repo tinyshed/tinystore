@@ -365,6 +365,26 @@ impl Reading<'_, '_> {
         within && self.budget.fits(bytes, decoded)
     }
 
+    /// Whether a page lets a series take a group: its directory, and its
+    /// clock, read here when it fits what the series has left and paid as
+    /// long as it is, so that one that does not fit ends the page and never
+    /// fails it. A clock the snapshot holds decoded costs nothing more. Paid
+    /// at a clock's most, 64 KiB, no series of a group past 256 had a share
+    /// that held one, and each of its pages was one bucket.
+    fn admits_group(&mut self, room: &Room, directory: usize, clock: i64) -> Result<bool> {
+        if !self.admits(room, directory, 0) {
+            return Ok(false);
+        }
+        if self.clocks.iter().any(|(kept, _)| *kept == clock) {
+            return Ok(true);
+        }
+        let spent = self.budget.bytes.saturating_add(directory);
+        let left = room.bytes.saturating_sub(spent).min(self.budget.bytes_left().saturating_sub(directory));
+        let (length, body) = clock::load(self.connection, clock, left)?;
+        let Some(body) = body else { return Ok(false) };
+        self.keep_clock(clock, length, &body).map(|_| true)
+    }
+
     /// The live blocks of a series in its window, as [`Reading::blocks`]
     /// takes them, a group's directory and clock read only once the page
     /// reaches the group; and the time of the first block it could not take.
@@ -387,8 +407,7 @@ impl Reading<'_, '_> {
                 break;
             }
             let length = usize::try_from(row.get::<_, i64>(3).map_err(failed)?).unwrap_or(usize::MAX);
-            // a clock is paid at its most, so that one that does not fit never fails the page
-            if !self.admits(room, length.saturating_add(clock::MOST_BYTES), 0) {
+            if !self.admits_group(room, length, row.get(2).map_err(failed)?)? {
                 return Ok(Some(start.max(window.from)));
             }
             self.budget.take_bytes(length)?;

@@ -364,8 +364,14 @@ impl Reading<'_, '_> {
             return Ok(times.clone());
         }
         let (length, body) = clock::load(self.connection, id, self.budget.bytes_left())?;
+        self.keep_clock(id, length, &body.ok_or_else(|| Error::corrupt("a clock past its length"))?)
+    }
+
+    /// Pays for a clock read from the file and keeps it decoded, in place of
+    /// the oldest kept when they are [`KEPT_CLOCKS`].
+    fn keep_clock(&mut self, id: i64, length: usize, body: &[u8]) -> Result<Vec<Times>> {
         self.budget.take_bytes(length)?;
-        let times = clock::decode(&body.ok_or_else(|| Error::corrupt("a clock past its length"))?)?;
+        let times = clock::decode(body)?;
         if self.clocks.len() == KEPT_CLOCKS {
             self.clocks.remove(0);
         }

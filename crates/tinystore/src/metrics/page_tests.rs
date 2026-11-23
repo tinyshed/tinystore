@@ -222,6 +222,28 @@ fn an_aggregates_pages_go_past_the_series_a_query_finds_a_group_at_a_time() {
     }
 }
 
+// contract: MET-17
+#[test]
+fn a_page_holds_as_many_buckets_of_a_wide_group_as_its_bounds_allow() {
+    let f = fixture();
+    let first = f.now() - 15 * SECOND * 499;
+    let hosts = (0..300).map(|host| {
+        let mut series = Series::counter("requests_total").label("host", host);
+        series.extend((0..500).map(|index| (first + 15 * SECOND * index, f64::from(index * (host % 7 + 1)))));
+        series
+    });
+    for part in hosts.collect::<Vec<_>>().chunks(150) {
+        f.metrics().ingest(part).unwrap();
+    }
+    maintain(&f.store).unwrap();
+    let query = f.metrics().query().name("requests_total").since(3 * HOUR).every(10 * MINUTE);
+    let whole = query.aggregate(Op::Increase).unwrap().groups;
+    assert!(whole[0].buckets.len() > 10, "{} buckets", whole[0].buckets.len());
+    let pages = aggregate_pages(&query, Op::Increase, 100_000);
+    assert_eq!(pages.len(), 1, "300 series' packed hours and heads are within a page's bounds");
+    assert_eq!(joined_groups(&pages), whole);
+}
+
 // contract: MET-20
 #[test]
 fn a_group_past_the_series_a_query_finds_is_a_limit_and_the_groups_before_it_are_not() {
