@@ -38,8 +38,9 @@ mod sampled;
 pub(super) use paging::{PageTaken, TakenGroup, Wide};
 
 /// The decoded clocks a snapshot keeps, since series written together share
-/// theirs.
-const KEPT_CLOCKS: usize = 8;
+/// theirs. Series written a second apart for a minute have sixty between
+/// them: with eight kept, each series decoded its clock again.
+const KEPT_CLOCKS: usize = 64;
 
 /// What a call takes of each series.
 #[derive(Clone, Copy, Debug)]
