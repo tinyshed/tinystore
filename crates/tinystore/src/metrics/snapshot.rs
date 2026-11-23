@@ -11,7 +11,9 @@
 //! age of the oldest one. Every row's bytes are paid for before they are
 //! copied, and what a call does not need is not copied: a block an aggregate
 //! answers from its summary keeps its body in the file, and `latest` takes
-//! one chunk of a head or one block's directory.
+//! one chunk of a head or one block's directory. The bodies of the blocks it
+//! decodes are copied last, a statement for many of them in the order of
+//! their ids: a statement a body took a quarter of a chart's read.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -131,7 +133,12 @@ const NEWEST_GROUP: &str = "select start_ts, end_ts, clock, length(directory),
     from groups where id = (select id from groups where series_id = ?1 and start_ts < ?3
         order by start_ts desc limit 1)
     and end_ts >= ?2";
-const PAYLOAD: &str = "select body from payloads where id = ?1";
+/// The bodies of the payloads a JSON array of ids names, in the order of
+/// their ids.
+const PAYLOADS: &str = "select id, body from payloads where id in (select value from json_each(?1)) order by id";
+/// The ids one statement of [`PAYLOADS`] is given at most, so that its array
+/// stays small whatever a query copies.
+const PAYLOADS_AT_ONCE: usize = 1024;
 const HEAD: &str = "select body from heads where series_id = ?1 and length(body) <= ?2";
 
 impl Engine {
@@ -145,9 +152,10 @@ impl Engine {
     }
 
     /// `read` run on one snapshot of the file, the query read as a timer's
-    /// series when it names one. A series whose bytes no longer read is
-    /// suspended once the snapshot has ended, since a suspension writes.
-    fn snapshot<T>(
+    /// series when it names one, and the bodies of the blocks it took copied
+    /// in the same snapshot. A series whose bytes no longer read is suspended
+    /// once the snapshot has ended, since a suspension writes.
+    fn snapshot<T: Holds>(
         &self,
         asked: &Asked,
         want: Want<'_>,
@@ -160,7 +168,9 @@ impl Engine {
             let read_as = timer::read_as(connection, asked, want)?;
             let asked = read_as.as_ref().unwrap_or(asked);
             let mut reading = Reading { connection, zstd: &mut zstd, budget, clocks: Vec::new(), met: &mut met };
-            read(&mut reading, asked)
+            let mut taken = read(&mut reading, asked)?;
+            reading.bodies(taken.taken())?;
+            Ok(taken)
         });
         self.codecs.give_back(zstd);
         if let Some((id, failure)) = met {
@@ -168,6 +178,18 @@ impl Engine {
             self.suspend(id, &failure).ok();
         }
         taken
+    }
+}
+
+/// What a snapshot hands back: the series it took, whose blocks' bodies it
+/// copies once they are all known.
+pub(super) trait Holds {
+    fn taken(&mut self) -> Vec<&mut Taken>;
+}
+
+impl Holds for Vec<Taken> {
+    fn taken(&mut self) -> Vec<&mut Taken> {
+        self.iter_mut().collect()
     }
 }
 
@@ -328,18 +350,51 @@ impl Reading<'_, '_> {
         }
     }
 
-    fn part(&mut self, mut block: Block, whole: bool) -> Result<Part> {
+    fn part(&mut self, block: Block, whole: bool) -> Result<Part> {
         if !whole {
             self.budget.take_decoded(block.times.count)?;
+            // its body is copied with the others, by Reading::bodies
             if block.external() {
                 self.budget.take_bytes(block.body_len)?;
-                // a plan counts a payload's bytes by its directory and leaves them in the file
-                if !self.budget.is_planning() {
-                    block.body = self.payload(block.payload, block.body_len)?;
-                }
             }
         }
         Ok(Part { block, whole })
+    }
+
+    /// Copies the bodies of the blocks the series took that keep theirs
+    /// apart, [`PAYLOADS_AT_ONCE`] a statement in the order of their ids,
+    /// each paid for already. A plan counts them by their directories and
+    /// leaves them in the file.
+    fn bodies(&mut self, mut taken: Vec<&mut Taken>) -> Result<()> {
+        if self.budget.is_planning() {
+            return Ok(());
+        }
+        let mut wanted: Vec<(i64, usize, usize)> = Vec::new();
+        for (series, one) in taken.iter().enumerate() {
+            for (at, part) in one.blocks.iter().enumerate() {
+                if !part.whole && part.block.external() {
+                    wanted.push((part.block.payload, series, at));
+                }
+            }
+        }
+        wanted.sort_unstable();
+        for some in wanted.chunk_by(|a, b| a.0 == b.0).collect::<Vec<_>>().chunks(PAYLOADS_AT_ONCE) {
+            let ids: Vec<i64> = some.iter().map(|same| same[0].0).collect();
+            let mut found = self.payloads(&ids)?.into_iter().peekable();
+            for same in some {
+                let mut body = found.next_if(|(id, _)| *id == same[0].0).map(|(_, body)| body);
+                for (left, &(_, series, at)) in same.iter().enumerate().rev() {
+                    let block = &mut taken[series].blocks[at].block;
+                    if body.as_ref().is_none_or(|body| body.len() != block.body_len) {
+                        let lost = Error::corrupt("a block's payload is missing or of another length");
+                        return Err(self.met(&taken[series].found, lost));
+                    }
+                    // one id is one block's, but a block taken twice is given its body twice
+                    block.body = if left == 0 { body.take() } else { body.clone() }.unwrap_or_default();
+                }
+            }
+        }
+        Ok(())
     }
 
     fn group_rows(&mut self, sql: &'static str, id: i64, window: Window) -> Result<Vec<Row>> {
@@ -380,14 +435,13 @@ impl Reading<'_, '_> {
         Ok(times)
     }
 
-    fn payload(&mut self, id: i64, length: usize) -> Result<Vec<u8>> {
-        let body: Option<Vec<u8>> = self
-            .connection
-            .prepare_cached(PAYLOAD)
-            .and_then(|mut select| select.query_row(params![id], |row| row.get(0)).optional())
-            .map_err(|error| sql_error("read a block's values", error))?;
-        let body = body.filter(|body| body.len() == length);
-        body.ok_or_else(|| Error::corrupt("a block's payload is missing or of another length"))
+    /// The payloads of `ids`, sorted, that the file holds, in their order.
+    fn payloads(&self, ids: &[i64]) -> Result<Vec<(i64, Vec<u8>)>> {
+        let failed = |error| sql_error("read the values of blocks", error);
+        let ids = serde_json::to_string(ids).map_err(|error| Error::internal("a list of ids").with_source(error))?;
+        let mut select = self.connection.prepare_cached(PAYLOADS).map_err(failed)?;
+        let rows = select.query_map(params![ids], |row| Ok((row.get(0)?, row.get(1)?))).map_err(failed)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(failed)
     }
 }
 

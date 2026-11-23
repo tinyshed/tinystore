@@ -28,7 +28,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::chosen::{Choice, Chosen};
 use super::sampled::Sampled;
 use super::{
-    GROUPS, GROUPS_AND_BEFORE, HEAD, Part, Reading, State, Taken, TakenHead, Want, Window, from_the_chunk_before,
+    GROUPS, GROUPS_AND_BEFORE, HEAD, Holds, Part, Reading, State, Taken, TakenHead, Want, Window, from_the_chunk_before,
 };
 use crate::metrics::aggregate::{Op, Shape};
 use crate::metrics::budget::Budget;
@@ -85,6 +85,27 @@ pub(in crate::metrics) struct WidePart {
     pub(in crate::metrics) end: i64,
     pub(in crate::metrics) beyond: Option<i64>,
     pub(in crate::metrics) after: Option<(String, Labels)>,
+}
+
+impl Holds for (Vec<Taken>, Option<Place>) {
+    fn taken(&mut self) -> Vec<&mut Taken> {
+        self.0.iter_mut().collect()
+    }
+}
+
+impl Holds for PageTaken {
+    fn taken(&mut self) -> Vec<&mut Taken> {
+        match self {
+            PageTaken::Groups(groups, _) => groups.iter_mut().flat_map(|group| group.members.iter_mut()).collect(),
+            PageTaken::Wide(_) => Vec::new(),
+        }
+    }
+}
+
+impl Holds for WidePart {
+    fn taken(&mut self) -> Vec<&mut Taken> {
+        self.members.iter_mut().collect()
+    }
 }
 
 /// How far a page lets a series go: a part is taken while what the page
