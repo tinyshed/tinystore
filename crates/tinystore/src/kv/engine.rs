@@ -172,7 +172,6 @@ impl Kv {
     }
 
     /// The store kv opened in, while it is open.
-    #[cfg(any(feature = "replication", feature = "async"))]
     pub(crate) fn store(&self) -> Result<Store> {
         self.store.upgrade().ok_or_else(|| Error::closed("the store"))
     }
@@ -236,6 +235,10 @@ impl Kv {
 
     pub(crate) fn runs(&self) -> &Runs {
         &self.runs
+    }
+
+    pub(crate) fn probe(&self) -> &crate::probe::Probe {
+        &self.probe
     }
 
     #[cfg(feature = "config")]

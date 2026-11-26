@@ -261,7 +261,7 @@ impl Shared {
                 self.answer(stream, Ok(answer));
             }
             Ok(Run::Handed(handed, answer)) => {
-                runs.insert(stream, ClientRun::Handed(*handed));
+                runs.insert(stream, ClientRun::Handed(handed));
                 self.send(&[Frame::new(Kind::Response, stream, answer)]);
             }
             Ok(Run::Waiting) => {}

@@ -333,7 +333,7 @@ fn call_here(
             on_bucket(&owners.iter().fold(builder.open()?, |bucket, owner| bucket.under(owner)), key, call)
         }
         Handle::Once { name, keep } => {
-            let answers = super::once::rows(store, &name, Some(Duration::from_millis(keep)))?;
+            let answers = super::once::rows(store, &name, Some(Duration::from_millis(keep)), None)?;
             on_once(&owners.iter().fold(answers, |answers, owner| answers.under(owner)), key, call)
         }
         Handle::RateLimit { name, interval, burst } => {
@@ -512,8 +512,9 @@ fn claim_here(answers: &Bucket<()>, key: &str) -> Result<Claimed> {
         let waiter = Box::new(move |unkept| {
             let _ = ended.send(unkept);
         });
-        match super::once::hand(answers, key, waiter)? {
-            super::once::Hand::Kept(raw) => return Ok(Claimed::Kept(raw)),
+        match super::once::hand(answers, None, key, waiter)? {
+            super::once::Hand::Kept(kept) => return Ok(Claimed::Kept(kept.raw)),
+            super::once::Hand::Refresh(kept, _) => return Ok(Claimed::Kept(kept.raw)),
             super::once::Hand::Yours(handed) => return Ok(Claimed::Yours(answers.scope.kv.keep_passed(handed))),
             super::once::Hand::Wait => {
                 let left = deadline.saturating_duration_since(std::time::Instant::now());

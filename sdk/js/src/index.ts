@@ -165,7 +165,7 @@ export {
 	type ValueBucket,
 	type ValuePage,
 } from './metrics.ts'
-export type { Once, OnceOptions } from './once.ts'
+export type { Once, OnceAnswer, OnceOptions } from './once.ts'
 export type { ColumnType, Query, RowPage, Table, TableOptions, UpsertOptions } from './query.ts'
 export type {
 	Aggregate as EventsAggregate,

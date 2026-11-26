@@ -42,6 +42,14 @@ func FlushEvery(d time.Duration) flushEvery
 
 FlushEvery keeps counts in memory and writes them that often, so that an add costs no commit and a crash loses at most that span.
 
+## Fresh
+
+```go
+func Fresh(d time.Duration) fresh
+```
+
+Fresh is how long an answer is answered without making a new one, shorter than Keep: past it, the kept answer is answered at once and one new one is made in the background.
+
 ## Idle
 
 ```go
@@ -113,6 +121,18 @@ type Allowance struct {
 ```
 
 Allowance is what a rate limit or a quota answers a request.
+
+## Answer
+
+```go
+type Answer[T any] struct {
+	Value T
+	Age   time.Duration
+	Stale bool
+}
+```
+
+Answer is an answer with how old it is: Stale once it is older than the Fresh its answers opened with.
 
 ## Bucket
 
@@ -436,7 +456,7 @@ type Once[T any] struct {
 }
 ```
 
-Once runs a function once a key and keeps its answer: a request sent twice is answered as the first was rather than done twice. The core lets one run of a key go at a time, every client of the store included: it answers the kept answer, or hands the run to this client and keeps what it sends back.
+Once runs a function once a key and keeps its answer: a request sent twice is answered as the first was rather than done twice. The core lets one run of a key go at a time, every client of the store included: it answers the kept answer, or hands the run to this client and keeps what it sends back. Opened with Fresh, a kept answer older than it is answered at once, and the core may hand this client the build of the next one, which runs in the background.
 
 ### OpenOnce
 
@@ -447,6 +467,25 @@ func OpenOnce[T any](home tinystore.Home, name string, opts ...OnceOption) (*Onc
 OpenOnce opens answers of type T kept once a key, a day unless Keep says.
 
 	charges, err := kv.OpenOnce[Receipt](store, "charges", kv.Keep(24*time.Hour))
+	books, err := kv.OpenOnce[GradeBook](store, "cabinet-books", kv.Fresh(10*time.Minute), kv.Keep(12*time.Hour))
+
+### Once.Answer
+
+```go
+func (o *Once[T]) Answer(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (Answer[T], error)
+```
+
+Answer is Run's answer with how old it is. Opened with Fresh, a kept answer older than it comes back at once, Stale, and fn may make the next one in the background, on a context that the caller's cancel does not reach: its answer replaces the kept one, and its error, which no caller sees, keeps it until Keep ends.
+
+	book, err := books.Answer(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
+
+### Once.Clear
+
+```go
+func (o *Once[T]) Clear(ctx context.Context) error
+```
+
+Clear forgets every answer of this branch and of the branches under it, in one commit. A run under way meanwhile keeps its answer once it ends.
 
 ### Once.Delete
 

@@ -479,6 +479,15 @@ impl<V> Bucket<V> {
         Bucket { scope, expiry, encrypted: None, _value: PhantomData }
     }
 
+    /// How long a key is kept after it is written, for a bucket whose keys
+    /// expire so: once's answers.
+    pub(crate) fn kept_for(&self) -> Option<Duration> {
+        match self.expiry {
+            Expiry::Ttl(keep) => Some(keep),
+            _ => None,
+        }
+    }
+
     /// The same bucket seen from the branch `owner` names under this one:
     /// `sessions.under(user_id).clear()` signs a user out everywhere.
     pub fn under(&self, owner: impl Key) -> Bucket<V> {

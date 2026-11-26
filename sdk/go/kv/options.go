@@ -56,7 +56,7 @@ type listOptions struct {
 	after *string
 }
 
-type onceOptions struct{ keep *time.Duration }
+type onceOptions struct{ keep, fresh *time.Duration }
 
 type rateLimitOptions struct {
 	rate  uint64
@@ -148,6 +148,15 @@ type keep time.Duration
 func Keep(d time.Duration) keep { return keep(d) }
 
 func (k keep) once(o *onceOptions) { d := time.Duration(k); o.keep = &d }
+
+type fresh time.Duration
+
+// Fresh is how long an answer is answered without making a new one, shorter
+// than Keep: past it, the kept answer is answered at once and one new one is
+// made in the background.
+func Fresh(d time.Duration) fresh { return fresh(d) }
+
+func (f fresh) once(o *onceOptions) { d := time.Duration(f); o.fresh = &d }
 
 type rate struct {
 	n   int

@@ -2960,6 +2960,12 @@
     },
     {
       "fields": {
+        "aged": {
+          "bool": true
+        },
+        "fresh": {
+          "uint": "1500"
+        },
         "keep": {
           "uint": "1500"
         },
@@ -2967,7 +2973,7 @@
           "str": "name"
         }
       },
-      "hex": "8201a46e616d6502cd05dc",
+      "hex": "8401a46e616d6502cd05dc03cd05dc04c3",
       "message": "kv.OnceOpen",
       "name": "kv.OnceOpen with every field"
     },
@@ -2979,14 +2985,23 @@
     },
     {
       "fields": {
+        "age": {
+          "uint": "1500"
+        },
         "found": {
+          "bool": true
+        },
+        "refresh": {
+          "bool": true
+        },
+        "stale": {
           "bool": true
         },
         "value": {
           "bin": "01ff"
         }
       },
-      "hex": "8201c302c40201ff",
+      "hex": "8501c302c40201ff03cd05dc04c305c3",
       "message": "kv.Answer",
       "name": "kv.Answer with every field"
     },

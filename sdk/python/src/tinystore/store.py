@@ -188,16 +188,23 @@ class Store:
         return Quota(Parts(self._link, name, opener, "kv.quota.open", (), None, None))
 
     @overload
-    def once[T](self, name: str, of: type[T], *, keep: Duration | None = None) -> Once[T]: ...
+    def once[T](
+        self, name: str, of: type[T], *, keep: Duration | None = None, fresh: Duration | None = None
+    ) -> Once[T]: ...
     @overload
-    def once(self, name: str, of: None = None, *, keep: Duration | None = None) -> Once[Any]: ...
-    def once(self, name: str, of: Any = None, *, keep: Duration | None = None) -> Once[Any]:
+    def once(
+        self, name: str, of: None = None, *, keep: Duration | None = None, fresh: Duration | None = None
+    ) -> Once[Any]: ...
+    def once(
+        self, name: str, of: Any = None, *, keep: Duration | None = None, fresh: Duration | None = None
+    ) -> Once[Any]:
         """A function run once a key, its JSON answer kept a day unless keep says.
 
-        ``store.once("charges", Receipt)``
+        ``store.once("charges", Receipt)``; with fresh, shorter than keep, an answer
+        older than it is answered at once while one new one is made in the background.
         """
-        opener = once_open(name, keep)
-        return Once(Parts(self._link, name, opener, "kv.once.open", (), json_values(of), None))
+        opens = once_open(name, keep, fresh)
+        return Once(Parts(self._link, name, opens.plain, "kv.once.open", (), json_values(of), None), opens.aged)
 
     @overload
     def queue[T](

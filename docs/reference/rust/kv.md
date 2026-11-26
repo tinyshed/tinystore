@@ -522,6 +522,123 @@ pub struct Maintenance {
 
 What one maintenance pass did.
 
+## Fresh
+
+```rust
+pub struct Fresh<V> { /* private fields */ }
+```
+
+Once's answers, each answered as it is while younger than `fresh`, then
+answered at once while one new answer is made in the background, until
+`keep` ends:
+
+```rust
+let (fresh, keep) = (Duration::from_mins(10), Duration::from_hours(12));
+let books = store.once::<String>("cabinet-books").fresh(fresh).keep(keep).open()?;
+let user = 7;
+let answer = books.answer(user, move || book(user))?;
+println!("{} made {:?} ago, stale: {}", answer.value, answer.age, answer.stale);
+```
+
+| The kept answer            | What the caller gets | What is built                                |
+|----------------------------|----------------------|----------------------------------------------|
+| younger than `fresh`       | it, at once          | nothing                                      |
+| between `fresh` and `keep` | it at once, stale    | one new answer in the background             |
+| past `keep`, or none       | the new answer       | one, which every caller of the key waits for |
+
+A build in the background runs on the store's threads, so its function
+is `Send + 'static`; its answer replaces the kept one and starts both
+terms again, and its error keeps the kept one until `keep` ends, while no
+other build of its key starts for a tenth of `fresh`, a second at least
+and a minute at most. One build of a key runs at a time across every
+client of the store; on a node that copies kv.db, one a node.
+
+### Fresh.answer
+
+```rust
+pub fn answer<E, W>(&self, key: impl Key, work: W) -> Result<Answer<V>, E>
+where
+    E: From<Error> + Send + 'static,
+    W: FnOnce() -> Result<V, E> + Send + 'static,
+```
+
+The answer kept under `key`, with how old it is, or `work`'s once
+none is kept, which is then kept, as `Once::run` keeps it. A kept
+answer older than `fresh` is answered at once, `stale`, and `work`
+makes the new one in the background, unless a build of the key is
+under way or failed within its pause.
+
+### Fresh.run
+
+```rust
+pub fn run<E, W>(&self, key: impl Key, work: W) -> Result<V, E>
+where
+    E: From<Error> + Send + 'static,
+    W: FnOnce() -> Result<V, E> + Send + 'static,
+```
+
+`Fresh::answer`'s value alone.
+
+### Fresh.get
+
+```rust
+pub fn get(&self, key: impl Key) -> Result<Option<V>>
+```
+
+The answer kept under `key`, stale or not.
+
+### Fresh.delete
+
+```rust
+pub fn delete(&self, key: impl Key) -> Result<bool>
+```
+
+Forgets the answer kept under `key`, so that the next run runs again;
+says whether there was one.
+
+### Fresh.clear
+
+```rust
+pub fn clear(&self) -> Result<()>
+```
+
+Removes every answer of this branch and of the branches under it, in
+one commit. A build under way meanwhile keeps its answer once it ends.
+
+### Fresh.under
+
+```rust
+pub fn under(&self, owner: impl Key) -> Fresh<V>
+```
+
+The same answers seen from the branch `owner` names under these.
+
+## FreshBuilder
+
+```rust
+pub struct FreshBuilder<V> { /* private fields */ }
+```
+
+Answers being opened with `fresh`: their name and type, how long one is
+answered without making a new one, and how long one is kept at all.
+
+### FreshBuilder.keep
+
+```rust
+pub fn keep(self, keep: Duration) -> Self
+```
+
+How long an answer is kept from when it was made; a day unless said.
+
+### FreshBuilder.open
+
+```rust
+pub fn open(self) -> Result<Fresh<V>>
+```
+
+Opens the answers; a `fresh` of zero, or as long as `keep` or longer,
+is `Invalid`.
+
 ## KeyCall
 
 ```rust
@@ -593,6 +710,19 @@ pub fn expire(self) -> Result<bool>
 Gives a live key the expiry `ttl` or `expires_at` named, keeping its
 value and version, and says whether it was there.
 
+## Answer
+
+```rust
+pub struct Answer<V> {
+    pub value: V,
+    pub age: Duration,
+    pub stale: bool,
+}
+```
+
+An answer with how old it is: `stale` once it is older than the `fresh`
+its answers opened with, and never for answers opened without one.
+
 ## Once
 
 ```rust
@@ -609,6 +739,25 @@ pub fn under(&self, owner: impl Key) -> Once<V>
 ```
 
 The same answers seen from the branch `owner` names under these.
+
+### Once.answer
+
+```rust
+pub fn answer<E: From<Error>>(
+    &self,
+    key: impl Key,
+    work: impl FnOnce() -> Result<V, E>,
+) -> Result<Answer<V>, E>
+```
+
+`Once::run`'s answer with how old it is: no older than `keep`, and
+never stale, since these answers were opened without `fresh`.
+
+```rust
+let charges = store.once::<String>("charges").open()?;
+let receipt = charges.answer("key-7f", || Ok::<_, tinystore::Error>("receipt 1".to_owned()))?;
+println!("{} made {:?} ago", receipt.value, receipt.age);
+```
 
 ### Once.run
 
@@ -628,6 +777,16 @@ nothing, so the next run runs again; an answer meant to be kept, a card
 declined, is a value rather than an error. An answer that could not be
 kept is still returned, to this caller and to those that waited for this
 run, and the failure logged.
+
+### Once.clear
+
+```rust
+pub fn clear(&self) -> Result<()>
+```
+
+Removes every answer of this branch and of the branches under it, in
+one commit, so that the next run of each key runs again. A run under
+way meanwhile keeps its answer once it ends.
 
 ### Once.get
 
@@ -662,6 +821,16 @@ pub fn keep(self, keep: Duration) -> Self
 
 How long an answer is kept from when it was made; a day unless said.
 After that, a run of its key runs again.
+
+### OnceBuilder.fresh
+
+```rust
+pub fn fresh(self, fresh: Duration) -> FreshBuilder<V>
+```
+
+How long an answer is answered without making a new one, shorter than
+`keep`: past it, the kept answer is answered at once and one new one
+is made in the background, as `crate::kv::Fresh` says.
 
 ### OnceBuilder.open
 
@@ -1450,6 +1619,149 @@ pub fn open(self) -> Result<Counters>
 
 Opens the counters: a plain call, made once at start.
 
+## aio::kv::Build
+
+```rust
+pub type Build = Pin<Box<dyn Future<Output = ()> + Send + 'static>>
+```
+
+A build in the background of a stale answer, as the program's runtime
+runs it: `tokio::spawn(build)`.
+
+## aio::kv::Fresh
+
+```rust
+pub struct Fresh<V> { /* private fields */ }
+```
+
+Once's answers opened with `fresh`, awaited: the same answers and terms
+as `crate::kv::Fresh`, whose builds in the background run where `spawn`
+puts them.
+
+```rust
+let books = store
+    .once::<String>("cabinet-books")
+    .fresh(Duration::from_mins(10))
+    .keep(Duration::from_hours(12))
+    .spawn(|build| drop(tokio::spawn(build)))
+    .open()?;
+let answer = books.answer(7, || book(7)).await?; // at once, stale or not, once one is kept
+```
+
+### aio::kv::Fresh.answer
+
+```rust
+pub fn answer<K, E, W, F>(
+    &self,
+    key: K,
+    work: W,
+) -> impl Future<Output = Result<Answer<V>, E>> + Send + use<K, V, E, W, F>
+where
+    K: Key,
+    E: From<Error> + Send + 'static,
+    W: FnOnce() -> F + Send + 'static,
+    F: Future<Output = Result<V, E>> + Send + 'static,
+```
+
+The answer kept under `key`, with how old it is, or the answer of the
+future `work` gives once none is kept, as `crate::kv::Fresh::answer`
+gives it. A kept answer older than `fresh` is answered at once,
+`stale`, and `work`'s future, given to `spawn`, makes the new one,
+unless a build of the key is under way or failed within its pause.
+
+### aio::kv::Fresh.run
+
+```rust
+pub fn run<K, E, W, F>(
+    &self,
+    key: K,
+    work: W,
+) -> impl Future<Output = Result<V, E>> + Send + use<K, V, E, W, F>
+where
+    K: Key,
+    E: From<Error> + Send + 'static,
+    W: FnOnce() -> F + Send + 'static,
+    F: Future<Output = Result<V, E>> + Send + 'static,
+```
+
+`Fresh::answer`'s value alone.
+
+### aio::kv::Fresh.get
+
+```rust
+pub fn get(&self, key: impl Key) -> impl Future<Output = Result<Option<V>>> + Send + 'static
+```
+
+The answer kept under `key`, stale or not.
+
+### aio::kv::Fresh.delete
+
+```rust
+pub fn delete(&self, key: impl Key) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Forgets the answer kept under `key`; says whether there was one.
+
+### aio::kv::Fresh.clear
+
+```rust
+pub fn clear(&self) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Removes every answer of this branch and of the branches under it, in
+one commit, as `crate::kv::Fresh::clear` does.
+
+### aio::kv::Fresh.under
+
+```rust
+pub fn under(&self, owner: impl Key) -> Fresh<V>
+```
+
+The same answers seen from the branch `owner` names under these.
+
+### aio::kv::Fresh.blocking
+
+```rust
+pub fn blocking(&self) -> &Fresh<V>
+```
+
+The same answers, for their blocking calls.
+
+## aio::kv::FreshBuilder
+
+```rust
+pub struct FreshBuilder<V> { /* private fields */ }
+```
+
+Answers being opened with `fresh`, as `crate::kv::FreshBuilder` are,
+and where their builds in the background run.
+
+### aio::kv::FreshBuilder.keep
+
+```rust
+pub fn keep(self, keep: Duration) -> Self
+```
+
+How long an answer is kept from when it was made; a day unless said.
+
+### aio::kv::FreshBuilder.spawn
+
+```rust
+pub fn spawn(self, spawn: impl Fn(Build) + Send + Sync + 'static) -> Self
+```
+
+Where a build in the background runs: `.spawn(|build| { tokio::spawn(build); })`.
+A build dropped before its end keeps nothing and lets its key go.
+
+### aio::kv::FreshBuilder.open
+
+```rust
+pub fn open(self) -> Result<Fresh<V>>
+```
+
+Opens the answers: a plain call, made once at start. Without `spawn`
+it is `Invalid`, since a stale answer would have nowhere to be made.
+
 ## aio::kv::Once
 
 ```rust
@@ -1500,6 +1812,24 @@ runs again; once the function answered, its answer is kept all the
 same and the key let go after it. A run of a key inside its own run,
 awaited or blocking, is `Invalid`.
 
+### aio::kv::Once.answer
+
+```rust
+pub fn answer<K, E, W, F>(
+    &self,
+    key: K,
+    work: W,
+) -> impl Future<Output = Result<Answer<V>, E>> + Send + use<K, V, E, W, F>
+where
+    K: Key,
+    E: From<Error> + Send,
+    W: FnOnce() -> F + Send,
+    F: Future<Output = Result<V, E>> + Send,
+```
+
+`Once::run`'s answer with how old it is, as
+`crate::kv::Once::answer` gives it.
+
 ### aio::kv::Once.get
 
 ```rust
@@ -1516,6 +1846,15 @@ pub fn delete(&self, key: impl Key) -> impl Future<Output = Result<bool>> + Send
 
 Forgets the answer kept under `key`, so that the next run runs again;
 says whether there was one.
+
+### aio::kv::Once.clear
+
+```rust
+pub fn clear(&self) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Removes every answer of this branch and of the branches under it, in
+one commit, as `crate::kv::Once::clear` does.
 
 ### aio::kv::Once.under
 
@@ -1549,6 +1888,16 @@ pub fn keep(self, keep: Duration) -> Self
 ```
 
 How long an answer is kept from when it was made; a day unless said.
+
+### aio::kv::OnceBuilder.fresh
+
+```rust
+pub fn fresh(self, fresh: Duration) -> FreshBuilder<V>
+```
+
+How long an answer is answered without making a new one, shorter than
+`keep`, as `crate::kv::OnceBuilder::fresh` says; awaited answers
+opened so also take where their builds in the background run.
 
 ### aio::kv::OnceBuilder.open
 

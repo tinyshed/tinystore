@@ -27,6 +27,7 @@ mod engine;
 pub(crate) mod fixture;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
+mod fresh;
 mod key_call;
 #[cfg(feature = "locks")]
 pub mod locks;
@@ -43,8 +44,9 @@ pub use allowance::{Allowance, Window};
 pub use bucket::{All, Bucket, BucketBuilder, Entry, PAGE_KEYS, Page, Version};
 pub use counters::{Counters, CountersBuilder};
 pub use engine::Maintenance;
+pub use fresh::{Fresh, FreshBuilder};
 pub use key_call::KeyCall;
-pub use once::{Once, OnceBuilder};
+pub use once::{Answer, Once, OnceBuilder};
 pub use path::Key;
 pub use quota::{Quota, QuotaBuilder};
 pub use rate_limit::{RateLimit, RateLimitBuilder};
@@ -56,13 +58,16 @@ pub use value::{Bytes, Value};
 pub(crate) use {
     batch::{Batch, Outcome, Place},
     cells::Cell,
-    once::{Hand, Waiter, hand, rows as once_rows},
+    once::{Hand, Kept, Waiter, hand, rows as once_rows},
     path::MAX_PATH as MAX_KEY,
     scope::{Kind, Scope},
 };
 // What keeps a config's live settings: kv.db, its versions and the configs open in the process.
 #[cfg(feature = "config")]
 pub(crate) use engine::{Kv, next_version};
+// An answer just made, as the async API's runs give it.
+#[cfg(feature = "async")]
+pub(crate) use once::made;
 // The tries of an update, which the async API awaits.
 #[cfg(feature = "async")]
 pub(crate) use bucket::{Proposed, UPDATE_ATTEMPTS, kept};

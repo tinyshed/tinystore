@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"time"
 
 	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/internal/core"
@@ -12,14 +13,30 @@ import (
 // is answered as the first was rather than done twice. The core lets one run
 // of a key go at a time, every client of the store included: it answers the
 // kept answer, or hands the run to this client and keeps what it sends back.
+// Opened with Fresh, a kept answer older than it is answered at once, and the
+// core may hand this client the build of the next one, which runs in the
+// background.
 type Once[T any] struct {
 	parts
+	// aged opens the handle that Answer asks through, which reads each
+	// answer's age: Run without Fresh opens as an older client did, and so
+	// still reaches an older server.
+	aged   *core.Opener
 	values core.Values[T]
+}
+
+// Answer is an answer with how old it is: Stale once it is older than the
+// Fresh its answers opened with.
+type Answer[T any] struct {
+	Value T
+	Age   time.Duration
+	Stale bool
 }
 
 // OpenOnce opens answers of type T kept once a key, a day unless Keep says.
 //
 //	charges, err := kv.OpenOnce[Receipt](store, "charges", kv.Keep(24*time.Hour))
+//	books, err := kv.OpenOnce[GradeBook](store, "cabinet-books", kv.Fresh(10*time.Minute), kv.Keep(12*time.Hour))
 func OpenOnce[T any](home tinystore.Home, name string, opts ...OnceOption) (*Once[T], error) {
 	var o onceOptions
 	for _, opt := range opts {
@@ -32,13 +49,25 @@ func OpenOnce[T any](home tinystore.Home, name string, opts ...OnceOption) (*Onc
 	if err != nil {
 		return nil, err
 	}
+	freshMs, err := millis(o.fresh, "kv once "+name+": fresh")
+	if err != nil {
+		return nil, err
+	}
 	of := homeOf(home)
-	open := &core.Opener{Method: wire.MethodKvOnceOpen, Body: wire.Encode(&wire.KvOnceOpen{Name: name, Keep: keepMs})}
-	return &Once[T]{parts{store: of.Store, name: name, opener: open, via: core.ViaLink{Link: of.Store.Link}}, core.JSONValues[T]()}, nil
+	// Only this client, which reads Refresh, sends Fresh: the core hands a
+	// build in the background only to a handle opened with it, so an older
+	// client never reads one as a run of its own.
+	aged := &core.Opener{Method: wire.MethodKvOnceOpen, Body: wire.Encode(&wire.KvOnceOpen{Name: name, Keep: keepMs, Fresh: freshMs, Aged: true})}
+	plain := aged
+	if freshMs == nil {
+		plain = &core.Opener{Method: wire.MethodKvOnceOpen, Body: wire.Encode(&wire.KvOnceOpen{Name: name, Keep: keepMs})}
+	}
+	opened := parts{store: of.Store, name: name, opener: plain, via: core.ViaLink{Link: of.Store.Link}}
+	return &Once[T]{opened, aged, core.JSONValues[T]()}, nil
 }
 
 // Under is the answers of a branch, each key apart from the same key elsewhere.
-func (o *Once[T]) Under(owners ...any) *Once[T] { return &Once[T]{o.below(owners), o.values} }
+func (o *Once[T]) Under(owners ...any) *Once[T] { return &Once[T]{o.below(owners), o.aged, o.values} }
 
 // Run is the answer kept for key, or fn's, which is kept. A run of a key
 // that another runs, here or in another process, waits for it and gets its
@@ -46,35 +75,76 @@ func (o *Once[T]) Under(owners ...any) *Once[T] { return &Once[T]{o.below(owners
 // again. A connection lost after fn returned and before its answer was kept
 // is OutcomeUnknown.
 func (o *Once[T]) Run(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (T, error) {
-	var zero T
-	stream, kept, err := o.claim(ctx, key)
+	answer, err := o.ask(ctx, o.opener, key, fn)
+	return answer.Value, err
+}
+
+// Answer is Run's answer with how old it is. Opened with Fresh, a kept answer
+// older than it comes back at once, Stale, and fn may make the next one in
+// the background, on a context that the caller's cancel does not reach: its
+// answer replaces the kept one, and its error, which no caller sees, keeps it
+// until Keep ends.
+//
+//	book, err := books.Answer(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
+func (o *Once[T]) Answer(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (Answer[T], error) {
+	return o.ask(ctx, o.aged, key, fn)
+}
+
+func (o *Once[T]) ask(ctx context.Context, opener *core.Opener, key string, fn func(ctx context.Context) (T, error)) (Answer[T], error) {
+	stream, kept, err := o.claim(ctx, opener, key)
 	if err != nil || stream == nil {
 		return kept, err
 	}
-	answer, err := fn(ctx)
+	if kept.Stale {
+		go o.build(context.WithoutCancel(ctx), stream, fn)
+		return kept, nil
+	}
+	made, answer, err := o.made(ctx, fn)
 	if err != nil {
 		// fn's own error is the one to give
 		_ = end(ctx, stream, wire.Encode(&wire.KvAnswer{}))
-		return zero, err
+		return Answer[T]{}, err
+	}
+	if err := end(ctx, stream, answer); err != nil {
+		return Answer[T]{}, err
+	}
+	return Answer[T]{Value: made}, nil
+}
+
+// made runs fn and encodes what it answered as the run's last DATA.
+func (o *Once[T]) made(ctx context.Context, fn func(ctx context.Context) (T, error)) (T, []byte, error) {
+	var zero T
+	answer, err := fn(ctx)
+	if err != nil {
+		return zero, nil, err
 	}
 	raw, err := o.values.Encode(answer)
 	if err != nil {
-		_ = end(ctx, stream, wire.Encode(&wire.KvAnswer{}))
-		return zero, err
+		return zero, nil, err
 	}
-	if err := end(ctx, stream, wire.Encode(&wire.KvAnswer{Found: true, Value: &raw})); err != nil {
-		return zero, err
+	return answer, wire.Encode(&wire.KvAnswer{Found: true, Value: &raw}), nil
+}
+
+// build runs a build the core handed over in the background, its caller
+// answered already: what fn makes, or not found when it fails, goes back as
+// the run's last DATA. A connection lost or a store closed meanwhile ends it
+// with nothing kept, and no one hears, since no caller waits for it.
+func (o *Once[T]) build(ctx context.Context, stream *core.Stream, fn func(ctx context.Context) (T, error)) {
+	_, answer, err := o.made(ctx, fn)
+	if err != nil {
+		answer = wire.Encode(&wire.KvAnswer{})
 	}
-	return answer, nil
+	_ = end(ctx, stream, answer)
 }
 
 // claim asks for key's run: the answer kept for it, or the run the core
-// handed over, which a connection lost before the answer asks for again.
-func (o *Once[T]) claim(ctx context.Context, key string) (*core.Stream, T, error) {
+// handed over, which a connection lost before the answer asks for again. A
+// run handed over with a kept answer, Stale, is a build in the background.
+func (o *Once[T]) claim(ctx context.Context, opener *core.Opener, key string) (*core.Stream, Answer[T], error) {
 	var stream *core.Stream
-	var kept T
+	var kept Answer[T]
 	err := o.store.Link.Run(ctx, core.Reading, func(c *core.Connection) error {
-		handle, err := core.HandleOn(ctx, c, o.opener)
+		handle, err := core.HandleOn(ctx, c, opener)
 		if err != nil {
 			return err
 		}
@@ -87,25 +157,40 @@ func (o *Once[T]) claim(ctx context.Context, key string) (*core.Stream, T, error
 			st.Cancel()
 			return err
 		}
-		if !first.End {
-			stream = st
-			return nil
-		}
 		var offered wire.KvAnswer
 		if err := decode(first.Body, &offered); err != nil {
+			st.Cancel()
+			return err
+		}
+		if !first.End {
+			stream = st
+			if offered.Refresh {
+				kept, err = o.kept(offered)
+				kept.Stale = true
+			}
 			return err
 		}
 		if !offered.Found {
 			return core.Errorf(core.Protocol, "kv once %s: a run ended without its answer", o.name)
 		}
-		var raw wire.Raw
-		if offered.Value != nil {
-			raw = *offered.Value
-		}
-		kept, err = o.values.Decode(raw)
+		kept, err = o.kept(offered)
 		return err
 	})
 	return stream, kept, err
+}
+
+// kept is an answer the core kept, with its age.
+func (o *Once[T]) kept(offered wire.KvAnswer) (Answer[T], error) {
+	var raw wire.Raw
+	if offered.Value != nil {
+		raw = *offered.Value
+	}
+	value, err := o.values.Decode(raw)
+	var age time.Duration
+	if offered.Age != nil {
+		age = time.Duration(*offered.Age) * time.Millisecond
+	}
+	return Answer[T]{Value: value, Age: age, Stale: offered.Stale}, err
 }
 
 // end sends the run's answer as the stream's last DATA, and waits for the
@@ -143,4 +228,13 @@ func (o *Once[T]) Get(ctx context.Context, key string) (T, bool, error) {
 // Delete forgets the answer kept for key, so that its next run runs fn again.
 func (o *Once[T]) Delete(ctx context.Context, key string) (bool, error) {
 	return foundOf(o.call(ctx, wire.MethodKvOnceDelete, wire.KvCall{Key: key}, core.Writing))
+}
+
+// Clear forgets every answer of this branch and of the branches under it, in
+// one commit. A run under way meanwhile keeps its answer once it ends.
+func (o *Once[T]) Clear(ctx context.Context) error {
+	_, err := o.via.Call(ctx, o.opener, wire.MethodKvClear, func(handle uint64) []byte {
+		return wire.Encode(&wire.KvBranch{Handle: handle, Under: o.under})
+	}, core.Writing)
+	return err
 }

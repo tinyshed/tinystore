@@ -60,7 +60,7 @@ pub mod metrics;
 pub mod pipe;
 #[cfg(feature = "store")]
 mod polled;
-#[cfg(any(feature = "wire", feature = "sql", all(feature = "async", feature = "store")))]
+#[cfg(any(feature = "wire", feature = "sql", feature = "kv", all(feature = "async", feature = "store")))]
 mod pool;
 #[cfg(feature = "store")]
 mod probe;

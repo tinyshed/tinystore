@@ -174,7 +174,7 @@ enum ClientRun {
     /// Asking for its key, or waiting for the run that holds it.
     Asking(u64),
     /// Handed to the client, until its last DATA, a CANCEL or the session's end.
-    Handed(Handed),
+    Handed(Box<Handed>),
 }
 
 #[derive(Default)]
