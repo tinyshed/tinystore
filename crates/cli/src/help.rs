@@ -572,6 +572,31 @@ pub(crate) const METRICS_AGGREGATE: Command = Command {
            bucket and a column a group.",
 };
 
+pub(crate) const METRICS_EXPORT: Command = Command {
+    name: "metrics export",
+    takes: "[dir] export",
+    does: "the newest sample of every series, as the Prometheus text a scrape reads",
+    flags: &[
+        flag("--prefix", "<prefix>", "only the names that start with it"),
+        flag("--since", "<span>", "only the series whose newest sample is at most this old; every series otherwise"),
+        flag(
+            "--no-timestamps",
+            "",
+            "each line without its sample's time, as node_exporter's textfile collector takes it",
+        ),
+        flag("-o", "<file>", "write the file, whole once written, rather than stdout, and say what it wrote"),
+    ],
+    examples: &[
+        "tinystore metrics ./data export",
+        "tinystore metrics ./data export --only-prefix shop_ --since 5m -o shop.prom",
+        "tinystore metrics ./data export --no-timestamps -o /var/lib/node_exporter/shop.prom",
+    ],
+    more: "It reads beside the program or server that holds the directory. Each series is one line with its newest \
+           value and that sample's time in milliseconds, unless --no-timestamps leaves the time out. A name or a \
+           label past letters, digits, _ and : is written with _ in their place. A running program's instruments \
+           write their totals every 15 seconds, so its last seconds may not be in the text yet.",
+};
+
 pub(crate) const METRICS_DELETE: Command = Command {
     name: "metrics delete",
     takes: "<dir> delete <name> [label=value]...",
@@ -597,6 +622,26 @@ pub(crate) const METRICS_REPLACE: Command = Command {
            through the server that holds the directory, or starts one.",
 };
 
+pub(crate) const EVENTS_EXPORT: Command = Command {
+    name: "events export",
+    takes: "[dir] export <stream>",
+    does: "every event of a stream's range, oldest first, as JSON lines",
+    flags: &[
+        flag("--where", "<field=text|field:=json>", "events whose field holds the value; again for more"),
+        flag("--level", "<level>", "trace, debug, info, warn or error, and above"),
+        flag("--since", "<span>", "the last span, as 15m, 1h or 2d; everything the stream keeps by default"),
+        FROM,
+        TO,
+        flag("-o", "<file>", "write the file, whole once written, rather than stdout"),
+    ],
+    examples: &[
+        "tinystore events ./data export audit > audit.jsonl",
+        "tinystore events ./data export audit --from 2026-11-01T00:00Z --to 2026-11-02T00:00Z -o day.jsonl",
+    ],
+    more: "It reads beside the program or server that holds the directory, a page at a time until the range ends, \
+           and prints each event as list --json does, then says on stderr how many it wrote.",
+};
+
 pub(crate) const EVENTS_LIST: Command = Command {
     name: "events list",
     takes: "[dir] list <stream>",
@@ -607,7 +652,7 @@ pub(crate) const EVENTS_LIST: Command = Command {
         SINCE,
         FROM,
         TO,
-        flag("--limit", "<count>", "how many events a page holds; 100 by default"),
+        flag("--limit", "<count>", "how many events a page holds; 100 by default, 10000 at most"),
         flag("--after", "<next>", "the page after one, as its end says"),
         flag("--json", "", "one JSON object an event, as logs --json prints"),
     ],
@@ -721,7 +766,9 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &METRICS_NAMES,
             &METRICS_READ,
             &METRICS_AGGREGATE,
+            &METRICS_EXPORT,
             &EVENTS_LIST,
+            &EVENTS_EXPORT,
         ],
     ),
     (

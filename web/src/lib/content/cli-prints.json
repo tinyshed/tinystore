@@ -55,9 +55,17 @@
     "example": "tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target",
     "prints": "ping_rtt_ms max every 10m   17 Nov 02:05–03:05 Europe/Moscow\n             finland   poland   sweden\n  02:00:00      32.6     24.6     41.6\n  02:10:00      32.6     24.6     41.6\n  02:20:00      32.6     24.6     41.6\n  02:30:00      32.6     24.6     41.6\n  02:40:00      32.6     24.6     41.6\n  02:50:00      32.6     24.6     41.6\n  03:00:00      32.6     24.6     41.6"
   },
+  "metrics export": {
+    "example": "tinystore metrics ./data export",
+    "prints": "# TYPE http_requests_total counter\nhttp_requests_total{route=\"/api/chat\"} 3383 1795737044534\n# TYPE ping_rtt_ms gauge\nping_rtt_ms{target=\"finland\"} 31.8 1795737044534\nping_rtt_ms{target=\"sweden\"} 40.4 1795737044534\nping_rtt_ms{target=\"poland\"} 23.4 1795737044534"
+  },
   "events list": {
     "example": "tinystore events ./data list audit --since 1h",
     "prints": "03:05:16.566 EVENT audit  role.changed  role=admin user=42\n03:05:16.581 EVENT audit  login  user=43"
+  },
+  "events export": {
+    "example": "tinystore events ./data export audit > audit.jsonl",
+    "prints": "{\"time\":\"2026-11-26T23:50:44.509Z\",\"stream\":\"audit\",\"event\":\"role.changed\",\"role\":\"admin\",\"user\":42}\n{\"time\":\"2026-11-26T23:50:44.517Z\",\"stream\":\"audit\",\"event\":\"login\",\"user\":43}"
   },
   "kv set": {
     "example": "tinystore kv ./data set flags beta on --ttl 1h",

@@ -23,12 +23,12 @@ and Go have no call for it. From any of them, and from a shell, the command
 line writes the same text beside the program that holds the store:
 
 ```sh
-tinystore metrics ./data export --only-prefix shop_
+tinystore metrics ./data export --prefix shop_
 ```
 
 [metrics export](../cli/metrics.md#export-for-prometheus) has its flags, and
 a cron line for node_exporter's textfile collector, which takes samples
-without their times: `--no-timestamps`, `timestamps(false)` in Rust.
+without their times.
 
 ## Give the metrics to a Prometheus
 

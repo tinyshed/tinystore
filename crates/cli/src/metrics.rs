@@ -1,12 +1,13 @@
-//! `tinystore metrics`: a store's series from a shell. `names`, `read` and
-//! `aggregate` read beside whoever holds the directory; `ingest`, `replace`
-//! and `delete` write through the server that holds it, or a sidecar they
-//! start.
+//! `tinystore metrics`: a store's series from a shell. `names`, `read`,
+//! `aggregate` and `export` read beside whoever holds the directory; `ingest`,
+//! `replace` and `delete` write through the server that holds it, or a sidecar
+//! they start.
 //!
 //! ```text
 //! tinystore metrics ./data names
 //! tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h
 //! tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target
+//! tinystore metrics ./data export --prefix shop_ -o shop.prom
 //! curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
 //! ping … | awk '…' | tinystore metrics ./data ingest -f --kind ping_lost_total=counter
 //! tinystore metrics ./data delete ping_rtt_ms target=poland
@@ -27,12 +28,13 @@ use tinystore::{ErrorKind, Store};
 use crate::asked::{self, Asked, Done, Refused, Verb, failed, wrong};
 use crate::reach;
 use crate::window::{self, Window};
-use crate::{following, help};
+use crate::{exported, following, help};
 
-const VERBS: [Verb; 6] = [
+const VERBS: [Verb; 7] = [
     Verb { word: "names", command: &help::METRICS_NAMES, run: names },
     Verb { word: "read", command: &help::METRICS_READ, run: read },
     Verb { word: "aggregate", command: &help::METRICS_AGGREGATE, run: aggregate },
+    Verb { word: "export", command: &help::METRICS_EXPORT, run: export },
     Verb { word: "ingest", command: &help::METRICS_INGEST, run: ingest },
     Verb { word: "replace", command: &help::METRICS_REPLACE, run: replace },
     Verb { word: "delete", command: &help::METRICS_DELETE, run: delete },
@@ -130,6 +132,41 @@ fn read(asked: Asked) -> Done {
     }
     shown_samples(&page.series, window, gaps)?;
     read_on("metrics read", &format!("{most} samples"), page.next.as_deref())
+}
+
+/// The newest sample of every series as Prometheus' text, on stdout or in
+/// the file `-o` names; with `-o`, what it wrote is said on stderr, since
+/// stdout is then free of the text, and what it left out always is.
+fn export(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("metrics", "export", true)?;
+    if let Some(word) = rest.first() {
+        return Err(wrong(format!("{word}: export takes no words; --prefix {word} for the names that start with it")));
+    }
+    let since = asked.value("--since").map(asked::span).transpose().map_err(wrong)?;
+    let (_store, Some(metrics)) = beside(&dir)? else {
+        asked::say("metrics export", format!("{} holds no metrics yet", dir.display()));
+        return Ok(());
+    };
+    let mut exposition = metrics.exposition().prefix(asked.value("--prefix").unwrap_or_default());
+    if let Some(since) = since {
+        exposition = exposition.since(since);
+    }
+    exposition = exposition.timestamps(!asked.has("--no-timestamps"));
+    let mut written = None;
+    exported::to(asked.value("-o"), |out| {
+        written = Some(exposition.write(&mut &mut *out)?);
+        Ok(())
+    })?;
+    let Some(written) = written else { return Ok(()) };
+    if let Some(path) = asked.value("-o") {
+        let names = counted(written.names, "name");
+        asked::say("metrics export", format!("wrote {} of {names} to {path}", counted(written.series, "series")));
+    }
+    if written.skipped > 0 {
+        let why = "a name or labels spelt with _ as another's are";
+        asked::say("metrics export", format!("left out {}: {why}", counted(written.skipped, "series")));
+    }
+    Ok(())
 }
 
 /// A query read a page of `most` at a time, from `--after` on when given.

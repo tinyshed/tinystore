@@ -1,9 +1,9 @@
 # metrics
 
 `tinystore metrics` reads and writes a store's metrics from a shell, with no
-SDK. `names`, `read` and `aggregate` read beside the program or server that
-holds the directory. `ingest` writes the Prometheus text that an exporter
-serves, or that a script keeps printing. `replace` corrects a gauge's samples
+SDK. `names`, `read`, `aggregate` and `export` read beside the program or
+server that holds the directory. `ingest` writes the Prometheus text that an
+exporter serves, or that a script keeps printing. `replace` corrects a gauge's samples
 over a range, and `delete` removes a series. All three write through a
 server, as [every write](README.md#who-writes) of the command line does.
 
@@ -11,6 +11,7 @@ server, as [every write](README.md#who-writes) of the command line does.
 tinystore metrics ./data names
 tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h
 tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target
+tinystore metrics ./data export --prefix ping_ > ping.prom
 curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
 ping … | awk '…' | tinystore metrics ./data ingest -f
 printf '2026-11-02T00:00Z 900\n' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-02T00:00Z --to 2026-11-03T00:00Z
@@ -94,6 +95,48 @@ ping_rtt_ms max every 10m   26 Oct 13:40–14:40 Europe/Moscow
   of its own. `--json` gives one object per bucket.
 - A page holds 1000 buckets unless `--limit` says, and always ends between
   two whole buckets.
+
+## Export for Prometheus
+
+```sh
+tinystore metrics ./data export
+tinystore metrics ./data export --prefix shop_ --since 5m -o shop.prom
+```
+
+```text
+# HELP shop_orders_total Orders placed.
+# TYPE shop_orders_total counter
+shop_orders_total{shop="msk"} 1027 1795737044534
+```
+
+- `export` writes the newest sample of every series the store holds as
+  Prometheus' text format, a family a name and a line a series with its
+  newest value and that sample's time in milliseconds.
+  [To Prometheus](../metrics/exposition.md) says what each kind becomes.
+- `--prefix shop_` writes only the names that start with it. `--since 5m`
+  leaves out a series whose newest sample is older; without it, every
+  series the store still keeps is written, however long it has been silent.
+- `-o shop.prom` writes the file rather than stdout: it is written beside as
+  `shop.prom.part` and renamed once whole, so a collector never reads half
+  of it, and what it wrote is said on stderr.
+- `--no-timestamps` writes each line without its sample's time.
+- A name or a label past letters, digits, `_` and `:` is written with `_` in
+  their place; a series so spelt as another's is left out, and stderr says
+  how many.
+- A running program's instruments write their totals every 15 seconds, so
+  its last seconds may not be in the text yet.
+
+node_exporter's textfile collector and the Pushgateway refuse a sample that
+carries its own time, so a cron line for them leaves the times out with
+`--no-timestamps`, and `-o` renames the file once whole:
+
+```sh
+* * * * * tinystore metrics /srv/shop/data export --no-timestamps -o /var/lib/node_exporter/shop.prom
+```
+
+A Prometheus that scrapes a program's own handler keeps the times, as
+[To Prometheus](../metrics/exposition.md#give-the-metrics-to-a-prometheus)
+shows.
 
 ## Write a scrape or a file
 

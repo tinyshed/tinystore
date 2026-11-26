@@ -1,12 +1,14 @@
 //! `tinystore events`: a store's streams of events from a shell. `append`
 //! writes one event given in words, or another program's output on stdin, a
 //! line an event, through the server that holds the directory or a sidecar
-//! it starts; `list` reads a stream beside whoever holds it.
+//! it starts; `list` reads a page of a stream beside whoever holds it, and
+//! `export` every event of its range.
 //!
 //! ```text
 //! tinystore events ./data append audit role.changed user:=42 role=admin
 //! my-worker 2>&1 | tinystore events ./data append worker
 //! tinystore events ./data list audit --since 1h --where user:=42
+//! tinystore events ./data export audit --since 7d > audit.jsonl
 //! ```
 
 use std::io::{IsTerminal as _, Read};
@@ -16,21 +18,25 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 use tinystore::client::Event;
+use tinystore::mcp::logs::json;
+use tinystore::records::{AllEvents, List};
 use tinystore::{ErrorKind, Store};
 
 use crate::asked::{self, Asked, Done, Refused, Verb, failed, wrong};
-use crate::help;
 use crate::logs::{Printer, level_named};
-use crate::reach;
 use crate::window::{self, Window};
+use crate::{exported, help, reach};
 
-const VERBS: [Verb; 2] = [
+const VERBS: [Verb; 3] = [
     Verb { word: "append", command: &help::EVENTS_APPEND, run: append },
     Verb { word: "list", command: &help::EVENTS_LIST, run: list },
+    Verb { word: "export", command: &help::EVENTS_EXPORT, run: export },
 ];
 
 /// The events a page of `list` holds unless `--limit` says.
 const PAGE: usize = 100;
+/// The events a page of the engine holds at most, which `export` reads by.
+const MOST_PAGE: usize = 10_000;
 /// The range `list` reads when none is given.
 const LAST_HOUR: Duration = Duration::from_secs(3600);
 
@@ -121,28 +127,20 @@ fn list(asked: Asked) -> Done {
     };
     let window = Window::asked(&asked, LAST_HOUR)?;
     let most = asked.count("--limit", PAGE)?;
-    asked::existing(&dir)?;
-    let store = Store::open_beside(&dir).map_err(failed)?;
-    // opening the stream itself would make it, which a read beside cannot
-    let all = match store.all_events() {
-        Ok(all) => all,
-        Err(error) if error.kind() == ErrorKind::NotFound => return outln!("{} holds no events yet", dir.display()),
-        Err(error) => return Err(failed(error)),
-    };
-    if !all.streams()?.iter().any(|held| held.name == *stream) {
-        return outln!("{} holds no stream {stream}", dir.display());
+    if most > MOST_PAGE {
+        return Err(wrong(format!(
+            "--limit {most}: a page holds {MOST_PAGE} events at most; events export writes every event of a range"
+        )));
     }
+    let (_store, all) = match beside(&dir, stream)? {
+        Ok(held) => held,
+        Err(none) => return outln!("{none}"),
+    };
     let mut read = all.list().streams([stream.as_str()]).from(window.from).limit(most);
     if let Some(to) = window.to {
         read = read.to(to);
     }
-    if let Some(level) = asked.value("--level") {
-        read = read.min_level(level_named(level).ok_or_else(|| wrong(level_words(level)))?);
-    }
-    for given in asked.values("--where") {
-        let (key, value) = field_of(&given)?;
-        read = read.filter(&key, &value);
-    }
+    read = narrowed(&asked, read)?;
     if let Some(after) = asked.value("--after") {
         read = read.after(after);
     }
@@ -162,6 +160,77 @@ fn list(asked: Asked) -> Done {
         None => {}
     }
     Ok(())
+}
+
+/// Every event of a stream's range, oldest first, as `list --json` prints
+/// each, read a page at a time until the range ends; how many it wrote is
+/// said on stderr, since stdout is the events.
+fn export(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("events", "export", true)?;
+    let [stream] = &rest[..] else {
+        return Err(wrong("export takes a stream: export audit"));
+    };
+    let ranged = ["--since", "--from", "--to"].iter().any(|flag| asked.has(flag));
+    let window = ranged.then(|| Window::asked(&asked, LAST_HOUR)).transpose()?;
+    let (_store, all) = match beside(&dir, stream)? {
+        Ok(held) => held,
+        Err(none) => {
+            asked::say("events export", none);
+            return Ok(());
+        }
+    };
+    let mut read = all.list().streams([stream.as_str()]).limit(MOST_PAGE);
+    if let Some(window) = window {
+        // --to alone ends the range and leaves it every event before
+        if asked.has("--since") || asked.has("--from") {
+            read = read.from(window.from);
+        }
+        if let Some(to) = window.to {
+            read = read.to(to);
+        }
+    }
+    let read = narrowed(&asked, read)?;
+    let mut count = 0_u64;
+    exported::to(asked.value("-o"), |out| {
+        for event in read.all() {
+            writeln!(out, "{}", json(&event?)).map_err(exported::unwritable)?;
+            count += 1;
+        }
+        Ok(())
+    })?;
+    asked::say("events export", format!("wrote {} of {stream}", counted(count, "event")));
+    Ok(())
+}
+
+/// The store beside whoever holds it and its events, when it holds
+/// `stream`; otherwise what says it holds none.
+fn beside(dir: &Path, stream: &str) -> Result<Result<(Store, AllEvents), String>, Refused> {
+    asked::existing(dir)?;
+    let store = Store::open_beside(dir).map_err(failed)?;
+    // opening the stream itself would make it, which a read beside cannot
+    let all = match store.all_events() {
+        Ok(all) => all,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(Err(format!("{} holds no events yet", dir.display())));
+        }
+        Err(error) => return Err(failed(error)),
+    };
+    if !all.streams()?.iter().any(|held| held.name == stream) {
+        return Ok(Err(format!("{} holds no stream {stream}", dir.display())));
+    }
+    Ok(Ok((store, all)))
+}
+
+/// A read narrowed to the events `--level` and `--where` ask for.
+fn narrowed(asked: &Asked, mut read: List) -> Result<List, Refused> {
+    if let Some(level) = asked.value("--level") {
+        read = read.min_level(level_named(level).ok_or_else(|| wrong(level_words(level)))?);
+    }
+    for given in asked.values("--where") {
+        let (key, value) = field_of(&given)?;
+        read = read.filter(&key, &value);
+    }
+    Ok(read)
 }
 
 /// An event's fields as words give them: `role=admin` a text, `user:=42` any
