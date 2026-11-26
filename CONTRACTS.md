@@ -348,6 +348,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **CLI-06** `metrics ingest -f` MUST write a stream's lines while the stream is still open, a batch at most a second after its first line, and MUST skip a line it cannot read, or one the store refuses, saying its number, ending 1 once the stream ends.
 - **CLI-07** Tab completion MUST make no store and write nothing, and MUST offer nothing rather than fail.
 - **CLI-08** `lock hold` MUST run its command only once it holds the key, MUST stop the command once the lease is lost, and MUST let the key go and end with the command's exit once it ends.
+- **CLI-09** `events export` MUST write every event of its range once, oldest first, each as `events list --json` prints it, holding a page at a time; `events list` given a `--limit` past what a page holds MUST be refused, naming the bound.
 
 ### MCP
 

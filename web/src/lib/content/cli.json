@@ -415,6 +415,34 @@
       "takes": "[dir] aggregate <name> --op <op>"
     },
     {
+      "does": "the newest sample of every series, as the Prometheus text a scrape reads",
+      "examples": [
+        "tinystore metrics ./data export",
+        "tinystore metrics ./data export --prefix shop_ --since 5m -o shop.prom"
+      ],
+      "flags": [
+        {
+          "means": "only the names that start with it",
+          "name": "--prefix",
+          "value": "<prefix>"
+        },
+        {
+          "means": "only the series whose newest sample is at most this old; every series otherwise",
+          "name": "--since",
+          "value": "<span>"
+        },
+        {
+          "means": "write the file, whole once written, rather than stdout, and say what it wrote",
+          "name": "-o",
+          "value": "<file>"
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory. Each series is one line with its newest value and that sample's time in milliseconds. A running program's instruments write their totals every 15 seconds, so its last seconds may not be in the text yet.",
+      "name": "metrics export",
+      "takes": "[dir] export"
+    },
+    {
       "does": "a stream's events, oldest first",
       "examples": [
         "tinystore events ./data list audit --since 1h",
@@ -447,7 +475,7 @@
           "value": "<time>"
         },
         {
-          "means": "how many events a page holds; 100 by default",
+          "means": "how many events a page holds; 100 by default, 10000 at most",
           "name": "--limit",
           "value": "<count>"
         },
@@ -466,6 +494,49 @@
       "more": "It reads beside the program or server that holds the directory, and prints each event as logs does.",
       "name": "events list",
       "takes": "[dir] list <stream>"
+    },
+    {
+      "does": "every event of a stream's range, oldest first, as JSON lines",
+      "examples": [
+        "tinystore events ./data export audit > audit.jsonl",
+        "tinystore events ./data export audit --from 2026-11-01T00:00Z --to 2026-11-02T00:00Z -o day.jsonl"
+      ],
+      "flags": [
+        {
+          "means": "events whose field holds the value; again for more",
+          "name": "--where",
+          "value": "<field=text|field:=json>"
+        },
+        {
+          "means": "trace, debug, info, warn or error, and above",
+          "name": "--level",
+          "value": "<level>"
+        },
+        {
+          "means": "the last span, as 15m, 1h or 2d; everything the stream keeps by default",
+          "name": "--since",
+          "value": "<span>"
+        },
+        {
+          "means": "from a time: 14:30 today, 2026-10-25T03:00, or one with its offset",
+          "name": "--from",
+          "value": "<time>"
+        },
+        {
+          "means": "up to a time, now by default",
+          "name": "--to",
+          "value": "<time>"
+        },
+        {
+          "means": "write the file, whole once written, rather than stdout",
+          "name": "-o",
+          "value": "<file>"
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory, a page at a time until the range ends, and prints each event as list --json does, then says on stderr how many it wrote.",
+      "name": "events export",
+      "takes": "[dir] export <stream>"
     },
     {
       "does": "set a key's value",

@@ -370,3 +370,45 @@ fn a_stream_is_written_as_it_comes_and_a_line_it_cannot_read_is_skipped() {
     let kinds: Vec<(&str, &str)> = names.iter().map(|info| (info.name.as_str(), info.kind.as_str())).collect();
     assert_eq!(kinds, [("ping_lost_total", "counter"), ("ping_rtt_ms", "gauge")]);
 }
+
+/// A series' labels and its newest sample's time and value bits.
+type Newest = (Vec<(String, String)>, SystemTime, u64);
+
+/// Each series' labels and its newest sample's time and value bits, sorted.
+fn newest(store: &Store, name: &str) -> Vec<Newest> {
+    let latest = store.metrics().unwrap().query().name(name).latest().unwrap();
+    let mut newest: Vec<_> = latest
+        .into_iter()
+        .map(|latest| (latest.labels.into_iter().collect(), latest.at, latest.value.to_bits()))
+        .collect();
+    newest.sort();
+    newest
+}
+
+// contract: CLI-01
+#[test]
+fn an_export_is_the_prometheus_text_another_store_ingests_to_the_same_newest_samples() {
+    let dirs = tempfile::tempdir().unwrap();
+    let data = dirs.path().join("data");
+    filled(&data);
+    let held = Store::open(&data, Options::default()).unwrap();
+    let text = tinystore(&[&"metrics", &data, &"export"]);
+    assert!(text.status.success() && text.stderr.is_empty(), "{}", said(&text));
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(text.starts_with("# TYPE ping_rtt_ms gauge\n"), "{text}");
+    let other = Store::open(dirs.path().join("other"), Options::default()).unwrap();
+    other.metrics().unwrap().prometheus().ingest(&text).unwrap();
+    assert_eq!(newest(&other, "ping_rtt_ms"), newest(&held, "ping_rtt_ms"));
+    assert_eq!(newest(&other, "ping_rtt_ms").len(), 3);
+    let file = dirs.path().join("shop.prom");
+    let since = tinystore(&[&"metrics", &data, &"export", &"--since", &"10s", &"-o", &file]);
+    assert!(said(&since).contains("wrote 0 series of 0 names"), "a minute silent: {}", said(&since));
+    assert_eq!(std::fs::read(&file).unwrap(), b"");
+    let prefixed = tinystore(&[&"metrics", &data, &"export", &"--prefix", &"ping_", &"-o", &file]);
+    assert!(said(&prefixed).contains("wrote 3 series of 1 name to"), "{}", said(&prefixed));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), text, "the file is the text whole");
+    let words = tinystore(&[&"metrics", &data, &"export", &"ping_"]);
+    assert_eq!(words.status.code(), Some(2), "{}", said(&words));
+    other.close().unwrap();
+    held.close().unwrap();
+}

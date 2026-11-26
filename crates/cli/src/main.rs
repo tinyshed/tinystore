@@ -39,6 +39,7 @@ mod complete;
 mod config;
 mod connection;
 mod events;
+mod exported;
 mod files;
 mod following;
 mod frames_out;

@@ -37,8 +37,8 @@ tinystore kv ./data set flags beta on --ttl 1h
 |         | `files [dir] list <set>`              | a set's files; `get <set> <path> <file>` writes one to a path            |
 |         | `sql [dir] <db> "<query>"`            | a query's rows; reads only unless `--write`                              |
 |         | `search list [dir]`                   | the store's search indexes; `drop <dir> <name>` drops one                |
-|         | `metrics [dir] read <name>`           | a metric's samples; `names` and `aggregate` beside it                    |
-|         | `events [dir] list <stream>`          | a stream's events                                                        |
+|         | `metrics [dir] read <name>`           | a metric's samples; `names`, `aggregate` and `export` beside it          |
+|         | `events [dir] list <stream>`          | a stream's events; `export <stream>` every one of a range, JSON lines    |
 | Write   | `kv <dir> set <bucket> <key> <v>`     | set a key's value; `delete` deletes one                                  |
 |         | `jobs <dir> add <queue> <json>`       | add a job; `cancel <queue> <id>` cancels one                             |
 |         | `files <dir> put <set> <path> <f>`    | write a local file; `delete <set> <path>` deletes one                    |
@@ -205,24 +205,26 @@ next=$(tinystore metrics ./data read ping_rtt_ms --since 30d --json | tail -1 | 
 tinystore metrics ./data read ping_rtt_ms --since 30d --json --after "$next"
 ```
 
+`events export` and `metrics export` walk every page themselves.
+
 ## In these guides
 
-| Page                                   | Covers                                                    |
-|----------------------------------------|-----------------------------------------------------------|
-| [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs    |
-| [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs      |
-| [kv, sql and schema](kv-sql-schema.md) | values read and written, rows, `--write`, migrations      |
-| [jobs](jobs.md)                        | jobs added, listed and cancelled                          |
-| [files](files.md)                      | files put, got, listed and deleted                        |
-| [channels](channels.md)                | a message published, a channel listened to                |
-| [lock](lock.md)                        | a command run while it holds a key                        |
-| [config](config.md)                    | a config explained, its live settings changed             |
-| [metrics](metrics.md)                  | names, samples and aggregates, ingest, replace and delete |
-| [events](events.md)                    | an event or a program's output appended, a stream listed  |
-| [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte        |
-| [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness           |
-| [AI agents](mcp.md)                    | `tinystore mcp`, its tools that read and those that write |
-| [Your own MCP server](mcp-server.md)   | a Rust program's own tools, marks, `--write`, store tools |
+| Page                                   | Covers                                                      |
+|----------------------------------------|-------------------------------------------------------------|
+| [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs      |
+| [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs        |
+| [kv, sql and schema](kv-sql-schema.md) | values read and written, rows, `--write`, migrations        |
+| [jobs](jobs.md)                        | jobs added, listed and cancelled                            |
+| [files](files.md)                      | files put, got, listed and deleted                          |
+| [channels](channels.md)                | a message published, a channel listened to                  |
+| [lock](lock.md)                        | a command run while it holds a key                          |
+| [config](config.md)                    | a config explained, its live settings changed               |
+| [metrics](metrics.md)                  | names, samples, aggregates, export, ingest, replace, delete |
+| [events](events.md)                    | an event or a program's output appended, listed, exported   |
+| [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte          |
+| [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness             |
+| [AI agents](mcp.md)                    | `tinystore mcp`, its tools that read and those that write   |
+| [Your own MCP server](mcp-server.md)   | a Rust program's own tools, marks, `--write`, store tools   |
 
 In the Handbook, [Your first store](../../handbook/start/first-store.md#look-inside)
 looks inside a store, and [Running it](../../handbook/production/running-it.md)
