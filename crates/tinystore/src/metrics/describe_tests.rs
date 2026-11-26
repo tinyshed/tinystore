@@ -53,6 +53,17 @@ fn a_description_past_its_bounds_is_refused_naming_its_name() {
     assert_eq!(refused.kind(), ErrorKind::Invalid);
     assert!(refused.to_string().starts_with("metrics cpu: a unit of 32 bytes at most"), "{refused}");
     assert_eq!(stats.describe("cpu", description("", &"h".repeat(1025))).unwrap_err().kind(), ErrorKind::Invalid);
+    // a line break would end a scrape's # UNIT line, and the rest read as a sample
+    let broken = stats
+        .describe(
+            "cpu",
+            description(
+                "ms
+cpu 1", "",
+            ),
+        )
+        .unwrap_err();
+    assert!(broken.to_string().contains("no tab, line break or other control character"), "{broken}");
     assert_eq!(stats.describe("", Description::default()).unwrap_err().kind(), ErrorKind::Invalid);
     assert_eq!(stats.description("").unwrap_err().kind(), ErrorKind::Invalid);
     stats.describe("cpu", description(&"u".repeat(32), &"h".repeat(1024))).unwrap();

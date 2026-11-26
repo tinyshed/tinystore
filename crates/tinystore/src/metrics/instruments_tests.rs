@@ -442,6 +442,16 @@ fn an_instrument_opens_against_what_the_store_and_its_file_hold() {
     refused(stats.counter("").open().map(drop));
     refused(stats.counter("helped_total").help("h".repeat(1025)).open().map(drop));
     refused(stats.counter("united_total").unit("u".repeat(33)).open().map(drop));
+    refused(
+        stats
+            .counter("united_total")
+            .unit(
+                "ms
+united_total 1",
+            )
+            .open()
+            .map(drop),
+    );
     refused(stats.timer("bounded_ms").buckets(&[]).open().map(drop));
     refused(stats.counter("forever_total").keep(Duration::ZERO).open().map(drop));
     stats.gauge_func("read_once", || 1.0).open().unwrap();

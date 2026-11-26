@@ -39,6 +39,14 @@ use crate::{Error, Result};
 /// What a name's unit and help hold at most.
 pub(super) const MOST_UNIT: usize = 32;
 pub(super) const MOST_HELP: usize = 1024;
+
+/// Why a unit is refused: one that holds a line break or another control
+/// character, which a scrape's `# UNIT` line would end at, and the text
+/// after it read as a sample.
+pub(super) fn unit_refused(unit: &str) -> Option<String> {
+    let broken = unit.chars().any(char::is_control);
+    broken.then(|| format!("a unit of {unit:?}: no tab, line break or other control character"))
+}
 /// A timer's sum and longest are milliseconds.
 const MILLISECONDS: &str = "ms";
 
@@ -391,6 +399,9 @@ impl Engine {
 fn check_description<T>(builder: &Builder<T>) -> Result<()> {
     if builder.unit.as_ref().is_some_and(|unit| unit.len() > MOST_UNIT) {
         return Err(Error::invalid(format!("a unit of {MOST_UNIT} bytes at most")));
+    }
+    if let Some(why) = builder.unit.as_deref().and_then(unit_refused) {
+        return Err(Error::invalid(why));
     }
     if builder.help.as_ref().is_some_and(|help| help.len() > MOST_HELP) {
         return Err(Error::invalid(format!("a help of {MOST_HELP} bytes at most")));

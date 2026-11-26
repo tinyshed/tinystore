@@ -18,7 +18,7 @@ use rusqlite::{OptionalExtension, params};
 
 use super::Metrics;
 use super::engine::Engine;
-use super::instruments::{MOST_HELP, MOST_UNIT};
+use super::instruments::{MOST_HELP, MOST_UNIT, unit_refused};
 use super::labels::Kept;
 use super::series::Labels;
 use crate::sqlite::{Tx, sql_error};
@@ -85,6 +85,9 @@ fn checked(name: &str, description: &Description) -> Result<()> {
     Kept::of(name, &Labels::new())?;
     if description.unit.len() > MOST_UNIT {
         return Err(Error::invalid(format!("a unit of {MOST_UNIT} bytes at most")));
+    }
+    if let Some(why) = unit_refused(&description.unit) {
+        return Err(Error::invalid(why));
     }
     if description.help.len() > MOST_HELP {
         return Err(Error::invalid(format!("a help of {MOST_HELP} bytes at most")));

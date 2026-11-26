@@ -369,6 +369,22 @@ queue_length -0
 }
 
 #[tokio::test]
+async fn an_exposition_awaited_writes_what_its_blocking_twin_writes() {
+    let f = fixture();
+    let (_store, stats) = awaited(&f);
+    let text = "# TYPE http_requests_total counter\nhttp_requests_total{route=\"/notes\"} 1027\nqueue_length -0\n";
+    stats.prometheus().ingest(text).await.unwrap();
+    let (body, written) = stats.exposition().prefix("http_").write(Vec::new()).await.unwrap();
+    let mut blocking = Vec::new();
+    let blocking_written = stats.blocking().exposition().prefix("http_").write(&mut blocking).unwrap();
+    assert_eq!((String::from_utf8(body).unwrap(), written), (String::from_utf8(blocking).unwrap(), blocking_written));
+    assert_eq!((written.names, written.series), (1, 1));
+    let (bare, _) = stats.exposition().only_prefix("http_").timestamps(false).write(Vec::new()).await.unwrap();
+    assert!(String::from_utf8(bare).unwrap().ends_with("{route=\"/notes\"} 1027\n"));
+    f.store.close().unwrap();
+}
+
+#[tokio::test]
 async fn a_handle_crosses_from_the_blocking_api_and_fails_closed_once_its_store_closed() {
     let f = fixture();
     let blocking = f.metrics();

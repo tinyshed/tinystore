@@ -40,6 +40,7 @@
 //! | `describe`, `delete`, `flush`       | blocking, on the store's pool                   | runs to its end     |
 //! | a [`Query`]'s four calls            | checked in the first poll, then on the pool     | stops               |
 //! | a [`List`]'s `page`, `damaged`      | on the store's pool                             | stops               |
+//! | an [`Exposition`]'s `write`         | on the store's pool                             | stops               |
 //! | `description`                       | in the first poll, a reader idle; else the pool | answered, or stops  |
 //!
 //! None commits, syncs the disk or waits on the thread that polls its
@@ -68,7 +69,7 @@ use crate::pool::Pool;
 pub use crate::metrics::{
     Aggregate, Bucket, Buckets, Builder, Condition, Counter, Damage, Description, Exceeds, Gauge, GaugeFunc, Histogram,
     Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading, Recorder, Sample, Series,
-    Timer, Timing, Value, ValuePage, Values, exponential_buckets,
+    Timer, Timing, Value, ValuePage, Values, Written, exponential_buckets,
 };
 
 mod page;
@@ -160,6 +161,12 @@ impl Metrics {
     /// OpenMetrics': `stats.prometheus().label("instance", "web-1").ingest(&body)`.
     pub fn prometheus(&self) -> Prometheus {
         Prometheus { blocking: self.blocking.prometheus(), stats: self.blocking.clone(), pool: Arc::clone(&self.pool) }
+    }
+
+    /// The newest sample of every series the store holds, as Prometheus'
+    /// text format: `stats.exposition().write(Vec::new()).await`.
+    pub fn exposition(&self) -> Exposition {
+        Exposition { blocking: self.blocking.exposition(), pool: Arc::clone(&self.pool) }
     }
 
     /// The names the store holds samples of, as
@@ -536,6 +543,55 @@ impl Prometheus {
 
     fn with(self, change: impl FnOnce(crate::metrics::Prometheus) -> crate::metrics::Prometheus) -> Prometheus {
         Prometheus { blocking: change(self.blocking), ..self }
+    }
+}
+
+/// What writes the newest sample of every series the store holds as
+/// Prometheus' text format, as [`crate::metrics::Exposition`] builds one.
+#[derive(Clone)]
+#[must_use = "an exposition writes nothing until its write"]
+pub struct Exposition {
+    blocking: crate::metrics::Exposition,
+    pool: Arc<Pool>,
+}
+
+impl fmt::Debug for Exposition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.blocking, f)
+    }
+}
+
+impl Exposition {
+    /// Only the names that start with this text.
+    pub fn prefix(self, prefix: impl Into<String>) -> Exposition {
+        Exposition { blocking: self.blocking.prefix(prefix), pool: self.pool }
+    }
+
+    /// Only the series whose newest sample is at most this old, from the
+    /// store's clock where the write begins on the pool.
+    pub fn since(self, span: Duration) -> Exposition {
+        Exposition { blocking: self.blocking.since(span), pool: self.pool }
+    }
+
+    /// Whether each line carries its sample's time, as
+    /// [`crate::metrics::Exposition::timestamps`] says.
+    pub fn timestamps(self, on: bool) -> Exposition {
+        Exposition { blocking: self.blocking.timestamps(on), pool: self.pool }
+    }
+
+    /// Writes the text to `out` as [`crate::metrics::Exposition::write`]
+    /// does, blocking on a thread of the store's pool, and gives `out` back
+    /// with what it wrote: a `Vec<u8>` for a handler's body, a file for a
+    /// collector's. A future dropped stops at its next read.
+    pub fn write<W: std::io::Write + Send + 'static>(
+        &self,
+        mut out: W,
+    ) -> impl Future<Output = Result<(W, Written)>> + Send + 'static {
+        let exposition = self.blocking.clone();
+        run::read(&self.pool, "metrics: an exposition".to_owned(), move || {
+            let written = exposition.write(&mut out)?;
+            Ok((out, written))
+        })
     }
 }
 

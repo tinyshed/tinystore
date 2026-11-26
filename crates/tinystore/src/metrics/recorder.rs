@@ -27,7 +27,7 @@ use ::metrics::{
 
 use super::Metrics;
 use super::buckets::Buckets;
-use super::instruments::{Counter, Gauge, Histogram, MOST_HELP, MOST_UNIT};
+use super::instruments::{Counter, Gauge, Histogram, MOST_HELP, MOST_UNIT, unit_refused};
 use super::totals::Told;
 use crate::sync::lock;
 
@@ -40,7 +40,7 @@ macro_rules! told {
         if let Some(help) = said.help.filter(|help| help.len() <= MOST_HELP) {
             builder = builder.help(help);
         }
-        if let Some(unit) = said.unit.filter(|unit| unit.len() <= MOST_UNIT) {
+        if let Some(unit) = said.unit.filter(|unit| unit.len() <= MOST_UNIT && unit_refused(unit).is_none()) {
             builder = builder.unit(unit);
         }
         builder

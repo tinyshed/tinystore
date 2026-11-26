@@ -81,6 +81,7 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 | [Reading](reading.md)                      | `read`, pages of a long range, `latest`, names, labels     |
 | [Aggregates](aggregates.md)                | `op`, `every`, `by`, percentiles, gaps and partial buckets |
 | [Ingesting](ingesting.md)                  | samples from elsewhere, `replace`, `keep`, exporters' text |
+| [To Prometheus](exposition.md)             | the newest samples as the text a Prometheus scrapes        |
 | [The store's own metrics](self-metrics.md) | `selfMetrics` and the `tinystore_` series                  |
 | [The metrics crate](metrics-crate.md)      | Rust's `metrics` macros recorded into the store            |
 
@@ -134,6 +135,7 @@ you add `.await`:
 | `stats.damaged()?`                                       | `stats.damaged().await?`                                        |
 | `stats.delete("cpu", [("host", "web-2")])?`              | `stats.delete("cpu", [("host", "web-2")]).await?`               |
 | `stats.flush()?`                                         | `stats.flush().await?`                                          |
+| `stats.exposition().write(&mut out)?`                    | `stats.exposition().write(out).await?`, which gives `out` back  |
 | `requests.inc()`, `gauge.set(0.5)`, `timer.record(took)` | the same: an instrument counts in memory, so you don't await it |
 
 The values are the blocking module's own types, so `tinystore::aio::metrics`

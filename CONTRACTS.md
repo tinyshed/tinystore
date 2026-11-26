@@ -259,6 +259,8 @@ These contracts are what does not.
 - **MET-28** A walk of an aggregate's pages MUST yield each group once, its buckets whole and in order, its parts from the pages it spans joined; a page read by hand keeps `more`.
 - **MET-29** An instrument given `maxSeries` MUST count a new set of labels past it into `__overflow`, and the first overflow MUST be said once where the program's TinyStore lines go, in every SDK; another `maxSeries` for an instrument the store holds MUST be refused `invalid`.
 - **MET-30** An ingest of up to 100,000 samples and 32 MiB MUST be one write, applied whole, through every way a store is reached, a message past one body going up in pieces; past either bound it MUST be `limit`, writing nothing.
+- **MET-31** The Prometheus text an exposition writes MUST be read back by the store's own ingest to the same names, labels, kinds and help, and to each series' newest sample bit for bit, a NaN's payload alone excepted, which no text spells; a name or a label past the 0.0.4 format's characters MUST be written, and read back, with `_` in their place, and a series whose name or labels so spelt are another's MUST be left out and counted as skipped.
+- **MET-32** An exposition MUST write every series the store holds within its prefix and `since`, however many a name has, or fail; it MUST NOT stop short of them silently.
 
 ### Search
 
