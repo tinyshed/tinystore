@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use serde::de::DeserializeOwned;
 
 use super::batch::{Batch, Ran, Write};
+use super::describe::{self, Column};
 use super::each::Each;
 use super::engine::{Base, Databases, Opening, folder_of};
 use super::migrations::Migrations;
@@ -224,6 +225,27 @@ impl Database {
     /// ```
     pub fn each<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Each<T>> {
         Each::walk(self, statement.into(), None, Arc::from([]))
+    }
+
+    /// The columns a statement answers, in its order, each with the type its
+    /// table declares where it is a table's own column, whether or not the
+    /// statement would answer a row: it is compiled on a reader and nothing
+    /// runs. The values of its `?`s are not read, and may be left out. A
+    /// statement that writes, `returning` or not, is `invalid`, and one that
+    /// names what its file lacks fails as `all` fails it.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let db = tinystore::Store::open("data", Default::default())?.database("app").open()?;
+    /// let columns = db.describe("select id, title, length(title) as size from notes where author_id = ?")?;
+    /// // id: Some("TEXT"), title: Some("TEXT"), size: None
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn describe(&self, statement: impl Into<Sql>) -> Result<Vec<Column>> {
+        let statement = statement.into();
+        let described = self.base.file().read(|connection| describe::columns_on(connection, &statement));
+        described.map_err(|error| self.base.failed(&statement, error))
     }
 
     /// Runs a write once it is durable. Writes from many callers share a
@@ -454,7 +476,7 @@ impl Database {
 
     /// The database as an error names it: `sql app`.
     #[cfg(feature = "async")]
-    pub(crate) fn describe(&self) -> String {
+    pub(crate) fn shown(&self) -> String {
         self.base.describe()
     }
 

@@ -25,6 +25,7 @@ mod batch;
 #[cfg(feature = "wire")]
 mod columns;
 mod database;
+mod describe;
 mod each;
 mod engine;
 #[cfg(feature = "replication")]
@@ -42,6 +43,7 @@ mod walk;
 
 pub use batch::Write;
 pub use database::{Database, DatabaseBuilder, Done};
+pub use describe::Column;
 pub use each::Each;
 pub use migrations::Migrations;
 pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};
@@ -52,7 +54,7 @@ pub use tx::Tx;
 // What the wire takes of sql: its answers by rows and by columns, and their values.
 #[cfg(feature = "wire")]
 pub(crate) use {
-    columns::{Column, Columns},
+    columns::{Columns, Packed},
     database::is_query,
     rows::{Answer, Held, Keep, Kept},
     tx::{BOUND as TX_BOUND, HELD as TX_HELD},
@@ -85,6 +87,9 @@ pub(crate) use run::{column_on, rows_on};
 #[cfg(test)]
 #[path = "database_tests.rs"]
 mod database_tests;
+#[cfg(test)]
+#[path = "describe_tests.rs"]
+mod describe_tests;
 #[cfg(test)]
 #[path = "query_tests.rs"]
 mod query_tests;

@@ -30,7 +30,7 @@ VECTORS: list[dict[str, Any]] = json.loads(
 class Recorder:
     """A runner that keeps the last statement it was given and answers nothing."""
 
-    describe = "sql vectors"
+    label = "sql vectors"
 
     def __init__(self) -> None:
         self.last: Sql | None = None

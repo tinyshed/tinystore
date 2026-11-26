@@ -272,6 +272,25 @@ async def test_a_statement_gives_by_its_columns_what_it_gives_by_its_rows(app: t
         assert await app.scalar("select ?", integer) == integer
 
 
+# contract: SQL-16
+async def test_describe_names_the_columns_of_a_statement_that_answers_no_row_in_its_order(
+    app: tinystore.Database,
+) -> None:
+    await app.exec("create table readings (ts integer not null, host text, cpu real) strict")
+    statement = "select host, ts, cpu * 2 as twice from readings where ts = ?"
+    assert await app.describe(statement) == [
+        tinystore.Column("host", "TEXT"),
+        tinystore.Column("ts", "INTEGER"),
+        tinystore.Column("twice"),
+    ]
+    assert await app.all(statement, -1) == []
+    assert [column.name for column in await app.describe(statement, -1)] == ["host", "ts", "twice"]
+    with pytest.raises(tinystore.InvalidError):
+        await app.describe("delete from readings returning ts")
+    with pytest.raises(tinystore.InvalidError, match="no such column: tss"):
+        await app.describe("select tss from readings")
+
+
 async def test_columns_past_one_message_come_in_parts_and_are_whole(app: tinystore.Database) -> None:
     rows = 150_000
     columns = await app.columns(

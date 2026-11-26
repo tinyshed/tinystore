@@ -161,6 +161,7 @@ const (
 	MethodSqlBatch    = 0x0304
 	MethodSqlTx       = 0x0305
 	MethodSqlColumns  = 0x0306
+	MethodSqlDescribe = 0x0307
 )
 
 // methodNames is every method by its name in the schema.
@@ -294,6 +295,7 @@ var methodNames = []struct {
 	{"sql.batch", MethodSqlBatch},
 	{"sql.tx", MethodSqlTx},
 	{"sql.columns", MethodSqlColumns},
+	{"sql.describe", MethodSqlDescribe},
 }
 
 // Methods is every method by its name in the schema.
@@ -713,6 +715,10 @@ func NewMessage(name string) Message {
 		return &SqlTxCall{}
 	case "sql.TxAnswer":
 		return &SqlTxAnswer{}
+	case "sql.DescribedColumn":
+		return &SqlDescribedColumn{}
+	case "sql.Described":
+		return &SqlDescribed{}
 	}
 	return nil
 }
@@ -15093,4 +15099,101 @@ func (m SqlTxAnswer) IsZero() bool {
 		m.Failure == nil &&
 		m.Body == nil &&
 		!m.More
+}
+
+// SqlDescribedColumn is the schema's sql.DescribedColumn.
+//
+// A column a statement answers, without its rows: its name, and the type its
+// table declares for it where it is a table's own column, as SQLite keeps it.
+type SqlDescribedColumn struct {
+	Name string `wire:"1,name"`
+	// absent for an expression
+	Declared *string `wire:"2,declared"`
+}
+
+func (m SqlDescribedColumn) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Name != "" {
+		w.Uint(1)
+		w.Str(m.Name)
+		n++
+	}
+	if m.Declared != nil {
+		w.Uint(2)
+		w.Str(*m.Declared)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SqlDescribedColumn) Read(r *Reader) {
+	*m = SqlDescribedColumn{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Name = r.Str()
+		case 2:
+			v := r.Str()
+			m.Declared = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SqlDescribedColumn writes as no field at all.
+func (m SqlDescribedColumn) IsZero() bool {
+	return m.Name == "" &&
+		m.Declared == nil
+}
+
+// SqlDescribed is the schema's sql.Described.
+//
+// A statement's columns in its order, whether or not it answers a row: it is
+// compiled on a reader and nothing of it runs. One that writes is invalid.
+type SqlDescribed struct {
+	Columns []SqlDescribedColumn `wire:"1,columns"`
+}
+
+func (m SqlDescribed) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Columns) > 0 {
+		w.Uint(1)
+		w.Array(len(m.Columns))
+		for _, item0 := range m.Columns {
+			item0.Write(w)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SqlDescribed) Read(r *Reader) {
+	*m = SqlDescribed{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []SqlDescribedColumn{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SqlDescribedColumn
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Columns = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SqlDescribed writes as no field at all.
+func (m SqlDescribed) IsZero() bool {
+	return len(m.Columns) == 0
 }

@@ -160,6 +160,7 @@ These contracts are what does not.
 - **SQL-13** `each` MUST hold a part of its rows in memory, not all of them, and see one snapshot for as long as that snapshot lasts; a walk ordered by columns by their names MUST read on past it only after the last row it gave, and any other walk MUST fail `limit` there.
 - **SQL-14** A read inside a transaction MUST carry the rows the same read carries outside it, through every way a store is reached.
 - **SQL-15** An upsert of a list MUST write every row or none, in one statement.
+- **SQL-16** `describe` MUST answer a statement's columns in the statement's order, each with the type its table declares where it is a table's own column, whether or not the statement answers a row, and MUST run nothing of it.
 
 ### Blobs
 

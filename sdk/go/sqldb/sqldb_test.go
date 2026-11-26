@@ -356,6 +356,33 @@ func TestAStatementGivesByItsColumnsWhatItGivesByItsRows(t *testing.T) {
 	})
 }
 
+// contract: SQL-16
+func TestDescribeNamesTheColumnsOfAStatementThatAnswersNoRowInItsOrder(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		statement := `select title, id, length(title) as size from notes where author_id = ?`
+		columns := ways.Must(sqldb.Describe(ctx, db, statement))
+		want := []sqldb.Column{{Name: "title", Type: "TEXT"}, {Name: "id", Type: "TEXT"}, {Name: "size"}}
+		if !slices.Equal(columns, want) {
+			t.Fatalf("columns %+v, want %+v", columns, want)
+		}
+		if rows := ways.Must(sqldb.All[map[string]any](ctx, db, statement, 7)); len(rows) != 0 {
+			t.Fatalf("rows %v", rows)
+		}
+		if again := ways.Must(sqldb.Describe(ctx, db, statement, 7)); !slices.Equal(again, want) {
+			t.Fatalf("with its value, columns %+v", again)
+		}
+		_, err := sqldb.Describe(ctx, db, `delete from notes returning id`)
+		is(t, err, tinystore.ErrInvalid)
+		_, err = sqldb.Describe(ctx, db, `select titel from notes`)
+		is(t, err, tinystore.ErrInvalid)
+		if !strings.Contains(err.Error(), "no such column: titel") {
+			t.Fatalf("a mistyped column: %v", err)
+		}
+	})
+}
+
 func TestATableInsertsUpdatesAndDeletesWhatItsConditionSays(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

@@ -69,7 +69,7 @@ fn query(asked: Asked) -> Done {
             failed(error)
         }
     })?;
-    print_rows(&rows, json)
+    print_rows(&rows, json, || head_of(&db, statement))
 }
 
 /// Runs a statement that may write, on the store this process holds.
@@ -77,7 +77,7 @@ fn write(store: &Store, database: &str, statement: &str, json: bool) -> Done {
     let db = opened(store, database)?;
     if gives_rows(statement) {
         let rows: Vec<Row> = db.all(statement)?;
-        return print_rows(&rows, json);
+        return print_rows(&rows, json, || head_of(&db, statement));
     }
     let done = db.exec(statement)?;
     print_done(done.changes, done.last_insert_rowid, json)
@@ -259,18 +259,30 @@ fn tables(asked: Asked) -> Done {
     }
 }
 
-/// Prints rows as a table a person reads, or one JSON object a row.
-fn print_rows(rows: &[Row], json: bool) -> Done {
+/// The names of the columns a statement answers, for the head of a table
+/// with no rows: none for a write, whose `returning` is not described.
+fn head_of(db: &Database, statement: &str) -> Vec<String> {
+    db.describe(statement).map(|columns| columns.into_iter().map(|column| column.name).collect()).unwrap_or_default()
+}
+
+/// Prints rows as a table a person reads, or one JSON object a row. With no
+/// rows, `head` names the columns, so that the table still says what a row
+/// would hold.
+fn print_rows(rows: &[Row], json: bool, head: impl FnOnce() -> Vec<String>) -> Done {
     if json {
         for row in rows {
             outln!("{}", row.json())?;
         }
         return Ok(());
     }
-    let Some(first) = rows.first() else {
-        return outln!("no rows");
-    };
     let colours = Terminal::of_stdout().colours();
+    let Some(first) = rows.first() else {
+        let head = head();
+        if !head.is_empty() {
+            outln!("{}", paint(colours, Style::new().bold(), head.join("  ")))?;
+        }
+        return outln!("{}", paint(colours, Style::new().dimmed(), "no rows"));
+    };
     let columns: Vec<&String> = first.0.iter().map(|(column, _)| column).collect();
     let shown: Vec<Vec<String>> =
         rows.iter().map(|row| row.0.iter().map(|(_, cell)| cell.to_string()).collect()).collect();

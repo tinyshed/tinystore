@@ -204,6 +204,7 @@ export const methods = {
 	'sql.batch': 0x0304,
 	'sql.tx': 0x0305,
 	'sql.columns': 0x0306,
+	'sql.describe': 0x0307,
 } as const
 
 export type Method = keyof typeof methods
@@ -13551,6 +13552,100 @@ export const SqlTxAnswer = message(
 			}
 			r.leave()
 			return { rows: $rows, done: $done, failure: $failure, body: $body, more: $more }
+		},
+	},
+)
+
+/**
+ * A column a statement answers, without its rows: its name, and the type its
+ * table declares for it where it is a table's own column, as SQLite keeps it.
+ */
+export const SqlDescribedColumn = message(
+	'sql.DescribedColumn',
+	{
+		name: [1, str],
+		/** absent for an expression */
+		declared: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.declared !== undefined) {
+				w.field(2)
+				w.str(v.declared)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $declared: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$declared = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, declared: $declared }
+		},
+	},
+)
+
+/**
+ * A statement's columns in its order, whether or not it answers a row: it is
+ * compiled on a reader and nothing of it runs. One that writes is invalid.
+ */
+export const SqlDescribed = message(
+	'sql.Described',
+	{
+		columns: [1, list(SqlDescribedColumn)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.columns !== undefined) {
+				w.field(1)
+				w.array(v.columns.length)
+				for (const item0 of v.columns) {
+					SqlDescribedColumn.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $columns: Read<typeof SqlDescribedColumn.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof SqlDescribedColumn.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SqlDescribedColumn.read(r))
+						}
+						r.leave()
+						$columns = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { columns: $columns }
 		},
 	},
 )

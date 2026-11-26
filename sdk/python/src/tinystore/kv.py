@@ -334,7 +334,7 @@ class Bucket[T]:
         """The bucket and the key as the core's errors show them, the key after its branch's owners."""
         path = "/".join((*self._parts.under, key_text(key)))
         shown = f"kv bucket {self.name}: key {json.dumps(path, ensure_ascii=False)}"
-        return shown if self._parts.home is None else f"{self._parts.home.describe}: {shown}"
+        return shown if self._parts.home is None else f"{self._parts.home.label}: {shown}"
 
     async def _call(self, method: str, fields: dict[str, Any], idempotence: Idempotence) -> bytes:
         under = under_field(self._parts.under)

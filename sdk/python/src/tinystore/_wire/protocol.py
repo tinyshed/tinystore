@@ -170,6 +170,7 @@ methods: dict[str, int] = {
     "sql.batch": 0x0304,
     "sql.tx": 0x0305,
     "sql.columns": 0x0306,
+    "sql.describe": 0x0307,
 }
 
 
@@ -11124,6 +11125,88 @@ SqlTxAnswer = Message(
 )
 
 
+def _write_sql_described_column(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("name")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("declared")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_sql_described_column(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["name"] = r.str()
+            case 2:
+                read["declared"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A column a statement answers, without its rows: its name, and the type its
+# table declares for it where it is a table's own column, as SQLite keeps it.
+SqlDescribedColumn = Message(
+    "sql.DescribedColumn",
+    {
+        "name": (1, str_),
+        # absent for an expression
+        "declared": (2, str_),
+    },
+    _write_sql_described_column,
+    _read_sql_described_column,
+)
+
+
+def _write_sql_described(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("columns")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            SqlDescribedColumn.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_sql_described(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [SqlDescribedColumn.read(r) for _ in range(r.array())]
+                r.leave()
+                read["columns"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A statement's columns in its order, whether or not it answers a row: it is
+# compiled on a reader and nothing of it runs. One that writes is invalid.
+SqlDescribed = Message(
+    "sql.Described",
+    {
+        "columns": (1, list_(SqlDescribedColumn)),
+    },
+    _write_sql_described,
+    _read_sql_described,
+)
+
+
 def _write_blobs_filled(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -12171,6 +12254,8 @@ messages: dict[str, Message] = {
     "sql.TxOpen": SqlTxOpen,
     "sql.TxCall": SqlTxCall,
     "sql.TxAnswer": SqlTxAnswer,
+    "sql.DescribedColumn": SqlDescribedColumn,
+    "sql.Described": SqlDescribed,
     "blobs.Filled": BlobsFilled,
     "channels.Batch": ChannelsBatch,
     "config.Given": ConfigGiven,

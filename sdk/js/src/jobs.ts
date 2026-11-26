@@ -1000,9 +1000,9 @@ export function addingIn(
 ): (connection: Connection) => Promise<{ method: number; body: Uint8Array }> {
 	const { name, source, call } = partsOf(adding)
 	if (source.home !== home) {
-		const kept = source.home === undefined ? 'jobs.db' : source.home.describe
+		const kept = source.home === undefined ? 'jobs.db' : source.home.label
 		throw new InvalidError(
-			`${home.describe}: jobs queue ${name}: kept in ${kept}, outside this batch of ${home.describe}`,
+			`${home.label}: jobs queue ${name}: kept in ${kept}, outside this batch of ${home.label}`,
 		)
 	}
 	return async connection => {
@@ -1166,8 +1166,7 @@ export function openQueue<T>(
 	home?: Home,
 ): Queue<T> {
 	checkName(name, 'queue')
-	const describe =
-		home === undefined ? `jobs queue ${name}` : `${home.describe}: jobs queue ${name}`
+	const describe = home === undefined ? `jobs queue ${name}` : `${home.label}: jobs queue ${name}`
 	const concurrency =
 		typeof options.concurrency === 'number' ? { total: options.concurrency } : options.concurrency
 	const fields = {

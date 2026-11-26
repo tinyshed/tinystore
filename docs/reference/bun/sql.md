@@ -57,6 +57,19 @@ interface DatabaseOptions {
 }
 ```
 
+## Column
+
+```ts
+interface Column {
+    name: string
+    type?: string
+}
+```
+
+A column a statement answers: its name as its rows name it, and the type
+its table declares for it where it is a table's own column, as SQLite keeps
+it, `INTEGER` or `varchar(80)`; none for an expression.
+
 ## Done
 
 ```ts
@@ -130,7 +143,7 @@ const sql: SqlTag
 ```ts
 class Database implements Runner, Home {
     readonly name: string
-    readonly describe: string
+    readonly label: string
 }
 ```
 
@@ -262,6 +275,20 @@ scalar<T = SqlValue>(...statement: Statement): Promise<T>
 
 The one value of the one row a statement gives, as count(*) does; null as SQL answers it.
 
+### Database.describe
+
+```ts
+describe(...statement: Statement): Promise<Column[]>
+```
+
+The columns a statement answers, in its order, whether or not it
+answers a row: the server compiles it and runs nothing. Values of its
+?s are not read and may be left out; a statement that writes is
+InvalidError.
+
+    const columns = await db.describe`select id, title from notes where author_id = ${id}`
+    // [{ name: 'id', type: 'TEXT' }, { name: 'title', type: 'TEXT' }]
+
 ### Database.columns
 
 ```ts
@@ -361,7 +388,7 @@ Runs a write once it is durable; writes from many callers share a commit, each f
 
 ```ts
 class SqlTx implements Runner {
-    readonly describe: string
+    readonly label: string
 }
 ```
 

@@ -672,9 +672,9 @@ export function appendingIn(
 ): (connection: Connection) => Promise<{ method: number; body: Uint8Array }> {
 	const { stream, open, home: kept, event } = appendingPartsOf(appending)
 	if (kept !== home) {
-		const where = kept === undefined ? 'records.db' : kept.describe
+		const where = kept === undefined ? 'records.db' : kept.label
 		throw new InvalidError(
-			`${home.describe}: events ${stream}: kept in ${where}, outside this batch of ${home.describe}`,
+			`${home.label}: events ${stream}: kept in ${where}, outside this batch of ${home.label}`,
 		)
 	}
 	return async connection => {

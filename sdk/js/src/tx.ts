@@ -117,7 +117,7 @@ export class Tx {
 		const queue = queueParts(handle)
 		if (queue !== undefined) {
 			const what = `jobs queue ${queue.name}`
-			this.#takes(queue.source.link, queue.source.home?.describe, 'jobs.db', what)
+			this.#takes(queue.source.link, queue.source.home?.label, 'jobs.db', what)
 			return new StoreTxQueue(queue, op => {
 				this.#open()
 				this.#jobs.push(op)
@@ -127,7 +127,7 @@ export class Tx {
 		if (parts === undefined) {
 			throw new InvalidError('tx.with takes a bucket, counters or a queue')
 		}
-		this.#takes(parts.link, parts.home?.describe, 'kv.db', `kv ${parts.name}`)
+		this.#takes(parts.link, parts.home?.label, 'kv.db', `kv ${parts.name}`)
 		if (parts.values === undefined) {
 			return new TxCounters(this, parts)
 		}

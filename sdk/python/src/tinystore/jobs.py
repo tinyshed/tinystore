@@ -845,9 +845,9 @@ def adding_in(adding: Adding, home: Home) -> Callable[[Connection], Awaitable[di
     """
     source, call = adding.source, adding.call
     if source.home is not home:
-        kept = "jobs.db" if source.home is None else source.home.describe
+        kept = "jobs.db" if source.home is None else source.home.label
         raise InvalidError(
-            f"{home.describe}: jobs queue {adding.queue}: kept in {kept}, outside this batch of {home.describe}"
+            f"{home.label}: jobs queue {adding.queue}: kept in {kept}, outside this batch of {home.label}"
         )
 
     async def sent(connection: Connection) -> dict[str, Any]:
@@ -1141,7 +1141,7 @@ def open_queue(
     home is the database whose file keeps it, its open naming the database's
     handle on each connection; the store's jobs.db when None.
     """
-    describe = f"jobs queue {name}" if home is None else f"{home.describe}: jobs queue {name}"
+    describe = f"jobs queue {name}" if home is None else f"{home.label}: jobs queue {name}"
     fields = queue_fields(name, describe, options)
     opener: Opener = JobsQueueOpen.encode(fields)
     via = via_link(link)

@@ -345,6 +345,30 @@ for (const way of ways) {
 			expect((twice as Error).message).toContain('two columns named ts')
 		})
 
+		// contract: SQL-16
+		test('describe names the columns of a statement that answers no row, in its order', async () => {
+			const columns =
+				await app.describe`select host, ts, cpu * 2 as twice from samples where ts = ${-1}`
+			expect(columns).toEqual([
+				{ name: 'host', type: 'TEXT' },
+				{ name: 'ts', type: 'INTEGER' },
+				{ name: 'twice' },
+			])
+			expect(
+				await app.all`select host, ts, cpu * 2 as twice from samples where ts = ${-1}`,
+			).toEqual([])
+			// the ?s' values are not read
+			expect(await app.describe('select ts from samples where ts = ?')).toEqual([
+				{ name: 'ts', type: 'INTEGER' },
+			])
+			const writes = await caught(app.describe`delete from samples returning ts`)
+			expect(writes).toBeInstanceOf(InvalidError)
+			expect(await app.scalar<number>`select count(*) from samples`).toBeGreaterThan(0)
+			const mistyped = await caught(app.describe`select tss from samples`)
+			expect(mistyped).toBeInstanceOf(InvalidError)
+			expect((mistyped as Error).message).toContain('no such column: tss')
+		})
+
 		test('a column of no value is an array as any other, and an integer past 2^53 a bigint', async () => {
 			const none = await app.columns`select ts, cpu, host, cpu + 1 as more from samples where 0`
 			expect<unknown>(none).toEqual({ ts: [], cpu: [], host: [], more: [] })
