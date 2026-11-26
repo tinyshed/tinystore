@@ -13417,6 +13417,101 @@ impl Message for SqlTxAnswer {
     }
 }
 
+/// A column a statement answers, without its rows: its name, and the type its
+/// table declares for it where it is a table's own column, as SQLite keeps it.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlDescribedColumn {
+    pub(crate) name: String,
+    /// Absent for an expression.
+    pub(crate) declared: Option<String>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlDescribedColumn {
+    const NAME: &'static str = "sql.DescribedColumn";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.declared = Some(codec::str(r, "declared")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(declared) = &self.declared {
+            map.field(out, 2);
+            codec::write_str(out, declared);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.declared.as_ref().map_or(0, |declared| 1 + 5 + declared.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.declared.is_none()
+    }
+}
+
+/// A statement's columns in its order, whether or not it answers a row: it is
+/// compiled on a reader and nothing of it runs. One that writes is invalid.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlDescribed {
+    pub(crate) columns: Vec<SqlDescribedColumn>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlDescribed {
+    const NAME: &'static str = "sql.Described";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.columns = codec::list(r, "columns", codec::message::<SqlDescribedColumn>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.columns.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.columns, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.columns, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.columns.is_empty()
+    }
+}
+
 /// Every method's number, by its name in the schema.
 pub(crate) mod method {
     #[cfg(feature = "backup")]
@@ -13697,6 +13792,8 @@ pub(crate) mod method {
     pub(crate) const SQL_TX: u16 = 0x0305;
     #[cfg(feature = "sql")]
     pub(crate) const SQL_COLUMNS: u16 = 0x0306;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_DESCRIBE: u16 = 0x0307;
 
     /// Who may call a method: the word its schema line starts with.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13959,6 +14056,8 @@ pub(crate) mod method {
             SQL_TX => Some(Access::Write),
             #[cfg(feature = "sql")]
             SQL_COLUMNS => Some(Access::Read),
+            #[cfg(feature = "sql")]
+            SQL_DESCRIBE => Some(Access::Read),
             _ => None,
         }
     }
@@ -14218,6 +14317,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("sql.tx", 0x0305, "exchange"),
     #[cfg(feature = "sql")]
     ("sql.columns", 0x0306, "download"),
+    #[cfg(feature = "sql")]
+    ("sql.describe", 0x0307, "call"),
 ];
 
 /// A body of the message `name` read and written again, and the size the message
@@ -14622,6 +14723,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "sql.TxCall" => SqlTxCall::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.TxAnswer" => SqlTxAnswer::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.DescribedColumn" => SqlDescribedColumn::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Described" => SqlDescribed::decode(body).map(|message| (message.encode(), message.size())),
         _ => return None,
     };
     Some(rewritten)

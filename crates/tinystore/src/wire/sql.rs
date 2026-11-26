@@ -13,14 +13,14 @@ use std::time::{Duration, Instant};
 
 use super::codec::{Cell, Map, Message};
 use super::protocol::{
-    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlOpen, SqlOrder, SqlQuery, SqlRows,
-    SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
+    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn, SqlDone,
+    SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
 };
 use super::{Route, codec, msgpack};
 use crate::engine::SharedFile;
 use crate::limits::{ANSWER_BYTES, Limit};
 use crate::sql::{
-    Answer, Column, Columns, Database, Direction, Done, End, First, Held, Keep, Kept, Key, Migrations, Part, Rows, Sql,
+    Answer, Columns, Database, Direction, Done, End, First, Held, Keep, Kept, Key, Migrations, Packed, Part, Rows, Sql,
     TX_HELD, Taken, Tx, Value, Walk, Walking, Wanted, Write, is_query,
 };
 use crate::sync::lock;
@@ -121,6 +121,7 @@ impl Handles {
 pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], read_only: bool) -> Answered {
     match called {
         method::SQL_OPEN => open(store, handles, SqlOpen::decode(body)?, read_only),
+        method::SQL_DESCRIBE => describe(handles, SqlStatement::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -150,6 +151,15 @@ fn open(store: &Store, handles: &Handles, asked: SqlOpen, read_only: bool) -> An
     let database = builder.open()?;
     let handle = handles.open.keep(database);
     Ok(Handle { handle }.encode())
+}
+
+/// A statement's columns, compiled on a reader and run not at all: a read,
+/// which a read connection may ask too.
+fn describe(handles: &Handles, asked: SqlStatement) -> Answered {
+    let database = handles.database(asked.handle)?;
+    let columns = database.describe(statement(asked.text, asked.values)?)?;
+    let columns = columns.into_iter().map(|column| SqlDescribedColumn { name: column.name, declared: column.declared });
+    Ok(SqlDescribed { columns: columns.collect() }.encode())
 }
 
 /// A call of another engine that a database's batch carries, made into a
@@ -569,9 +579,9 @@ const PACKED: usize = 9;
 fn column_parts(mut columns: Columns, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
     let head = columns.columns.iter().map(|(name, _)| name.len() + 24).sum::<usize>() + 16;
     let row_weight = |row: usize| {
-        let of = |(_, column): &(String, Column)| match column {
-            Column::Values(values) => weight_of(&values[row]),
-            Column::Integers { .. } | Column::Reals { .. } => PACKED,
+        let of = |(_, column): &(String, Packed)| match column {
+            Packed::Values(values) => weight_of(&values[row]),
+            Packed::Integers { .. } | Packed::Reals { .. } => PACKED,
         };
         columns.columns.iter().map(of).sum::<usize>()
     };
@@ -617,18 +627,18 @@ fn weight_of(value: &Value) -> usize {
 /// The rows `cut` of every column, as one part. It takes the values of a
 /// column that is not packed, which go once.
 fn column_part(columns: &mut Columns, cut: Range<usize>) -> SqlColumns {
-    let part = |(name, column): &mut (String, Column)| {
+    let part = |(name, column): &mut (String, Packed)| {
         let mut part = SqlColumn { name: name.clone(), integers: None, reals: None, nulls: None, values: None };
         match column {
-            Column::Integers { values, nulls } => {
+            Packed::Integers { values, nulls } => {
                 part.integers = Some(packed(&values[cut.clone()], |integer| integer.to_le_bytes()));
                 part.nulls = null_bits(nulls, &cut);
             }
-            Column::Reals { values, nulls } => {
+            Packed::Reals { values, nulls } => {
                 part.reals = Some(packed(&values[cut.clone()], |real| real.to_le_bytes()));
                 part.nulls = null_bits(nulls, &cut);
             }
-            Column::Values(values) => {
+            Packed::Values(values) => {
                 let cells = values[cut.clone()].iter_mut().map(|value| cell_of(std::mem::replace(value, Value::Null)));
                 part.values = Some(cells.collect());
             }

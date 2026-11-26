@@ -1,6 +1,6 @@
 //! A statement's rows by their columns: what each column is told to hold.
 
-use super::{Column, Columns, Holds};
+use super::{Columns, Holds, Packed};
 use crate::sql::Answer;
 use crate::sql::{Database, Sql, Value, Wanted};
 use crate::{Options, Store, sql};
@@ -31,7 +31,7 @@ fn fixture() -> Fixture {
     Fixture { db: db.unwrap(), _store: store, _dir: dir }
 }
 
-fn columns(db: &Database, statement: Sql) -> Vec<Column> {
+fn columns(db: &Database, statement: Sql) -> Vec<Packed> {
     let columns: Columns = db.read(&statement, Wanted::All).unwrap().expect("a query");
     columns.columns.into_iter().map(|(_, column)| column).collect()
 }
@@ -55,17 +55,17 @@ fn a_column_of_integers_or_of_reals_alone_is_packed_and_any_other_keeps_its_valu
     assert_eq!((by_columns.len(), by_columns.width()), (2, 6));
     let names: Vec<&str> = by_columns.columns.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["ts", "cpu", "host", "raw", "either", "other"]);
-    let held: Vec<Column> = by_columns.columns.into_iter().map(|(_, column)| column).collect();
+    let held: Vec<Packed> = by_columns.columns.into_iter().map(|(_, column)| column).collect();
     assert_eq!(
         held,
         [
-            Column::Integers { values: vec![1, 2], nulls: vec![] },
-            Column::Reals { values: vec![0.5, 1.5], nulls: vec![] },
-            Column::Values(vec![text("a"), text("b")]),
-            Column::Values(vec![Value::Blob(vec![1]), Value::Blob(vec![2])]),
+            Packed::Integers { values: vec![1, 2], nulls: vec![] },
+            Packed::Reals { values: vec![0.5, 1.5], nulls: vec![] },
+            Packed::Values(vec![text("a"), text("b")]),
+            Packed::Values(vec![Value::Blob(vec![1]), Value::Blob(vec![2])]),
             // an INTEGER beside a REAL is read as neither: 1 stays 1, and not 1.0
-            Column::Values(vec![Value::Integer(1), Value::Real(2.5)]),
-            Column::Values(vec![Value::Real(1.5), Value::Integer(2)]),
+            Packed::Values(vec![Value::Integer(1), Value::Real(2.5)]),
+            Packed::Values(vec![Value::Real(1.5), Value::Integer(2)]),
         ]
     );
 }
@@ -79,7 +79,7 @@ fn a_null_among_numbers_is_marked_and_is_zero_or_a_nan() {
     .unwrap();
 
     let held = columns(&f.db, sql!("select cpu, hits from samples order by ts"));
-    let [Column::Reals { values: cpu, nulls: no_cpu }, Column::Integers { values: hits, nulls: no_hits }] = &held[..]
+    let [Packed::Reals { values: cpu, nulls: no_cpu }, Packed::Integers { values: hits, nulls: no_hits }] = &held[..]
     else {
         panic!("reals and integers, and it is {held:?}");
     };
@@ -97,12 +97,12 @@ fn a_column_that_holds_no_value_is_what_its_declaration_says() {
     assert_eq!(
         columns(&f.db, no_row),
         [
-            Column::Reals { values: vec![], nulls: vec![] },
-            Column::Integers { values: vec![], nulls: vec![] },
-            Column::Values(vec![]),
-            Column::Values(vec![]),
+            Packed::Reals { values: vec![], nulls: vec![] },
+            Packed::Integers { values: vec![], nulls: vec![] },
+            Packed::Values(vec![]),
+            Packed::Values(vec![]),
             // an expression declares nothing
-            Column::Values(vec![]),
+            Packed::Values(vec![]),
         ]
     );
 
@@ -111,20 +111,20 @@ fn a_column_that_holds_no_value_is_what_its_declaration_says() {
     assert_eq!(
         nulls_alone[..4],
         [
-            Column::Integers { values: vec![0], nulls: vec![true] },
-            Column::Values(vec![Value::Null]),
-            Column::Values(vec![Value::Null]),
-            Column::Values(vec![Value::Null]),
+            Packed::Integers { values: vec![0], nulls: vec![true] },
+            Packed::Values(vec![Value::Null]),
+            Packed::Values(vec![Value::Null]),
+            Packed::Values(vec![Value::Null]),
         ]
     );
-    assert!(matches!(&nulls_alone[4], Column::Reals { values, nulls } if values[0].is_nan() && nulls == &[true]));
+    assert!(matches!(&nulls_alone[4], Packed::Reals { values, nulls } if values[0].is_nan() && nulls == &[true]));
 
     // a declaration is read as SQLite reads a column's affinity from it
     let loose = columns(&f.db, sql!("select price, total, ratio, big, name, bare from loose"));
-    let packed = |column: &Column| match column {
-        Column::Integers { .. } => Holds::Integers,
-        Column::Reals { .. } => Holds::Reals,
-        Column::Values(_) => Holds::Any,
+    let packed = |column: &Packed| match column {
+        Packed::Integers { .. } => Holds::Integers,
+        Packed::Reals { .. } => Holds::Reals,
+        Packed::Values(_) => Holds::Any,
     };
     let held: Vec<Holds> = loose.iter().map(packed).collect();
     assert_eq!(held, [Holds::Reals, Holds::Reals, Holds::Reals, Holds::Integers, Holds::Any, Holds::Any]);

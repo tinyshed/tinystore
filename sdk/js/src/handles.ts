@@ -14,7 +14,7 @@ export type Open = Uint8Array | ((connection: Connection) => Promise<Uint8Array>
 
 /** A database a bucket or a queue is kept in: its handle on a connection, and its name as errors say it. */
 export interface Home {
-	readonly describe: string
+	readonly label: string
 	handle(connection: Connection): Promise<number>
 	/**
 	 * The opener of a handle kept in the database's file: the one made first

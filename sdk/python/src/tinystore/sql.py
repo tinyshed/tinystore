@@ -33,6 +33,7 @@ from ._wire.protocol import (
     SqlBatch,
     SqlBatched,
     SqlColumns,
+    SqlDescribed,
     SqlDone,
     SqlOpen,
     SqlQuery,
@@ -497,6 +498,18 @@ class Done:
     last_insert_rowid: int
 
 
+@dataclass(frozen=True, slots=True)
+class Column:
+    """A column a statement answers: its name, and the type its table declares for it.
+
+    The type is SQLite's, ``INTEGER`` or ``varchar(80)``, where the column is
+    a table's own, and None for an expression.
+    """
+
+    name: str
+    type: str | None = None
+
+
 def _done_of(done: Mapping[str, Any]) -> Done:
     return Done(done.get("changes", 0), done.get("last_insert_rowid", 0))
 
@@ -563,7 +576,7 @@ class Runner(Protocol):
     """What reads and writes a database: the database itself, or a transaction of it."""
 
     @property
-    def describe(self) -> str: ...
+    def label(self) -> str: ...
 
     async def rows(self, statement: Sql, want: Want) -> Answered: ...
 
@@ -672,7 +685,7 @@ class Database:
 
     def __init__(self, link: Link, workers: set[Worker], name: str, opener: bytes) -> None:
         self.name = name
-        self._describe = f"sql {name}"
+        self._label = f"sql {name}"
         self._link = link
         self._workers = workers
         self._opener = opener
@@ -680,8 +693,8 @@ class Database:
         """the buckets and queues kept in the file, by their open: a transaction opens them first"""
 
     @property
-    def describe(self) -> str:
-        return self._describe
+    def label(self) -> str:
+        return self._label
 
     async def handle(self, connection: Connection) -> int:
         return await handle_on(connection, methods["sql.open"], self._opener)
@@ -704,7 +717,7 @@ class Database:
         """
         if any(each.database is self and not each.ended for each in _running.get()):
             raise InvalidError(
-                f"{self._describe}: {what}: made around the database's transaction from inside it, where it would "
+                f"{self._label}: {what}: made around the database's transaction from inside it, where it would "
                 "wait for the writer the transaction holds: make it through the transaction, as tx.exec or "
                 "tx.with_(queue).add"
             )
@@ -962,6 +975,28 @@ class Database:
         """The one value of the one row a statement gives, as count(*) does; None as SQL answers it."""
         of, statement, values = _split(first, rest)
         return await _scalar(self, of, statement_of(statement, values))
+
+    async def describe(self, statement: Statement, /, *values: Any) -> list[Column]:
+        """The columns a statement answers, in its order, whether or not it answers a row.
+
+        The server compiles it and runs nothing: the values of its ``?``s are
+        not read and may be left out. A statement that writes is InvalidError.
+
+            columns = await db.describe("select id, title from notes where author_id = ?")
+            # [Column(name='id', type='TEXT'), Column(name='title', type='TEXT')]
+        """
+        self.refuse_around("a read")
+        # text alone is described as it is, its ?s without values
+        is_text = isinstance(statement, str) and not values and not _is_template(statement)
+        piece = Sql(cast("str", statement), ()) if is_text else statement_of(statement, values)
+
+        async def attempt(connection: Connection) -> bytes:
+            handle = await self.handle(connection)
+            body = SqlStatement.encode(handle=handle, text=piece.text, values=list(piece.values))
+            return await connection.session.call(methods["sql.describe"], body)
+
+        described = SqlDescribed.decode(await self._link.run("read", attempt))
+        return [Column(column.get("name", ""), column.get("declared")) for column in described.get("columns", [])]
 
     async def columns(self, statement: Statement, /, *values: Any) -> dict[str, list[Any]]:
         """What ``all`` gives, by its columns: a list a column, by the column's name.
@@ -1248,8 +1283,8 @@ class SqlTx:
         self._parts = of_this_release(connection)
 
     @property
-    def describe(self) -> str:
-        return self._database.describe
+    def label(self) -> str:
+        return self._database.label
 
     @overload
     def with_[T](self, handle: Bucket[T]) -> Bucket[T]: ...
@@ -1291,7 +1326,7 @@ class SqlTx:
             self._takes(handle.home, handle.opener, f"files {handle.name}")
             return handle.through(self._via)
         raise InvalidError(
-            f"{self.describe}: a transaction takes in a bucket, a queue, files or events opened from its database"
+            f"{self.label}: a transaction takes in a bucket, a queue, files or events opened from its database"
         )
 
     @overload
@@ -1359,7 +1394,7 @@ class SqlTx:
                 if not commit:
                     raise
                 raise OutcomeUnknownError(
-                    f"{self.describe}: the transaction's commit left with no answer; "
+                    f"{self.label}: the transaction's commit left with no answer; "
                     f"read what it wrote before running it again: {err}"
                 ) from err
 
@@ -1370,11 +1405,11 @@ class SqlTx:
         first open would wait for the writer the transaction holds.
         """
         if home is not self._database:
-            kept = "the store" if home is None else home.describe
-            raise InvalidError(f"{what}: kept in {kept}, outside this transaction of {self.describe}")
+            kept = "the store" if home is None else home.label
+            raise InvalidError(f"{what}: kept in {kept}, outside this transaction of {self.label}")
         if id(opener) not in self._guests:
             raise InvalidError(
-                f"{self.describe}: {what}: made after the transaction began; make it before db.tx, which opens it first"
+                f"{self.label}: {what}: made after the transaction began; make it before db.tx, which opens it first"
             )
         failed = self._guests[id(opener)]
         if failed is not None:

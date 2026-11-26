@@ -166,6 +166,17 @@ impl Database {
         self.rows(statement.into(), Wanted::Scalar, Rows::scalar::<T>)
     }
 
+    /// The columns a statement answers, in its order, with the types their
+    /// tables declare, as [`sql::Database::describe`] says them: compiled on
+    /// a reader on the store's pool, and nothing of it run.
+    pub fn describe(
+        &self,
+        statement: impl Into<Sql>,
+    ) -> impl Future<Output = Result<Vec<sql::Column>>> + Send + 'static {
+        let (db, statement) = (self.db.clone(), statement.into());
+        run::read(&self.pool, self.what("a read"), move || db.describe(statement))
+    }
+
     /// The rows a statement gives, one at a time, as [`sql::Database::each`]
     /// walks them: a `Stream` whose parts are read on the store's pool from
     /// one snapshot, each row decoded as it is polled, so that memory holds
@@ -376,7 +387,7 @@ impl Database {
 
     /// A call of the database as its errors name it: `sql app: a read`.
     fn what(&self, call: &str) -> String {
-        format!("{}: {call}", self.db.describe())
+        format!("{}: {call}", self.db.shown())
     }
 }
 

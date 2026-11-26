@@ -145,9 +145,23 @@ message sql.TxAnswer {
   5 more: bool        # rows of the same call follow in the next answer
 }
 
-read  0x0301 sql.open(sql.Open)         -> Handle
-read  0x0302 sql.query(sql.Query)       -> download sql.Rows until sql.Rows
-write 0x0303 sql.exec(sql.Statement)    -> sql.Done
-write 0x0304 sql.batch(sql.Batch)       -> sql.Batched
-write 0x0305 sql.tx(sql.TxOpen)         -> exchange sql.TxAnswer for sql.TxCall
-read  0x0306 sql.columns(sql.Statement) -> download sql.Columns until sql.Columns
+# A column a statement answers, without its rows: its name, and the type its
+# table declares for it where it is a table's own column, as SQLite keeps it.
+message sql.DescribedColumn {
+  1 name: str
+  2 declared: str?    # absent for an expression
+}
+
+# A statement's columns in its order, whether or not it answers a row: it is
+# compiled on a reader and nothing of it runs. One that writes is invalid.
+message sql.Described {
+  1 columns: [sql.DescribedColumn]
+}
+
+read  0x0301 sql.open(sql.Open)          -> Handle
+read  0x0302 sql.query(sql.Query)        -> download sql.Rows until sql.Rows
+write 0x0303 sql.exec(sql.Statement)     -> sql.Done
+write 0x0304 sql.batch(sql.Batch)        -> sql.Batched
+write 0x0305 sql.tx(sql.TxOpen)          -> exchange sql.TxAnswer for sql.TxCall
+read  0x0306 sql.columns(sql.Statement)  -> download sql.Columns until sql.Columns
+read  0x0307 sql.describe(sql.Statement) -> sql.Described

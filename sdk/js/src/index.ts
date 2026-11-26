@@ -221,6 +221,7 @@ export {
 	type WhereValue,
 } from './search.ts'
 export {
+	type Column,
 	type Columns,
 	type Database,
 	type DatabaseOptions,

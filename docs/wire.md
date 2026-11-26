@@ -667,14 +667,15 @@ and checked; a read connection's applies none and chooses no durability, and
 opens the file as it is, `not_found` when the store holds none.
 
 <!-- written from protocol/*.wire by `just protocol`: methods of sql -->
-| method   | name        | may   | request         | answer                                     |
-|----------|-------------|-------|-----------------|--------------------------------------------|
-| `0x0301` | sql.open    | read  | `sql.Open`      | `Handle`                                   |
-| `0x0302` | sql.query   | read  | `sql.Query`     | download `sql.Rows` until `sql.Rows`       |
-| `0x0303` | sql.exec    | write | `sql.Statement` | `sql.Done`                                 |
-| `0x0304` | sql.batch   | write | `sql.Batch`     | `sql.Batched`                              |
-| `0x0305` | sql.tx      | write | `sql.TxOpen`    | exchange `sql.TxAnswer` for `sql.TxCall`   |
-| `0x0306` | sql.columns | read  | `sql.Statement` | download `sql.Columns` until `sql.Columns` |
+| method   | name         | may   | request         | answer                                     |
+|----------|--------------|-------|-----------------|--------------------------------------------|
+| `0x0301` | sql.open     | read  | `sql.Open`      | `Handle`                                   |
+| `0x0302` | sql.query    | read  | `sql.Query`     | download `sql.Rows` until `sql.Rows`       |
+| `0x0303` | sql.exec     | write | `sql.Statement` | `sql.Done`                                 |
+| `0x0304` | sql.batch    | write | `sql.Batch`     | `sql.Batched`                              |
+| `0x0305` | sql.tx       | write | `sql.TxOpen`    | exchange `sql.TxAnswer` for `sql.TxCall`   |
+| `0x0306` | sql.columns  | read  | `sql.Statement` | download `sql.Columns` until `sql.Columns` |
+| `0x0307` | sql.describe | read  | `sql.Statement` | `sql.Described`                            |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/sql.wire`. A query's rows come in its

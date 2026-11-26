@@ -227,7 +227,7 @@ export class Bucket<T> {
 				return next
 			}
 		}
-		const shown = [this.#home?.describe, `kv bucket ${this.name}`, this.#shownKey(key)]
+		const shown = [this.#home?.label, `kv bucket ${this.name}`, this.#shownKey(key)]
 		throw new ConflictError(
 			`${shown.filter(part => part !== undefined).join(': ')}: other writes came first each time it was tried`,
 		)

@@ -7308,6 +7308,52 @@
       "hex": "80",
       "message": "sql.TxAnswer",
       "name": "sql.TxAnswer with no field"
+    },
+    {
+      "fields": {
+        "declared": {
+          "str": "declared"
+        },
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8201a46e616d6502a86465636c61726564",
+      "message": "sql.DescribedColumn",
+      "name": "sql.DescribedColumn with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.DescribedColumn",
+      "name": "sql.DescribedColumn with no field"
+    },
+    {
+      "fields": {
+        "columns": {
+          "list": [
+            {
+              "fields": {
+                "declared": {
+                  "str": "declared"
+                },
+                "name": {
+                  "str": "name"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918201a46e616d6502a86465636c61726564",
+      "message": "sql.Described",
+      "name": "sql.Described with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Described",
+      "name": "sql.Described with no field"
     }
   ],
   "methods": {
@@ -7433,6 +7479,7 @@
     "server.stop": 1,
     "sql.batch": 772,
     "sql.columns": 774,
+    "sql.describe": 775,
     "sql.exec": 771,
     "sql.open": 769,
     "sql.query": 770,

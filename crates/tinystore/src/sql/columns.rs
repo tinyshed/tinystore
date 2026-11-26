@@ -28,12 +28,12 @@ use crate::Result;
 #[derive(Debug)]
 pub(crate) struct Columns {
     pub(crate) rows: usize,
-    pub(crate) columns: Vec<(String, Column)>,
+    pub(crate) columns: Vec<(String, Packed)>,
     held: Held,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Column {
+pub(crate) enum Packed {
     /// A NULL among them is 0, and marked.
     Integers {
         values: Vec<i64>,
@@ -157,7 +157,7 @@ impl Taking {
 
     /// The column its rows made: a packed column's marks reach its last row,
     /// and one of NULLs alone is what it was `declared` to hold.
-    fn end(self, declared: Holds) -> Column {
+    fn end(self, declared: Holds) -> Packed {
         let marked = |mut nulls: Nulls, rows: usize| {
             if !nulls.is_empty() {
                 nulls.resize(rows, false);
@@ -166,21 +166,21 @@ impl Taking {
         };
         match (self, declared) {
             (Taking::Nulls(rows), Holds::Integers) => {
-                Column::Integers { values: vec![0; rows], nulls: vec![true; rows] }
+                Packed::Integers { values: vec![0; rows], nulls: vec![true; rows] }
             }
             (Taking::Nulls(rows), Holds::Reals) => {
-                Column::Reals { values: vec![f64::NAN; rows], nulls: vec![true; rows] }
+                Packed::Reals { values: vec![f64::NAN; rows], nulls: vec![true; rows] }
             }
-            (Taking::Nulls(rows), Holds::Any) => Column::Values(vec![Value::Null; rows]),
+            (Taking::Nulls(rows), Holds::Any) => Packed::Values(vec![Value::Null; rows]),
             (Taking::Integers { values, nulls }, _) => {
                 let nulls = marked(nulls, values.len());
-                Column::Integers { values, nulls }
+                Packed::Integers { values, nulls }
             }
             (Taking::Reals { values, nulls }, _) => {
                 let nulls = marked(nulls, values.len());
-                Column::Reals { values, nulls }
+                Packed::Reals { values, nulls }
             }
-            (Taking::Values(values), _) => Column::Values(values),
+            (Taking::Values(values), _) => Packed::Values(values),
         }
     }
 }

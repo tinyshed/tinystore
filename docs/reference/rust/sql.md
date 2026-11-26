@@ -232,6 +232,24 @@ for order in db.each::<Order>("select * from orders")? {
 }
 ```
 
+### Database.describe
+
+```rust
+pub fn describe(&self, statement: impl Into<Sql>) -> Result<Vec<Column>>
+```
+
+The columns a statement answers, in its order, each with the type its
+table declares where it is a table's own column, whether or not the
+statement would answer a row: it is compiled on a reader and nothing
+runs. The values of its `?`s are not read, and may be left out. A
+statement that writes, `returning` or not, is `invalid`, and one that
+names what its file lacks fails as `all` fails it.
+
+```rust
+let columns = db.describe("select id, title, length(title) as size from notes where author_id = ?")?;
+// id: Some("TEXT"), title: Some("TEXT"), size: None
+```
+
 ### Database.exec
 
 ```rust
@@ -359,6 +377,21 @@ pub struct Done {
 What a write changed: the rows, and SQLite's rowid of the row it inserted,
 `0` when it inserted none. The rowid is a table's key only for an `integer
 primary key`.
+
+## Column
+
+```rust
+pub struct Column {
+    pub name: String,
+    pub declared: Option<String>,
+}
+```
+
+A column a statement answers: its name as its rows name it, and the type
+its table declares for it where the column is a table's own, as SQLite
+keeps it: a type a strict table takes in capitals, `INTEGER` or `TEXT`,
+and any other as written, `varchar(80)`; `None` for an expression, and
+for a column its table declares no type for.
 
 ## Each
 
@@ -1023,6 +1056,19 @@ where
 
 The one value of the one row a statement gives, as
 `sql::Database::scalar` reads it; it runs as `Database::all` does.
+
+### aio::sql::Database.describe
+
+```rust
+pub fn describe(
+    &self,
+    statement: impl Into<Sql>,
+) -> impl Future<Output = Result<Vec<Column>>> + Send + 'static
+```
+
+The columns a statement answers, in its order, with the types their
+tables declare, as `sql::Database::describe` says them: compiled on
+a reader on the store's pool, and nothing of it run.
 
 ### aio::sql::Database.each
 

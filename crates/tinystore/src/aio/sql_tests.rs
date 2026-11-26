@@ -132,6 +132,22 @@ async fn reads_answer_as_the_blocking_ones_do_on_the_same_database() {
     f.store.close().await.unwrap();
 }
 
+// contract: SQL-16
+#[tokio::test]
+async fn describe_answers_as_the_blocking_one_does_and_refuses_as_it_refuses() {
+    let f = fixture();
+    let db = f.app();
+    let statement = "select title, id, author_id + 1 as next from notes where id = ?";
+    let described = db.describe(statement).await.unwrap();
+    assert_eq!(described, db.blocking().describe(statement).unwrap());
+    let shown: Vec<(&str, Option<&str>)> =
+        described.iter().map(|column| (column.name.as_str(), column.declared.as_deref())).collect();
+    assert_eq!(shown, [("title", Some("TEXT")), ("id", Some("TEXT")), ("next", None)]);
+    let (awaited, blocking) = (db.describe("delete from notes").await, db.blocking().describe("delete from notes"));
+    assert_eq!(awaited.unwrap_err().to_string(), blocking.unwrap_err().to_string());
+    f.store.close().await.unwrap();
+}
+
 // contract: SQL-01
 #[tokio::test]
 async fn a_statement_with_returning_goes_on_from_its_read_to_the_writer() {

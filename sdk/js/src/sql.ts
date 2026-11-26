@@ -56,6 +56,7 @@ import {
 	SqlBatch,
 	SqlBatched,
 	SqlColumns,
+	SqlDescribed,
 	SqlDone,
 	SqlOpen,
 	SqlQuery,
@@ -99,6 +100,16 @@ export interface DatabaseOptions {
 	 * other is InvalidError, naming both.
 	 */
 	backup?: boolean
+}
+
+/**
+ * A column a statement answers: its name as its rows name it, and the type
+ * its table declares for it where it is a table's own column, as SQLite keeps
+ * it, `INTEGER` or `varchar(80)`; none for an expression.
+ */
+export interface Column {
+	name: string
+	type?: string
 }
 
 /** What a write changed: the rows, and SQLite's rowid of the row it inserted, 0 when none. */
@@ -728,7 +739,7 @@ export const walk: unique symbol = Symbol('walk')
 
 /** What reads and writes a database: the database itself, or a transaction of it. */
 export interface Runner {
-	readonly describe: string
+	readonly label: string
 	rows(statement: Sql, want: Want): Promise<Answered>
 	exec(statement: Sql): Promise<Done>
 	[walk]?<T = Row>(statement: Sql, order: readonly Ordered[] | undefined): AsyncGenerator<T>
@@ -774,7 +785,7 @@ export function insideDatabaseTx(): boolean {
  */
 export class Database implements Runner, Home {
 	readonly name: string
-	readonly describe: string
+	readonly label: string
 	readonly #link: Link
 	readonly #open: Uint8Array
 	readonly #workers: Set<Worker>
@@ -786,7 +797,7 @@ export class Database implements Runner, Home {
 		this.#link = link
 		this.#workers = workers
 		this.name = name
-		this.describe = `sql ${name}`
+		this.label = `sql ${name}`
 		this.#open = open
 	}
 
@@ -830,7 +841,7 @@ export class Database implements Runner, Home {
 	#refuseAround(what: string): void {
 		if (running.getStore()?.some(each => each.database === this && !each.ended)) {
 			throw new InvalidError(
-				`${this.describe}: ${what}: made around the database's transaction from inside it, where it would wait for the writer the transaction holds: make it through the transaction, as tx.exec or tx.with(queue).add`,
+				`${this.label}: ${what}: made around the database's transaction from inside it, where it would wait for the writer the transaction holds: make it through the transaction, as tx.exec or tx.with(queue).add`,
 			)
 		}
 	}
@@ -945,6 +956,33 @@ export class Database implements Runner, Home {
 	/** The one value of the one row a statement gives, as count(*) does; null as SQL answers it. */
 	async scalar<T = SqlValue>(...statement: Statement): Promise<T> {
 		return scalar<T>(this, statementOf(statement))
+	}
+
+	/**
+	 * The columns a statement answers, in its order, whether or not it
+	 * answers a row: the server compiles it and runs nothing. Values of its
+	 * ?s are not read and may be left out; a statement that writes is
+	 * InvalidError.
+	 *
+	 *     const columns = await db.describe`select id, title from notes where author_id = ${id}`
+	 *     // [{ name: 'id', type: 'TEXT' }, { name: 'title', type: 'TEXT' }]
+	 */
+	async describe(...statement: Statement): Promise<Column[]> {
+		this.#refuseAround('a read')
+		// text alone is described as it is, its ?s without values
+		const [first] = statement
+		const piece =
+			statement.length === 1 && typeof first === 'string'
+				? new Sql(first, [])
+				: statementOf(statement)
+		const answered = await this.#link.run('read', async connection => {
+			const handle = await this.handle(connection)
+			const body = SqlStatement.encode({ handle, text: piece.text, values: [...piece.values] })
+			return connection.session.call(methods['sql.describe'], body)
+		})
+		return (SqlDescribed.decode(answered).columns ?? []).map(({ name = '', declared }) =>
+			declared === undefined ? { name } : { name, type: declared },
+		)
 	}
 
 	/**
@@ -1171,7 +1209,7 @@ type Guests = Map<Open, unknown>
  * time, in order.
  */
 export class SqlTx implements Runner {
-	readonly describe: string
+	readonly label: string
 	readonly #stream: Stream
 	readonly #database: Database
 	readonly #connection: Connection
@@ -1185,7 +1223,7 @@ export class SqlTx implements Runner {
 		this.#database = database
 		this.#connection = connection
 		this.#guests = guests
-		this.describe = database.describe
+		this.label = database.label
 		const call: Via['call'] = async (openMethod, open, method, body) => {
 			const handle = await handleOn(this.#connection, openMethod, open)
 			return this.#nested(method, body(handle))
@@ -1240,7 +1278,7 @@ export class SqlTx implements Runner {
 			return new TxEvents(events, this.#via)
 		}
 		throw new InvalidError(
-			`${this.describe}: a transaction takes in a bucket, a queue, files or events opened from its database`,
+			`${this.label}: a transaction takes in a bucket, a queue, files or events opened from its database`,
 		)
 	}
 
@@ -1285,7 +1323,7 @@ export class SqlTx implements Runner {
 		if (this.#stream.cancelled) {
 			// the signal's CANCEL leaves ahead of a commit sent now, and the server rolls back at it
 			throw new CancelledError(
-				`${this.describe}: the transaction was cancelled before its commit left`,
+				`${this.label}: the transaction was cancelled before its commit left`,
 			)
 		}
 		await this.#stream.send(SqlTxCall.encode({ commit }), true)
@@ -1294,7 +1332,7 @@ export class SqlTx implements Runner {
 		} catch (err) {
 			if (commit && (err instanceof ConnectionLostError || err instanceof CancelledError)) {
 				throw new OutcomeUnknownError(
-					`${this.describe}: the transaction's commit left with no answer; read what it wrote before running it again: ${err.message}`,
+					`${this.label}: the transaction's commit left with no answer; read what it wrote before running it again: ${err.message}`,
 				)
 			}
 			throw err
@@ -1308,14 +1346,12 @@ export class SqlTx implements Runner {
 	 */
 	#takes(home: Home | undefined, open: Open, what: string): void {
 		if (home !== this.#database) {
-			const kept = home === undefined ? 'the store' : home.describe
-			throw new InvalidError(
-				`${what}: kept in ${kept}, outside this transaction of ${this.describe}`,
-			)
+			const kept = home === undefined ? 'the store' : home.label
+			throw new InvalidError(`${what}: kept in ${kept}, outside this transaction of ${this.label}`)
 		}
 		if (!this.#guests.has(open)) {
 			throw new InvalidError(
-				`${this.describe}: ${what}: made after the transaction began; make it before db.tx, which opens it first`,
+				`${this.label}: ${what}: made after the transaction began; make it before db.tx, which opens it first`,
 			)
 		}
 		const failed = this.#guests.get(open)

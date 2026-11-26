@@ -794,10 +794,8 @@ def appending_in(appending: Appending, home: Home) -> Callable[[Connection], Awa
     """
     events, event = appending.events, appending.event
     if events.home is not home:
-        kept = "records.db" if events.home is None else events.home.describe
-        raise InvalidError(
-            f"{home.describe}: events {events.stream}: kept in {kept}, outside this batch of {home.describe}"
-        )
+        kept = "records.db" if events.home is None else events.home.label
+        raise InvalidError(f"{home.label}: events {events.stream}: kept in {kept}, outside this batch of {home.label}")
 
     async def sent(connection: Connection) -> dict[str, Any]:
         handle = await handle_on(connection, methods["records.open"], events.opener)

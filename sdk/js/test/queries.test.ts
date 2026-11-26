@@ -40,7 +40,7 @@ const vectors: { queries: Case[] } = JSON.parse(
 
 /** A runner that keeps the last statement it was given and answers nothing. */
 class Recorder implements Runner {
-	readonly describe = 'sql vectors'
+	readonly label = 'sql vectors'
 	last: Sql | undefined
 
 	async rows(statement: Sql) {

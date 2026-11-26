@@ -58,6 +58,27 @@ func Scalar[T any](ctx context.Context, r Runner, text string, args ...any) (T, 
 
 Scalar is the one value of the one row a statement gives, as count(\*) does; T's zero for NULL.
 
+## Column
+
+```go
+type Column struct {
+	Name string
+	Type string
+}
+```
+
+Column is a column a statement answers: its name as its rows name it, and the type its table declares for it where it is a table's own column, as SQLite keeps it, INTEGER or varchar(80); empty for an expression.
+
+### Describe
+
+```go
+func Describe(ctx context.Context, db *DB, text string, args ...any) ([]Column, error)
+```
+
+Describe is the columns a statement answers, in its order, whether or not it answers a row: the server compiles it and runs nothing. Text alone is described with its ?s left without values; a statement that writes is invalid.
+
+	columns, err := sqldb.Describe(ctx, db, "select id, title from notes where author_id = ?")
+
 ## Condition
 
 ```go

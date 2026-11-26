@@ -6,8 +6,9 @@ use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::{Cell, Message};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlMigration, SqlOpen, SqlOrder,
-    SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
+    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn, SqlDone,
+    SqlMigration, SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen,
+    method,
 };
 
 const NOTES: &str =
@@ -961,6 +962,35 @@ fn a_client_says_how_far_a_databases_commits_go_and_one_open_keeps_what_it_has()
         SqlOpen { name: "other".to_owned(), migrations: None, durability: Some("fast".to_owned()), backup: None };
     let refused = client.call::<Handle>(method::SQL_OPEN, &unknown).unwrap_err();
     assert_eq!(refused.message, "sql other: durability \"fast\": it is full or os: invalid");
+}
+
+// contract: SQL-16
+#[test]
+fn describe_names_a_statements_columns_without_its_rows_and_a_read_connection_asks_it_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let mut owner = Client::admitted(&store, crate::pipe::Capability::Data);
+    open(&mut owner);
+    let mut reader = Client::admitted(&store, crate::pipe::Capability::Read);
+    let read = open(&mut reader);
+    let column = |name: &str, declared: Option<&str>| SqlDescribedColumn {
+        name: name.to_owned(),
+        declared: declared.map(str::to_owned),
+    };
+    let asked = |text: &str| SqlStatement { handle: read, text: text.to_owned(), values: Vec::new() };
+    let described: SqlDescribed = reader
+        .call(method::SQL_DESCRIBE, &asked("select done, upper(title) as shout, id from notes where id = ?"))
+        .unwrap();
+    assert_eq!(described.columns, [column("done", Some("INTEGER")), column("shout", None), column("id", Some("TEXT"))]);
+
+    let copy = dir.path().join("copy.db");
+    for text in ["delete from notes returning id".to_owned(), format!("vacuum into '{}'", copy.display())] {
+        let refused = reader.call::<SqlDescribed>(method::SQL_DESCRIBE, &asked(&text)).unwrap_err();
+        assert_eq!(refused.code, "invalid", "{text}: {}", refused.message);
+    }
+    let mistyped = reader.call::<SqlDescribed>(method::SQL_DESCRIBE, &asked("select titel from notes")).unwrap_err();
+    assert_eq!((mistyped.code.as_str(), mistyped.message.contains("no such column: titel")), ("invalid", true));
+    assert!(!copy.exists(), "nothing ran");
 }
 
 // contract: SEC-01

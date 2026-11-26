@@ -531,6 +531,54 @@ func Columns[T any](ctx context.Context, db *DB, text string, args ...any) (T, e
 	return out, nil
 }
 
+// Column is a column a statement answers: its name as its rows name it, and
+// the type its table declares for it where it is a table's own column, as
+// SQLite keeps it, INTEGER or varchar(80); empty for an expression.
+type Column struct {
+	Name string
+	Type string
+}
+
+// Describe is the columns a statement answers, in its order, whether or not
+// it answers a row: the server compiles it and runs nothing. Text alone is
+// described with its ?s left without values; a statement that writes is
+// invalid.
+//
+//	columns, err := sqldb.Describe(ctx, db, "select id, title from notes where author_id = ?")
+func Describe(ctx context.Context, db *DB, text string, args ...any) ([]Column, error) {
+	statement := Piece{text: text}
+	if len(args) > 0 {
+		statement = statementOf(text, args)
+	}
+	if statement.err != nil {
+		return nil, statement.err
+	}
+	var described wire.SqlDescribed
+	err := db.store.Link.Run(ctx, core.Reading, func(c *core.Connection) error {
+		handle, err := db.Handle(ctx, c)
+		if err != nil {
+			return err
+		}
+		body := wire.Encode(&wire.SqlStatement{Handle: handle, Text: statement.text, Values: statement.values})
+		answer, err := c.Session.Call(ctx, wire.MethodSqlDescribe, body)
+		if err != nil {
+			return err
+		}
+		return decode(answer, &described)
+	})
+	if err != nil {
+		return nil, err
+	}
+	columns := make([]Column, len(described.Columns))
+	for i, column := range described.Columns {
+		columns[i].Name = column.Name
+		if column.Declared != nil {
+			columns[i].Type = *column.Declared
+		}
+	}
+	return columns, nil
+}
+
 // columnsOf is a statement's rows by their columns, from the parts of its answer.
 func columnsOf(parts [][]byte) ([]string, [][]any, error) {
 	var names []string

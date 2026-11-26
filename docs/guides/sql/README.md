@@ -96,6 +96,46 @@ has. [A database left out of
 backups](../backup/README.md#a-database-left-out-of-backups) says what a
 backup does with it.
 
+## What a statement answers
+
+`describe` gives the columns a statement answers, in the statement's order,
+without running it: for a console, a dashboard or an export that shows a
+statement someone else wrote, and must name the columns even when no row
+comes back.
+
+```ts
+const columns = await db.describe`select id, title, length(title) as size from notes where author_id = ${userId}`
+// [{ name: 'id', type: 'TEXT' }, { name: 'title', type: 'TEXT' }, { name: 'size' }]
+```
+
+```python
+columns = await db.describe("select id, title, length(title) as size from notes where author_id = ?", user_id)
+# [Column(name='id', type='TEXT'), Column(name='title', type='TEXT'), Column(name='size', type=None)]
+```
+
+```go
+columns, err := sqldb.Describe(ctx, db, `select id, title, length(title) as size from notes where author_id = ?`, userID)
+// [{Name:id Type:TEXT} {Name:title Type:TEXT} {Name:size Type:}]
+```
+
+```rust
+let columns = db.describe(sql!("select id, title, length(title) as size from notes where author_id = ?", user_id))?;
+// [Column { name: "id", declared: Some("TEXT") }, …, Column { name: "size", declared: None }]
+```
+
+A column that is a table's own carries the type its table declares, as
+SQLite keeps it: `INTEGER` or `TEXT` in capitals, any other type as the
+table wrote it, `varchar(80)`. An expression has none. The statement is
+compiled on a reader and nothing of it runs, so the values of its `?`s are
+not read: text alone, without them, is described too. A statement that
+writes, with `returning` or without, is `invalid`, and one that names a
+column its table lacks fails as `all` fails it (contract SQL-16).
+
+A row read as an object keeps its columns' order in TypeScript and Python,
+except that a JavaScript object puts a column named like an integer, `"2"`,
+before the others; a Go map keeps none. Read the order from `describe` where
+it matters.
+
 ## In these guides
 
 | Page                                                      | Covers                                                  |
@@ -139,6 +179,7 @@ as in blocking Rust:
 | Blocking                                      | Async                                                |
 |-----------------------------------------------|------------------------------------------------------|
 | `db.all(q)?`, `db.one(q)?`, `db.scalar(q)?`   | `db.all(q).await?`, and the same for the others      |
+| `db.describe(q)?`                             | `db.describe(q).await?`                              |
 | a query's `all`, `count`, `list` and the rest | `query.list(50, None).await?`                        |
 | `db.each(q)?`, `query.each()?`, iterators     | `Stream`s, each item `rows.next().await`             |
 | `db.exec(q)?`, `db.batch(writes)?`            | `db.exec(q).await?`, `db.batch(writes).await?`       |

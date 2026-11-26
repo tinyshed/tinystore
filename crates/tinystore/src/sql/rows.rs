@@ -209,7 +209,8 @@ pub(super) fn named_columns(statement: &Statement<'_>) -> Result<(Vec<String>, V
     named.map_err(|_| Error::invalid(NOT_UTF8))
 }
 
-const NOT_UTF8: &str = "a column's declared type or name is not UTF-8, as a file another program wrote may hold";
+pub(super) const NOT_UTF8: &str =
+    "a column's declared type or name is not UTF-8, as a file another program wrote may hold";
 
 /// Where a statement's values go as its rows are read, for a caller that
 /// keeps them in a form of its own: the wire, as the bytes of its message.

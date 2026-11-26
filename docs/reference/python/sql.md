@@ -33,6 +33,20 @@ class Done:
 
 What a write changed: the rows, and SQLite's rowid of the row it inserted, 0 when none.
 
+## Column
+
+```python
+@dataclass(frozen=True, slots=True)
+class Column:
+    name: str
+    type: str | None = None
+```
+
+A column a statement answers: its name, and the type its table declares for it.
+
+The type is SQLite's, ``INTEGER`` or ``varchar(80)``, where the column is
+a table's own, and None for an expression.
+
 ## Database
 
 ```python
@@ -46,11 +60,11 @@ The verb says what comes back: all the rows, one or none, one value, or
 what a write changed. A write with ``returning`` goes through a read's
 verb and runs on the writer, its rows given once it is durable.
 
-### Database.describe
+### Database.label
 
 ```python
 @property
-def describe() -> str: ...
+def label() -> str: ...
 ```
 
 ### Database.handle
@@ -321,6 +335,20 @@ async def scalar(first: Any, /, *rest: Any) -> Any: ...
 
 The one value of the one row a statement gives, as count(*) does; None as SQL answers it.
 
+### Database.describe
+
+```python
+async def describe(statement: Statement, /, *values: Any) -> list[Column]: ...
+```
+
+The columns a statement answers, in its order, whether or not it answers a row.
+
+The server compiles it and runs nothing: the values of its ``?``s are
+not read and may be left out. A statement that writes is InvalidError.
+
+    columns = await db.describe("select id, title from notes where author_id = ?")
+    # [Column(name='id', type='TEXT'), Column(name='title', type='TEXT')]
+
 ### Database.columns
 
 ```python
@@ -480,11 +508,11 @@ A database's transaction, from ``db.tx``.
 Its reads see its writes, and a call that fails leaves it as it was
 before the call. Its calls go one at a time, in order.
 
-### SqlTx.describe
+### SqlTx.label
 
 ```python
 @property
-def describe() -> str: ...
+def label() -> str: ...
 ```
 
 ### SqlTx.with_

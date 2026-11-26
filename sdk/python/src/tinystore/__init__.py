@@ -114,7 +114,7 @@ from .records import (
     TxEvents,
 )
 from .search import Hit, Hybrid, IndexInfo, IndexStatus, Match, Result, SearchIndex, TableIndex, Total, Vectors
-from .sql import Database, Done, Sql, SqlTx, TxQueue, sql
+from .sql import Column, Database, Done, Sql, SqlTx, TxQueue, sql
 from .store import SelfMetrics, Status, Store, connect, open
 from .trace import trace
 from .tx import Tx, TxBucket, TxCounters
@@ -134,6 +134,7 @@ __all__ = [
     "Channel",
     "Clock",
     "ClosedError",
+    "Column",
     "CommittedLocallyError",
     "Concurrency",
     "Config",
