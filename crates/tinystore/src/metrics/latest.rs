@@ -30,9 +30,25 @@ impl Engine {
     pub(super) fn latest(&self, asked: &Asked) -> Result<Vec<Latest>> {
         let mut budget = Budget::default();
         let taken = self.take(asked, Want::Newest, &mut budget)?;
+        self.newest_held(&taken, &mut budget)
+    }
+
+    /// `latest` of the series the query finds from the id `from` on, as many
+    /// as a query finds, and the id the next part starts from when there are
+    /// more: a part a snapshot, so that a name of any count of series is read
+    /// whole.
+    pub(super) fn latest_from(&self, asked: &Asked, from: i64) -> Result<(Vec<Latest>, Option<i64>)> {
+        let mut budget = Budget::default();
+        let (taken, next) = self.take_from(asked, Want::Newest, from, &mut budget)?;
+        Ok((self.newest_held(&taken, &mut budget)?, next))
+    }
+
+    /// The newest sample of each series taken, decoded under the store's
+    /// memory for what the snapshot copied.
+    fn newest_held(&self, taken: &[Taken], budget: &mut Budget) -> Result<Vec<Latest>> {
         let _held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: the newest samples", PATIENCE)?;
         let mut zstd = self.codecs.take();
-        let answer = self.newest_of_each(&mut zstd, &taken, &mut budget);
+        let answer = self.newest_of_each(&mut zstd, taken, budget);
         self.codecs.give_back(zstd);
         answer
     }

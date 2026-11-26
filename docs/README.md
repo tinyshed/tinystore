@@ -192,6 +192,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Reading](guides/metrics/reading.md)
 - [Aggregates](guides/metrics/aggregates.md)
 - [Ingesting](guides/metrics/ingesting.md)
+- [To Prometheus](guides/metrics/exposition.md)
 - [The store's own metrics](guides/metrics/self-metrics.md)
 - [The metrics crate](guides/metrics/metrics-crate.md)
 

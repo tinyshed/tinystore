@@ -36,6 +36,7 @@ mod directory;
 mod engine;
 mod exact;
 mod explain;
+mod exposition;
 #[cfg(test)]
 pub(crate) mod fixture;
 mod flush;
@@ -91,6 +92,7 @@ pub use damage::Damage;
 pub use describe::Description;
 pub use exact::ExactSum;
 pub use explain::{Exceeds, Plan};
+pub use exposition::{Exposition, Written};
 pub use held::{SeriesQuery, query};
 pub use instruments::{Builder, Counter, Gauge, GaugeFunc, Histogram, Reading, Timer, Timing};
 pub use latest::Latest;

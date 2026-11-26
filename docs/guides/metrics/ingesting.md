@@ -360,3 +360,5 @@ TINYSTORE_SERIES=1000000 cargo test --release -p tinystore --lib -- metrics::ing
 
 - [Metrics](README.md): the engine's overview.
 - [Reading](reading.md): the samples back, bit for bit.
+- [To Prometheus](exposition.md): the other way, the newest samples as the
+  text a Prometheus scrapes.

@@ -151,6 +151,24 @@ impl Engine {
         })
     }
 
+    /// `take` of the series the query finds from the id `from` on, as many
+    /// as a query finds, and the id the next of them are found from when
+    /// there are more: an exposition goes past that bound this way, a
+    /// snapshot a part.
+    pub(super) fn take_from(
+        &self,
+        asked: &Asked,
+        want: Want<'_>,
+        from: i64,
+        budget: &mut Budget,
+    ) -> Result<(Vec<Taken>, Option<i64>)> {
+        self.snapshot(asked, want, budget, |reading, asked| {
+            let (found, next) = matching::find_from(reading.connection, asked, from, reading.budget)?;
+            let taken = found.into_iter().map(|series| reading.series(self, series, asked, want));
+            Ok((taken.collect::<Result<Vec<_>>>()?, next))
+        })
+    }
+
     /// `read` run on one snapshot of the file, the query read as a timer's
     /// series when it names one, and the bodies of the blocks it took copied
     /// in the same snapshot. A series whose bytes no longer read is suspended
@@ -190,6 +208,12 @@ pub(super) trait Holds {
 impl Holds for Vec<Taken> {
     fn taken(&mut self) -> Vec<&mut Taken> {
         self.iter_mut().collect()
+    }
+}
+
+impl Holds for (Vec<Taken>, Option<i64>) {
+    fn taken(&mut self) -> Vec<&mut Taken> {
+        self.0.iter_mut().collect()
     }
 }
 
