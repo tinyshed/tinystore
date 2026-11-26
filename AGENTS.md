@@ -279,7 +279,8 @@ is `Closed`.
 its pool, which the pipe's calls and the async API's run on and whose idle
 threads end after a minute, its timer, which ends the patience of the waits
 that hold no thread, the locks' timer, the threads channels run handlers on,
-and the threads a queue's `work` asks for, which its worker's `stop` and the
+up to four that run once's builds in the background, each ended after a
+minute idle, and the threads a queue's `work` asks for, which its worker's `stop` and the
 store's close stop; with `cli`, the thread that takes the command line's
 connections and two a connection, on blocking calls that look each tick at
 whether the store closes, so that no async runtime runs in the library. The

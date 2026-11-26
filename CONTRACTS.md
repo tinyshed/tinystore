@@ -76,6 +76,10 @@ These contracts are what does not.
 - **KV-13** A page MUST NOT hold a snapshot between pages, and MUST end before the value that passes its bytes.
 - **KV-14** An update MUST write its change at the version it read, or create a key that was not there, so that updates racing on a key all keep their changes; one that another write came before eight times running MUST fail `conflict`, and a change that returns nothing MUST write nothing.
 - **KV-15** `count` MUST equal the number of keys `all` walks when nothing writes the branch meanwhile, and MUST NOT count an expired or a cleared key.
+- **KV-16** `once` opened with `fresh` MUST answer a kept answer older than `fresh` at once, waiting for no build, and MUST run at most one build of a key in the background at a time across every client of the store, whose answer replaces the kept one, and nothing once the kept one was deleted or cleared while it ran; a handle opened without `fresh` MUST NOT be handed one.
+- **KV-17** A build in the background that fails MUST leave the kept answer as it was until `keep` ends, and no other build of its key MUST start for a tenth of `fresh`, a second at least and a minute at most; past `keep` a failed build MUST give its error to its caller and keep nothing.
+- **KV-18** An answer MUST say its age at the store's clock, within `[0, keep]`, and MUST be stale only when it is older than the `fresh` its answers opened with.
+- **KV-19** A clear of once's answers MUST remove the answers of its branch and of every branch under it in one commit, and none beside it.
 
 ### Config
 

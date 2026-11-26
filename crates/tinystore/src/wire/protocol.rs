@@ -5352,7 +5352,8 @@ impl Message for KvResealed {
     }
 }
 
-/// A branch of a handle, for a clear, a reseal or a count.
+/// A branch of a handle, for a clear, a reseal or a count; a clear takes once's
+/// answers too.
 #[cfg(feature = "kv")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct KvBranch {
@@ -5945,13 +5946,19 @@ impl Message for KvAllowance {
     }
 }
 
-/// Opens once's answers: a function run once a key, its answer kept.
+/// Opens once's answers: a function run once a key, its answer kept. Only a
+/// client that reads refresh sends fresh, so an older one is never handed a
+/// build in the background.
 #[cfg(feature = "kv")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct KvOnceOpen {
     pub(crate) name: String,
     /// A day when absent. Milliseconds.
     pub(crate) keep: Option<u64>,
+    /// How long an answer is answered without making a new one, shorter than keep. Milliseconds.
+    pub(crate) fresh: Option<u64>,
+    /// The client reads age and stale; an older one sends none and is sent neither.
+    pub(crate) aged: bool,
 }
 
 #[cfg(feature = "kv")]
@@ -5965,6 +5972,8 @@ impl Message for KvOnceOpen {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.name = codec::str(r, "name")?,
                 2 => message.keep = Some(codec::uint(r, "keep")?),
+                3 => message.fresh = Some(codec::uint(r, "fresh")?),
+                4 => message.aged = codec::bool(r, "aged")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -5981,6 +5990,14 @@ impl Message for KvOnceOpen {
             map.field(out, 2);
             codec::write_uint(out, keep);
         }
+        if let Some(fresh) = &self.fresh {
+            map.field(out, 3);
+            codec::write_uint(out, fresh);
+        }
+        if self.aged {
+            map.field(out, 4);
+            codec::write_bool(out, &self.aged);
+        }
         map.close(out);
     }
 
@@ -5988,22 +6005,35 @@ impl Message for KvOnceOpen {
         3
             + 1 + 5 + self.name.len()
             + self.keep.map_or(0, |_| 10)
+            + self.fresh.map_or(0, |_| 10)
+            + 2
     }
 
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.keep.is_none()
+            && self.fresh.is_none()
+            && !self.aged
     }
 }
 
 /// An answer of once: in the server's RESPONSE, found when one was kept, and
 /// otherwise the run is the client's; in the client's last DATA, found with the
-/// answer to keep, or not found when the function failed.
+/// answer to keep, or not found when the function failed. A RESPONSE found
+/// with refresh leaves the stream open: the client answers its caller with the
+/// kept answer at once, makes the new one in the background, and sends it as
+/// its last DATA, or not found when it failed, which keeps the kept one.
 #[cfg(feature = "kv")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct KvAnswer {
     pub(crate) found: bool,
     pub(crate) value: Option<Row>,
+    /// How old the kept answer is, to a handle opened aged. Milliseconds.
+    pub(crate) age: Option<u64>,
+    /// Older than the handle's fresh.
+    pub(crate) stale: bool,
+    /// The client makes the new answer in the background.
+    pub(crate) refresh: bool,
 }
 
 #[cfg(feature = "kv")]
@@ -6017,6 +6047,9 @@ impl Message for KvAnswer {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.found = codec::bool(r, "found")?,
                 2 => message.value = Some(codec::row(r, "value")?),
+                3 => message.age = Some(codec::uint(r, "age")?),
+                4 => message.stale = codec::bool(r, "stale")?,
+                5 => message.refresh = codec::bool(r, "refresh")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -6033,6 +6066,18 @@ impl Message for KvAnswer {
             map.field(out, 2);
             codec::write_row(out, value);
         }
+        if let Some(age) = &self.age {
+            map.field(out, 3);
+            codec::write_uint(out, age);
+        }
+        if self.stale {
+            map.field(out, 4);
+            codec::write_bool(out, &self.stale);
+        }
+        if self.refresh {
+            map.field(out, 5);
+            codec::write_bool(out, &self.refresh);
+        }
         map.close(out);
     }
 
@@ -6040,11 +6085,17 @@ impl Message for KvAnswer {
         3
             + 2
             + self.value.as_ref().map_or(0, |value| 1 + codec::row_size(value))
+            + self.age.map_or(0, |_| 10)
+            + 2
+            + 2
     }
 
     fn is_zero(&self) -> bool {
         !self.found
             && self.value.is_none()
+            && self.age.is_none()
+            && !self.stale
+            && !self.refresh
     }
 }
 

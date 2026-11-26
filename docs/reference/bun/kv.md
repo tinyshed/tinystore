@@ -446,8 +446,26 @@ Gives n uses back to every window of key, one unless given.
 interface OnceOptions {
     /** how long an answer is kept: a day when absent */
     keep?: Duration | undefined
+    /**
+     * how long an answer is answered without making a new one, shorter than
+     * keep: past it, the kept answer is answered at once and one new one is
+     * made in the background
+     */
+    fresh?: Duration | undefined
 }
 ```
+
+## OnceAnswer
+
+```ts
+interface OnceAnswer<T> {
+    value: T
+    age: DurationText
+    stale: boolean
+}
+```
+
+An answer with how old it is: stale once older than the `fresh` its answers opened with.
 
 ## Once
 
@@ -481,6 +499,19 @@ kept is OutcomeUnknownError.
 
     const receipt = await charges.run(requestId, () => pay.charge(order, requestId))
 
+### Once.answer
+
+```ts
+answer(key: Key, fn: () => T | Promise<T>): Promise<OnceAnswer<T>>
+```
+
+run's answer with how old it is. Opened with `fresh`, a kept answer older
+than it comes back at once, stale, and fn may make the next one in the
+background: its answer replaces the kept one, and its throw, which no
+caller sees, keeps it until `keep` ends.
+
+    const { value, age, stale } = await books.answer(userId, () => cabinet.book(userId))
+
 ### Once.get
 
 ```ts
@@ -496,6 +527,15 @@ delete(key: Key): Promise<boolean>
 ```
 
 Forgets the answer kept for key, so that its next run runs fn again.
+
+### Once.clear
+
+```ts
+clear(): Promise<void>
+```
+
+Forgets every answer of this branch and of the branches under it, in one
+commit. A run under way meanwhile keeps its answer once it ends.
 
 ## Tx
 

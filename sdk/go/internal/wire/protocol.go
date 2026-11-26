@@ -6382,7 +6382,8 @@ func (m KvResealed) IsZero() bool {
 
 // KvBranch is the schema's kv.Branch.
 //
-// A branch of a handle, for a clear, a reseal or a count.
+// A branch of a handle, for a clear, a reseal or a count; a clear takes once's
+// answers too.
 type KvBranch struct {
 	Handle uint64   `wire:"1,handle"`
 	Under  []string `wire:"2,under"`
@@ -6998,11 +6999,17 @@ func (m KvAllowance) IsZero() bool {
 
 // KvOnceOpen is the schema's kv.OnceOpen.
 //
-// Opens once's answers: a function run once a key, its answer kept.
+// Opens once's answers: a function run once a key, its answer kept. Only a
+// client that reads refresh sends fresh, so an older one is never handed a
+// build in the background.
 type KvOnceOpen struct {
 	Name string `wire:"1,name"`
 	// a day when absent
 	Keep *uint64 `wire:"2,keep"`
+	// how long an answer is answered without making a new one, shorter than keep
+	Fresh *uint64 `wire:"3,fresh"`
+	// the client reads age and stale; an older one sends none and is sent neither
+	Aged bool `wire:"4,aged"`
 }
 
 func (m KvOnceOpen) Write(w *Writer) {
@@ -7018,6 +7025,16 @@ func (m KvOnceOpen) Write(w *Writer) {
 		w.Uint(*m.Keep)
 		n++
 	}
+	if m.Fresh != nil {
+		w.Uint(3)
+		w.Uint(*m.Fresh)
+		n++
+	}
+	if m.Aged {
+		w.Uint(4)
+		w.Bool(m.Aged)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -7031,6 +7048,11 @@ func (m *KvOnceOpen) Read(r *Reader) {
 		case 2:
 			v := r.Uint()
 			m.Keep = &v
+		case 3:
+			v := r.Uint()
+			m.Fresh = &v
+		case 4:
+			m.Aged = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -7041,17 +7063,28 @@ func (m *KvOnceOpen) Read(r *Reader) {
 // IsZero says whether KvOnceOpen writes as no field at all.
 func (m KvOnceOpen) IsZero() bool {
 	return m.Name == "" &&
-		m.Keep == nil
+		m.Keep == nil &&
+		m.Fresh == nil &&
+		!m.Aged
 }
 
 // KvAnswer is the schema's kv.Answer.
 //
 // An answer of once: in the server's RESPONSE, found when one was kept, and
 // otherwise the run is the client's; in the client's last DATA, found with the
-// answer to keep, or not found when the function failed.
+// answer to keep, or not found when the function failed. A RESPONSE found
+// with refresh leaves the stream open: the client answers its caller with the
+// kept answer at once, makes the new one in the background, and sends it as
+// its last DATA, or not found when it failed, which keeps the kept one.
 type KvAnswer struct {
 	Found bool `wire:"1,found"`
 	Value *Raw `wire:"2,value"`
+	// how old the kept answer is, to a handle opened aged
+	Age *uint64 `wire:"3,age"`
+	// older than the handle's fresh
+	Stale bool `wire:"4,stale"`
+	// the client makes the new answer in the background
+	Refresh bool `wire:"5,refresh"`
 }
 
 func (m KvAnswer) Write(w *Writer) {
@@ -7067,6 +7100,21 @@ func (m KvAnswer) Write(w *Writer) {
 		w.Raw(*m.Value)
 		n++
 	}
+	if m.Age != nil {
+		w.Uint(3)
+		w.Uint(*m.Age)
+		n++
+	}
+	if m.Stale {
+		w.Uint(4)
+		w.Bool(m.Stale)
+		n++
+	}
+	if m.Refresh {
+		w.Uint(5)
+		w.Bool(m.Refresh)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -7080,6 +7128,13 @@ func (m *KvAnswer) Read(r *Reader) {
 		case 2:
 			v := r.Raw()
 			m.Value = &v
+		case 3:
+			v := r.Uint()
+			m.Age = &v
+		case 4:
+			m.Stale = r.Bool()
+		case 5:
+			m.Refresh = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -7090,7 +7145,10 @@ func (m *KvAnswer) Read(r *Reader) {
 // IsZero says whether KvAnswer writes as no field at all.
 func (m KvAnswer) IsZero() bool {
 	return !m.Found &&
-		m.Value == nil
+		m.Value == nil &&
+		m.Age == nil &&
+		!m.Stale &&
+		!m.Refresh
 }
 
 // KvCheck is the schema's kv.Check.

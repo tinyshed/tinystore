@@ -138,6 +138,11 @@ impl Scope {
         &self.name
     }
 
+    #[cfg(feature = "replication")]
+    pub(crate) fn kind(&self) -> Kind {
+        self.kind
+    }
+
     /// The handle as an error names it: `kv counters hits`.
     pub(crate) fn shown(&self) -> String {
         described(self.kv.lent_by(), self.kind, &self.name)

@@ -508,12 +508,12 @@ Each engine's high byte, as [Frames](#frames) says:
 `T` is a call's one message; the others are the shapes of
 [Streams](#streams):
 
-| answer                 | the stream                                                                                                                                       |
-|------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
-| `T`                    | a call: a `T` as its `RESPONSE`·END                                                                                                              |
-| download `T` until `U` | after its `RESPONSE`, any number of `T` as `DATA`, then a `U` with END; an answer that fits one message may be a `U` as the `RESPONSE`·END alone |
-| handover `T`           | a `T` as the `RESPONSE`·END; or the run handed to the client, which sends the `T` to keep as its last `DATA`                                     |
-| exchange `T` for `U`   | after its `RESPONSE`, `T` from the server and `U` from the client as `DATA`, until each side ends its own                                        |
+| answer                 | the stream                                                                                                                                                                                                                                     |
+|------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `T`                    | a call: a `T` as its `RESPONSE`·END                                                                                                                                                                                                            |
+| download `T` until `U` | after its `RESPONSE`, any number of `T` as `DATA`, then a `U` with END; an answer that fits one message may be a `U` as the `RESPONSE`·END alone                                                                                               |
+| handover `T`           | a `T` as the `RESPONSE`·END; or the run handed to the client, which sends the `T` to keep as its last `DATA`; or a `T` as the `RESPONSE` alone, which hands the client a run in the background and leaves the stream open for that last `DATA` |
+| exchange `T` for `U`   | after its `RESPONSE`, `T` from the server and `U` from the client as `DATA`, until each side ends its own                                                                                                                                      |
 
 The values they carry:
 

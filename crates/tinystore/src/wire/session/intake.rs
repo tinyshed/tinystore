@@ -220,7 +220,7 @@ impl Shared {
         };
         let (shared, stream, body) = (Arc::clone(self), frame.stream, frame.body);
         self.workers.run(Box::new(move || {
-            let kept = guarded(|| kv::kept(handed, &body));
+            let kept = guarded(|| kv::kept(*handed, &body));
             shared.end_stream(stream, kept);
         }));
     }

@@ -114,15 +114,34 @@ Uses by key in named windows, each counted from a key's first use, all or none.
 
 ```python
 @overload
-def once[T](name: str, of: type[T], *, keep: Duration | None = None) -> Once[T]: ...
+def once[T](
+    name: str,
+    of: type[T],
+    *,
+    keep: Duration | None = None,
+    fresh: Duration | None = None,
+) -> Once[T]: ...
 @overload
-def once(name: str, of: None = None, *, keep: Duration | None = None) -> Once[Any]: ...
-def once(name: str, of: Any = None, *, keep: Duration | None = None) -> Once[Any]: ...
+def once(
+    name: str,
+    of: None = None,
+    *,
+    keep: Duration | None = None,
+    fresh: Duration | None = None,
+) -> Once[Any]: ...
+def once(
+    name: str,
+    of: Any = None,
+    *,
+    keep: Duration | None = None,
+    fresh: Duration | None = None,
+) -> Once[Any]: ...
 ```
 
 A function run once a key, its JSON answer kept a day unless keep says.
 
-``store.once("charges", Receipt)``
+``store.once("charges", Receipt)``; with fresh, shorter than keep, an answer
+older than it is answered at once while one new one is made in the background.
 
 ### Store.queue
 

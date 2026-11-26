@@ -424,6 +424,19 @@ it and gets its answer; an exception of fn keeps nothing and is raised,
 so the next run runs fn again. A connection lost after fn returned and
 before its answer was kept is OutcomeUnknownError.
 
+### Once.answer
+
+```python
+async def answer(key: Key, fn: Callable[[], Awaitable[T] | T]) -> Answer[T]: ...
+```
+
+run's answer with how old it is.
+
+Opened with ``fresh``, a kept answer older than it comes back at once,
+stale, and fn may make the next one in the background: its answer
+replaces the kept one, and its exception, which no caller sees, keeps it
+until ``keep`` ends.
+
 ### Once.get
 
 ```python
@@ -439,6 +452,16 @@ async def delete(key: Key) -> bool: ...
 ```
 
 Forgets the answer kept for key, so that its next run runs fn again.
+
+### Once.clear
+
+```python
+async def clear() -> None: ...
+```
+
+Forgets every answer of this branch and of the branches under it, in one commit.
+
+A run under way meanwhile keeps its answer once it ends.
 
 ## Tx
 

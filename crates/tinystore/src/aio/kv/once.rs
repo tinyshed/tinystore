@@ -4,11 +4,12 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::fresh::FreshBuilder;
 use super::named;
 use crate::aio::oneshot::pending;
 use crate::aio::{Store, run};
 use crate::cancel::{self, Captured};
-use crate::kv::{Handed, Key, Value, WriteOptions};
+use crate::kv::{Answer, Handed, Key, Value, WriteOptions, made};
 use crate::pool::Pool;
 use crate::{Error, Result};
 
@@ -32,6 +33,13 @@ impl<V: Value> OnceBuilder<V> {
     /// How long an answer is kept from when it was made; a day unless said.
     pub fn keep(self, keep: Duration) -> Self {
         OnceBuilder { builder: self.builder.keep(keep), ..self }
+    }
+
+    /// How long an answer is answered without making a new one, shorter than
+    /// `keep`, as [`crate::kv::OnceBuilder::fresh`] says; awaited answers
+    /// opened so also take where their builds in the background run.
+    pub fn fresh(self, fresh: Duration) -> FreshBuilder<V> {
+        FreshBuilder::new(self.builder.fresh(fresh), self.pool)
     }
 
     /// Opens the answers: a plain call, made once at start.
@@ -84,25 +92,27 @@ impl<V: Value> Once<V> {
         W: FnOnce() -> F + Send,
         F: Future<Output = Result<V, E>> + Send,
     {
-        let run = Run {
-            once: self.once.clone(),
-            pool: Arc::clone(&self.pool),
-            tokens: cancel::captured(),
-            key: key.text().into_owned(),
-        };
+        let answer = self.answer(key, work);
+        async move { answer.await.map(|answer| answer.value) }
+    }
+
+    /// [`Once::run`]'s answer with how old it is, as
+    /// [`crate::kv::Once::answer`] gives it.
+    pub fn answer<K, E, W, F>(
+        &self,
+        key: K,
+        work: W,
+    ) -> impl Future<Output = Result<Answer<V>, E>> + Send + use<K, V, E, W, F>
+    where
+        K: Key,
+        E: From<Error> + Send,
+        W: FnOnce() -> F + Send,
+        F: Future<Output = Result<V, E>> + Send,
+    {
+        let run = Run::new(&self.once, &self.pool, &key.text());
         async move {
-            #[cfg(feature = "replication")]
-            if run.once.answers().is_copy() {
-                return run.at_home(work).await;
-            }
-            let handed = match run.claim().await? {
-                Start::Kept(answer) => return Ok(answer),
-                Start::Yours(handed) => *handed,
-            };
-            let mut function = pin!(work());
-            let answer = poll_fn(|context| handed.polling(|| function.as_mut().poll(context))).await?;
-            run.keep(handed, &answer).await;
-            Ok(answer)
+            let found = run.kept().await?;
+            run.build(found, work).await
         }
     }
 
@@ -123,6 +133,14 @@ impl<V: Value> Once<V> {
         })
     }
 
+    /// Removes every answer of this branch and of the branches under it, in
+    /// one commit, as [`crate::kv::Once::clear`] does.
+    pub fn clear(&self) -> impl Future<Output = Result<()>> + Send + 'static {
+        let answers = self.once.answers().clone();
+        let what = named(answers.scope.shown_branch(), "a clear");
+        run::write(&self.pool, what, move |answer| answers.clear_then(move |cleared| answer.send(cleared)))
+    }
+
     /// The same answers seen from the branch `owner` names under these.
     pub fn under(&self, owner: impl Key) -> Once<V> {
         Once { once: self.once.under(owner), pool: Arc::clone(&self.pool) }
@@ -135,7 +153,7 @@ impl<V: Value> Once<V> {
 }
 
 /// One run of a key: what its steps share.
-struct Run<V> {
+pub(super) struct Run<V> {
     once: crate::kv::Once<V>,
     pool: Arc<Pool>,
     /// The tokens around the call that made the run, which reach its reads.
@@ -146,25 +164,62 @@ struct Run<V> {
 /// How a run's claim ended.
 enum Start<V> {
     /// An answer kept, or the one the run waited for could not keep.
-    Kept(V),
+    Kept(Answer<V>),
     Yours(Box<Handed>),
 }
 
 impl<V: Value> Run<V> {
-    /// The answer kept, or the key claimed for this run: a run under way is
-    /// waited for by a waiter the engine calls as it ends, which wakes this
-    /// task, and its answer read again.
-    async fn claim(&self) -> Result<Start<V>> {
+    pub(super) fn new(once: &crate::kv::Once<V>, pool: &Arc<Pool>, key: &str) -> Run<V> {
+        Run { once: once.clone(), pool: Arc::clone(pool), tokens: cancel::captured(), key: key.to_owned() }
+    }
+
+    /// The answer `found` kept, or once no run holds the key, the answer of
+    /// the future `work` gives, which is then kept: a run's steps after its
+    /// first read.
+    pub(super) async fn build<E, W, F>(self, found: Option<Answer<V>>, work: W) -> Result<Answer<V>, E>
+    where
+        E: From<Error>,
+        W: FnOnce() -> F,
+        F: Future<Output = Result<V, E>>,
+    {
+        #[cfg(feature = "replication")]
+        if found.is_none() && self.once.answers().is_copy() {
+            return self.at_home(work).await.map(made);
+        }
+        let handed = match self.claim(found).await? {
+            Start::Kept(answer) => return Ok(answer),
+            Start::Yours(handed) => *handed,
+        };
+        let mut function = pin!(work());
+        match poll_fn(|context| handed.polling(|| function.as_mut().poll(context))).await {
+            Ok(answer) => {
+                keep(&self.once, &self.pool, (handed, &self.key), &answer).await;
+                Ok(made(answer))
+            }
+            Err(error) => {
+                handed.failed();
+                Err(error)
+            }
+        }
+    }
+
+    /// The answer `found` kept, or the key claimed for this run: a run under
+    /// way is waited for by a waiter the engine calls as it ends, which wakes
+    /// this task, and its answer read again.
+    async fn claim(&self, mut found: Option<Answer<V>>) -> Result<Start<V>> {
         loop {
-            if let Some(answer) = self.kept().await? {
+            if let Some(answer) = found {
                 return Ok(Start::Kept(answer));
             }
             let (answer, ended) = pending(named(self.shown_key(), "a run under way"));
             let Some(handed) = self.once.claim_then(&self.key, Box::new(move |unkept| answer.send(Ok(unkept))))? else {
                 // a waiter the store dropped as it closed answers Closed
                 match ended.await? {
-                    Some(unkept) => return Ok(Start::Kept(self.once.unkept(&unkept)?)),
-                    None => continue,
+                    Some(unkept) => return Ok(Start::Kept(made(self.once.unkept(&unkept)?))),
+                    None => {
+                        found = self.kept().await?;
+                        continue;
+                    }
                 }
             };
             // a run that kept its answer between the read and the claim let the key go first
@@ -175,37 +230,54 @@ impl<V: Value> Run<V> {
         }
     }
 
-    /// Keeps `answer`, and lets the key go once it is kept. A keep queued
-    /// commits whether or not the run's future is still awaited; one that
-    /// failed is logged, and the run still returns its answer, as a
-    /// blocking run does.
-    fn keep(&self, handed: Handed, answer: &V) -> impl Future<Output = ()> + Send + 'static {
-        let kept = match self.once.answers().encode(&self.key, answer) {
-            Ok(raw) => {
-                let what = named(self.shown_key(), "a keep");
-                Some(run::write(&self.pool, what, move |done| handed.keep_then(raw, move || done.send(Ok(())))))
-            }
-            Err(error) => {
-                handed.not_kept(&error);
-                None
-            }
-        };
-        async move {
-            if let Some(kept) = kept {
-                let _ = kept.await;
-            }
-        }
-    }
-
-    /// The answer kept under the key, read as a point read.
-    async fn kept(&self) -> Result<Option<V>> {
+    /// The answer kept under the key, with its age, read as a point read.
+    pub(super) async fn kept(&self) -> Result<Option<Answer<V>>> {
         let (once, key) = (self.once.clone(), self.key.clone());
         let what = named(self.shown_key(), "a kept answer");
-        self.tokens.run(None, || run::point(&self.pool, what, move || once.get(&*key))).await
+        self.tokens.run(None, || run::point(&self.pool, what, move || once.kept(&key))).await
+    }
+
+    pub(super) fn once(&self) -> &crate::kv::Once<V> {
+        &self.once
+    }
+
+    pub(super) fn pool(&self) -> &Arc<Pool> {
+        &self.pool
+    }
+
+    pub(super) fn key(&self) -> &str {
+        &self.key
     }
 
     fn shown_key(&self) -> String {
         self.once.answers().scope.shown_key(&self.key)
+    }
+}
+
+/// Keeps `answer` under the key `handed` holds, and lets the key go once it is
+/// kept. A keep queued commits whether or not the run's future is still
+/// awaited; one that failed is logged, and the run still returns its answer,
+/// as a blocking run does.
+pub(super) fn keep<V: Value>(
+    once: &crate::kv::Once<V>,
+    pool: &Arc<Pool>,
+    (handed, key): (Handed, &str),
+    answer: &V,
+) -> impl Future<Output = ()> + Send + 'static {
+    let kept = match once.answers().encode(key, answer) {
+        Ok(raw) => {
+            let what = named(once.answers().scope.shown_key(key), "a keep");
+            Some(run::write(pool, what, move |done| handed.keep_then(raw, move || done.send(Ok(())))))
+        }
+        Err(error) => {
+            handed.not_kept(&error);
+            None
+        }
+    };
+    async move {
+        if let Some(kept) = kept {
+            let _ = kept.await;
+        }
     }
 }
 
@@ -222,9 +294,6 @@ impl<V: Value> Run<V> {
         W: FnOnce() -> F,
         F: Future<Output = Result<V, E>>,
     {
-        if let Some(answer) = self.kept().await? {
-            return Ok(answer);
-        }
         let held = match self.claim_at_home().await? {
             AtHome::Kept(answer) => return Ok(answer),
             AtHome::Held(held) => held,

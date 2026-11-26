@@ -92,7 +92,6 @@ impl Drop for WriterHeld {
 
 /// Waits until `holds`, failing the test after ten seconds, as long as a
 /// thread of the store's may take on a busy machine.
-#[cfg(feature = "async")]
 pub(crate) fn eventually(what: &str, mut holds: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !holds() {

@@ -52,7 +52,8 @@ message kv.Resealed {
   1 count: uint
 }
 
-# A branch of a handle, for a clear, a reseal or a count.
+# A branch of a handle, for a clear, a reseal or a count; a clear takes once's
+# answers too.
 message kv.Branch {
   1 handle: uint
   2 under: [key]
@@ -122,18 +123,28 @@ message kv.Allowance {
   4 windows: [kv.WindowUse]  # a quota's, in the order it names them
 }
 
-# Opens once's answers: a function run once a key, its answer kept.
+# Opens once's answers: a function run once a key, its answer kept. Only a
+# client that reads refresh sends fresh, so an older one is never handed a
+# build in the background.
 message kv.OnceOpen {
   1 name: str
   2 keep: duration?          # a day when absent
+  3 fresh: duration?         # how long an answer is answered without making a new one, shorter than keep
+  4 aged: bool               # the client reads age and stale; an older one sends none and is sent neither
 }
 
 # An answer of once: in the server's RESPONSE, found when one was kept, and
 # otherwise the run is the client's; in the client's last DATA, found with the
-# answer to keep, or not found when the function failed.
+# answer to keep, or not found when the function failed. A RESPONSE found
+# with refresh leaves the stream open: the client answers its caller with the
+# kept answer at once, makes the new one in the background, and sends it as
+# its last DATA, or not found when it failed, which keeps the kept one.
 message kv.Answer {
   1 found: bool
   2 value: value?
+  3 age: duration?           # how old the kept answer is, to a handle opened aged
+  4 stale: bool              # older than the handle's fresh
+  5 refresh: bool            # the client makes the new answer in the background
 }
 
 # A read a transaction made, which its commit checks: the key still at the

@@ -4567,7 +4567,8 @@ def _read_kv_branch(r: Reader) -> dict[str, Any]:
     return read
 
 
-# A branch of a handle, for a clear, a reseal or a count.
+# A branch of a handle, for a clear, a reseal or a count; a clear takes once's
+# answers too.
 KvBranch = Message(
     "kv.Branch",
     {
@@ -5056,6 +5057,14 @@ def _write_kv_once_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(2)
         w.uint(x)
         n += 1
+    if (x := v.get("fresh")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("aged")) is not None:
+        w.uint(4)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5068,19 +5077,29 @@ def _read_kv_once_open(r: Reader) -> dict[str, Any]:
                 read["name"] = r.str()
             case 2:
                 read["keep"] = r.uint()
+            case 3:
+                read["fresh"] = r.uint()
+            case 4:
+                read["aged"] = r.bool()
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# Opens once's answers: a function run once a key, its answer kept.
+# Opens once's answers: a function run once a key, its answer kept. Only a
+# client that reads refresh sends fresh, so an older one is never handed a
+# build in the background.
 KvOnceOpen = Message(
     "kv.OnceOpen",
     {
         "name": (1, str_),
         # a day when absent
         "keep": (2, uint),
+        # how long an answer is answered without making a new one, shorter than keep
+        "fresh": (3, uint),
+        # the client reads age and stale; an older one sends none and is sent neither
+        "aged": (4, bool_),
     },
     _write_kv_once_open,
     _read_kv_once_open,
@@ -5098,6 +5117,18 @@ def _write_kv_answer(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(2)
         kv_value.write(w, x)
         n += 1
+    if (x := v.get("age")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("stale")) is not None:
+        w.uint(4)
+        w.bool(x)
+        n += 1
+    if (x := v.get("refresh")) is not None:
+        w.uint(5)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5110,6 +5141,12 @@ def _read_kv_answer(r: Reader) -> dict[str, Any]:
                 read["found"] = r.bool()
             case 2:
                 read["value"] = kv_value.read(r)
+            case 3:
+                read["age"] = r.uint()
+            case 4:
+                read["stale"] = r.bool()
+            case 5:
+                read["refresh"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -5118,12 +5155,21 @@ def _read_kv_answer(r: Reader) -> dict[str, Any]:
 
 # An answer of once: in the server's RESPONSE, found when one was kept, and
 # otherwise the run is the client's; in the client's last DATA, found with the
-# answer to keep, or not found when the function failed.
+# answer to keep, or not found when the function failed. A RESPONSE found
+# with refresh leaves the stream open: the client answers its caller with the
+# kept answer at once, makes the new one in the background, and sends it as
+# its last DATA, or not found when it failed, which keeps the kept one.
 KvAnswer = Message(
     "kv.Answer",
     {
         "found": (1, bool_),
         "value": (2, kv_value),
+        # how old the kept answer is, to a handle opened aged
+        "age": (3, uint),
+        # older than the handle's fresh
+        "stale": (4, bool_),
+        # the client makes the new answer in the background
+        "refresh": (5, bool_),
     },
     _write_kv_answer,
     _read_kv_answer,

@@ -19,8 +19,8 @@ use crate::Transaction;
 use crate::clock::from_unix_millis;
 use crate::engine::Home;
 use crate::kv::{
-    Allowance, Batch, Bucket, BucketBuilder, Cell, Counters, Hand, Handed, Kind, MAX_KEY, Outcome, PAGE_KEYS, Place,
-    Put, Quota, RateLimit, Raw, Scope, Stamp, Version, Waiter, WriteOptions, hand, once_rows,
+    Allowance, Batch, Bucket, BucketBuilder, Cell, Counters, Hand, Handed, Kept, Kind, MAX_KEY, Outcome, PAGE_KEYS,
+    Place, Put, Quota, RateLimit, Raw, Scope, Stamp, Version, Waiter, WriteOptions, hand, once_rows,
 };
 #[cfg(feature = "sql")]
 use crate::kv::{call_on_branch, call_on_key, clear_work};
@@ -40,7 +40,17 @@ enum Opened {
     Counters(Counters),
     RateLimit(RateLimit),
     Quota(Quota),
-    Once(Bucket<()>),
+    Once(Bucket<()>, Terms),
+}
+
+/// What a client opened once's answers with: past `fresh` an answer is stale,
+/// and `aged`, the client reads how old an answer is. Only a client that knows
+/// a build in the background sends `fresh`, so an older one is never handed
+/// one it would read as a run of its own.
+#[derive(Clone, Copy, Debug)]
+struct Terms {
+    fresh: Option<Duration>,
+    aged: bool,
 }
 
 use super::Answered;
@@ -74,7 +84,8 @@ pub(crate) fn call(
         method::KV_ONCE_OPEN => {
             let open = KvOnceOpen::decode(body)?;
             held(&Home::Store(store.clone()), &open.name, Kind::Once, read_only)?;
-            handles.open(Opened::Once(once_rows(store, &open.name, open.keep.map(Duration::from_millis))?))
+            let (keep, fresh) = (open.keep.map(Duration::from_millis), open.fresh.map(Duration::from_millis));
+            handles.open(Opened::Once(once_rows(store, &open.name, keep, fresh)?, Terms { fresh, aged: open.aged }))
         }
         method::KV_GET => get(handles, KvCall::decode(body)?),
         method::KV_HAS => has(handles, KvCall::decode(body)?),
@@ -240,9 +251,12 @@ pub(crate) enum Run {
 
 pub(crate) fn run(handles: &Handles, body: &[u8], again: Waiter) -> Result<Run, Failure> {
     let call = KvCall::decode(body)?;
-    let answers = handles.once(call.handle, &call.under)?;
-    Ok(match hand(&answers, &call.key, again)? {
-        Hand::Kept(raw) => Run::Answered(answer(Some(raw)).encode()),
+    let (answers, terms) = handles.once_terms(call.handle, &call.under)?;
+    Ok(match hand(&answers, terms.fresh, &call.key, again)? {
+        Hand::Kept(kept) => Run::Answered(terms.answer(kept).encode()),
+        Hand::Refresh(kept, handed) => {
+            Run::Handed(Box::new(handed), KvAnswer { refresh: true, ..terms.answer(kept) }.encode())
+        }
         Hand::Yours(handed) => Run::Handed(Box::new(handed), answer(None).encode()),
         Hand::Wait => Run::Waiting,
     })
@@ -290,9 +304,23 @@ impl Handles {
     }
 
     fn once(&self, handle: u64, under: &[String]) -> Result<Bucket<()>, Failure> {
+        Ok(self.once_terms(handle, under)?.0)
+    }
+
+    fn once_terms(&self, handle: u64, under: &[String]) -> Result<(Bucket<()>, Terms), Failure> {
         match self.opened(handle)? {
-            Opened::Once(answers) => Ok(under.iter().fold(answers, |answers, owner| answers.under(owner))),
+            Opened::Once(answers, terms) => {
+                Ok((under.iter().fold(answers, |answers, owner| answers.under(owner)), terms))
+            }
             other => Err(wrong(handle, &other, "once's answers")),
+        }
+    }
+
+    /// The branch a clear removes: a bucket's, or once's answers'.
+    fn cleared(&self, handle: u64, under: &[String]) -> Result<Bucket<()>, Failure> {
+        match self.opened(handle)? {
+            Opened::Once(..) => self.once(handle, under),
+            _ => self.bucket(handle, under),
         }
     }
 
@@ -397,7 +425,7 @@ fn has(handles: &Handles, call: KvCall) -> Answered {
 }
 
 fn clear(handles: &Handles, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
-    let bucket = KvBranch::decode(body).and_then(|branch| handles.bucket(branch.handle, &branch.under));
+    let bucket = KvBranch::decode(body).and_then(|branch| handles.cleared(branch.handle, &branch.under));
     match bucket {
         Ok(bucket) => {
             bucket.clear_then(move |cleared| done(cleared.map(|()| Empty {}.encode()).map_err(Failure::from)))
@@ -625,7 +653,19 @@ fn entry(cell: Option<Cell>, key: Option<String>) -> KvEntry {
 }
 
 fn answer(raw: Option<Raw>) -> KvAnswer {
-    KvAnswer { found: raw.is_some(), value: raw.map(row_of) }
+    KvAnswer { found: raw.is_some(), value: raw.map(row_of), ..KvAnswer::default() }
+}
+
+impl Terms {
+    /// A kept answer, with its age and whether it is stale to a client that
+    /// reads them.
+    fn answer(self, kept: Kept) -> KvAnswer {
+        KvAnswer {
+            age: self.aged.then(|| u64::try_from(kept.age.as_millis()).unwrap_or(u64::MAX)),
+            stale: self.aged && kept.stale,
+            ..answer(Some(kept.raw))
+        }
+    }
 }
 
 fn written(stamp: Stamp) -> Vec<u8> {
@@ -700,7 +740,7 @@ fn wrong(handle: u64, opened: &Opened, wanted: &str) -> Failure {
         Opened::Counters(_) => "counters",
         Opened::RateLimit(_) => "a rate limit",
         Opened::Quota(_) => "a quota",
-        Opened::Once(_) => "once's answers",
+        Opened::Once(..) => "once's answers",
     };
     Failure::invalid(format!("handle {handle} is {opened}, not {wanted}"))
 }

@@ -92,7 +92,8 @@ from .metrics import (
     Timing,
     exponential_buckets,
 )
-from .once import Once
+from .mirror import Changed, Diff, Mirror
+from .once import Fetched, Once
 from .query import Query, RowPage, Table
 from .records import (
     AllEvents,
@@ -153,6 +154,7 @@ __all__ = [
     "EventPage",
     "Events",
     "Explained",
+    "Fetched",
     "FieldInfo",
     "FileBytes",
     "FileChange",

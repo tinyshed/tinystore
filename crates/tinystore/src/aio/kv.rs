@@ -69,12 +69,14 @@
 
 mod bucket;
 mod counters;
+mod fresh;
 mod once;
 mod quota;
 mod rate_limit;
 
 pub use bucket::{All, Bucket, BucketBuilder, KeyCall};
 pub use counters::{Counters, CountersBuilder};
+pub use fresh::{Build, Fresh, FreshBuilder};
 pub use once::{Once, OnceBuilder};
 pub use quota::{Quota, QuotaBuilder};
 pub use rate_limit::{RateLimit, RateLimitBuilder};

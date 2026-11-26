@@ -156,7 +156,7 @@ fn a_run_of_once_is_handed_to_the_client_and_its_answer_kept_for_the_next() {
     assert!(!KvAnswer::decode(&handed.body).unwrap().found);
     let second = client.run(&charge);
 
-    let charged = KvAnswer { found: true, value: Some(Row::Int(42)) };
+    let charged = KvAnswer { found: true, value: Some(Row::Int(42)), ..KvAnswer::default() };
     client.write(Frame::new(Kind::Data, first, charged.encode()).ending());
     let kept = client.next_on(first);
     assert_eq!((kept.kind, kept.flags), (Kind::Data, frame::END));

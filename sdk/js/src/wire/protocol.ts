@@ -5642,7 +5642,8 @@ export const KvResealed = message(
 )
 
 /**
- * A branch of a handle, for a clear, a reseal or a count.
+ * A branch of a handle, for a clear, a reseal or a count; a clear takes once's
+ * answers too.
  */
 export const KvBranch = message(
 	'kv.Branch',
@@ -6256,7 +6257,9 @@ export const KvAllowance = message(
 )
 
 /**
- * Opens once's answers: a function run once a key, its answer kept.
+ * Opens once's answers: a function run once a key, its answer kept. Only a
+ * client that reads refresh sends fresh, so an older one is never handed a
+ * build in the background.
  */
 export const KvOnceOpen = message(
 	'kv.OnceOpen',
@@ -6264,6 +6267,10 @@ export const KvOnceOpen = message(
 		name: [1, str],
 		/** a day when absent */
 		keep: [2, uint],
+		/** how long an answer is answered without making a new one, shorter than keep */
+		fresh: [3, uint],
+		/** the client reads age and stale; an older one sends none and is sent neither */
+		aged: [4, bool],
 	},
 	{
 		write(w, v) {
@@ -6279,11 +6286,23 @@ export const KvOnceOpen = message(
 				w.uint(v.keep)
 				n++
 			}
+			if (v.fresh !== undefined) {
+				w.field(3)
+				w.uint(v.fresh)
+				n++
+			}
+			if (v.aged !== undefined) {
+				w.field(4)
+				w.bool(v.aged)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $name: string | undefined
 			let $keep: number | undefined
+			let $fresh: number | undefined
+			let $aged: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -6292,12 +6311,18 @@ export const KvOnceOpen = message(
 					case 2:
 						$keep = r.uint()
 						break
+					case 3:
+						$fresh = r.uint()
+						break
+					case 4:
+						$aged = r.bool()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name, keep: $keep }
+			return { name: $name, keep: $keep, fresh: $fresh, aged: $aged }
 		},
 	},
 )
@@ -6305,13 +6330,22 @@ export const KvOnceOpen = message(
 /**
  * An answer of once: in the server's RESPONSE, found when one was kept, and
  * otherwise the run is the client's; in the client's last DATA, found with the
- * answer to keep, or not found when the function failed.
+ * answer to keep, or not found when the function failed. A RESPONSE found
+ * with refresh leaves the stream open: the client answers its caller with the
+ * kept answer at once, makes the new one in the background, and sends it as
+ * its last DATA, or not found when it failed, which keeps the kept one.
  */
 export const KvAnswer = message(
 	'kv.Answer',
 	{
 		found: [1, bool],
 		value: [2, kvValue],
+		/** how old the kept answer is, to a handle opened aged */
+		age: [3, uint],
+		/** older than the handle's fresh */
+		stale: [4, bool],
+		/** the client makes the new answer in the background */
+		refresh: [5, bool],
 	},
 	{
 		write(w, v) {
@@ -6327,11 +6361,29 @@ export const KvAnswer = message(
 				kvValue.write(w, v.value)
 				n++
 			}
+			if (v.age !== undefined) {
+				w.field(3)
+				w.uint(v.age)
+				n++
+			}
+			if (v.stale !== undefined) {
+				w.field(4)
+				w.bool(v.stale)
+				n++
+			}
+			if (v.refresh !== undefined) {
+				w.field(5)
+				w.bool(v.refresh)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $found: boolean | undefined
 			let $value: Raw | undefined
+			let $age: number | undefined
+			let $stale: boolean | undefined
+			let $refresh: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -6340,12 +6392,21 @@ export const KvAnswer = message(
 					case 2:
 						$value = kvValue.read(r)
 						break
+					case 3:
+						$age = r.uint()
+						break
+					case 4:
+						$stale = r.bool()
+						break
+					case 5:
+						$refresh = r.bool()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { found: $found, value: $value }
+			return { found: $found, value: $value, age: $age, stale: $stale, refresh: $refresh }
 		},
 	},
 )

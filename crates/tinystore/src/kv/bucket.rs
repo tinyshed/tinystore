@@ -157,7 +157,6 @@ pub struct Entry<V> {
 pub struct Version(i64);
 
 impl Version {
-    #[cfg(any(feature = "wire", feature = "replication"))]
     pub(crate) fn new(revision: i64) -> Version {
         Version(revision)
     }
@@ -477,6 +476,15 @@ impl<V: Value> Bucket<V> {
 impl<V> Bucket<V> {
     pub(crate) fn new(scope: Scope, expiry: Expiry) -> Bucket<V> {
         Bucket { scope, expiry, encrypted: None, _value: PhantomData }
+    }
+
+    /// How long a key is kept after it is written, for a bucket whose keys
+    /// expire so: once's answers.
+    pub(crate) fn kept_for(&self) -> Option<Duration> {
+        match self.expiry {
+            Expiry::Ttl(keep) => Some(keep),
+            _ => None,
+        }
     }
 
     /// The same bucket seen from the branch `owner` names under this one:
@@ -933,9 +941,13 @@ impl<V> Bucket<V> {
         self.scope.pass_on(&self.handle(), key, &call)
     }
 
-    /// The handle a call on this bucket is made on at its home.
+    /// The handle a call on this bucket is made on at its home: once's
+    /// answers open there as once's, since their name refuses a bucket.
     fn handle(&self) -> forward::Handle {
         let name = self.scope.name().to_owned();
+        if let (Kind::Once, Expiry::Ttl(keep)) = (self.scope.kind(), self.expiry) {
+            return forward::Handle::Once { name, keep: millis(keep) as u64 };
+        }
         let database = self.scope.kv.lent_by().and_then(crate::replication::database_of).map(str::to_owned);
         forward::Handle::Bucket { name, expiry: self.expiry, encrypted: self.encrypted.is_some(), database }
     }
@@ -1074,11 +1086,10 @@ impl<V> Bucket<V> {
 
     fn pass_on_once(&self, key: &str, call: &forward::Call) -> Result<Vec<u8>> {
         let shown = || self.scope.shown_key(key);
-        let keep = match self.expiry {
-            Expiry::Ttl(keep) => crate::clock::millis(keep) as u64,
-            _ => return Err(Error::internal("once's answers kept for no span").within(shown())),
-        };
-        let handle = forward::Handle::Once { name: self.scope.name().to_owned(), keep };
+        let handle = self.handle();
+        if !matches!(handle, forward::Handle::Once { .. }) {
+            return Err(Error::internal("once's answers kept for no span").within(shown()));
+        }
         self.scope.pass_on(&handle, key, call).map_err(|error| error.within(shown()))
     }
 

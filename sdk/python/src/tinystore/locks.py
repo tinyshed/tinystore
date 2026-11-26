@@ -45,8 +45,14 @@ _WAIT = "10s"
 _holding: contextvars.ContextVar[tuple[tuple[int, str], ...]] = contextvars.ContextVar("tinystore holding", default=())
 """The keys the caller holds or waits for, each with the link of the store it is of."""
 
-_opened: weakref.WeakKeyDictionary[Link, dict[str, int]] = weakref.WeakKeyDictionary()
-"""The limit each semaphore's first open gave, by the link of the store that opened it.
+
+def outside_holds() -> None:
+    """Holds no key from here on in this context: work that outlives the hold its caller is inside."""
+    _holding.set(())
+
+
+_opened: weakref.WeakKeyDictionary[Link, dict[str, _Shape]] = weakref.WeakKeyDictionary()
+"""The limit and the background each semaphore's first open gave, by the link of the store that opened it.
 
 One name keeps one limit in a program, and two stores are two programs, each
 of whose holds the store admits by its own limit.

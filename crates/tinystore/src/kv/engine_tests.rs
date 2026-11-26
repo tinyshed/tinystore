@@ -96,6 +96,34 @@ fn reads_of_an_idle_key_on_a_copy_renew_it_at_its_home() {
     home.close().unwrap();
 }
 
+// contract: KV-16
+#[test]
+fn a_fresh_answer_a_copy_builds_in_the_background_lands_at_its_home() {
+    let clock = Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_secs(1_800_000_000)));
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let home = node_on(home_dir.path(), Node { serve: Some("127.0.0.1:0".into()), ..Node::default() }, &clock);
+    let from = vec![home.node().unwrap().address()];
+    let copy = node_on(copy_dir.path(), Node { from, ..Node::default() }, &clock);
+    let opened = |store: &Store| store.once::<String>("books").fresh(10 * MINUTE).keep(DAY).open().unwrap();
+    let (at_home, at_copy) = (opened(&home), opened(&copy));
+    assert_eq!(at_copy.run("user-7", || Ok::<_, crate::Error>("book 1".to_owned())).unwrap(), "book 1");
+    eventually("the copy holds the answer", || at_copy.get("user-7").unwrap().is_some());
+
+    clock.advance(10 * MINUTE);
+    let stale = at_copy.fetch("user-7", || Ok::<_, crate::Error>("book 2".to_owned())).unwrap();
+    assert!(stale.stale, "answered at once, stale");
+    eventually("the build landed at the home", || at_home.get("user-7").unwrap().as_deref() == Some("book 2"));
+    eventually("and the copy holds it", || at_copy.get("user-7").unwrap().as_deref() == Some("book 2"));
+    let fetched = at_copy.fetch("user-7", || -> crate::Result<String> { panic!("built again") }).unwrap();
+    assert!(!fetched.stale, "both terms began again");
+
+    at_copy.delete("user-7").unwrap();
+    assert_eq!(at_home.get("user-7").unwrap(), None, "a delete on the copy reaches the home too");
+    drop((at_home, at_copy));
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
 // contract: STORE-10
 #[cfg(feature = "async")]
 #[test]

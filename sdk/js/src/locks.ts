@@ -163,6 +163,11 @@ const permitOf = (holding: Holding): Permit => ({ signal: holding.signal, waited
 // each with the link of the store it is of.
 const holding = new AsyncLocalStorage<readonly (readonly [Link, string])[]>()
 
+/** Runs fn as holding no key: work that outlives the hold its caller is inside, as a build in the background. */
+export function withoutHolding<T>(fn: () => T): T {
+	return holding.exit(fn)
+}
+
 /** What a lock and a semaphore share: asking for a key, and the lease once given. */
 class Keys {
 	readonly #link: Link
