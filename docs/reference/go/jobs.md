@@ -135,6 +135,14 @@ func MaxWaiting(n int) maxWaiting
 
 MaxWaiting is how many jobs a queue holds waiting before an add is a Limit error.
 
+## NoQuiet
+
+```go
+func NoQuiet() noQuiet
+```
+
+NoQuiet holds a job by no quiet hours, its queue's neither.
+
 ## Prefix
 
 ```go
@@ -142,6 +150,14 @@ func Prefix(p string) prefix
 ```
 
 Prefix lists the jobs whose ids start with it, in their byte order.
+
+## Quiet
+
+```go
+func Quiet(from, to, timeZone string) quiet
+```
+
+Quiet is hours in which a job does not run: two wall-clock times of a day, HH:MM, in a time zone, an IANA name; a from after to wraps midnight. A time the store gives a job inside them, a retry's or a repeat's too, becomes their end. A queue's, or a job's own in the place of its queue's: jobs.Quiet("23:00", "07:00", "Europe/Moscow").
 
 ## Rate
 

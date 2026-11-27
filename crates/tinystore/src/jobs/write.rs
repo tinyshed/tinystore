@@ -16,6 +16,7 @@
 use rusqlite::Connection;
 
 use super::gather::{self, Gathering, Wrote};
+use super::quiet::Hours;
 use super::read::Row;
 use super::rows::{self, Change, Failed, NewJob, Own};
 use super::state::QueueState;
@@ -26,12 +27,16 @@ use crate::Result;
 #[derive(Debug)]
 pub(crate) struct Prepared {
     pub(crate) key: Option<String>,
-    /// When the job is due: the call's time, its repeat's next, or now.
+    /// When the job is due: the call's time, its repeat's next, or now, held
+    /// by the call's own quiet hours or its queue's.
     pub(crate) at: i64,
+    /// That time before any hours held it, which a job's own hold when the
+    /// call gives none.
+    pub(crate) unheld: i64,
     /// Whether the call named a time.
     pub(crate) timed: bool,
     pub(crate) repeat: Option<String>,
-    /// When the call's repeat runs next after now.
+    /// When the call's repeat runs next after now, before any hours held it.
     pub(crate) repeated: Option<i64>,
     pub(crate) group: Option<String>,
     /// How long the job holds its id once done, as it keeps it.
@@ -46,6 +51,10 @@ pub(crate) struct Prepared {
     pub(crate) value: Kept,
     /// A gather's times and items.
     pub(crate) gather: Option<Gathering>,
+    /// The call's own quiet hours as the job keeps them, `none` among them.
+    pub(crate) quiet: Option<String>,
+    /// The hours that hold the call's times: its own, or its queue's.
+    pub(crate) hours: Option<Hours>,
     pub(crate) now: i64,
 }
 
@@ -73,7 +82,21 @@ impl Prepared {
     }
 
     fn own(&self) -> Own<'_> {
-        Own { dedupe: self.dedupe.as_deref(), keep: self.keep, expires: self.expires }
+        Own { dedupe: self.dedupe.as_deref(), keep: self.keep, expires: self.expires, quiet: self.quiet.as_deref() }
+    }
+
+    /// `at`, or the end of the call's quiet hours when it falls inside them.
+    pub(crate) fn held(&self, at: i64) -> i64 {
+        self.hours.as_ref().map_or(at, |hours| hours.hold(at))
+    }
+
+    /// `at` held by the hours that hold the job a call finds: the call's own,
+    /// the job's own when the call gives none, or else its queue's.
+    fn held_for(&self, kept: Option<&str>, at: i64) -> Result<i64> {
+        match (&self.quiet, kept) {
+            (None, Some(kept)) => Ok(Hours::parse(kept)?.map_or(at, |hours| hours.hold(at))),
+            _ => Ok(self.held(at)),
+        }
     }
 }
 
@@ -129,13 +152,14 @@ pub(crate) struct Set {
 pub(crate) fn set(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Set> {
     let key = call.key.as_deref().unwrap_or_default();
     if let Some(there) = there(c, queue, call)? {
+        let at = call.held_for(there.quiet.as_deref(), call.unheld)?;
         if rows::lease_held(c, there.id, call.now)? {
-            let again = again(call, &there);
+            let again = again(call, &there, at);
             rows::ask_again(c, queue.id, &there, again, &call.change(there.next))?;
-            return Ok(Set { due: again.unwrap_or(call.at) });
+            return Ok(Set { due: again.unwrap_or(at) });
         }
-        rows::renew(c, queue.id, key, &there, &call.change(call.at))?;
-        return Ok(Set { due: call.at });
+        rows::renew(c, queue.id, key, &there, &call.change(at))?;
+        return Ok(Set { due: at });
     }
     // a set starts a failed job anew, its error gone with the rest of it
     let failed = rows::drop_failed(c, queue.id, key)?.map(|failed| Failed { error: None, ..failed });
@@ -147,9 +171,9 @@ pub(crate) fn set(c: &Connection, queue: &QueueState, call: &Prepared) -> Result
 /// When the run a set asks of a running job is: its time when it named one;
 /// the repeat's next time when the job repeats; now otherwise, as soon as the
 /// run under way ends, since that run may have read what changed.
-fn again(call: &Prepared, there: &rows::Row) -> Option<i64> {
+fn again(call: &Prepared, there: &rows::Row, at: i64) -> Option<i64> {
     match (call.timed, call.repeat.is_some() || there.repeat.is_some()) {
-        (true, _) => Some(call.at),
+        (true, _) => Some(at),
         (false, true) => None,
         (false, false) => Some(call.now),
     }
@@ -176,6 +200,7 @@ pub(crate) fn upsert(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
         || differs(call.group.as_deref(), shape.group.as_deref())
         || differs(call.dedupe.as_deref(), shape.dedupe.as_deref())
         || call.keep.is_some() && call.keep != shape.keep
+        || differs(call.quiet.as_deref(), shape.quiet.as_deref())
         || call.ttl.is_none() && call.expires.is_some() && call.expires != shape.expires;
     if !changed {
         // a renewal alone is written once a thirtieth of its ttl, as an idle key's is, and changes nothing
@@ -195,7 +220,9 @@ pub(crate) fn upsert(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
         return Ok(Some(rows::due_of(there.next)));
     }
     let next = match call.repeated {
-        Some(repeated) if repeat_changed && rows::due_of(there.next) > call.now => repeated,
+        Some(repeated) if repeat_changed && rows::due_of(there.next) > call.now => {
+            call.held_for(there.quiet.as_deref(), repeated)?
+        }
         _ => there.next,
     };
     rows::reshape(c, (queue.id, key), &there, &call.change(next), !shape.same_value)?;
@@ -244,7 +271,7 @@ pub(crate) fn gather(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
     // a job waiting for a retry keeps its backoff: it runs at the later of the two
     let waits_for_retry = !kept.held && kept.attempt > 0;
     let settles = if waits_for_retry { settles.max(rows::due_of(there.next)) } else { settles };
-    let due = call.gathers_held(kept.quiet.as_deref(), settles)?;
+    let due = call.held_for(there.quiet.as_deref(), settles)?;
     let value = Kept::of(joined);
     let change = Change { next: due, repeat: None, group: call.group.as_deref(), own: call.own(), value: &value };
     rows::gather(c, (queue.id, key), &there, (latest, taken, kept.held), &change)?;
@@ -265,7 +292,11 @@ pub(crate) fn update(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
     }
     // a parked job goes back to its time, and a claim parks it again while
     // its group is full
-    let next = if call.timed || call.repeat.is_some() { call.at } else { rows::due_of(there.next) };
+    let next = if call.timed || call.repeat.is_some() {
+        call.held_for(there.quiet.as_deref(), call.unheld)?
+    } else {
+        rows::due_of(there.next)
+    };
     rows::update(c, queue.id, key, &there, &call.change(next))?;
     Ok(Some(next))
 }

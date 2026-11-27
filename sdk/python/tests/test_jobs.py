@@ -50,6 +50,26 @@ async def test_an_id_adds_a_job_once_set_makes_it_whatever_it_was_update_and_can
     assert not await later.cancel(job_id)
 
 
+# contract: JOB-24
+async def test_a_job_due_inside_its_quiet_hours_is_due_at_their_end_and_a_calls_own_wins(
+    store: tinystore.Store,
+) -> None:
+    now = datetime.now(UTC)
+    night = tinystore.Quiet(from_=f"{(now.hour - 1) % 24:02d}:00", to=f"{(now.hour + 2) % 24:02d}:00", time_zone="UTC")
+    pushes = store.queue("pushes-at-night", Text, quiet=night)
+    await pushes.add({"text": "held"}, id="held")
+    await pushes.add({"text": "urgent"}, id="urgent", quiet=False)
+    held = await pushes.get("held")
+    end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
+    assert held is not None and held.at == end
+    urgent = await pushes.get("urgent")
+    assert urgent is not None and urgent.at - now < timedelta(minutes=1)
+    with pytest.raises(tinystore.InvalidError):
+        await pushes.add({"text": "x"}, quiet=tinystore.Quiet(from_="23:00", to="23:00", time_zone="UTC"))
+    with pytest.raises(tinystore.InvalidError, match="quiet=True"):
+        await pushes.add({"text": "x"}, quiet=True)  # pyright: ignore[reportArgumentType]
+
+
 # contract: JOB-22, JOB-23
 async def test_gather_appends_what_arrives_under_one_id_to_one_job_due_settle_after_the_last(
     store: tinystore.Store,

@@ -138,7 +138,7 @@ func OpenQueue[T any](home tinystore.Home, name string, opts ...QueueOption) (*Q
 	if o.err != nil {
 		return nil, core.Wrap(core.Invalid, o.err, "%s", describe)
 	}
-	message := wire.JobsQueueOpen{Name: name, Attempts: o.attempts, Backoff: o.backoff, Concurrency: o.concurrency, Rate: o.rate, GroupRate: o.groupRate, MaxWaiting: o.maxWaiting, DedupeCalendar: o.calendar}
+	message := wire.JobsQueueOpen{Name: name, Attempts: o.attempts, Backoff: o.backoff, Concurrency: o.concurrency, Rate: o.rate, GroupRate: o.groupRate, MaxWaiting: o.maxWaiting, DedupeCalendar: o.calendar, Quiet: o.quiet}
 	var err error
 	if message.Timeout, err = millis(o.timeout, describe+": timeout"); err != nil {
 		return nil, err
@@ -423,6 +423,7 @@ func (q *Queue[T]) callOf(value T, o jobOptions) (wire.JobsCall, error) {
 		call.ExpiresAt = &at
 	}
 	call.DedupeCalendar = o.calendar
+	call.Quiet, call.NoQuiet = o.quiet, o.noQuiet
 	return call, nil
 }
 

@@ -12,7 +12,7 @@ use serde::de::DeserializeOwned;
 
 use super::run::Run;
 use crate::jobs::{
-    self, Change, Concurrency, Counts, Dedupe, Filter, Gather, Gathered, Job, JobRef, Lease, Outcome, Page, Took,
+    self, Change, Concurrency, Counts, Dedupe, Filter, Gather, Gathered, Job, JobRef, Lease, Outcome, Page, Quiet, Took,
 };
 use crate::pool::Pool;
 use crate::{ErrorKind, Result, Transaction, TxHandle};
@@ -84,6 +84,11 @@ where
     /// again: a week; `Duration::ZERO` keeps it not at all.
     pub fn keep(self, span: Duration) -> Self {
         self.with(|builder| builder.keep(span))
+    }
+
+    /// The hours in which the queue's jobs do not run; see [`jobs::QueueBuilder::quiet`].
+    pub fn quiet(self, quiet: Quiet) -> Self {
+        self.with(|builder| builder.quiet(quiet))
     }
 
     /// Jobs that may wait; an add past it is a `limit`: ten million.
@@ -424,6 +429,12 @@ where
     /// again; see [`jobs::JobCall::ttl`].
     pub fn ttl(self, span: Duration) -> Self {
         self.with(|call| call.ttl(span))
+    }
+
+    /// The hours in which this job does not run, in the place of its queue's;
+    /// see [`jobs::JobCall::quiet`].
+    pub fn quiet(self, quiet: Quiet) -> Self {
+        self.with(|call| call.quiet(quiet))
     }
 
     /// The job leaves its queue at `time`; see [`jobs::JobCall::expires_at`].

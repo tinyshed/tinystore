@@ -78,6 +78,26 @@ for (const way of ways) {
 			expect(await later.cancel(id)).toBe(false)
 		})
 
+		// contract: JOB-24
+		test("a job due inside its quiet hours is due at their end, and a call's own wins over its queue's", async () => {
+			const zone = 'UTC'
+			const now = new Date()
+			const hour = (n: number) => `${String((now.getUTCHours() + n + 24) % 24).padStart(2, '0')}:00`
+			const quiet = { from: hour(-1), to: hour(2), timeZone: zone }
+			const pushes = store.queue<{ text: string }>('pushes-at-night', { quiet })
+			await pushes.add({ text: 'held' }, { id: 'held' })
+			await pushes.add({ text: 'urgent' }, { id: 'urgent', quiet: false })
+			const end = new Date(now)
+			end.setUTCHours(now.getUTCHours() + 2, 0, 0, 0)
+			expect((await pushes.get('held'))?.at).toEqual(end)
+			expect(((await pushes.get('urgent'))?.at.getTime() ?? 0) - now.getTime()).toBeLessThan(60_000)
+			const refused = pushes.add(
+				{ text: 'x' },
+				{ quiet: { from: '23:00', to: '23:00', timeZone: zone } },
+			)
+			expect(await caught(refused)).toBeInstanceOf(InvalidError)
+		})
+
 		// contract: JOB-17
 		test('upsert adds a job, or brings the one there to the call and keeps its time', async () => {
 			const polls = store.queue<{ group: string }>('polls')

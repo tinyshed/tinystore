@@ -1,10 +1,9 @@
-# Gather
+# Gather and quiet hours
 
-`gather` collects what arrives under one id into one job of a Jobs queue.
-Use it when many events should become one message: grades that appear one
-by one, comments on a post, a burst of changes to sync. The job's value is a
-list, each gather adds its items to the end, and the job runs once the
-gathers stop for a while.
+`gather` collects what arrives under one id into one job of a Jobs queue,
+and quiet hours keep a queue's jobs from running at night. Use them when
+many events should become one message, sent at a decent hour: grades that
+appear one by one, comments on a post, a burst of changes to sync.
 
 ## Gather what arrives into one job
 
@@ -92,6 +91,10 @@ and the failed job with the run's items is listed under the `failed` state.
 An id keeps one failure: if the new job fails for good too, its failure
 replaces the earlier one.
 
+A gather into a job that waits for its retry adds its items to the retry,
+which runs at the later of its backoff and the settle: a gather never
+brings a retry forward.
+
 ## Where a gather is refused
 
 - The value is not a list, or the job already under the id holds a value
@@ -106,12 +109,92 @@ A done job that its `dedupe` still holds keeps the id, and a gather adds
 nothing: `count` is 0. A failed job gives its id up, and the gather starts a
 new list, as [`add`](ids.md#four-calls-one-table) does.
 
-In Rust and in Bun, `tx.with(batch).gather(…)` inside a database's
-transaction gathers with the transaction's commit. Python's database
-transaction has no gather yet. The store's own transaction in the SDKs,
+In Rust, Bun and Python, `tx.with(batch).gather(…)` (`tx.with_` in Python)
+inside a database's transaction gathers with the transaction's commit. The store's own transaction in the SDKs,
 `store.tx`, keeps its writes for the commit and answers them after it, so it
 has no gather either, and Go's transactions refuse one. A copy of a store on another node refuses a
 gather too: gather at the store's home.
+
+## Quiet hours
+
+Grades are gathered for five minutes, and nothing is sent from 23:00 to
+07:00 Moscow time. A push that would go out at night goes out at seven.
+
+```ts
+const night = { from: '23:00', to: '07:00', timeZone: 'Europe/Moscow' }
+const pushes = store.queue<Notice[]>('notify-push', { quiet: night })
+
+await pushes.gather('grades:7', [{ course: 1, grade: 'A' }], { settle: '5m' }) // at 23:58: { at: 07:00 the next morning }
+await pushes.add([{ course: 0, grade: 'exam moved' }], { quiet: false }) // this job is not held
+```
+
+```python
+night = tinystore.Quiet(from_="23:00", to="07:00", time_zone="Europe/Moscow")
+pushes = store.queue("notify-push", list[Notice], quiet=night)
+
+await pushes.gather("grades:7", [Notice(course=1, grade="A")], settle="5m")  # at 23:58: at 07:00 the next morning
+await pushes.add([Notice(course=0, grade="exam moved")], quiet=False)  # this job is not held
+```
+
+```go
+night := jobs.Quiet("23:00", "07:00", "Europe/Moscow")
+pushes, err := jobs.OpenQueue[[]Notice](store, "notify-push", night)
+
+gathered, err := pushes.Gather(ctx, "grades:7", []Notice{{Course: 1, Grade: "A"}}, jobs.Settle(5*time.Minute)) // at 23:58: At 07:00
+added, err := pushes.Add(ctx, []Notice{{Course: 0, Grade: "exam moved"}}, jobs.NoQuiet()) // this job is not held
+```
+
+```rust
+use tinystore::jobs::{Gather, Quiet};
+
+let night = Quiet::hours("23:00", "07:00", "Europe/Moscow");
+let pushes = store.queue::<Vec<Notice>>("notify-push").quiet(night).open()?;
+
+let gathered = pushes.gather("grades:7", &vec![Notice { course: 1, grade: "A".into() }], Gather::settle(Duration::from_mins(5)))?;
+let added = pushes.id("exam:3").quiet(Quiet::none()).add(&vec![Notice { course: 0, grade: "exam moved".into() }])?;
+```
+
+The store moves a time when it falls inside the hours, and leaves it alone
+outside them (contract JOB-24):
+
+| The store gives a job this time | 23:00 to 07:00, the job is due |
+|---------------------------------|--------------------------------|
+| 22:59                           | 22:59                          |
+| 23:00, or any time until 06:59  | 07:00                          |
+| 07:00                           | 07:00                          |
+
+This holds for every time the store computes: the time an `add`, a `set`,
+an `update` or an `upsert` gives with `at`, `delay` or none, a gather's
+settle, a retry's backoff, a snooze and a repeat's next time. An explicit
+`at` inside the hours moves too, because the hours are a promise to the
+person who gets the message. `get` and the command line show the moved
+time, so "why didn't it run?" has an answer.
+
+A job due before the hours that a worker reaches only inside them, at the
+end of a backlog, after a busy group gave it its place or from before the
+queue had hours, does not run either: the worker's claim moves it to the
+hours' end instead.
+
+- A `from` after `to` wraps midnight, as 23:00 to 07:00 does. The same two
+  times, a time that is not `HH:MM`, or an unknown zone is an invalid error.
+- The hours follow the wall clock of their zone. If daylight saving skips
+  the end, such as 02:30 on the night the clock jumps from 02:00 to 03:00,
+  the job is due at the end of the skip, 03:00, as a [cron](schedules.md)
+  time is.
+- A call's own `quiet` wins over the queue's, for that job's first run and
+  every later one. `false` in Bun and Python, `jobs.NoQuiet()` in Go and
+  `Quiet::none()` in Rust hold the job by no hours at all.
+- A call's own hours are kept in its job's row and hold it in every
+  process. A `set`, an `update` or an `upsert` that gives none keeps them.
+- A queue's hours are given when it opens, like the rest of its options. A
+  second open in the same process with other hours is refused. They hold
+  only what the process that opened the queue with them does: a process
+  that opens it without them claims, retries and repeats its jobs at any
+  hour, a job's own hours aside. A write a copy of the store passes to its
+  home runs on the queue as the home opened it, so give the hours in the
+  home's process too, or on the call.
+- Quiet hours win over a gather's `max`: a list whose `max` ends at night
+  is sent at the hours' end.
 
 ## See also
 

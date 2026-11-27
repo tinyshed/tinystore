@@ -159,7 +159,7 @@ impl Cron {
 
 /// A wall time of `zone` as an instant: the end of the skip for one daylight
 /// saving skips, the first of the two for one it repeats.
-fn instant(zone: &TimeZone, wall: DateTime) -> Option<Timestamp> {
+pub(super) fn instant(zone: &TimeZone, wall: DateTime) -> Option<Timestamp> {
     match zone.to_ambiguous_zoned(wall).offset() {
         AmbiguousOffset::Unambiguous { offset } => offset.to_timestamp(wall).ok(),
         AmbiguousOffset::Fold { before, .. } => before.to_timestamp(wall).ok(),

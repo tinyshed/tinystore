@@ -47,7 +47,7 @@ from ._wire.protocol import (
 from .blobs import Files, FilesOptions, Size, WhenFull, files_open
 from .channels import Channel, TxChannel
 from .errors import InvalidError, OutcomeUnknownError, error_of
-from .jobs import Adding, Backoff, Concurrency, Dedupe, Gathered, Job, Queue, QueueOptions, Quiet, adding_in, open_queue
+from .jobs import Adding, Backoff, Concurrency, Dedupe, Job, Queue, QueueOptions, Quiet, adding_in, open_queue
 from .kv import Bucket, Parts, bucket_open
 from .records import Appending, Events, TxEvents, appending_in, events_open
 from .search import Fields, Hybrid, KeyboardLayout, TableIndex, Vectors, drop_index, index_open
@@ -913,6 +913,7 @@ class Database:
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,
+        quiet: Quiet | None = None,
     ) -> Queue[T]: ...
     @overload
     def queue(
@@ -929,6 +930,7 @@ class Database:
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,
+        quiet: Quiet | None = None,
     ) -> Queue[Any]: ...
     def queue(
         self,
@@ -944,6 +946,7 @@ class Database:
         keep: Duration | None = None,
         max_waiting: int | None = None,
         group_rate: str | None = None,
+        quiet: Quiet | None = None,
     ) -> Queue[Any]:
         """A queue of jobs kept in this database's file, as ``store.queue`` keeps one in jobs.db.
 
@@ -951,7 +954,9 @@ class Database:
         ``db.tx``, through ``tx.with_(queue)``. It shares the database's
         writer, which is the point and its cost.
         """
-        options = QueueOptions(attempts, backoff, timeout, concurrency, rate, dedupe, keep, max_waiting, group_rate)
+        options = QueueOptions(
+            attempts, backoff, timeout, concurrency, rate, dedupe, keep, max_waiting, group_rate, quiet
+        )
         return open_queue(self._link, self._workers, name, of, options, self)
 
     @overload

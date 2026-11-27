@@ -475,6 +475,7 @@ def job_fields(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> dict[str, Any]:
     """A job's time, group, repeat and options of its own, as an add, a set and an update take them."""
     return {
@@ -488,7 +489,31 @@ def job_fields(
         "keep": None if keep is None else ms(keep, "a job's keep"),
         "ttl": None if ttl is None else ms(ttl, "a job's ttl"),
         "expires_at": None if expires_at is None else unix_ms(expires_at, "a job's term"),
+        "quiet": quiet_fields(quiet) if quiet else None,
+        "no_quiet": quiet is False,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class Quiet:
+    """Hours in which a job does not run: two wall-clock times of a day in a time zone.
+
+    ``tinystore.Quiet(from_="23:00", to="07:00", time_zone="Europe/Moscow")``; a
+    ``from_`` after ``to`` wraps midnight. A time the store gives a job inside
+    them, a retry's or a repeat's too, becomes their end. The same two, or a zone
+    no one has, is InvalidError.
+    """
+
+    from_: str
+    to: str
+    time_zone: str
+
+
+def quiet_fields(quiet: Quiet | None) -> dict[str, str] | None:
+    """Quiet hours as a queue's open and a job's call carry them."""
+    if quiet is not None and not isinstance(quiet, Quiet):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise InvalidError(f"quiet={quiet!r}: quiet hours are a tinystore.Quiet, or False on a call for none")
+    return None if quiet is None else {"from": quiet.from_, "to": quiet.to, "time_zone": quiet.time_zone}
 
 
 @dataclass(frozen=True, slots=True)
@@ -548,6 +573,7 @@ class Queue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> bool:
         """Adds a job unless its id is taken, and says whether it added one.
 
@@ -567,6 +593,7 @@ class Queue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.add", fields)
@@ -586,6 +613,7 @@ class Queue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> Adding:
         """A job's add for a batch of the database the queue was opened from.
 
@@ -608,6 +636,7 @@ class Queue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         return Adding(self.name, self._source, {**timing, "id": id, "value": self._source.encode(value)})
 
@@ -626,6 +655,7 @@ class Queue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> None:
         """Makes the id's job this value at this time, whatever it was.
 
@@ -643,6 +673,7 @@ class Queue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         await self._source.call("jobs.set", lambda h: JobsCall.encode(fields, handle=h), "write")
@@ -662,6 +693,7 @@ class Queue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> bool:
         """Changes the id's job when it is not running, its old value's steps dropped, and says whether it did."""
         timing = job_fields(
@@ -675,6 +707,7 @@ class Queue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.update", fields)
@@ -694,6 +727,7 @@ class Queue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> bool:
         """Adds the job under id when it is free, or brings the one there to this call.
 
@@ -717,6 +751,7 @@ class Queue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.upsert", fields)
@@ -733,6 +768,7 @@ class Queue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> Gathered:
         """Gathers items, a list, into the job under id, which runs settle after the last gather.
 
@@ -750,7 +786,7 @@ class Queue[T]:
             batch = store.queue("notify-batch", list[Notice])
             gathered = await batch.gather("grades:7", [Notice(course=1)], settle="5m", max="1h")
         """
-        own = job_fields(group=group, dedupe=dedupe, keep=keep, ttl=ttl, expires_at=expires_at)
+        own = job_fields(group=group, dedupe=dedupe, keep=keep, ttl=ttl, expires_at=expires_at, quiet=quiet)
         call = {**own, "id": id, "value": self._source.encode(items)}
         asked = {"settle": ms(settle, "a gather's settle"), "max": None if max is None else ms(max, "a gather's max")}
         body = await self._source.call(
@@ -948,6 +984,7 @@ class StoreTxQueue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> None:
         """Adds a job unless its id is taken, with the commit."""
         timing = job_fields(
@@ -961,6 +998,7 @@ class StoreTxQueue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         self._write("jobs.add", {**timing, "id": id}, value)
 
@@ -979,6 +1017,7 @@ class StoreTxQueue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> None:
         """Makes the id's job this value at this time, whatever it was, with the commit."""
         timing = job_fields(
@@ -992,6 +1031,7 @@ class StoreTxQueue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         self._write("jobs.set", {**timing, "id": id}, value)
 
@@ -1010,6 +1050,7 @@ class StoreTxQueue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> None:
         """Changes the id's job when it is not running, its old value's steps dropped, with the commit."""
         timing = job_fields(
@@ -1023,6 +1064,7 @@ class StoreTxQueue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         self._write("jobs.update", {**timing, "id": id}, value)
 
@@ -1041,6 +1083,7 @@ class StoreTxQueue[T]:
         keep: Duration | None = None,
         ttl: Duration | None = None,
         expires_at: datetime | None = None,
+        quiet: Quiet | Literal[False] | None = None,
     ) -> None:
         """Adds the job under id, or brings the one there to this call, its time kept, with the commit."""
         timing = job_fields(
@@ -1054,6 +1097,7 @@ class StoreTxQueue[T]:
             keep=keep,
             ttl=ttl,
             expires_at=expires_at,
+            quiet=quiet,
         )
         self._write("jobs.upsert", {**timing, "id": id}, value)
 
@@ -1156,6 +1200,8 @@ class QueueOptions:
     max_waiting: int | None = None
     group_rate: str | None = None
     """jobs of each group started in any span, beside rate: "2/s", each account's own limit"""
+    quiet: Quiet | None = None
+    """hours in which the queue's jobs do not run, which a job's own win over"""
 
 
 def queue_fields(name: str, describe: str, options: QueueOptions) -> dict[str, Any]:
@@ -1184,6 +1230,7 @@ def queue_fields(name: str, describe: str, options: QueueOptions) -> dict[str, A
         **dedupe_fields(options.dedupe, f"{describe}: dedupe"),
         "keep": None if options.keep is None else ms(options.keep, f"{describe}: keep"),
         "max_waiting": _whole(options.max_waiting, describe, "a max_waiting"),
+        "quiet": quiet_fields(options.quiet),
     }
 
 

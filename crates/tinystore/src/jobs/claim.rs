@@ -12,6 +12,7 @@ use super::call::{LONGEST_SPAN, in_years};
 use super::dedupe::Dedupe;
 use super::gather;
 use super::policy::Policy;
+use super::quiet::Hours;
 use super::repeat::Repeat;
 use super::rows::{self, PARKED_BY, execute};
 use super::state::QueueState;
@@ -28,7 +29,7 @@ const PARK_AT_MOST: usize = 1000;
 /// A failure as a job keeps it: its text, at most this long.
 const MAX_ERROR: usize = 4096;
 
-const CLAIM_JOBS: &str = "select next, id, key, at, attempt, value, spill, grp, expires, taken
+const CLAIM_JOBS: &str = "select next, id, key, at, attempt, value, spill, grp, expires, taken, quiet
     from _tinystore_jobs j
     where queue = ?1 and next <= ?2
         and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
@@ -67,7 +68,8 @@ const EARLIEST_LEASE: &str = "select min(until) from _tinystore_jobs_leases wher
 const DROP_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1 and attempt = ?2 and next = ?3";
 const DROP_ANY_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1";
 const EXTEND_LEASE: &str = "update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2 and next = ?4";
-const JOB_HELD: &str = "select again, repeat, error, attempt, dedupe, keep, expires, taken from _tinystore_jobs
+const JOB_HELD: &str = "select again, repeat, error, attempt, dedupe, keep, expires, taken, quiet
+    from _tinystore_jobs
     where queue = ?1 and next = ?2 and id = ?3";
 const JOB_SPILL: &str = "select spill from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
 /// The spill and the dedupe of a job whose end deletes it: one that neither
@@ -409,6 +411,8 @@ struct DueRow {
     /// The leading items of its list a run whose lease ended read, once a
     /// gather came while that run held it.
     taken: Option<i64>,
+    /// Its own quiet hours, as it keeps them.
+    quiet: Option<String>,
 }
 
 /// Up to `limit` due jobs no live lease holds, in the order of their time.
@@ -426,6 +430,7 @@ fn due(c: &Connection, claiming: &Claiming<'_>, limit: usize) -> Result<Vec<DueR
             group: row.get(7)?,
             expires: row.get(8)?,
             taken: row.get(9)?,
+            quiet: row.get(10)?,
         })
     })
 }
@@ -439,6 +444,9 @@ impl Claimed {
         if row.expires.is_some_and(|expires| expires <= claiming.now) {
             end_term(c, queue, (row.next, row.id, row.key.as_deref()))?;
             self.abandoned.push(row.id);
+            return Ok(false);
+        }
+        if self.held_quiet(c, claiming, &row)? {
             return Ok(false);
         }
         let lease = params![row.id, queue.id, row.next, row.attempt + 1, claiming.until];
@@ -476,6 +484,28 @@ impl Claimed {
         Ok(true)
     }
 
+    /// Moves a due row whose quiet hours the claim falls in to their end, and
+    /// says whether it did: a job a worker reaches late, after a backlog, a
+    /// full group or the hours given to a queue that held it already, runs
+    /// at their end, never inside them. One whose term comes first ends. A
+    /// claim moves at most its limit of them, and finds the rest at its next.
+    fn held_quiet(&mut self, c: &Connection, claiming: &Claiming<'_>, row: &DueRow) -> Result<bool> {
+        let queue = claiming.queue;
+        let held = hold(queue, row.quiet.as_deref(), claiming.now);
+        if held <= claiming.now {
+            return Ok(false);
+        }
+        let place = (row.next, row.id, row.key.as_deref());
+        if row.expires.is_some_and(|expires| held >= expires) {
+            end_term(c, queue, place)?;
+            self.abandoned.push(row.id);
+        } else {
+            rows::move_to(c, queue.id, place, held)?;
+        }
+        self.more = true;
+        Ok(true)
+    }
+
     /// Leases a due job of a group, counting it among the group's running
     /// jobs, and says whether it leased it.
     fn lease_in_group(
@@ -504,7 +534,7 @@ fn abandon(c: &Connection, claiming: &Claiming<'_>, row: &DueRow, attempts: i64)
     let (queue, place) = (claiming.queue, (row.next, row.id, row.key.as_deref()));
     execute(c, DROP_ANY_LEASE, [row.id], "an abandoned job's lease")?;
     let held = held(c, queue, place)?;
-    if let Some(next) = next_run(row.at, &held, claiming.now) {
+    if let Some(next) = next_run(queue, row.at, &held, claiming.now) {
         run_again(c, queue, (place, &held), (next, Some(cause)), (None, None))?;
         return Ok(false);
     }
@@ -664,14 +694,15 @@ fn write(c: &Connection, queue: &QueueState, lease: &Lease, how: &How, now: i64)
         How::Done => done(c, queue, lease, &held, now),
         How::Retry { at, cause } => retry(c, queue, lease, &held, (*at, cause), now),
         How::Fail { cause } => fail(c, queue, lease, &held, cause, now),
-        How::Snooze { at } if past_term(&held, *at) => {
-            end_term(c, queue, lease.place())?;
-            Ok(Settled::default())
-        }
         How::Snooze { at } => {
-            let to = Moved { next: *at, at: lease.at, attempt: held.attempt, error: held.error.clone(), ran };
+            let at = hold(queue, held.quiet.as_deref(), *at);
+            if past_term(&held, at) {
+                end_term(c, queue, lease.place())?;
+                return Ok(Settled::default());
+            }
+            let to = Moved { next: at, at: lease.at, attempt: held.attempt, error: held.error.clone(), ran };
             move_job(c, queue, lease.place(), &to)?;
-            Ok(Settled { due: Some(*at), ..Settled::default() })
+            Ok(Settled { due: Some(at), ..Settled::default() })
         }
         How::GiveBack => {
             let to = Moved {
@@ -706,7 +737,7 @@ fn superseded(
         How::Snooze { .. } | How::GiveBack => None,
         How::Done | How::Fail { .. } | How::Extend { .. } => return Ok(None),
     };
-    match (held.again, next_run(lease.at, held, now)) {
+    match (held.again, next_run(queue, lease.at, held, now)) {
         (Some(_), Some(next)) => {
             run_again(c, queue, (lease.place(), held), (next, error), lease.last_run(now)).map(Some)
         }
@@ -749,6 +780,8 @@ struct HeldRow {
     expires: Option<i64>,
     /// The leading items of its list the run read, once a gather came while it ran.
     taken: Option<i64>,
+    /// Its own quiet hours, as it keeps them.
+    quiet: Option<String>,
 }
 
 fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<HeldRow> {
@@ -765,6 +798,7 @@ fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<
                         keep: row.get(5)?,
                         expires: row.get(6)?,
                         taken: row.get(7)?,
+                        quiet: row.get(8)?,
                     })
                 })
                 .optional()
@@ -781,7 +815,7 @@ fn done(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, now: 
         let (_, gathered) = gather::split(&rows::value_of(c, queue.id, (lease.next, lease.id))?, taken as u64)?;
         rows::set_value(c, queue.id, (lease.next, lease.id), &Kept::of(gathered))?;
     }
-    if let Some(next) = next_run(lease.at, held, now) {
+    if let Some(next) = next_run(queue, lease.at, held, now) {
         return run_again(c, queue, (lease.place(), held), (next, None), lease.last_run(now));
     }
     let dedupe = match &held.dedupe {
@@ -835,11 +869,12 @@ fn retry(
             rows::drop_steps(c, lease.id)?;
         }
         _ => {
-            if let Some(next) = next_run(lease.at, held, now) {
+            if let Some(next) = next_run(queue, lease.at, held, now) {
                 due = due.min(next);
             }
         }
     }
+    let due = hold(queue, held.quiet.as_deref(), due);
     if past_term(held, due) {
         end_term(c, queue, lease.place())?;
         return Ok(Settled::default());
@@ -862,7 +897,7 @@ fn fail(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, cause
     if let (Some(taken), Some(again)) = (held.taken, held.again) {
         return fail_gathered(c, queue, lease, (held, taken, again), (&cause, now));
     }
-    if let Some(next) = next_run(lease.at, held, now) {
+    if let Some(next) = next_run(queue, lease.at, held, now) {
         return run_again(c, queue, (lease.place(), held), (next, Some(cause)), lease.last_run(now));
     }
     let ending = Ending { attempts: lease.attempt, cause: &cause, ran: lease.last_run(now), now, forked: false };
@@ -884,16 +919,44 @@ fn fail_gathered(
     let place = (lease.next, lease.id);
     let (read, gathered) = gather::split(&rows::value_of(c, queue.id, place)?, taken as u64)?;
     rows::set_value(c, queue.id, place, &Kept::of(read))?;
-    rows::fork(c, queue.id, place, (again, rows::next_id(c)?), (&Kept::of(gathered), cause))?;
+    rows::fork(
+        c,
+        queue.id,
+        place,
+        (hold(queue, held.quiet.as_deref(), again), rows::next_id(c)?),
+        (&Kept::of(gathered), cause),
+    )?;
     let ending = Ending { attempts: lease.attempt, cause, ran: lease.last_run(now), now, forked: true };
     failed_for_good(c, queue, (lease.place(), held), &ending)?;
-    Ok(Settled { failed: Some(cause.to_owned()), due: Some(again), ..Settled::default() })
+    Ok(Settled {
+        failed: Some(cause.to_owned()),
+        due: Some(hold(queue, held.quiet.as_deref(), again)),
+        ..Settled::default()
+    })
+}
+
+/// `at`, or the end of the job's quiet hours, its own as it keeps them or its
+/// queue's, when it falls inside them. A job and a queue without any pay one
+/// check each.
+fn hold(queue: &QueueState, kept: Option<&str>, at: i64) -> i64 {
+    let hours = match (kept, &queue.policy.quiet) {
+        (None, None) => return at,
+        (Some(kept), _) => Hours::parse(kept),
+        (None, Some(quiet)) => quiet.checked(),
+    };
+    match hours {
+        Ok(hours) => hours.map_or(at, |hours| hours.hold(at)),
+        Err(error) => {
+            tracing::error!(target: "tinystore", %error, "a job's quiet hours do not read");
+            at
+        }
+    }
 }
 
 /// When a settled job, whose run was for `at`, runs again without a retry: the
 /// earlier of its repeat's next time, after `at` and after now, and the time a
-/// set asked of it.
-fn next_run(at: i64, held: &HeldRow, now: i64) -> Option<i64> {
+/// set asked of it, held by its quiet hours.
+fn next_run(queue: &QueueState, at: i64, held: &HeldRow, now: i64) -> Option<i64> {
     let repeated = held.repeat.as_deref().and_then(|text| match Repeat::parse(text) {
         Ok(repeat) => repeat.next(at.max(now)),
         Err(error) => {
@@ -901,10 +964,11 @@ fn next_run(at: i64, held: &HeldRow, now: i64) -> Option<i64> {
             None
         }
     });
-    match (repeated, held.again) {
+    let next = match (repeated, held.again) {
         (Some(repeated), Some(again)) => Some(repeated.min(again)),
         (repeated, again) => repeated.or(again),
-    }
+    };
+    next.map(|next| hold(queue, held.quiet.as_deref(), next))
 }
 
 /// Where a settlement moves a job's row: its next time and the time it runs

@@ -60,7 +60,7 @@ pub(crate) fn pass_on_write<V: Serialize>(
     );
     asked.write(&mut out);
     out.bytes(&json);
-    asked.write_own(&mut out);
+    asked.write_own(&mut out)?;
     answered(store, out)
 }
 

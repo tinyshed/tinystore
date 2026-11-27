@@ -3572,6 +3572,67 @@ impl Message for JobsRate {
     }
 }
 
+/// Hours in which a job does not run: from and to, HH:MM on the wall clock of
+/// timeZone; a from after to wraps midnight. A time the store gives a job
+/// inside them is their end.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsQuiet {
+    pub(crate) from: String,
+    pub(crate) to: String,
+    /// An IANA name, UTC among them.
+    pub(crate) time_zone: String,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsQuiet {
+    const NAME: &'static str = "jobs.Quiet";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.from = codec::str(r, "from")?,
+                2 => message.to = codec::str(r, "to")?,
+                3 => message.time_zone = codec::str(r, "timeZone")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.from.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.from);
+        }
+        if !self.to.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.to);
+        }
+        if !self.time_zone.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.time_zone);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.from.len()
+            + 1 + 5 + self.to.len()
+            + 1 + 5 + self.time_zone.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.from.is_empty()
+            && self.to.is_empty()
+            && self.time_zone.is_empty()
+    }
+}
+
 /// Opens a queue; an option left out takes its default.
 #[cfg(feature = "jobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -3599,6 +3660,8 @@ pub(crate) struct JobsQueueOpen {
     pub(crate) group_rate: Option<JobsRate>,
     /// In the place of dedupe: until the local unit a job was done in ends.
     pub(crate) dedupe_calendar: Option<JobsCalendar>,
+    /// Hours in which the queue's jobs do not run.
+    pub(crate) quiet: Option<JobsQuiet>,
 }
 
 #[cfg(feature = "jobs")]
@@ -3622,6 +3685,7 @@ impl Message for JobsQueueOpen {
                 10 => message.database = Some(codec::uint(r, "database")?),
                 11 => message.group_rate = Some(JobsRate::read(r)?),
                 12 => message.dedupe_calendar = Some(JobsCalendar::read(r)?),
+                13 => message.quiet = Some(JobsQuiet::read(r)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -3678,6 +3742,10 @@ impl Message for JobsQueueOpen {
             map.field(out, 12);
             codec::write_message(out, dedupe_calendar);
         }
+        if let Some(quiet) = &self.quiet {
+            map.field(out, 13);
+            codec::write_message(out, quiet);
+        }
         map.close(out);
     }
 
@@ -3695,6 +3763,7 @@ impl Message for JobsQueueOpen {
             + self.database.map_or(0, |_| 10)
             + self.group_rate.as_ref().map_or(0, |group_rate| 1 + group_rate.size())
             + self.dedupe_calendar.as_ref().map_or(0, |dedupe_calendar| 1 + dedupe_calendar.size())
+            + self.quiet.as_ref().map_or(0, |quiet| 1 + quiet.size())
     }
 
     fn is_zero(&self) -> bool {
@@ -3710,6 +3779,7 @@ impl Message for JobsQueueOpen {
             && self.database.is_none()
             && self.group_rate.is_none()
             && self.dedupe_calendar.is_none()
+            && self.quiet.is_none()
     }
 }
 
@@ -3835,6 +3905,10 @@ pub(crate) struct JobsCall {
     pub(crate) expires_at: Option<i64>,
     /// This job's own once it failed for good; 0 not at all. Milliseconds.
     pub(crate) keep: Option<u64>,
+    /// This job's own hours in which it does not run, in the place of its queue's.
+    pub(crate) quiet: Option<JobsQuiet>,
+    /// No quiet hours hold this job, its queue's neither; not beside quiet.
+    pub(crate) no_quiet: bool,
 }
 
 #[cfg(feature = "jobs")]
@@ -3860,6 +3934,8 @@ impl Message for JobsCall {
                 12 => message.ttl = Some(codec::uint(r, "ttl")?),
                 13 => message.expires_at = Some(codec::int(r, "expiresAt")?),
                 14 => message.keep = Some(codec::uint(r, "keep")?),
+                15 => message.quiet = Some(JobsQuiet::read(r)?),
+                16 => message.no_quiet = codec::bool(r, "noQuiet")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -3924,6 +4000,14 @@ impl Message for JobsCall {
             map.field(out, 14);
             codec::write_uint(out, keep);
         }
+        if let Some(quiet) = &self.quiet {
+            map.field(out, 15);
+            codec::write_message(out, quiet);
+        }
+        if self.no_quiet {
+            map.field(out, 16);
+            codec::write_bool(out, &self.no_quiet);
+        }
         map.close(out);
     }
 
@@ -3943,6 +4027,8 @@ impl Message for JobsCall {
             + self.ttl.map_or(0, |_| 10)
             + self.expires_at.map_or(0, |_| 10)
             + self.keep.map_or(0, |_| 10)
+            + self.quiet.as_ref().map_or(0, |quiet| 1 + quiet.size())
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -3960,6 +4046,8 @@ impl Message for JobsCall {
             && self.ttl.is_none()
             && self.expires_at.is_none()
             && self.keep.is_none()
+            && self.quiet.is_none()
+            && !self.no_quiet
     }
 }
 
@@ -15350,6 +15438,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "jobs.Backoff" => JobsBackoff::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
         "jobs.Rate" => JobsRate::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "jobs")]
+        "jobs.Quiet" => JobsQuiet::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
         "jobs.QueueOpen" => JobsQueueOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]

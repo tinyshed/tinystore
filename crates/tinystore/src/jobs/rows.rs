@@ -53,7 +53,7 @@ const DROP_DEAD_LEASES: &str = "delete from _tinystore_jobs_leases";
 const COUNT_ENDED_ATTEMPT: &str = "update _tinystore_jobs set attempt = l.attempt from _tinystore_jobs_leases l
     where l.id = ?1 and _tinystore_jobs.queue = l.queue and _tinystore_jobs.next = l.next and _tinystore_jobs.id = l.id";
 
-const JOB_BY_KEY: &str = "select j.next, j.id, j.again, j.repeat, j.spill, j.expires
+const JOB_BY_KEY: &str = "select j.next, j.id, j.again, j.repeat, j.spill, j.expires, j.quiet
     from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
     where k.queue = ?1 and k.key = ?2";
 const LEASE_HELD: &str = "select 1 from _tinystore_jobs_leases where id = ?1 and until > ?2";
@@ -61,8 +61,8 @@ const DONE_KEY: &str = "select 1 from _tinystore_jobs_done where queue = ?1 and 
 
 const INSERT_JOB: &str =
     "insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill, grp, error, dedupe, keep,
-        expires, latest)
-    values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+        expires, latest, quiet)
+    values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
 const INSERT_SPILLED: &str = "insert into _tinystore_jobs_spilled (id, value) values (?1, ?2)";
 const DELETE_SPILLED: &str = "delete from _tinystore_jobs_spilled where id = ?1";
 /// A key's row: where its job lies, replacing a key a job left behind.
@@ -74,9 +74,11 @@ const DROP_KEY: &str = "delete from _tinystore_jobs_keys where queue = ?1 and ke
 /// retry and error gone; the times of its last run stay, and so does a repeat,
 /// a group or an option of its own the set does not name.
 const RENEW_JOB: &str = "update _tinystore_jobs
-    set next = ?4, at = ?4, attempt = 0, again = null, error = null, value = ?5, spill = ?6, latest = null, taken = null,
+    set next = ?4, at = ?4, attempt = 0, again = null, error = null, value = ?5, spill = ?6,
+        latest = null, taken = null,
         repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
-        dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep), expires = coalesce(?11, expires)
+        dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep), expires = coalesce(?11, expires),
+        quiet = coalesce(?12, quiet)
     where queue = ?1 and next = ?2 and id = ?3";
 /// What a gather counted while a run held the job, which a write to a job no
 /// live lease holds forgets: that run never settles, and a settlement of the
@@ -89,26 +91,24 @@ macro_rules! forget_gathered {
 }
 
 /// An update's job: its value, and what else the update named.
-const UPDATE_JOB: &str = concat!(
-    "update _tinystore_jobs
-    set ",
-    forget_gathered!(),
-    ", next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
+const UPDATE_JOB: &str = "update _tinystore_jobs
+    set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
         dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep), expires = coalesce(?11, expires),
         quiet = coalesce(?12, quiet)
-    where queue = ?1 and next = ?2 and id = ?3"
-);
+    where queue = ?1 and next = ?2 and id = ?3";
 /// A set while the job runs: the value and repeat its next run takes, and when
 /// that run is, which its settlement reads; no gather's latest time holds it.
 const ASK_AGAIN: &str = "update _tinystore_jobs
-    set again = ?4, value = ?5, spill = ?6, latest = null, taken = null, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
-        dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep), expires = coalesce(?11, expires)
+    set again = ?4, value = ?5, spill = ?6, latest = null, taken = null,
+        repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
+        dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep), expires = coalesce(?11, expires),
+        quiet = coalesce(?12, quiet)
     where queue = ?1 and next = ?2 and id = ?3";
 /// What an upsert compares of the job that is there with its call: whether
 /// its value is the call's, ?4, and its group and options of its own.
 const SHAPE_OF: &str = "select
         coalesce(j.value, (select s.value from _tinystore_jobs_spilled s where s.id = j.spill)) is ?4,
-        j.grp, j.dedupe, j.keep, j.expires
+        j.grp, j.dedupe, j.keep, j.expires, j.quiet
     from _tinystore_jobs j where j.queue = ?1 and j.next = ?2 and j.id = ?3";
 /// A term an upsert renews, which changes nothing else.
 const RENEW_TERM: &str = "update _tinystore_jobs set expires = ?4 where queue = ?1 and next = ?2 and id = ?3";
@@ -126,8 +126,7 @@ const RESHAPE_JOB: &str = concat!(
         repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
         dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep), expires = coalesce(?11, expires),
         quiet = coalesce(?12, quiet)
-    where queue = ?1 and next = ?2 and id = ?3"
-);
+    where queue = ?1 and next = ?2 and id = ?3";
 /// A run asked of a job that runs, right after the run under way: its
 /// settlement reads `again`.
 const RUN_AFTER: &str = "update _tinystore_jobs set again = min(coalesce(again, ?4), ?4)
@@ -142,7 +141,7 @@ const DUE_NOW: &str = "update _tinystore_jobs set next = ?4, at = case when atte
 const GATHERING: &str = "select j.next, j.id, j.again, j.repeat, j.spill, j.expires,
         coalesce(j.value, (select s.value from _tinystore_jobs_spilled s where s.id = j.spill)),
         j.latest, j.taken, j.quiet,
-        exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?3), j.attempt
+        exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?3)
     from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
     where k.queue = ?1 and k.key = ?2";
 /// A gather's waiting job: its list, its time, and what else it named; an
@@ -152,7 +151,7 @@ const GATHERING: &str = "select j.next, j.id, j.again, j.repeat, j.spill, j.expi
 const GATHER_JOB: &str = "update _tinystore_jobs
     set next = ?4, at = case when attempt = 0 then ?4 else at end, again = null, value = ?5, spill = ?6, grp = coalesce(?7, grp),
         dedupe = coalesce(?8, dedupe), keep = coalesce(?9, keep), expires = coalesce(?10, expires), latest = ?11,
-        taken = ?12
+        taken = ?12, quiet = coalesce(?13, quiet)
     where queue = ?1 and next = ?2 and id = ?3";
 /// A gather while the job runs: the whole list, its run's items first, which
 /// `taken` counts, and when the job runs again, which the settlement reads
@@ -160,7 +159,7 @@ const GATHER_JOB: &str = "update _tinystore_jobs
 const GATHER_AGAIN: &str = "update _tinystore_jobs
     set again = ?4, value = ?5, spill = ?6, grp = coalesce(?7, grp),
         dedupe = coalesce(?8, dedupe), keep = coalesce(?9, keep), expires = coalesce(?10, expires), latest = ?11,
-        taken = ?12
+        taken = ?12, quiet = coalesce(?13, quiet)
     where queue = ?1 and next = ?2 and id = ?3";
 /// A job's value wherever it lies.
 const VALUE_OF: &str = "select coalesce(j.value, (select s.value from _tinystore_jobs_spilled s where s.id = j.spill))
@@ -171,8 +170,8 @@ const SET_VALUE: &str = "update _tinystore_jobs set value = ?4, spill = ?5 where
 /// there ran, which fails for good.
 const FORK_JOB: &str =
     "insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill, grp, error,
-        dedupe, keep, expires, latest)
-    select queue, ?4, ?5, key, ?4, 0, repeat, ?6, ?7, grp, ?8, dedupe, keep, expires, latest
+        dedupe, keep, expires, latest, quiet)
+    select queue, ?4, ?5, key, ?4, 0, repeat, ?6, ?7, grp, ?8, dedupe, keep, expires, latest, quiet
     from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3
     returning key";
 const DROP_FAILED: &str =
@@ -208,6 +207,8 @@ pub(crate) struct Row {
     pub(crate) spill: Option<i64>,
     /// When it leaves its queue unless written again.
     pub(crate) expires: Option<i64>,
+    /// Its own quiet hours, as it keeps them, which hold a call's time that gives none.
+    pub(crate) quiet: Option<String>,
 }
 
 /// A job a write adds.
@@ -250,6 +251,8 @@ pub(crate) struct Own<'a> {
     pub(crate) keep: Option<i64>,
     /// When it leaves its queue unless written again, unix milliseconds.
     pub(crate) expires: Option<i64>,
+    /// Its quiet hours, as [`Quiet`](super::quiet::Quiet) keeps them: `none` holds it by none.
+    pub(crate) quiet: Option<&'a str>,
 }
 
 /// What an upsert finds of the job that is there, beside its row.
@@ -260,6 +263,7 @@ pub(crate) struct Shape {
     pub(crate) dedupe: Option<String>,
     pub(crate) keep: Option<i64>,
     pub(crate) expires: Option<i64>,
+    pub(crate) quiet: Option<String>,
 }
 
 /// What a failed job a write took the place of leaves to the new one.
@@ -346,6 +350,7 @@ pub(crate) fn job_by_key(c: &Connection, queue: i64, key: &str) -> Result<Option
                         repeat: row.get(3)?,
                         spill: row.get(4)?,
                         expires: row.get(5)?,
+                        quiet: row.get(6)?,
                     })
                 })
                 .optional()
@@ -365,11 +370,10 @@ pub(crate) fn gathering(c: &Connection, queue: i64, key: &str, now: i64) -> Resu
                         value: row.get(6)?,
                         latest: row.get(7)?,
                         taken: row.get(8)?,
-                        quiet: row.get(9)?,
                         held: row.get(10)?,
-                        attempt: row.get(11)?,
                     };
-                    Ok((Row { next, id, again, repeat, spill, expires }, kept))
+                    let quiet = row.get(9)?;
+                    Ok((Row { next, id, again, repeat, spill, expires, quiet }, kept))
                 })
                 .optional()
         })
@@ -405,7 +409,8 @@ pub(crate) fn gather(
         own.keep,
         own.expires,
         latest,
-        taken
+        taken,
+        own.quiet
     ];
     if running {
         return execute(c, GATHER_AGAIN, params, "a gather into a running job").map(drop);
@@ -495,7 +500,8 @@ pub(crate) fn insert(c: &Connection, job: &NewJob<'_>) -> Result<()> {
         own.dedupe,
         own.keep,
         own.expires,
-        job.latest
+        job.latest,
+        own.quiet
     ];
     execute(c, INSERT_JOB, params, "a job's row")?;
     if let Some(key) = job.key {
@@ -530,7 +536,8 @@ pub(crate) fn shape(c: &Connection, queue: i64, there: &Row, value: &Kept) -> Re
         .and_then(|mut select| {
             select.query_row(params![queue, there.next, there.id, value.bytes()], |row| {
                 let (same_value, group, dedupe) = (row.get(0)?, row.get(1)?, row.get(2)?);
-                Ok(Shape { same_value, group, dedupe, keep: row.get(3)?, expires: row.get(4)? })
+                let (keep, expires, quiet) = (row.get(3)?, row.get(4)?, row.get(5)?);
+                Ok(Shape { same_value, group, dedupe, keep, expires, quiet })
             })
         })
         .map_err(|error| sql_error("an upsert's job", error))
@@ -575,8 +582,8 @@ fn rewrite(
     drop_spill(c, there.spill)?;
     let (spill, own) = (spill(c, there.id, change.value)?, change.own);
     let (inline, repeat, group) = (change.value.inline(), change.repeat, change.group);
-    let own = (own.dedupe, own.keep, own.expires);
-    let params = params![queue, there.next, there.id, time, inline, spill, repeat, group, own.0, own.1, own.2];
+    let own = (own.dedupe, own.keep, own.expires, own.quiet);
+    let params = params![queue, there.next, there.id, time, inline, spill, repeat, group, own.0, own.1, own.2, own.3];
     execute(c, statement, params, what).map(drop)
 }
 

@@ -156,6 +156,23 @@ def fail(reason: str | BaseException) -> Outcome: ...
 
 Fails the job for good now, its reason kept as its error: return it.
 
+## Quiet
+
+```python
+@dataclass(frozen=True, slots=True)
+class Quiet:
+    from_: str
+    to: str
+    time_zone: str
+```
+
+Hours in which a job does not run: two wall-clock times of a day in a time zone.
+
+``tinystore.Quiet(from_="23:00", to="07:00", time_zone="Europe/Moscow")``; a
+``from_`` after ``to`` wraps midnight. A time the store gives a job inside
+them, a retry's or a repeat's too, becomes their end. The same two, or a zone
+no one has, is InvalidError.
+
 ## Gathered
 
 ```python
@@ -217,6 +234,7 @@ async def add(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> bool: ...
 ```
 
@@ -244,6 +262,7 @@ def adding(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> Adding: ...
 ```
 
@@ -274,6 +293,7 @@ async def set(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> None: ...
 ```
 
@@ -299,6 +319,7 @@ async def update(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> bool: ...
 ```
 
@@ -321,6 +342,7 @@ async def upsert(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> bool: ...
 ```
 
@@ -349,6 +371,7 @@ async def gather(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> Gathered: ...
 ```
 
@@ -518,6 +541,7 @@ async def add(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> None: ...
 ```
 
@@ -540,6 +564,7 @@ async def set(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> None: ...
 ```
 
@@ -562,6 +587,7 @@ async def update(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> None: ...
 ```
 
@@ -584,6 +610,7 @@ async def upsert(
     keep: Duration | None = None,
     ttl: Duration | None = None,
     expires_at: datetime | None = None,
+    quiet: Quiet | Literal[False] | None = None,
 ) -> None: ...
 ```
 

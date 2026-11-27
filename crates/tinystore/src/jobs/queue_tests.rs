@@ -411,6 +411,7 @@ fn a_jobs_file_the_release_before_wrote_opens_and_its_jobs_run_by_their_queues_o
         alter table _tinystore_jobs drop column dedupe; alter table _tinystore_jobs drop column keep;
         alter table _tinystore_jobs drop column expires; alter table _tinystore_jobs_failed drop column until;
         alter table _tinystore_jobs drop column latest; alter table _tinystore_jobs drop column taken;
+        alter table _tinystore_jobs drop column quiet;
         delete from _tinystore_migrations where history = 'jobs' and version >= 2";
     let file = crate::sqlite::File::open(&path, crate::sqlite::Config::default()).unwrap();
     let failed = |error| crate::sqlite::sql_error("a test", error);

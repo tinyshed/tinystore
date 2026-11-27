@@ -29,6 +29,15 @@ message jobs.Rate {
   2 per: duration
 }
 
+# Hours in which a job does not run: from and to, HH:MM on the wall clock of
+# timeZone; a from after to wraps midnight. A time the store gives a job
+# inside them is their end.
+message jobs.Quiet {
+  1 from: str
+  2 to: str
+  3 timeZone: str                    # an IANA name, UTC among them
+}
+
 # Opens a queue; an option left out takes its default.
 message jobs.QueueOpen {
   1 name: str                        # [a-z0-9][a-z0-9_-]{0,63}
@@ -43,6 +52,7 @@ message jobs.QueueOpen {
   10 database: uint?                 # a database's handle: the queue lives in its file; jobs.db when absent
   11 groupRate: jobs.Rate?           # each group's starts, beside the queue's rate
   12 dedupeCalendar: jobs.Calendar?  # in the place of dedupe: until the local unit a job was done in ends
+  13 quiet: jobs.Quiet?              # hours in which the queue's jobs do not run
 }
 
 # Opens a schedule: one repeating job the code owns, under its name, whose
@@ -73,6 +83,8 @@ message jobs.Call {
   12 ttl: duration?                  # it leaves its queue this long after its last write unless written again; not 0
   13 expiresAt: time?                # it leaves its queue then; not beside ttl
   14 keep: duration?                 # this job's own once it failed for good; 0 not at all
+  15 quiet: jobs.Quiet?              # this job's own hours in which it does not run, in the place of its queue's
+  16 noQuiet: bool                   # no quiet hours hold this job, its queue's neither; not beside quiet
 }
 
 # The job under an id; or, for a cancel, a job without one by the row a page
