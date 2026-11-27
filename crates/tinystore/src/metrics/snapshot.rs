@@ -169,6 +169,31 @@ impl Engine {
         })
     }
 
+    /// What an aggregate takes over each of `ranges`, out of one snapshot of
+    /// the file: each range's as a query of that range alone takes it. The
+    /// series are found once and paid for once, and what every range copies
+    /// and decodes is paid for on the one budget.
+    pub(super) fn take_ranges(
+        &self,
+        asked: &Asked,
+        shape: &Shape,
+        ranges: &[(i64, i64)],
+        budget: &mut Budget,
+    ) -> Result<Vec<Vec<Taken>>> {
+        let want = Want::Buckets(shape);
+        self.snapshot(asked, want, budget, |reading, asked| {
+            let found = matching::find(reading.connection, asked, reading.budget)?;
+            let mut taken = Vec::with_capacity(ranges.len());
+            for &(from, to) in ranges {
+                crate::cancel::check(|| "a comparison".to_owned())?;
+                let range = Asked { from, to, ..asked.clone() };
+                let series = found.iter().map(|series| reading.series(self, series.clone(), &range, want));
+                taken.push(series.collect::<Result<Vec<_>>>()?);
+            }
+            Ok(taken)
+        })
+    }
+
     /// `read` run on one snapshot of the file, the query read as a timer's
     /// series when it names one, and the bodies of the blocks it took copied
     /// in the same snapshot. A series whose bytes no longer read is suspended
@@ -214,6 +239,12 @@ impl Holds for Vec<Taken> {
 impl Holds for (Vec<Taken>, Option<i64>) {
     fn taken(&mut self) -> Vec<&mut Taken> {
         self.0.iter_mut().collect()
+    }
+}
+
+impl Holds for Vec<Vec<Taken>> {
+    fn taken(&mut self) -> Vec<&mut Taken> {
+        self.iter_mut().flatten().collect()
     }
 }
 

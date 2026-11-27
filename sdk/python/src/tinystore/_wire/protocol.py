@@ -135,6 +135,7 @@ methods: dict[str, int] = {
     # An ingest's message in pieces, as uploadPrometheus takes a text: written
     # once the last piece came, every series or none.
     "metrics.upload": 0x0612,
+    "metrics.compare": 0x0613,
     "records.open": 0x0501,
     "records.append": 0x0502,
     "records.list": 0x0503,
@@ -6531,6 +6532,154 @@ MetricsAggregates = Message(
 )
 
 
+def _write_metrics_compare_asked(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("query")) is not None:
+        w.uint(1)
+        MetricsQuery.write(w, x)
+        n += 1
+    if (x := v.get("op")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("window")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("against")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    if (x := v.get("same_hour")) is not None:
+        w.uint(5)
+        w.bool(x)
+        n += 1
+    if (x := v.get("estimate")) is not None:
+        w.uint(6)
+        w.bool(x)
+        n += 1
+    if (x := v.get("skip_nan")) is not None:
+        w.uint(7)
+        w.bool(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_compare_asked(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["query"] = MetricsQuery.read(r)
+            case 2:
+                read["op"] = r.str()
+            case 3:
+                read["window"] = r.uint()
+            case 4:
+                read["against"] = r.uint()
+            case 5:
+                read["same_hour"] = r.bool()
+            case 6:
+                read["estimate"] = r.bool()
+            case 7:
+                read["skip_nan"] = r.bool()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# The newest window's aggregate against the median of the windows before it:
+# the same hours of each earlier day with sameHour, every window before
+# otherwise. The query gives its name and where, and no range or page.
+MetricsCompareAsked = Message(
+    "metrics.CompareAsked",
+    {
+        "query": (1, MetricsQuery),
+        # as an aggregate's
+        "op": (2, str_),
+        "window": (3, uint),
+        # how far back the windows compared with reach
+        "against": (4, uint),
+        "same_hour": (5, bool_),
+        # a timer's percentile compares its estimate
+        "estimate": (6, bool_),
+        "skip_nan": (7, bool_),
+    },
+    _write_metrics_compare_asked,
+    _read_metrics_compare_asked,
+)
+
+
+def _write_metrics_compared(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("value")) is not None:
+        w.uint(1)
+        w.float(x)
+        n += 1
+    if (x := v.get("usual")) is not None:
+        w.uint(2)
+        w.float(x)
+        n += 1
+    if (x := v.get("ratio")) is not None:
+        w.uint(3)
+        w.float(x)
+        n += 1
+    if (x := v.get("samples")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    if (x := v.get("windows")) is not None:
+        w.uint(5)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_compared(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["value"] = r.float()
+            case 2:
+                read["usual"] = r.float()
+            case 3:
+                read["ratio"] = r.float()
+            case 4:
+                read["samples"] = r.uint()
+            case 5:
+                read["windows"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# What compare found; a value it could not give is none, never zero.
+MetricsCompared = Message(
+    "metrics.Compared",
+    {
+        # none when the newest window holds no sample
+        "value": (1, float_),
+        # the median of the windows before that hold samples
+        "usual": (2, float_),
+        # value / usual; none when either is none or usual is 0
+        "ratio": (3, float_),
+        # the newest window's
+        "samples": (4, uint),
+        # the windows the usual stands on
+        "windows": (5, uint),
+    },
+    _write_metrics_compared,
+    _read_metrics_compared,
+)
+
+
 def _write_metrics_exceeds(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -12751,6 +12900,8 @@ messages: dict[str, Message] = {
     "metrics.Bucket": MetricsBucket,
     "metrics.Group": MetricsGroup,
     "metrics.Aggregates": MetricsAggregates,
+    "metrics.CompareAsked": MetricsCompareAsked,
+    "metrics.Compared": MetricsCompared,
     "metrics.Exceeds": MetricsExceeds,
     "metrics.NewSeries": MetricsNewSeries,
     "metrics.Ingest": MetricsIngest,

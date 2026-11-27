@@ -652,6 +652,44 @@ for (const way of ways) {
 			expect(await last(store, 'jobs_total')).toEqual({ '{}': 40 })
 		})
 
+		// contract: MET-33
+		test('compare sets the newest window against the median of the windows before it', async () => {
+			const now = Date.now()
+			await store.metrics.ingest([
+				{
+					name: 'compared_ms',
+					kind: 'gauge',
+					labels: { source: 'server' },
+					samples: [
+						[now - 150_000, 2],
+						[now - 90_000, 4],
+						[now - 30_000, 12],
+					],
+				},
+			])
+			const asked = {
+				name: 'compared_ms',
+				op: 'max',
+				window: '1m',
+				where: { source: 'server' },
+				against: { last: '10m' },
+			} as const
+			expect(await store.metrics.compare(asked)).toEqual({
+				value: 12,
+				usual: 3,
+				ratio: 4,
+				samples: 1,
+				windows: 2,
+			})
+			const none = await store.metrics.compare({ ...asked, name: 'compared_nothing' })
+			expect(none).toEqual({ samples: 0, windows: 0 })
+			const many = await caught(store.metrics.compare({ ...asked, against: { last: '1002m' } }))
+			expect(many).toBeInstanceOf(InvalidError)
+			expect(String(many)).toContain('1000 at most')
+			const ranged = await caught(store.metrics.compare({ ...asked, since: '1h' } as never))
+			expect(String(ranged)).toContain('no field `since`')
+		})
+
 		// contract: MET-25
 		test('a query field the SDK does not know is refused by name, never dropped', async () => {
 			const names = await caught(

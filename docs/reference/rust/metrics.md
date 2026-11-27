@@ -150,6 +150,63 @@ gives, as Prometheus' `ExponentialBuckets` makes them;
 `Buckets::Exponential` lets the store keep a finer grid instead, of
 the intervals values fell in.
 
+## Compare
+
+```rust
+pub struct Compare { /* private fields */ }
+```
+
+A comparison being asked: the query's series, the `op` of each window,
+its length, and the windows before it it compares with.
+
+### Compare.against
+
+```rust
+pub fn against(self, last: Duration) -> Self
+```
+
+How far back the windows it compares with reach.
+
+### Compare.same_hour
+
+```rust
+pub fn same_hour(self) -> Self
+```
+
+Compares with the same hours of each earlier day alone, rather than
+with every window before the newest.
+
+### Compare.run
+
+```rust
+pub fn run(&self) -> Result<Compared>
+```
+
+The newest window's `op` against the median of the earlier windows'.
+Each window is one aggregate of the query's series, merged as an
+aggregate without `by` merges them, all from one snapshot of the
+file, every bound of a query on them together. A window without a
+sample is left out of the median, and so is one retention cut short.
+A timer's percentile is a number only with the query's
+[`estimate`](Query::estimate), as `aggregate` gives one; without it
+that `op` is `invalid`, since the bounds it lies between are no
+number to compare.
+
+## Compared
+
+```rust
+pub struct Compared {
+    pub value: Option<f64>,
+    pub usual: Option<f64>,
+    pub ratio: Option<f64>,
+    pub samples: u64,
+    pub windows: u32,
+}
+```
+
+What `compare` found: the newest window's value, the usual one, and what
+each stands on. A value it could not give is none, never zero.
+
 ## Damage
 
 ```rust
@@ -1185,6 +1242,17 @@ the series of its own groups, so pages go past the series a query
 finds a group at a time, and a group whose series alone pass them is
 `limit` too.
 
+### Query.compare
+
+```rust
+pub fn compare(&self, op: Op, window: Duration) -> Compare
+```
+
+The `op` over the newest `window` against the median of the windows
+before it, which `Compare::against` reaches back over: the query's
+name and conditions, and its `estimate` and `skip_nan`, as an
+aggregate takes them; no range, buckets, groups or pages.
+
 ### Query.latest
 
 ```rust
@@ -2042,6 +2110,48 @@ pub fn explain(
 What `read`, or `aggregate` when given its `op`, would spend of each
 bound of a query, and the bound it would stop at. It decodes no
 sample.
+
+### aio::metrics::Query.compare
+
+```rust
+pub fn compare(&self, op: Op, window: Duration) -> Compare
+```
+
+The `op` over the newest `window` against the median of the windows
+before it, as `crate::metrics::Query::compare` gives them.
+
+## aio::metrics::Compare
+
+```rust
+pub struct Compare { /* private fields */ }
+```
+
+A comparison being asked, as `crate::metrics::Compare` is, `run`
+awaited.
+
+### aio::metrics::Compare.against
+
+```rust
+pub fn against(self, last: Duration) -> Self
+```
+
+How far back the windows it compares with reach.
+
+### aio::metrics::Compare.same_hour
+
+```rust
+pub fn same_hour(self) -> Self
+```
+
+Compares with the same hours of each earlier day alone.
+
+### aio::metrics::Compare.run
+
+```rust
+pub fn run(&self) -> impl Future<Output = Result<Compared>> + Send + 'static
+```
+
+The newest window's `op` against the median of the earlier windows'.
 
 ## aio::metrics::List
 

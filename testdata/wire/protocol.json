@@ -3909,6 +3909,108 @@
     },
     {
       "fields": {
+        "against": {
+          "uint": "1500"
+        },
+        "estimate": {
+          "bool": true
+        },
+        "op": {
+          "str": "op"
+        },
+        "query": {
+          "fields": {
+            "after": {
+              "str": "after"
+            },
+            "from": {
+              "int": "1790000000000"
+            },
+            "limit": {
+              "uint": "607"
+            },
+            "name": {
+              "str": "name"
+            },
+            "since": {
+              "uint": "1500"
+            },
+            "to": {
+              "int": "1790000000000"
+            },
+            "where": {
+              "names": {
+                "a": {
+                  "fields": {
+                    "not": {
+                      "bool": true
+                    },
+                    "prefix": {
+                      "str": "prefix"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "values"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "sameHour": {
+          "bool": true
+        },
+        "skipNan": {
+          "bool": true
+        },
+        "window": {
+          "uint": "1500"
+        }
+      },
+      "hex": "87018701a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0006cd025f07a5616674657202a26f7003cd05dc04cd05dc05c306c307c3",
+      "message": "metrics.CompareAsked",
+      "name": "metrics.CompareAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.CompareAsked",
+      "name": "metrics.CompareAsked with no field"
+    },
+    {
+      "fields": {
+        "ratio": {
+          "float": "3ff8000000000000"
+        },
+        "samples": {
+          "uint": "407"
+        },
+        "usual": {
+          "float": "3ff8000000000000"
+        },
+        "value": {
+          "float": "3ff8000000000000"
+        },
+        "windows": {
+          "uint": "507"
+        }
+      },
+      "hex": "8501cb3ff800000000000002cb3ff800000000000003cb3ff800000000000004cd019705cd01fb",
+      "message": "metrics.Compared",
+      "name": "metrics.Compared with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Compared",
+      "name": "metrics.Compared with no field"
+    },
+    {
+      "fields": {
         "bytes": {
           "uint": "207"
         },
@@ -7789,6 +7891,7 @@
     "locks.renew": 2306,
     "locks.state": 2308,
     "metrics.aggregate": 1539,
+    "metrics.compare": 1555,
     "metrics.damaged": 1545,
     "metrics.delete": 1548,
     "metrics.describe": 1547,

@@ -38,7 +38,7 @@
 //! | `ingest` and [`Prometheus::ingest`] | on the store's pool, its memory on no thread    | runs to its end     |
 //! | `replace`                           | on the store's pool, its memory on no thread    | runs to its end     |
 //! | `describe`, `delete`, `flush`       | blocking, on the store's pool                   | runs to its end     |
-//! | a [`Query`]'s four calls            | checked in the first poll, then on the pool     | stops               |
+//! | a [`Query`]'s calls, a [`Compare`]  | checked in the first poll, then on the pool     | stops               |
 //! | a [`List`]'s `page`, `damaged`      | on the store's pool                             | stops               |
 //! | an [`Exposition`]'s `write`         | on the store's pool                             | stops               |
 //! | `description`                       | in the first poll, a reader idle; else the pool | answered, or stops  |
@@ -67,9 +67,9 @@ use crate::cancel;
 use crate::pool::Pool;
 
 pub use crate::metrics::{
-    Aggregate, Bucket, Buckets, Builder, Condition, Counter, Damage, Description, Exceeds, Gauge, GaugeFunc, Histogram,
-    Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading, Recorder, Sample, Series,
-    Timer, Timing, Value, ValuePage, Values, Written, exponential_buckets,
+    Aggregate, Bucket, Buckets, Builder, Compared, Condition, Counter, Damage, Description, Exceeds, Gauge, GaugeFunc,
+    Histogram, Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading, Recorder, Sample,
+    Series, Timer, Timing, Value, ValuePage, Values, Written, exponential_buckets,
 };
 
 mod page;
@@ -407,8 +407,40 @@ impl Query {
         checked_then_read(&self.pool, "metrics: a plan", move || query.checked_explain(op))
     }
 
+    /// The `op` over the newest `window` against the median of the windows
+    /// before it, as [`crate::metrics::Query::compare`] gives them.
+    pub fn compare(&self, op: Op, window: Duration) -> Compare {
+        Compare { blocking: self.blocking.compare(op, window), pool: Arc::clone(&self.pool) }
+    }
+
     fn with(self, change: impl FnOnce(crate::metrics::Query) -> crate::metrics::Query) -> Self {
         Query { blocking: change(self.blocking), pool: self.pool }
+    }
+}
+
+/// A comparison being asked, as [`crate::metrics::Compare`] is, `run`
+/// awaited.
+#[derive(Clone, Debug)]
+pub struct Compare {
+    blocking: crate::metrics::Compare,
+    pool: Arc<Pool>,
+}
+
+impl Compare {
+    /// How far back the windows it compares with reach.
+    pub fn against(self, last: Duration) -> Self {
+        Compare { blocking: self.blocking.against(last), pool: self.pool }
+    }
+
+    /// Compares with the same hours of each earlier day alone.
+    pub fn same_hour(self) -> Self {
+        Compare { blocking: self.blocking.same_hour(), pool: self.pool }
+    }
+
+    /// The newest window's `op` against the median of the earlier windows'.
+    pub fn run(&self) -> impl Future<Output = Result<Compared>> + Send + 'static {
+        let compare = self.blocking.clone();
+        checked_then_read(&self.pool, "metrics: a comparison", move || compare.checked_run())
     }
 }
 

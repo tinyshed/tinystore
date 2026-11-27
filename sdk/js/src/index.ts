@@ -134,6 +134,8 @@ export {
 	type AggregateQuery,
 	type Bucket as MetricsBucket,
 	type Buckets,
+	type Compared,
+	type CompareQuery,
 	type Condition as MetricsCondition,
 	type Counter,
 	type Damage as MetricsDamage,

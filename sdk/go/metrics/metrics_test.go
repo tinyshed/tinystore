@@ -756,6 +756,32 @@ func TestWhatAStoreHoldsAPageAtATimeAndItsRemoval(t *testing.T) {
 	})
 }
 
+// contract: MET-33
+func TestCompareSetsTheNewestWindowAgainstTheMedianOfTheWindowsBefore(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		now := time.Now()
+		samples := []metrics.Sample{
+			{At: now.Add(-150 * time.Second), Value: 2},
+			{At: now.Add(-90 * time.Second), Value: 4},
+			{At: now.Add(-30 * time.Second), Value: 12},
+		}
+		ways.Must(0, metrics.Ingest(ctx, store, metrics.Series{Name: "compared_ms", Kind: metrics.KindGauge, Labels: metrics.Labels{"source": "server"}, Samples: samples}))
+		asked := metrics.Comparison{Name: "compared_ms", Where: metrics.Where{"source": "server"}, Op: metrics.Max, Window: time.Minute, Against: 10 * time.Minute}
+		got := ways.Must(metrics.Compare(ctx, store, asked))
+		if got.Value == nil || *got.Value != 12 || got.Usual == nil || *got.Usual != 3 || got.Ratio == nil || *got.Ratio != 4 || got.Samples != 1 || got.Windows != 2 {
+			t.Fatalf("compared %+v", got)
+		}
+		none := ways.Must(metrics.Compare(ctx, store, metrics.Comparison{Name: "compared_nothing", Op: metrics.Max, Window: time.Minute, Against: 10 * time.Minute}))
+		if none != (metrics.Compared{}) {
+			t.Fatalf("absent, not zero: %+v", none)
+		}
+		asked.Against = 1002 * time.Minute
+		_, err := metrics.Compare(ctx, store, asked)
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestAQueryIsRefusedBeforeItLeaves(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

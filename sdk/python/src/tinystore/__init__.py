@@ -78,6 +78,7 @@ from .logger import Levels, Logger, logger, secrets
 from .metrics import (
     Aggregate,
     AggregateBucket,
+    Compared,
     Counter,
     Gauge,
     Histogram,
@@ -152,6 +153,7 @@ __all__ = [
     "ClosedError",
     "Column",
     "CommittedLocallyError",
+    "Compared",
     "Concurrency",
     "Config",
     "ConflictError",

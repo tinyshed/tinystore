@@ -161,6 +161,51 @@ interface AggregateQuery<O extends Op = Op, F extends boolean = boolean> extends
 
 An aggregate: a query cut into buckets of every, each one exact value of op, by groups.
 
+## CompareQuery
+
+```ts
+interface CompareQuery {
+    /** the series of this name, merged into one answer as an aggregate without by merges them */
+    name: string
+    where?: Record<string, Condition> | undefined
+    op: Op
+    window: Duration
+    against: {
+        /** how far back the windows compared with reach */
+        last: Duration
+        /** the same hours of each earlier day alone: last '7d' compares with 7 windows */
+        sameHour?: boolean | undefined
+    }
+    /** a timer's percentile compares its estimate; without it such a percentile is refused */
+    estimate?: boolean | undefined
+    skipNaN?: boolean | undefined
+}
+```
+
+A comparison: op over the newest window, `[now − window, now)`, against
+the usual, the median of op over the windows before it within
+against.last: the same hours of each earlier day with sameHour, a day 24
+hours in no time zone, or every window before otherwise, 1000 at most.
+
+## Compared
+
+```ts
+interface Compared {
+    /** op over the newest window; absent when it holds no sample */
+    value?: number
+    /** the median over the windows before that hold samples; absent when none does */
+    usual?: number
+    /** value / usual; absent when either is absent or usual is 0 */
+    ratio?: number
+    /** the samples of the newest window */
+    samples: number
+    /** the windows the usual stands on */
+    windows: number
+}
+```
+
+What compare found; a value it could not give is absent, never zero.
+
 ## ValueBucket
 
 ```ts
@@ -433,6 +478,15 @@ explain(query: Query & Partial<Omit<AggregateQuery, keyof Query>>): Promise<Plan
 ```
 
 What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample.
+
+### Metrics.compare
+
+```ts
+compare(query: CompareQuery): Promise<Compared>
+```
+
+op over the newest window against the median of the windows before it:
+`{ name: 'moodle_call', op: 'p50', window: '15m', against: { last: '7d', sameHour: true } }`.
 
 ### Metrics.names
 

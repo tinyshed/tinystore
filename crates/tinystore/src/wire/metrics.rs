@@ -20,11 +20,11 @@ use std::time::Duration;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsBucket,
-    MetricsCondition, MetricsDamage, MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExceeds,
-    MetricsExposition, MetricsGroup, MetricsIngest, MetricsIngestUpload, MetricsLatest, MetricsName, MetricsNameAsked,
-    MetricsNamePage, MetricsNewSeries, MetricsNewest, MetricsPageAsked, MetricsPiece, MetricsPlan, MetricsQuery,
-    MetricsRead, MetricsRefused, MetricsReplace, MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage,
-    MetricsUpload, method,
+    MetricsCompareAsked, MetricsCompared, MetricsCondition, MetricsDamage, MetricsDamages, MetricsDeleted,
+    MetricsDescription, MetricsExceeds, MetricsExposition, MetricsGroup, MetricsIngest, MetricsIngestUpload,
+    MetricsLatest, MetricsName, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsNewest, MetricsPageAsked,
+    MetricsPiece, MetricsPlan, MetricsQuery, MetricsRead, MetricsRefused, MetricsReplace, MetricsSeries,
+    MetricsSeriesNamed, MetricsSession, MetricsTextPage, MetricsUpload, method,
 };
 use super::{Link, Route};
 use crate::clock::from_unix_millis;
@@ -150,6 +150,7 @@ pub(crate) fn call(store: &Store, called: u16, body: &[u8], (max_body, read_only
     let metrics = metrics_of(store, read_only)?;
     match called {
         method::METRICS_EXPLAIN => explain(&metrics, MetricsAggregateAsked::decode(body)?),
+        method::METRICS_COMPARE => compare(&metrics, MetricsCompareAsked::decode(body)?),
         method::METRICS_NAMES => names(&metrics, MetricsPageAsked::decode(body)?, max_body),
         method::METRICS_LABEL_NAMES | method::METRICS_LABEL_VALUES => {
             texts(&metrics, called, MetricsPageAsked::decode(body)?, max_body)
@@ -290,6 +291,26 @@ fn explain(metrics: &Metrics, asked: MetricsAggregateAsked) -> Answered {
         bound: exceeds.bound,
     });
     Ok(MetricsPlan { series: plan.series, bytes: plan.bytes, decoded: plan.decoded, exceeds }.encode())
+}
+
+fn compare(metrics: &Metrics, asked: MetricsCompareAsked) -> Answered {
+    let op = op_of(Some(&asked.op))?;
+    let mut query = query(metrics, asked.query)?;
+    if asked.estimate {
+        query = query.estimate();
+    }
+    if asked.skip_nan {
+        query = query.skip_nan();
+    }
+    let mut compare =
+        query.compare(op, Duration::from_millis(asked.window)).against(Duration::from_millis(asked.against));
+    if asked.same_hour {
+        compare = compare.same_hour();
+    }
+    let compared = compare.run()?;
+    let (value, usual, ratio) = (compared.value, compared.usual, compared.ratio);
+    Ok(MetricsCompared { value, usual, ratio, samples: compared.samples, windows: u64::from(compared.windows) }
+        .encode())
 }
 
 /// A page's options as the client gave them.

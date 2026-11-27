@@ -136,6 +136,53 @@ type Bucket struct {
 
 Bucket is a bucket of an aggregate. One of count … last has its Value; a percentile's is a gauge's sample at the rank, or a timer's bucket of its spread that holds it, from Lower to Upper, and with Estimate asked a point between them.
 
+## Compared
+
+```go
+type Compared struct {
+	// Value is the Op over the newest window; nil when it holds no sample.
+	Value *float64
+	// Usual is the median over the windows before that hold samples; nil when none does.
+	Usual *float64
+	// Ratio is Value / Usual; nil when either is nil or Usual is 0.
+	Ratio *float64
+	// Samples are the newest window's.
+	Samples int64
+	// Windows are those the usual stands on.
+	Windows int
+}
+```
+
+Compared is what Compare found; a value it could not give is nil, never zero.
+
+### Compare
+
+```go
+func Compare(ctx context.Context, store *tinystore.Store, c Comparison) (Compared, error)
+```
+
+Compare sets the newest window's Op against the median of the windows before it. A window without a sample counts in no median.
+
+## Comparison
+
+```go
+type Comparison struct {
+	// Name is the series compared, merged into one answer as an aggregate without By merges them.
+	Name    string
+	Where   Where
+	Op      Op
+	Window  time.Duration
+	Against time.Duration
+	// SameHour compares with the same hours of each earlier day alone.
+	SameHour bool
+	// Estimate makes a timer's percentile compare its estimate; without it such a percentile is refused.
+	Estimate bool
+	SkipNaN  bool
+}
+```
+
+Comparison is an Op over the newest Window, \[now − Window, now), against the median of the same Op over the windows before it within Against: the same hours of each earlier day with SameHour, a day 24 hours in no time zone, or every window before otherwise, 1000 at most.
+
 ## Condition
 
 ```go

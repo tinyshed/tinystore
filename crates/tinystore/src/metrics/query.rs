@@ -26,6 +26,7 @@ use std::time::{Duration, SystemTime};
 use sha2::{Digest, Sha256};
 
 use super::aggregate::{Asking, Op, Shape};
+use super::compare::{self, Compare, Compared, Windows};
 use super::engine::Engine;
 use super::explain::Plan;
 use super::labels::{MOST_LABELS, MOST_NAME_BYTES, MOST_VALUE_BYTES, NAME};
@@ -384,6 +385,29 @@ impl Query {
         })
     }
 
+    /// The `op` over the newest `window` against the median of the windows
+    /// before it, which [`Compare::against`] reaches back over: the query's
+    /// name and conditions, and its `estimate` and `skip_nan`, as an
+    /// aggregate takes them; no range, buckets, groups or pages.
+    pub fn compare(&self, op: Op, window: Duration) -> Compare {
+        Compare::of(self.clone(), op, window)
+    }
+
+    /// `compare` in its two steps, as [`Query::checked_read`] is `read`:
+    /// every window's aggregate from one snapshot, the newest first.
+    pub(super) fn checked_compare(&self, op: Op, windows: Windows) -> Result<Checked<Compared>> {
+        let check = move |query: &Query| {
+            query.uncut()?;
+            let shape = query.shape(op)?;
+            Ok((query.asked()?, shape))
+        };
+        let estimate = self.estimate;
+        self.once_checked(Fresh::Written, check, move |engine, (asked, shape)| {
+            let ranges = windows.ranges(asked.now);
+            compare::compared(engine.aggregate_ranges(&asked, &shape, &ranges)?, estimate)
+        })
+    }
+
     /// The newest sample of each series the query finds, when it has one in
     /// the range: a series that stopped writing leaves the answer rather
     /// than show its last value for ever.
@@ -480,6 +504,23 @@ impl Query {
         if asks || self.estimate || self.skip_nan || self.fill {
             let fields = "`every`, `calendar`, `by`, `without`, `estimate`, `skip_nan` and `fill`";
             return Err(Error::invalid(format!("{fields} are an aggregate's: {call} takes none")));
+        }
+        Ok(())
+    }
+
+    /// Refuses what a comparison chooses itself, its windows and its one
+    /// group, and asks for the name whose series it compares.
+    fn uncut(&self) -> Result<()> {
+        let ranged = self.since.is_some() || self.from.is_some() || self.to.is_some();
+        let grouped = self.every.is_some() || self.calendar.is_some() || self.by.is_some() || self.without.is_some();
+        if ranged || grouped || self.fill || self.limit.is_some() || self.after.is_some() {
+            return Err(Error::invalid(
+                "compare chooses its windows and answers one group: no `since`, `from`, `to`, `every`, `calendar`, \
+                 `by`, `without`, `fill`, `limit` or `after`",
+            ));
+        }
+        if self.name.is_none() {
+            return Err(Error::invalid("compare answers one name's series: the query gives `name`"));
         }
         Ok(())
     }

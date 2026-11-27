@@ -35,6 +35,8 @@ import {
 	Empty,
 	MetricsAggregateAsked,
 	MetricsAggregates,
+	MetricsCompareAsked,
+	MetricsCompared,
 	MetricsDamages,
 	MetricsDeleted,
 	MetricsDescription,
@@ -199,6 +201,43 @@ export interface AggregateQuery<O extends Op = Op, F extends boolean = boolean> 
 	skipNaN?: boolean | undefined
 	/** every bucket of the range retention keeps, one without samples with samples 0 and no value; with since or from, not limit */
 	fill?: F | undefined
+}
+
+/**
+ * A comparison: op over the newest window, `[now − window, now)`, against
+ * the usual, the median of op over the windows before it within
+ * against.last: the same hours of each earlier day with sameHour, a day 24
+ * hours in no time zone, or every window before otherwise, 1000 at most.
+ */
+export interface CompareQuery {
+	/** the series of this name, merged into one answer as an aggregate without by merges them */
+	name: string
+	where?: Record<string, Condition> | undefined
+	op: Op
+	window: Duration
+	against: {
+		/** how far back the windows compared with reach */
+		last: Duration
+		/** the same hours of each earlier day alone: last '7d' compares with 7 windows */
+		sameHour?: boolean | undefined
+	}
+	/** a timer's percentile compares its estimate; without it such a percentile is refused */
+	estimate?: boolean | undefined
+	skipNaN?: boolean | undefined
+}
+
+/** What compare found; a value it could not give is absent, never zero. */
+export interface Compared {
+	/** op over the newest window; absent when it holds no sample */
+	value?: number
+	/** the median over the windows before that hold samples; absent when none does */
+	usual?: number
+	/** value / usual; absent when either is absent or usual is 0 */
+	ratio?: number
+	/** the samples of the newest window */
+	samples: number
+	/** the windows the usual stands on */
+	windows: number
 }
 
 /** What every bucket of an aggregate says of itself. */
@@ -563,6 +602,37 @@ export class Metrics {
 		}
 	}
 
+	/**
+	 * op over the newest window against the median of the windows before it:
+	 * `{ name: 'moodle_call', op: 'p50', window: '15m', against: { last: '7d', sameHour: true } }`.
+	 */
+	async compare(query: CompareQuery): Promise<Compared> {
+		refuseUnknown('metrics compare', query, compareFields)
+		refuseUnknown('metrics compare: against', query.against ?? {}, ['last', 'sameHour'])
+		if (query.against?.last === undefined) {
+			throw new InvalidError(
+				'metrics compare: against.last says how far back the windows compared with reach',
+			)
+		}
+		const asked = {
+			query: queryOf({ name: query.name, where: query.where }),
+			op: query.op,
+			window: ms(query.window),
+			against: ms(query.against.last),
+			sameHour: query.against.sameHour === true,
+			estimate: query.estimate === true,
+			skipNan: query.skipNaN === true,
+		}
+		const answer = MetricsCompared.decode(
+			await this.#read('metrics.compare', MetricsCompareAsked.encode(asked)),
+		)
+		const compared: Compared = { samples: answer.samples ?? 0, windows: answer.windows ?? 0 }
+		if (answer.value !== undefined) compared.value = answer.value
+		if (answer.usual !== undefined) compared.usual = answer.usual
+		if (answer.ratio !== undefined) compared.ratio = answer.ratio
+		return compared
+	}
+
 	/** A page of the names the store holds samples of, in the byte order of their text. */
 	async names(options: PageOptions = {}): Promise<NamePage> {
 		const answer = await this.#read('metrics.names', MetricsPageAsked.encode(pageOf(options)))
@@ -810,6 +880,17 @@ const aggregateFields = Object.keys({
 	skipNaN: 0,
 	fill: 0,
 } satisfies Record<keyof AggregateQuery, 0>)
+
+/** A comparison's fields. */
+const compareFields = Object.keys({
+	name: 0,
+	where: 0,
+	op: 0,
+	window: 0,
+	against: 0,
+	estimate: 0,
+	skipNaN: 0,
+} satisfies Record<keyof CompareQuery, 0>)
 
 /**
  * Refuses a field a call's query does not take, naming it: an aggregate's on
