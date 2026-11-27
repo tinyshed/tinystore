@@ -45,13 +45,14 @@ class Job[T]:
     state: JobState
     at: datetime  # when it runs next; for one done or failed, when its last run was for
     attempt: int  # its attempts, a running one included
-    ahead: int  # the jobs that run before a waiting one, up to 10,000
+    ahead: int  # the jobs that run before a waiting one, exactly up to 10,000
     progress: Any  # what its handler last reported of a running job
     error: str | None  # why its last run failed
     group: str | None
     repeat: str | None  # a repeating job's repeat as it keeps it: '@every 30s +6178ms', '10 3 * * * Europe/Berlin'
     last_run: LastRun | None
     expires_at: datetime | None = None  # when it leaves its queue unless written again: its ttl's end, or its expires_at
+    ahead_at_least: bool = False  # counting ``ahead`` stopped at 10,000, more being there: past it ``ahead`` is 10,000, never an estimate
 ```
 
 A job as its queue holds it.

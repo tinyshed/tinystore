@@ -843,6 +843,7 @@ pub struct Job<V> {
     pub at: SystemTime,
     pub attempt: u32,
     pub ahead: u32,
+    pub ahead_at_least: bool,
     pub progress: Option<Value>,
     pub error: Option<String>,
     pub group: Option<String>,

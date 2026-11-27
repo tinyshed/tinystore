@@ -3712,6 +3712,10 @@ def _write_jobs_job(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(16)
         w.int(x)
         n += 1
+    if (x := v.get("ahead_at_least")) is not None:
+        w.uint(17)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -3752,6 +3756,8 @@ def _read_jobs_job(r: Reader) -> dict[str, Any]:
                 read["failure"] = Failure.read(r)
             case 16:
                 read["expires_at"] = r.int()
+            case 17:
+                read["ahead_at_least"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -3770,7 +3776,7 @@ JobsJob = Message(
         # when it runs next; for one done or failed, when its last run was for
         "at": (5, int_),
         "attempt": (6, uint),
-        # the jobs that run before a waiting one, up to 10,000
+        # the jobs that run before a waiting one: exactly up to 10,000
         "ahead": (7, uint),
         "progress": (8, str_),
         "error": (9, str_),
@@ -3786,6 +3792,8 @@ JobsJob = Message(
         "failure": (15, Failure),
         # when it leaves its queue unless written again: its ttl's end, or its expiresAt
         "expires_at": (16, int_),
+        # ahead stopped counting at 10,000, more being there
+        "ahead_at_least": (17, bool_),
     },
     _write_jobs_job,
     _read_jobs_job,

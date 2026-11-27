@@ -56,18 +56,24 @@ for job in videos.watch(&id) {
 
 ## What a job says
 
-| Field      | Means                                                         |
-|------------|---------------------------------------------------------------|
-| `state`    | `scheduled`, `waiting`, `running`, `failed` or `done`         |
-| `at`       | when it runs next                                             |
-| `ahead`    | the jobs that run before a waiting one, counted up to 10,000  |
-| `attempt`  | this run's number, the first being 1                          |
-| `progress` | what the handler set with `setProgress`, any JSON up to 4 KiB |
-| `error`    | why its last run failed                                       |
-| `lastRun`  | when the last finished run started and ended                  |
+| Field          | Means                                                         |
+|----------------|---------------------------------------------------------------|
+| `state`        | `scheduled`, `waiting`, `running`, `failed` or `done`         |
+| `at`           | when it runs next                                             |
+| `ahead`        | the jobs that run before a waiting one, exact up to 10,000    |
+| `aheadAtLeast` | true when the count stopped at 10,000 and more are ahead      |
+| `attempt`      | this run's number, the first being 1                          |
+| `progress`     | what the handler set with `setProgress`, any JSON up to 4 KiB |
+| `error`        | why its last run failed                                       |
+| `lastRun`      | when the last finished run started and ended                  |
 
 `get` returns nothing for an id with no job. A done job without `dedupe` is
 gone, so `get` returns nothing for it too.
+
+The store stops counting at 10,000. Past that, `ahead` is 10,000 and
+`aheadAtLeast` is true, so show "10,000+", not "10,000". It's never an
+estimate (contract JOB-25). Python and Rust spell it `ahead_at_least`, Go
+`AheadAtLeast`.
 
 ## After it ran
 

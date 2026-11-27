@@ -14,7 +14,8 @@ use crate::clock::from_unix_millis;
 use crate::sqlite::{File, TextBytes, prefix_end, query_cached, sql_error};
 use crate::{Error, Result};
 
-/// `ahead` counts this far: a job further back reads it.
+/// `ahead` counts this far, and `ahead_at_least` says when more are there: a
+/// job further back reads it.
 const MAX_AHEAD: usize = 10_000;
 
 /// The most jobs a page holds.
@@ -50,8 +51,11 @@ pub struct Job<V> {
     pub at: SystemTime,
     /// The attempts its run has had, a running one included.
     pub attempt: u32,
-    /// The jobs that run before a waiting one, up to 10,000.
+    /// The jobs that run before a waiting one, exactly up to 10,000.
     pub ahead: u32,
+    /// Whether counting `ahead` stopped at 10,000, more being there: past it
+    /// `ahead` is 10,000 and this is true, never an estimate.
+    pub ahead_at_least: bool,
     /// What its handler last reported of a running job.
     pub progress: Option<serde_json::Value>,
     /// Why its last run failed.
@@ -405,7 +409,7 @@ pub(crate) fn get<V: DeserializeOwned>(
     };
     let mut job = job_of::<V>(c, queue, &found, now)?;
     if job.state == State::Waiting {
-        job.ahead = ahead(c, queue, &found, now)?;
+        (job.ahead, job.ahead_at_least) = ahead(c, queue, &found, now)?;
     }
     Ok(Some(job))
 }
@@ -683,6 +687,7 @@ fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found
         at: from_unix_millis(at),
         attempt: u32::try_from(attempt).unwrap_or(u32::MAX),
         ahead: 0,
+        ahead_at_least: false,
         progress: held.and_then(|lease| lease.progress()),
         error: found.error.clone(),
         group: found.group.clone(),
@@ -694,19 +699,19 @@ fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found
 }
 
 /// How many jobs run before a waiting one: the waiting rows due before it,
-/// counted up to `MAX_AHEAD`; those a handler runs now wait for nothing and
-/// are not counted.
-fn ahead(c: &Connection, queue: &QueueState, found: &Found, now: i64) -> Result<u32> {
+/// counted up to `MAX_AHEAD` and one past it, to say whether more are there;
+/// those a handler runs now wait for nothing and are not counted.
+fn ahead(c: &Connection, queue: &QueueState, found: &Found, now: i64) -> Result<(u32, bool)> {
     if found.leased.is_some() {
-        return Ok(0); // held for a busy handler, which runs it next
+        return Ok((0, false)); // held for a busy handler, which runs it next
     }
     let running = queue.running_before(found.time, found.id, now);
+    let most = (MAX_AHEAD + 1 + running) as i64;
     let rows: i64 = c
         .prepare_cached(ROWS_BEFORE)
-        .and_then(|mut select| {
-            select.query_row(params![queue.id, found.time, found.id, (MAX_AHEAD + running) as i64], |row| row.get(0))
-        })
+        .and_then(|mut select| select.query_row(params![queue.id, found.time, found.id, most], |row| row.get(0)))
         .map_err(|error| sql_error("the jobs ahead of a job", error))?;
-    let ahead = usize::try_from(rows).unwrap_or(0).saturating_sub(running).min(MAX_AHEAD);
-    Ok(u32::try_from(ahead).unwrap_or(u32::MAX))
+    let counted = usize::try_from(rows).unwrap_or(0).saturating_sub(running);
+    let ahead = u32::try_from(counted.min(MAX_AHEAD)).unwrap_or(u32::MAX);
+    Ok((ahead, counted > MAX_AHEAD))
 }

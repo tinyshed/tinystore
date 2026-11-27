@@ -149,7 +149,7 @@ where
                     Some(Gone::Cancelled) => last.state = State::Cancelled,
                     Some(Gone::Failed(error)) => (last.state, last.error) = (State::Failed, Some(error)),
                 }
-                last.ahead = 0;
+                (last.ahead, last.ahead_at_least) = (0, false);
                 Report::Changed(Box::new(last))
             }));
         };
@@ -165,7 +165,7 @@ where
 /// Whether two readings of a job show a watcher the same: its state, place,
 /// attempt, time, progress and error.
 fn shows_the_same<V>(a: &Job<V>, b: &Job<V>) -> bool {
-    (a.state, a.ahead, a.attempt, a.at) == (b.state, b.ahead, b.attempt, b.at)
+    (a.state, a.ahead, a.ahead_at_least, a.attempt, a.at) == (b.state, b.ahead, b.ahead_at_least, b.attempt, b.at)
         && a.progress == b.progress
         && a.error == b.error
 }

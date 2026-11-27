@@ -4548,7 +4548,7 @@ export const JobsJob = message(
 		/** when it runs next; for one done or failed, when its last run was for */
 		at: [5, int],
 		attempt: [6, uint],
-		/** the jobs that run before a waiting one, up to 10,000 */
+		/** the jobs that run before a waiting one: exactly up to 10,000 */
 		ahead: [7, uint],
 		progress: [8, str],
 		error: [9, str],
@@ -4564,6 +4564,8 @@ export const JobsJob = message(
 		failure: [15, Failure],
 		/** when it leaves its queue unless written again: its ttl's end, or its expiresAt */
 		expiresAt: [16, int],
+		/** ahead stopped counting at 10,000, more being there */
+		aheadAtLeast: [17, bool],
 	},
 	{
 		write(w, v) {
@@ -4649,6 +4651,11 @@ export const JobsJob = message(
 				w.int(v.expiresAt)
 				n++
 			}
+			if (v.aheadAtLeast !== undefined) {
+				w.field(17)
+				w.bool(v.aheadAtLeast)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -4668,6 +4675,7 @@ export const JobsJob = message(
 			let $row: string | undefined
 			let $failure: Read<typeof Failure.fields> | undefined
 			let $expiresAt: number | undefined
+			let $aheadAtLeast: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -4718,6 +4726,9 @@ export const JobsJob = message(
 					case 16:
 						$expiresAt = r.int()
 						break
+					case 17:
+						$aheadAtLeast = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -4740,6 +4751,7 @@ export const JobsJob = message(
 				row: $row,
 				failure: $failure,
 				expiresAt: $expiresAt,
+				aheadAtLeast: $aheadAtLeast,
 			}
 		},
 	},

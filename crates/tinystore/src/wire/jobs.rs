@@ -513,6 +513,7 @@ fn job_of(job: Job<Raw>) -> JobsJob {
         at: Some(unix_millis(job.at)),
         attempt: u64::from(job.attempt),
         ahead: u64::from(job.ahead),
+        ahead_at_least: job.ahead_at_least,
         progress: job.progress.map(|progress| progress.to_string()),
         error: job.error,
         group: job.group,

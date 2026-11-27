@@ -542,6 +542,25 @@ for (const way of ways) {
 			expect(await caught(odd.add({ big: 1n }))).toBeInstanceOf(InvalidError)
 		})
 
+		// contract: JOB-25
+		test('ahead counts exactly to 10,000 and aheadAtLeast says when it stopped', async () => {
+			const videos = store.queue<{ at: number }>('videos')
+			await store.tx(async tx => {
+				for (let at = 0; at < 10_000; at++) {
+					await tx.with(videos).add({ at }, { id: String(at).padStart(5, '0') })
+				}
+			})
+			await videos.add({ at: 10_000 }, { id: '10000' })
+			await videos.add({ at: 10_001 }, { id: '10001' })
+			const ahead = async (id: string) => {
+				const job = await videos.get(id)
+				return [job?.ahead, job?.aheadAtLeast]
+			}
+			expect(await ahead('00000')).toEqual([0, false])
+			expect(await ahead('10000')).toEqual([10_000, false])
+			expect(await ahead('10001')).toEqual([10_000, true])
+		})
+
 		test('a transaction of the store makes its jobs together, or none of them', async () => {
 			const fanout = store.queue<{ member: string }>('fanout')
 			await store.tx(async tx => {

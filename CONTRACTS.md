@@ -155,6 +155,7 @@ These contracts are what does not.
 - **JOB-22** Items gathered under one id while its job waits MUST be one job's list, in the order they came, each item's JSON as it came, and none MUST be lost, also across a run: the items gathered while a job runs MUST be the next run's list alone once the run ends well, MUST follow the run's own in its retry, and MUST run as a job of their own under the id once the run fails for good.
 - **JOB-23** A gathered job MUST run `settle` after the last gather under its id, and never later than `max` after the gather that started its list.
 - **JOB-24** A time the store gives a job inside its quiet hours MUST be their end, for its first run and every later one: a retry's, a snooze's, a repeat's and a gather's. A set, an update or an upsert that gives no hours MUST hold its time by the job's own. A job MUST NOT start inside the hours the claiming process holds it by: a claim inside them MUST move it to their end. A call's own hours MUST win over its queue's, and a call's none MUST leave its job held by none.
+- **JOB-25** A waiting job's `ahead` MUST count exactly the jobs that run before it up to 10,000; past them it MUST be 10,000 with `aheadAtLeast` true, never an estimate and never a count cut silently.
 
 ### SQL
 

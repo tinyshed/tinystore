@@ -261,8 +261,11 @@ type Job[T any] struct {
 	At time.Time
 	// Attempt counts its attempts, a running one included.
 	Attempt int
-	// Ahead counts the jobs that run before a waiting one, up to 10,000.
+	// Ahead counts the jobs that run before a waiting one, exactly up to 10,000.
 	Ahead int
+	// AheadAtLeast says counting Ahead stopped at 10,000, more being there:
+	// past it Ahead is 10,000, never an estimate.
+	AheadAtLeast bool
 	// Progress is what its handler last reported of a running job, as JSON.
 	Progress json.RawMessage
 	// Error is why its last run failed.

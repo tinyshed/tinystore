@@ -676,6 +676,32 @@ func TestDedupeKeepsADoneIDTakenAndTheJobItsLastRun(t *testing.T) {
 	})
 }
 
+// contract: JOB-25
+func TestAheadCountsExactlyToTenThousandAndAheadAtLeastSaysWhenItStopped(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		videos := ways.Must(jobs.OpenQueue[int](store, "videos"))
+		ways.Must(0, store.Tx(ctx, func(tx *tinystore.Tx) error {
+			for at := range 10_000 {
+				if _, err := videos.In(tx).Add(ctx, at, jobs.ID(fmt.Sprintf("%05d", at))); err != nil {
+					return err
+				}
+			}
+			return nil
+		}))
+		ways.Must(videos.Add(ctx, 10_000, jobs.ID("10000")))
+		ways.Must(videos.Add(ctx, 10_001, jobs.ID("10001")))
+		for id, want := range map[string]struct {
+			ahead   int
+			atLeast bool
+		}{"00000": {0, false}, "10000": {10_000, false}, "10001": {10_000, true}} {
+			if job, _ := ways.Must2(videos.Get(ctx, id)); job.Ahead != want.ahead || job.AheadAtLeast != want.atLeast {
+				t.Fatalf("%s: ahead %d at least %v, want %+v", id, job.Ahead, job.AheadAtLeast, want)
+			}
+		}
+	})
+}
+
 func TestATransactionOfTheStoreMakesItsJobsTogetherOrNone(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

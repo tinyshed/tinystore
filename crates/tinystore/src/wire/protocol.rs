@@ -4307,7 +4307,7 @@ pub(crate) struct JobsJob {
     /// When it runs next; for one done or failed, when its last run was for. Unix milliseconds.
     pub(crate) at: Option<i64>,
     pub(crate) attempt: u64,
-    /// The jobs that run before a waiting one, up to 10,000.
+    /// The jobs that run before a waiting one: exactly up to 10,000.
     pub(crate) ahead: u64,
     pub(crate) progress: Option<String>,
     pub(crate) error: Option<String>,
@@ -4324,6 +4324,8 @@ pub(crate) struct JobsJob {
     pub(crate) failure: Option<Failure>,
     /// When it leaves its queue unless written again: its ttl's end, or its expiresAt. Unix milliseconds.
     pub(crate) expires_at: Option<i64>,
+    /// Ahead stopped counting at 10,000, more being there.
+    pub(crate) ahead_at_least: bool,
 }
 
 #[cfg(feature = "jobs")]
@@ -4351,6 +4353,7 @@ impl Message for JobsJob {
                 14 => message.row = Some(codec::str(r, "row")?),
                 15 => message.failure = Some(Failure::read(r)?),
                 16 => message.expires_at = Some(codec::int(r, "expiresAt")?),
+                17 => message.ahead_at_least = codec::bool(r, "aheadAtLeast")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -4423,6 +4426,10 @@ impl Message for JobsJob {
             map.field(out, 16);
             codec::write_int(out, expires_at);
         }
+        if self.ahead_at_least {
+            map.field(out, 17);
+            codec::write_bool(out, &self.ahead_at_least);
+        }
         map.close(out);
     }
 
@@ -4444,6 +4451,7 @@ impl Message for JobsJob {
             + self.row.as_ref().map_or(0, |row| 1 + 5 + row.len())
             + self.failure.as_ref().map_or(0, |failure| 1 + failure.size())
             + self.expires_at.map_or(0, |_| 10)
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -4463,6 +4471,7 @@ impl Message for JobsJob {
             && self.row.is_none()
             && self.failure.is_none()
             && self.expires_at.is_none()
+            && !self.ahead_at_least
     }
 }
 

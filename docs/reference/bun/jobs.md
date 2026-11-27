@@ -176,8 +176,10 @@ interface Job<T> {
     at: Date
     /** its attempts, a running one included */
     attempt: number
-    /** the jobs that run before a waiting one, up to 10,000 */
+    /** the jobs that run before a waiting one, exactly up to 10,000 */
     ahead: number
+    /** counting `ahead` stopped at 10,000, more being there: past it `ahead` is 10,000, never an estimate */
+    aheadAtLeast?: boolean
     /** what its handler last reported of a running job */
     progress: unknown
     /** why its last run failed */

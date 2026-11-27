@@ -694,7 +694,7 @@ fn get_says_where_a_job_is_and_how_many_run_before_it() {
     videos.id("mine").add(&note("mine")).unwrap();
     videos.id("later").delay(HOUR).add(&note("later")).unwrap();
     let mine = videos.get("mine").unwrap().unwrap();
-    assert_eq!((mine.state, mine.ahead), (State::Waiting, 3));
+    assert_eq!((mine.state, mine.ahead, mine.ahead_at_least), (State::Waiting, 3, false));
     assert_eq!(videos.get("later").unwrap().unwrap().state, State::Scheduled);
 
     let running = Mutex::new(None);
@@ -715,6 +715,26 @@ fn get_says_where_a_job_is_and_how_many_run_before_it() {
     assert_eq!(failed.state, State::Failed);
     assert!(failed.error.unwrap().contains("transcoding failed"));
     assert!(failed.last_run.is_some());
+}
+
+// contract: JOB-25
+#[test]
+fn ahead_is_exact_to_ten_thousand_and_ahead_at_least_says_when_it_stopped() {
+    let f = fixture();
+    let videos = f.store.queue::<Note>("videos").open().unwrap();
+    let added = f.store.tx(|tx| -> Result<()> {
+        for at in 0..10_000 {
+            tx.with(&videos).id(format!("{at:05}")).add(&note("before"))?;
+        }
+        Ok(())
+    });
+    added.unwrap();
+    videos.id("10000").add(&note("ten thousand before it")).unwrap();
+    videos.id("10001").add(&note("more than ten thousand before it")).unwrap();
+    let ahead = |id: &str| videos.get(id).unwrap().map(|job| (job.ahead, job.ahead_at_least)).unwrap();
+    assert_eq!(ahead("10000"), (10_000, false), "ten thousand is exact");
+    assert_eq!(ahead("10001"), (10_000, true), "never an estimate, and never silent");
+    assert_eq!(ahead("00000"), (0, false));
 }
 
 #[test]

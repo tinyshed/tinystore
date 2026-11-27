@@ -127,7 +127,7 @@ message jobs.Job {
   4 state: str                       # scheduled, waiting, running, done, failed or cancelled
   5 at: time?                        # when it runs next; for one done or failed, when its last run was for
   6 attempt: uint
-  7 ahead: uint                      # the jobs that run before a waiting one, up to 10,000
+  7 ahead: uint                      # the jobs that run before a waiting one: exactly up to 10,000
   8 progress: json?
   9 error: str?
   10 group: str?
@@ -137,6 +137,7 @@ message jobs.Job {
   14 row: str?                       # where a job without an id lies, which a cancel names it by
   15 failure: Failure?               # a walk's: why the job's value no longer reads, the job left out
   16 expiresAt: time?                # when it leaves its queue unless written again: its ttl's end, or its expiresAt
+  17 aheadAtLeast: bool              # ahead stopped counting at 10,000, more being there
 }
 
 # A page of a queue's jobs: those whose ids start with a prefix, in the byte

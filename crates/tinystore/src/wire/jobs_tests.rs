@@ -104,6 +104,29 @@ fn a_client_adds_finds_and_cancels_jobs_by_their_ids() {
     assert!(!client.call::<JobsChanged>(method::JOBS_UPDATE, &grace).unwrap().changed, "no job to change");
 }
 
+// contract: JOB-25
+#[test]
+fn a_job_past_ten_thousand_ahead_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "videos");
+    let op = |at: usize| JobsOp {
+        method: u64::from(method::JOBS_ADD),
+        call: Some(job(handle, &format!("{at:05}"), "{}")),
+        ..JobsOp::default()
+    };
+    let writes = (0..=10_000).map(op).collect();
+    client.call::<JobsTxResults>(method::JOBS_TX, &JobsTx { writes }).unwrap();
+    let ahead = |client: &mut Client, id: &str| {
+        let found = get(client, handle, id);
+        (found.ahead, found.ahead_at_least)
+    };
+    assert_eq!(ahead(&mut client, "09999"), (9_999, false));
+    assert_eq!(ahead(&mut client, "10000"), (10_000, false), "ten thousand is exact");
+    add(&mut client, &job(handle, "last", "{}"));
+    assert_eq!(ahead(&mut client, "last"), (10_000, true), "past it, ten thousand and at least");
+}
+
 fn page(client: &mut Client, list: &JobsList) -> JobsPage {
     client.call(method::JOBS_LIST, list).unwrap()
 }

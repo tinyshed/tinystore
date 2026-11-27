@@ -489,6 +489,30 @@ async def test_a_jobs_own_dedupe_holds_its_id_by_a_local_calendar_and_its_keep_o
         await crawl.add("x", id="x", dedupe=tinystore.Dedupe(calendar="day", time_zone="Mars/Olympus"))
 
 
+# contract: JOB-25
+async def test_ahead_counts_exactly_to_ten_thousand_and_ahead_at_least_says_when_it_stopped(
+    store: tinystore.Store,
+) -> None:
+    videos = store.queue("videos", int)
+
+    async def add(tx: tinystore.Tx) -> None:
+        for at in range(10_000):
+            await tx.with_(videos).add(at, id=f"{at:05}")
+
+    await store.tx(add)
+    await videos.add(10_000, id="10000")
+    await videos.add(10_001, id="10001")
+
+    async def ahead(id: str) -> tuple[int, bool]:
+        job = await videos.get(id)
+        assert job is not None
+        return job.ahead, job.ahead_at_least
+
+    assert await ahead("00000") == (0, False)
+    assert await ahead("10000") == (10_000, False)
+    assert await ahead("10001") == (10_000, True)
+
+
 async def test_a_value_json_cannot_write_is_refused_before_it_leaves(store: tinystore.Store) -> None:
     odd = store.queue("odd")
     with pytest.raises(tinystore.InvalidError):

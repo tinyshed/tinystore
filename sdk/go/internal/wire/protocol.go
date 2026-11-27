@@ -5374,7 +5374,7 @@ type JobsJob struct {
 	// when it runs next; for one done or failed, when its last run was for
 	At      *int64 `wire:"5,at"`
 	Attempt uint64 `wire:"6,attempt"`
-	// the jobs that run before a waiting one, up to 10,000
+	// the jobs that run before a waiting one: exactly up to 10,000
 	Ahead    uint64  `wire:"7,ahead"`
 	Progress *string `wire:"8,progress"`
 	Error    *string `wire:"9,error"`
@@ -5390,6 +5390,8 @@ type JobsJob struct {
 	Failure *Failure `wire:"15,failure"`
 	// when it leaves its queue unless written again: its ttl's end, or its expiresAt
 	ExpiresAt *int64 `wire:"16,expiresAt"`
+	// ahead stopped counting at 10,000, more being there
+	AheadAtLeast bool `wire:"17,aheadAtLeast"`
 }
 
 func (m JobsJob) Write(w *Writer) {
@@ -5475,6 +5477,11 @@ func (m JobsJob) Write(w *Writer) {
 		w.Int(*m.ExpiresAt)
 		n++
 	}
+	if m.AheadAtLeast {
+		w.Uint(17)
+		w.Bool(m.AheadAtLeast)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -5528,6 +5535,8 @@ func (m *JobsJob) Read(r *Reader) {
 		case 16:
 			v := r.Int()
 			m.ExpiresAt = &v
+		case 17:
+			m.AheadAtLeast = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -5552,7 +5561,8 @@ func (m JobsJob) IsZero() bool {
 		m.EndedAt == nil &&
 		m.Row == nil &&
 		m.Failure == nil &&
-		m.ExpiresAt == nil
+		m.ExpiresAt == nil &&
+		!m.AheadAtLeast
 }
 
 // JobsList is the schema's jobs.List.

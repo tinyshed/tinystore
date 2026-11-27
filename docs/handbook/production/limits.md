@@ -49,18 +49,19 @@ of repeating them.
 
 ## Jobs
 
-| What                     | Limit or default                               |
-|--------------------------|------------------------------------------------|
-| `attempts`               | 10                                             |
-| `backoff`                | from 1 s, doubling, up to 1 h, ±10 % at random |
-| `timeout`                | 1 minute per run                               |
-| a lease                  | 30 seconds, renewed every 15 while a run lasts |
-| `keep` of failed jobs    | 7 days                                         |
-| waiting jobs             | 10,000,000 per queue, `maxWaiting`             |
-| an id, a group           | 1 to 1,024 bytes                               |
-| a value, a step's answer | 1 MiB of JSON                                  |
-| progress                 | 4 KiB of JSON                                  |
-| a page                   | 1,000 jobs or 4 MiB                            |
+| What                     | Limit or default                                |
+|--------------------------|-------------------------------------------------|
+| `attempts`               | 10                                              |
+| `backoff`                | from 1 s, doubling, up to 1 h, ±10 % at random  |
+| `timeout`                | 1 minute per run                                |
+| a lease                  | 30 seconds, renewed every 15 while a run lasts  |
+| `keep` of failed jobs    | 7 days                                          |
+| waiting jobs             | 10,000,000 per queue, `maxWaiting`              |
+| an id, a group           | 1 to 1,024 bytes                                |
+| a value, a step's answer | 1 MiB of JSON                                   |
+| progress                 | 4 KiB of JSON                                   |
+| a page                   | 1,000 jobs or 4 MiB                             |
+| `ahead`                  | exact to 10,000, then 10,000 and `aheadAtLeast` |
 
 ## Blobs
 

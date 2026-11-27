@@ -49,8 +49,11 @@ type Job[T any] struct {
 	At time.Time
 	// Attempt counts its attempts, a running one included.
 	Attempt int
-	// Ahead counts the jobs that run before a waiting one, up to 10,000.
+	// Ahead counts the jobs that run before a waiting one, exactly up to 10,000.
 	Ahead int
+	// AheadAtLeast says counting Ahead stopped at 10,000, more being there:
+	// past it Ahead is 10,000, never an estimate.
+	AheadAtLeast bool
 	// Progress is what its handler last reported of a running job, as JSON.
 	Progress json.RawMessage
 	// Error is why its last run failed.
@@ -515,8 +518,9 @@ func get[T any](ctx context.Context, s *source, id string) (Job[T], bool, error)
 func jobOf[T any](s *source, found wire.JobsJob) (Job[T], error) {
 	job := Job[T]{
 		ID: text(found.Id), State: State(found.State), At: core.MomentOf(found.At), Attempt: int(found.Attempt),
-		Ahead: int(found.Ahead), Error: text(found.Error), Group: text(found.Group), Repeat: text(found.Repeat),
-		row: text(found.Row),
+		Ahead: int(found.Ahead), AheadAtLeast: found.AheadAtLeast, Error: text(found.Error), Group: text(found.Group),
+		Repeat: text(found.Repeat),
+		row:    text(found.Row),
 	}
 	if found.Value != nil && *found.Value != "" {
 		if err := json.Unmarshal([]byte(*found.Value), &job.Value); err != nil {
@@ -698,7 +702,8 @@ func (q *Queue[T]) watching(ctx context.Context, stream *core.Stream, last **wir
 // showsTheSame says whether two reports show a watcher the same: the job's
 // state, place, attempt, time, progress and error.
 func showsTheSame(a, b wire.JobsJob) bool {
-	return a.State == b.State && a.Ahead == b.Ahead && a.Attempt == b.Attempt && same(a.At, b.At) &&
+	return a.State == b.State && a.Ahead == b.Ahead && a.AheadAtLeast == b.AheadAtLeast && a.Attempt == b.Attempt &&
+		same(a.At, b.At) &&
 		text(a.Progress) == text(b.Progress) && text(a.Error) == text(b.Error)
 }
 

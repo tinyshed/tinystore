@@ -109,7 +109,7 @@ class Job[T]:
     attempt: int
     """its attempts, a running one included"""
     ahead: int
-    """the jobs that run before a waiting one, up to 10,000"""
+    """the jobs that run before a waiting one, exactly up to 10,000"""
     progress: Any
     """what its handler last reported of a running job"""
     error: str | None
@@ -120,6 +120,8 @@ class Job[T]:
     last_run: LastRun | None
     expires_at: datetime | None = None
     """when it leaves its queue unless written again: its ttl's end, or its expires_at"""
+    ahead_at_least: bool = False
+    """counting ``ahead`` stopped at 10,000, more being there: past it ``ahead`` is 10,000, never an estimate"""
     _row: str | None = field(default=None, repr=False, compare=False)
     """where a job without an id lies, which a cancel names it by"""
 
@@ -374,6 +376,7 @@ def _job_of[T](source: Source[T], found: dict[str, Any]) -> Job[T]:
         at=moment(found.get("at", 0)),
         attempt=found.get("attempt", 0),
         ahead=found.get("ahead", 0),
+        ahead_at_least=found.get("ahead_at_least", False),
         progress=None if progress is None else json.loads(progress),
         error=found.get("error"),
         group=found.get("group"),
@@ -460,7 +463,7 @@ class _Walk[T]:
 
 def _shows_the_same(a: dict[str, Any], b: dict[str, Any]) -> bool:
     """Whether two reports show a watcher the same: the job's state, place, attempt, time, progress and error."""
-    return all(a.get(k) == b.get(k) for k in ("state", "ahead", "attempt", "at", "progress", "error"))
+    return all(a.get(k) == b.get(k) for k in ("state", "ahead", "ahead_at_least", "attempt", "at", "progress", "error"))
 
 
 def job_fields(

@@ -162,8 +162,10 @@ export interface Job<T> {
 	at: Date
 	/** its attempts, a running one included */
 	attempt: number
-	/** the jobs that run before a waiting one, up to 10,000 */
+	/** the jobs that run before a waiting one, exactly up to 10,000 */
 	ahead: number
+	/** counting `ahead` stopped at 10,000, more being there: past it `ahead` is 10,000, never an estimate */
+	aheadAtLeast?: boolean
 	/** what its handler last reported of a running job */
 	progress: unknown
 	/** why its last run failed */
@@ -696,6 +698,7 @@ async function jobOf<T>(source: Source<T>, found: Read<typeof JobsJob.fields>): 
 		at: new Date(found.at ?? 0),
 		attempt: found.attempt ?? 0,
 		ahead: found.ahead ?? 0,
+		aheadAtLeast: found.aheadAtLeast ?? false,
 		progress: found.progress === undefined ? undefined : JSON.parse(found.progress),
 		error: found.error,
 		group: found.group,
@@ -770,6 +773,7 @@ function showsTheSame(a: Read<typeof JobsJob.fields>, b: Read<typeof JobsJob.fie
 	return (
 		a.state === b.state &&
 		a.ahead === b.ahead &&
+		a.aheadAtLeast === b.aheadAtLeast &&
 		a.attempt === b.attempt &&
 		a.at === b.at &&
 		a.progress === b.progress &&
