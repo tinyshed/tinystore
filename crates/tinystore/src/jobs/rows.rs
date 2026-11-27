@@ -267,7 +267,7 @@ pub(crate) struct Change<'a> {
 }
 
 /// The id and kind of the queue `name`, if it was registered.
-#[cfg(feature = "replication")]
+#[cfg(any(feature = "replication", feature = "wire"))]
 pub(crate) fn find_queue(c: &Connection, name: &str) -> Result<Option<(i64, String)>> {
     c.prepare_cached(QUEUE_NAMED)
         .and_then(|mut select| select.query_row([name], |row| Ok((row.get(0)?, row.get(1)?))).optional())
