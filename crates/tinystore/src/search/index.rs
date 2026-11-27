@@ -316,15 +316,20 @@ impl<T: DeserializeOwned> Index<T> {
     /// The hits of `query`, each with its document as its value, and where
     /// it matched when the search asked, read from it after the search.
     pub(super) fn found(&self, query: Query) -> Result<Found<T>> {
-        let Answer { hits, corrected, sought, total, .. } = self.search.search(&self.open, query)?;
-        let hits = hits.into_iter().map(|Ranked { id, value, score, text_score, similarity }| {
-            let Marked { matches, snippet } =
-                sought.as_ref().map(|sought| sought.marked_in(&value)).unwrap_or_default();
-            let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
-            Ok(Hit { id, value, score, matches, snippet, text_score, similarity })
-        });
-        Ok(Found { hits: hits.collect::<Result<_>>()?, corrected, total })
+        found_in(self.search.search(&self.open, query)?, decode)
     }
+}
+
+/// The hits of a search's answer, read after its snapshot ended: each
+/// document's value by `decode`, and where it matched when the search asked.
+pub(super) fn found_in<V>(answer: Answer, decode: impl Fn(&[u8]) -> Result<V>) -> Result<Found<V>> {
+    let Answer { hits, corrected, sought, total, .. } = answer;
+    let hits = hits.into_iter().map(|Ranked { id, value, score, text_score, similarity }| {
+        let Marked { matches, snippet } = sought.as_ref().map(|sought| sought.marked_in(&value)).unwrap_or_default();
+        let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
+        Ok(Hit { id, value, score, matches, snippet, text_score, similarity })
+    });
+    Ok(Found { hits: hits.collect::<Result<_>>()?, corrected, total })
 }
 
 impl<T: Serialize + DeserializeOwned> Index<T> {
@@ -749,7 +754,13 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
         Ok((self.index, query))
     }
 
-    fn query(&self) -> Result<Query> {
+    /// Counts its matches' ranges and its snippet's marks in `unit`.
+    pub(super) fn counted_in(mut self, unit: Unit) -> Self {
+        self.unit = unit;
+        self
+    }
+
+    pub(super) fn query(&self) -> Result<Query> {
         if self.text.len() > MOST_TEXT {
             let refused = format!("a search's text of {} bytes, past {MOST_TEXT}", self.text.len());
             return Err(SEARCH_TEXT.refuse(self.text.len() as u64, refused));
@@ -891,7 +902,7 @@ pub(super) fn too_many(documents: usize) -> Error {
     SET_MANY_DOCUMENTS.refuse(documents as u64, refused)
 }
 
-fn decode<T: DeserializeOwned>(value: &[u8]) -> Result<T> {
+pub(super) fn decode<T: DeserializeOwned>(value: &[u8]) -> Result<T> {
     serde_json::from_slice(value).map_err(|error| Error::invalid(format!("a document of another type: {error}")))
 }
 

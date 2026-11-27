@@ -515,6 +515,23 @@ async def reindex(
 
 Opens an index as index does and reads it again beside itself in the background, as a change would.
 
+### Store.search
+
+```python
+async def search(text: str, *, among: Sequence[Among]) -> ManyResult: ...
+```
+
+One question asked of several indexes in one call, each with its own options:
+
+    found = await store.search("algebra", among=[search.Among(courses, boost=2, limit=5), search.Among(people)])
+
+``groups`` holds each index's hits in the order asked, with ``more``,
+or the error it failed with while the others answer; ``best`` merges
+every group's hits by reciprocal rank fusion, the hit at rank r of its
+group weighing boost / (60 + r), since scores of two indexes cannot be
+compared. The store's indexes are searched in one snapshot; a table's
+index in its database's, and groups of different files are not one moment.
+
 ### Store.drop_index
 
 ```python

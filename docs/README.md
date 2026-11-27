@@ -148,6 +148,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Vectors](guides/search/vectors.md)
 - [Words and vectors together](guides/search/hybrid.md)
 - [A table's index](guides/search/table-index.md)
+- [Ask several indexes at once](guides/search/many.md)
 - [Rebuilds](guides/search/rebuilds.md)
 
 ### Channels

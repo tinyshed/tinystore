@@ -8,6 +8,39 @@ Every public type, trait and function of the Search engine in `tinystore::search
 impl Store
 ```
 
+### Store.search
+
+```rust
+pub fn search(&self, text: &str) -> ManySearch<'_>
+```
+
+One question asked of several indexes in one call, each named with
+[`among`](ManySearch::among) and its own options, run by
+[`run`](ManySearch::run):
+
+```rust
+use tinystore::search::eq;
+
+let found = store
+    .search("algebra")
+    .among(&courses, |a| a.boost(2.0).limit(5))
+    .among(&pages, |a| a.filter(eq("space_id", &7)).limit(5).snippet("plain", 60))
+    .among(&people, |a| a.limit(5))
+    .run()?;
+for best in &found.best {
+    println!("{} {}", best.index, best.hit.id);
+}
+```
+
+Each group holds its index's best by its own scores, and says whether
+it has more; [`best`](ManyFound::best) merges them by reciprocal rank
+fusion, since scores of two indexes cannot be compared. An index that
+fails is its group's error, and the others answer; the call fails
+only when every group does. The store's indexes of documents are
+searched in one snapshot of search.db, so that no write lands between
+two of their groups; a table's index is searched in a snapshot of its
+database's file, and groups from different files are not one moment.
+
 ### Store.index
 
 ```rust
@@ -676,6 +709,150 @@ pub struct Total {
 How many documents a search finds, under its filters and whatever its
 `limit` and `offset`: exactly up to 10,000, and past it 10,000 with
 `at_least`, never an estimate.
+
+## Among
+
+```rust
+pub struct Among { /* private fields */ }
+```
+
+What a group of a `ManySearch` asks of its index, as a search of it
+alone would: the text is the call's.
+
+### Among.boost
+
+```rust
+pub fn boost(self, boost: f64) -> Self
+```
+
+What the group's hits weigh in `ManyFound::best`, a positive number,
+1 unless said: a hit of a group of 2 weighs what a hit of half its
+rank would in a group of 1, near enough.
+
+### Among.limit
+
+```rust
+pub fn limit(self, limit: usize) -> Self
+```
+
+The hits the group answers, 1 to 100 and 10 unless said; its
+[`more`](Group::more) says whether the index has more.
+
+### Among.filter
+
+```rust
+pub fn filter(self, condition: Condition) -> Self
+```
+
+As [`SearchCall::filter`](super::SearchCall::filter).
+
+### Among.prefix
+
+```rust
+pub fn prefix(self) -> Self
+```
+
+As [`SearchCall::prefix`](super::SearchCall::prefix).
+
+### Among.prefix_every
+
+```rust
+pub fn prefix_every(self) -> Self
+```
+
+As [`SearchCall::prefix_every`](super::SearchCall::prefix_every).
+
+### Among.matches
+
+```rust
+pub fn matches(self) -> Self
+```
+
+As [`SearchCall::matches`](super::SearchCall::matches).
+
+### Among.snippet
+
+```rust
+pub fn snippet(self, field: &str, around: usize) -> Self
+```
+
+As [`SearchCall::snippet`](super::SearchCall::snippet).
+
+## Best
+
+```rust
+pub struct Best {
+    pub index: String,
+    pub group: usize,
+    pub hit: Hit<Value>,
+}
+```
+
+A hit of `ManyFound::best`: its group's index, the group's place among
+the groups, and the hit as its group holds it.
+
+## Group
+
+```rust
+pub struct Group<V> {
+    pub index: String,
+    pub hits: Vec<Hit<V>>,
+    pub more: bool,
+    pub corrected: Option<String>,
+    pub error: Option<Error>,
+}
+```
+
+An index's hits in a `ManySearch`, the best by its own scores first, or
+why its search failed.
+
+## ManyFound
+
+```rust
+pub struct ManyFound {
+    pub groups: Vec<Group>,
+    pub best: Vec<Best>,
+}
+```
+
+What a `ManySearch` found: a group an index, in the order asked, and
+every group's hits in one order.
+
+## ManySearch
+
+```rust
+pub struct ManySearch<'s> { /* private fields */ }
+```
+
+One question asked of several indexes, run by `ManySearch::run`.
+
+### ManySearch.among
+
+```rust
+pub fn among(self, index: &impl Searched, options: impl FnOnce(Among) -> Among) -> Self
+```
+
+Asks `index` too, its search as `options` says: `|a| a.limit(5)`. The
+same index may be asked twice, with another filter.
+
+### ManySearch.run
+
+```rust
+pub fn run(self) -> Result<ManyFound>
+```
+
+Searches every index asked, 1 to 32, each group in the order asked.
+
+## Searched
+
+```rust
+pub trait Searched
+```
+
+An index a `ManySearch` asks: an index of documents or a table's, each
+hit's value its document or its row as JSON, since the indexes of one
+call keep values of different types. A table's index reads each row as
+its type and writes it as JSON again, so that type is `Serialize` too.
 
 ## Match
 
@@ -1576,5 +1753,33 @@ pub fn ready(&self) -> impl Future<Output = Result<()>> + Send + 'static
 Waits until the index has read its table's rows and serves the
 settings it was opened with, as `Index::ready` waits: dropped, it
 stops waiting, and the table's rows are read on.
+
+## aio::search::ManySearch
+
+```rust
+pub struct ManySearch<'s> { /* private fields */ }
+```
+
+One question asked of several indexes, run by its awaited
+`ManySearch::run`.
+
+### aio::search::ManySearch.among
+
+```rust
+pub fn among(self, index: &impl Searched, options: impl FnOnce(Among) -> Among) -> Self
+```
+
+As `crate::search::ManySearch::among`.
+
+### aio::search::ManySearch.run
+
+```rust
+pub fn run(self) -> impl Future<Output = Result<ManyFound>> + Send + 'static
+```
+
+Runs the search on the store's pool, as
+`crate::search::ManySearch::run` does. How many indexes it asks and
+their limits and boosts are checked here, so that a call refused for
+them answers in its first poll and never reaches the pool.
 
 <!-- Generated by task reference from crates/tinystore through rustdoc. Edit the doc comments there, not this file. -->

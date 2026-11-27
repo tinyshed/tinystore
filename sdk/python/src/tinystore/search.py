@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from ._connection import check_name
-from ._handles import key_text, via_link
+from ._handles import handle_on, key_text, via_link
 from ._rows import reader, row_of
 from ._values import from_json, to_json
 from ._wire.protocol import (
@@ -38,6 +38,8 @@ from ._wire.protocol import (
     SearchGot,
     SearchKey,
     SearchListed,
+    SearchManyFound,
+    SearchManyQuery,
     SearchName,
     SearchOpen,
     SearchQuery,
@@ -46,7 +48,7 @@ from ._wire.protocol import (
     SearchStatus,
     methods,
 )
-from .errors import InvalidError
+from .errors import InvalidError, TinystoreError, error_of
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -226,8 +228,9 @@ _UNSET: Any = _Unset()
 class _Searchable[T]:
     """What every index answers: its searches, and where it stands."""
 
-    def __init__(self, via: Via, name: str, opener: Opener, read: Callable[[dict[str, Any]], T]) -> None:
+    def __init__(self, link: Link, via: Via, name: str, opener: Opener, read: Callable[[dict[str, Any]], T]) -> None:
         self.name = name
+        self._link = link
         self._via = via
         self._opener = opener
         self._read = read
@@ -298,22 +301,21 @@ class _Searchable[T]:
 
     def _result_of(self, found: dict[str, Any]) -> Result[T]:
         """The hits a search found, each value read as this index reads its documents."""
-        return Result(
-            [
-                Hit(
-                    hit.get("id", ""),
-                    self._read({**hit, "columns": found.get("columns")}),
-                    hit.get("score", 0.0),
-                    _matches_of(hit.get("matches")),
-                    _snippet_of(hit.get("snippet")),
-                    hit.get("text_score"),
-                    hit.get("similarity"),
-                )
-                for hit in found.get("hits", [])
-            ],
-            found.get("corrected"),
-            _total_of(found.get("total")),
-        )
+        return Result(self._hits_of(found), found.get("corrected"), _total_of(found.get("total")))
+
+    def _hits_of(self, found: dict[str, Any]) -> list[Hit[T]]:
+        return [
+            Hit(
+                hit.get("id", ""),
+                self._read({**hit, "columns": found.get("columns")}),
+                hit.get("score", 0.0),
+                _matches_of(hit.get("matches")),
+                _snippet_of(hit.get("snippet")),
+                hit.get("text_score"),
+                hit.get("similarity"),
+            )
+            for hit in found.get("hits", [])
+        ]
 
     async def status(self) -> IndexStatus:
         """Where the index stands; a search never waits, and answers by the settings it serves."""
@@ -338,7 +340,7 @@ class SearchIndex[T](_Searchable[T]):
     """Documents of one type by id, found again by their words, vectors or both: ``store.index(name, Article)``."""
 
     def __init__(self, link: Link, name: str, opener: bytes, of: Any) -> None:
-        super().__init__(via_link(link), name, opener, lambda hit: from_json(hit.get("value") or "null", of))
+        super().__init__(link, via_link(link), name, opener, lambda hit: from_json(hit.get("value") or "null", of))
         self._of = of
 
     async def set(self, id: Key, value: T, *, vector: Vector | None = _UNSET) -> None:
@@ -397,11 +399,126 @@ class TableIndex[T](_Searchable[T]):
     commit that makes it.
     """
 
-    def __init__(self, via: Via, name: str, opener: Opener, of: Any) -> None:
+    def __init__(self, link: Link, via: Via, name: str, opener: Opener, of: Any) -> None:
         read_row = reader(of)
         super().__init__(
-            via, name, opener, lambda hit: read_row(row_of(hit.get("columns") or [], hit.get("row") or []))
+            link, via, name, opener, lambda hit: read_row(row_of(hit.get("columns") or [], hit.get("row") or []))
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Among:
+    """An index a search among several asks, and its search as a search of it alone says it.
+
+    ``boost`` is what its hits weigh in ``best``, a positive number; ``limit``
+    1 to 100, 10 unless said, and the group's ``more`` says whether the index
+    has more; ``where``, ``prefix``, ``matches`` and ``snippet`` as a search
+    of the index alone takes them.
+    """
+
+    index: SearchIndex[Any] | TableIndex[Any]
+    boost: float | None = None
+    where: Where | None = None
+    limit: int | None = None
+    prefix: bool | Literal["every"] = False
+    matches: bool = False
+    snippet: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ManyGroup:
+    """An index's hits, the best by its own scores first and whether it has more, or why its search failed."""
+
+    index: str
+    hits: list[Hit[Any]]
+    more: bool = False
+    corrected: str | None = None
+    error: TinystoreError | None = None
+    """why the index's search failed; its group then holds no hit"""
+
+
+@dataclass(frozen=True, slots=True)
+class Best:
+    """A hit of best: its group's index, the group's place among the groups, and the hit its group holds."""
+
+    index: str
+    group: int
+    hit: Hit[Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ManyResult:
+    """What a search among several indexes found: a group an index, in the order asked, and every hit in one order.
+
+    ``best`` is every group's hits by reciprocal rank fusion, never by score:
+    the hit at rank r of its group, from 1, weighs boost / (60 + r); of equal
+    weights the group asked first comes first, then the higher rank.
+    """
+
+    groups: list[ManyGroup]
+    best: list[Best]
+
+
+async def search_many(link: Link, text: str, among: Sequence[Among]) -> ManyResult:
+    """Asks text of every index of among in one call over one connection, each handle opened there first."""
+    asked = [_among_of(link, each) for each in among]
+
+    async def attempt(connection: Any) -> bytes:
+        openers = [each.index._opener for each in among]  # pyright: ignore[reportPrivateUsage]
+        handles = [await handle_on(connection, methods["search.open"], opener) for opener in openers]
+        entries = [body(handle) for body, handle in zip(asked, handles, strict=True)]
+        return await connection.session.call(
+            methods["search.searchMany"], SearchManyQuery.encode(text=text, among=entries)
+        )
+
+    found: dict[str, Any] = SearchManyFound.decode(await link.run("read", attempt))
+    answered: list[dict[str, Any]] = found.get("groups", [])
+    groups: list[ManyGroup] = [_group_of(each.index, group) for each, group in zip(among, answered, strict=True)]
+    best: list[Best] = []
+    named_all: list[dict[str, Any]] = found.get("best", [])
+    for named in named_all:
+        at: int = named.get("group", 0)
+        hit: int = named.get("hit", 0)
+        best.append(Best(groups[at].index, at, groups[at].hits[hit]))
+    return ManyResult(groups, best)
+
+
+def _among_of(link: Link, among: Among) -> Callable[[int], dict[str, Any]]:
+    """An index's part of a search among several, once its handle is known; an index of another store is refused."""
+    index = among.index
+    if index._link is not link:  # pyright: ignore[reportPrivateUsage]
+        raise InvalidError(f"index {index.name}: an index of another store, in a search among this one's")
+    if among.prefix not in (True, False, "every"):
+        raise InvalidError(f"a prefix of {among.prefix!r}: True, False or 'every'")
+    statements: list[dict[str, Any]] = []
+    where = None if among.where is None else where_json(among.where, statements)
+    snippet = _cut(among.snippet)
+
+    def body(handle: int) -> dict[str, Any]:
+        query = {
+            "handle": handle,
+            "where": where,
+            "statements": statements,
+            "limit": among.limit,
+            "prefix": among.prefix is True,
+            "prefix_every": True if among.prefix == "every" else None,
+            # Python slices a str by its code points
+            "matches": "chars" if among.matches else None,
+            "snippet": snippet,
+        }
+        return {"query": {key: value for key, value in query.items() if value is not None}, "boost": among.boost}
+
+    return body
+
+
+def _group_of(index: _Searchable[Any], group: dict[str, Any]) -> ManyGroup:
+    name = group.get("index", "")
+    failure = group.get("failure")
+    if failure is not None:
+        error = error_of(failure.get("code", "internal"), failure.get("message", ""), failure.get("what"))
+        return ManyGroup(name, [], error=error)
+    hits = index._hits_of(group)  # pyright: ignore[reportPrivateUsage]
+    return ManyGroup(name, hits, group.get("more", False), group.get("corrected"))
 
 
 def _fields_of(fields: Fields | None) -> list[dict[str, Any]]:

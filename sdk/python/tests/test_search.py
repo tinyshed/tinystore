@@ -192,6 +192,63 @@ async def test_a_hits_snippet_is_cut_around_its_first_match_its_marks_in_code_po
         await pages.search("algebra", snippet={"field": "body"})
 
 
+@dataclass
+class Offered:
+    title: str
+
+
+@dataclass
+class SpacePage:
+    title: str
+    plain: str
+    space_id: int
+
+
+# contract: SRCH-25, SRCH-26, SRCH-27
+async def test_one_question_of_several_indexes_answers_a_group_an_index_and_every_hit_merged_by_rank(
+    store: tinystore.Store,
+) -> None:
+    courses = store.index("box_courses", Offered, fields={"title": 1})
+    pages = store.index("box_pages", SpacePage, fields={"title": 2, "plain": 1}, filters=["space_id"])
+    people = store.index("box_people", fields={"name": 1})
+    await courses.set_many([("c-1", Offered("Linear algebra")), ("c-2", Offered("Algebra of logic"))])
+    await pages.set_many(
+        [
+            ("p-1", SpacePage("Notes", "In the term we read linear algebra.", 7)),
+            ("p-2", SpacePage("Algebra", "Another space.", 8)),
+        ]
+    )
+    await people.set("u-1", {"name": "Ada"})
+    found = await store.search(
+        "algebra",
+        among=[
+            search.Among(courses, boost=2, limit=1),
+            search.Among(pages, where={"space_id": 7}, limit=5, snippet={"field": "plain", "around": 12}),
+            search.Among(people, limit=5),
+        ],
+    )
+    assert [group.index for group in found.groups] == ["box_courses", "box_pages", "box_people"]
+    first, second, third = found.groups
+    assert (len(first.hits), first.more) == (1, True)
+    assert isinstance(first.hits[0].value, Offered), "each group's hits of its index's type"
+    assert [hit.id for hit in second.hits] == ["p-1"]
+    assert second.hits[0].snippet is not None
+    assert second.hits[0].snippet.text == "…read linear algebra."
+    assert third.hits == [] and third.error is None
+    assert [(best.index, best.hit.id) for best in found.best] == [
+        ("box_courses", first.hits[0].id),
+        ("box_pages", "p-1"),
+    ]
+    assert found.best[0].hit is first.hits[0], "the hit its group holds, not a copy"
+    await store.drop_index("box_people")
+    failed = await store.search("algebra", among=[search.Among(courses), search.Among(people)])
+    assert isinstance(failed.groups[1].error, tinystore.InvalidError)
+    assert "index box_people" in str(failed.groups[1].error)
+    assert sorted(best.hit.id for best in failed.best) == ["c-1", "c-2"]
+    with pytest.raises(tinystore.InvalidError):
+        await store.search("algebra", among=[])
+
+
 async def test_a_hit_keeps_each_half_of_its_score_and_a_floor_keeps_a_far_vector_out_of_the_sum(
     store: tinystore.Store,
 ) -> None:

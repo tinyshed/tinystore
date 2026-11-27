@@ -13,8 +13,8 @@ use super::Lent;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, SearchDeleted, SearchDocument, SearchDropped, SearchFound, SearchGot, SearchHit,
-    SearchIndex, SearchKey, SearchListed, SearchMark, SearchMatch, SearchName, SearchOpen, SearchQuery, SearchSet,
-    SearchSetMany, SearchSnippet, SearchStatement, SearchStatus, SearchTotal, method,
+    SearchIndex, SearchKey, SearchListed, SearchManyQuery, SearchMark, SearchMatch, SearchName, SearchOpen,
+    SearchQuery, SearchSet, SearchSetMany, SearchSnippet, SearchStatement, SearchStatus, SearchTotal, method,
 };
 use crate::engine::SharedFile;
 use crate::search::{self, Document, Index, Match, Rebuild, SearchCall, Snippet, Status, Unit};
@@ -77,6 +77,7 @@ pub(crate) fn call(
             let indexes = if read_only { search::list_as_it_is(store)? } else { search::list(store)? };
             Ok(SearchListed { indexes: indexes.iter().map(listed).collect() }.encode())
         }
+        method::SEARCH_SEARCH_MANY => many::searched_many(store, handles, SearchManyQuery::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -397,6 +398,9 @@ fn listed(index: &search::Listed) -> SearchIndex {
         error: status.error,
     }
 }
+
+#[path = "search_many.rs"]
+mod many;
 
 #[cfg(test)]
 #[path = "search_tests.rs"]

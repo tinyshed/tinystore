@@ -193,14 +193,56 @@ message search.Listed {
   1 indexes: [search.Index]
 }
 
-read  0x0b01 search.open(search.Open)       -> Handle
-write 0x0b02 search.set(search.Set)         -> Empty
-write 0x0b03 search.setMany(search.SetMany) -> Empty
+# One question asked of several indexes in one call, as a "find anything"
+# box asks it: the store's indexes of documents searched in one snapshot of
+# search.db, a table's index in a snapshot of its database's file.
+message search.ManyQuery {
+  1 text: str                        # every index's, as a query's text
+  2 among: [search.Among]            # 1 to 32, in order; the same index twice with another where
+}
+
+# One index a ManyQuery asks, and its search as a query of it alone says it:
+# its where, limit, prefix, matches and snippet; its own text, vector,
+# offset or total are invalid.
+message search.Among {
+  1 query: search.Query              # limit 1 to 100, 10 when absent
+  2 boost: float?                    # what its hits weigh in best, above 0; 1 when absent
+}
+
+# Each index's group in the order asked, and every group's hits in one
+# order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
+# weighs boost / (60 + r); equal weights by the group asked first, then rank.
+message search.ManyFound {
+  1 groups: [search.Group]
+  2 best: [search.Best]
+}
+
+# An index's hits, the best by its own scores first, or why its search failed.
+message search.Group {
+  1 index: str                       # the index's name
+  2 hits: [search.Hit]               # none where it failed
+  3 corrected: str?                  # as search.Found's
+  4 columns: [str]?                  # the columns of a table's index's rows
+  5 more: bool                       # the index has hits past the group's limit
+  6 failure: Failure?                # why its search failed
+}
+
+# A hit of best, by its group's place and its own place in that group's hits.
+message search.Best {
+  1 group: uint
+  2 hit: uint
+}
+
+read  0x0b01 search.open(search.Open)            -> Handle
+write 0x0b02 search.set(search.Set)              -> Empty
+write 0x0b03 search.setMany(search.SetMany)      -> Empty
 # Answers whether the index held the document.
-write 0x0b04 search.delete(search.Key)      -> search.Deleted
-read  0x0b05 search.get(search.Key)         -> search.Got
-read  0x0b06 search.search(search.Query)    -> search.Found
-read  0x0b07 search.status(Handle)          -> search.Status
+write 0x0b04 search.delete(search.Key)           -> search.Deleted
+read  0x0b05 search.get(search.Key)              -> search.Got
+read  0x0b06 search.search(search.Query)         -> search.Found
+read  0x0b07 search.status(Handle)               -> search.Status
 # Drops an index and every document it holds, in the background.
-write 0x0b08 search.dropIndex(search.Name)  -> search.Dropped
-read  0x0b09 search.list(Empty)             -> search.Listed
+write 0x0b08 search.dropIndex(search.Name)       -> search.Dropped
+read  0x0b09 search.list(Empty)                  -> search.Listed
+# Fails only where every index failed, with the first failure.
+read  0x0b0a search.searchMany(search.ManyQuery) -> search.ManyFound

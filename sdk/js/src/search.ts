@@ -6,8 +6,8 @@
 // index, `db.searchIndex`, finds a database's rows, each hit its row.
 
 import type { Link } from './connection.ts'
-import { InvalidError } from './errors.ts'
-import { checkName, type Open, type Via, viaLink } from './handles.ts'
+import { errorOf, InvalidError, type TinystoreError } from './errors.ts'
+import { checkName, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import { parseJson } from './json.ts'
 import { keyText } from './kv.ts'
 import { rowsOf, Sql } from './sql.ts'
@@ -22,6 +22,8 @@ import {
 	SearchGot,
 	SearchKey,
 	SearchListed,
+	SearchManyFound,
+	SearchManyQuery,
 	SearchName,
 	SearchOpen,
 	SearchQuery,
@@ -282,10 +284,11 @@ abstract class Searchable<T> {
 	readonly #via: Via
 	readonly #open: Open
 
-	constructor(via: Via, name: string, open: Open) {
+	constructor(link: Link, via: Via, name: string, open: Open) {
 		this.name = name
 		this.#via = via
 		this.#open = open
+		reached.set(this, { link, open })
 	}
 
 	/**
@@ -323,28 +326,7 @@ abstract class Searchable<T> {
 				limit: asked.limit,
 			})
 		const found = SearchFound.decode(await this.call('search.search', body, 'read'))
-		const columns = found.columns
-		const hits = (found.hits ?? []).map(hit => {
-			const value = (
-				columns === undefined
-					? parseJson(hit.value ?? 'null')
-					: rowsOf<T>(columns, [(hit.row ?? []) as SqlValue[]])[0]
-			) as T
-			const read: Hit<T> = { id: hit.id ?? '', value, score: hit.score ?? 0 }
-			if (hit.matches !== undefined) {
-				read.matches = hit.matches.map(matchOf)
-			}
-			if (hit.snippet !== undefined) {
-				read.snippet = snippetOf(hit.snippet)
-			}
-			if (hit.textScore !== undefined) {
-				read.textScore = hit.textScore
-			}
-			if (hit.similarity !== undefined) {
-				read.similarity = hit.similarity
-			}
-			return read
-		})
+		const hits = hitsOf<T>(found.hits ?? [], found.columns)
 		const read: Found<T> =
 			found.corrected === undefined ? { hits } : { hits, corrected: found.corrected }
 		if (found.total !== undefined) {
@@ -386,7 +368,7 @@ abstract class Searchable<T> {
 export class SearchIndex<T> extends Searchable<T> {
 	/** An index comes from `store.index` and `store.reindex`. */
 	constructor(link: Link, name: string, open: Uint8Array) {
-		super(viaLink(link), name, open)
+		super(link, viaLink(link), name, open)
 	}
 
 	/**
@@ -452,6 +434,182 @@ export class SearchIndex<T> extends Searchable<T> {
  * commit that makes it.
  */
 export class TableIndex<T> extends Searchable<T> {}
+
+/** Each index's link and open, which a search among several opens on one connection. */
+const reached = new WeakMap<object, { link: Link; open: Open }>()
+
+/** An index a search among several asks, and its search as a search of it alone says it. */
+export interface Among {
+	index: SearchIndex<unknown> | TableIndex<unknown>
+	/** what its hits weigh in `best`, a positive number, 1 unless said */
+	boost?: number | undefined
+	where?: Where | undefined
+	/** 1 to 100, 10 unless said; `more` says whether the index has more */
+	limit?: number | undefined
+	prefix?: boolean | 'every' | undefined
+	matches?: boolean | undefined
+	snippet?: { field: string; around?: number | undefined } | undefined
+}
+
+/** One question of several indexes: the text every one reads, and 1 to 32 indexes in order. */
+export interface ManyQuery {
+	text: string
+	in: readonly Among[]
+}
+
+/** An index's hits, the best by its own scores first and whether it has more, or why its search failed. */
+export type ManyGroup =
+	| { index: string; hits: Hit<unknown>[]; more: boolean; corrected?: string | undefined }
+	| { index: string; error: TinystoreError }
+
+/** A hit of `best`: its group's index, the group's place among the groups, and the hit its group holds. */
+export interface Best {
+	index: string
+	group: number
+	hit: Hit<unknown>
+}
+
+/** What a search among several indexes found: a group an index, in the order asked, and every hit in one order. */
+export interface ManyFound {
+	groups: ManyGroup[]
+	/**
+	 * every group's hits by reciprocal rank fusion, never by score: the hit
+	 * at rank `r` of its group, from 1, weighs `boost / (60 + r)`; of equal
+	 * weights the group asked first comes first, then the higher rank
+	 */
+	best: Best[]
+}
+
+/**
+ * Asks `text` of every index of `query.in` in one call over one connection,
+ * each index's handle opened there first: an index of another store is
+ * refused.
+ */
+export async function searchMany(link: Link, query: ManyQuery): Promise<ManyFound> {
+	const asked = query.in.map(among => amongOf(link, among))
+	const answer = await link.run('read', async connection => {
+		const handles = await Promise.all(
+			asked.map(({ open }) => handleOn(connection, methods['search.open'], open)),
+		)
+		const among = asked.map(({ body }, at) => body(handles[at] ?? 0))
+		return connection.session.call(
+			methods['search.searchMany'],
+			SearchManyQuery.encode({ text: query.text, among }),
+		)
+	})
+	const found = SearchManyFound.decode(answer)
+	const groups = (found.groups ?? []).map(groupOf)
+	const best = (found.best ?? []).map(({ group, hit }) => {
+		const at = Number(group ?? 0)
+		const held = groups[at]
+		if (held === undefined || 'error' in held) {
+			throw new InvalidError(`a search among indexes: best names group ${at}, which holds no hit`)
+		}
+		const named = held.hits[Number(hit ?? 0)]
+		if (named === undefined) {
+			throw new InvalidError(
+				`a search among indexes: best names hit ${hit} of group ${at}, past its hits`,
+			)
+		}
+		return { index: held.index, group: at, hit: named }
+	})
+	return { groups, best }
+}
+
+/** An index a search among several asks: its open, and its part of the request once its handle is known. */
+function amongOf(link: Link, among: Among) {
+	const reach = reached.get(among.index)
+	if (reach === undefined) {
+		throw new InvalidError(
+			'a search among indexes: each `index` is one `store.index` or `db.searchIndex` opened',
+		)
+	}
+	if (reach.link !== link) {
+		throw new InvalidError(
+			`index ${among.index.name}: an index of another store, in a search among this one's`,
+		)
+	}
+	const statements: SearchStatementOf[] = []
+	const where = among.where === undefined ? undefined : whereJson(among.where, statements)
+	const body = (handle: number) => ({
+		query: {
+			handle,
+			where,
+			statements,
+			limit: among.limit,
+			prefix: among.prefix === true || undefined,
+			prefixEvery: among.prefix === 'every' || undefined,
+			matches: among.matches === true ? 'utf16' : undefined,
+			snippet:
+				among.snippet === undefined
+					? undefined
+					: { field: among.snippet.field, around: among.snippet.around, unit: 'utf16' },
+		},
+		boost: among.boost,
+	})
+	return { open: reach.open, body }
+}
+
+function groupOf(group: {
+	index?: string | undefined
+	hits?: Parameters<typeof hitsOf>[0] | undefined
+	corrected?: string | undefined
+	columns?: string[] | undefined
+	more?: boolean | undefined
+	failure?:
+		| {
+				code?: string | undefined
+				message?: string | undefined
+				what?: Record<string, string> | undefined
+		  }
+		| undefined
+}): ManyGroup {
+	const index = group.index ?? ''
+	if (group.failure !== undefined) {
+		const { code, message, what } = group.failure
+		return { index, error: errorOf(code ?? 'internal', message ?? '', what ?? {}) }
+	}
+	const hits = hitsOf<unknown>(group.hits ?? [], group.columns)
+	const found: ManyGroup = { index, hits, more: group.more ?? false }
+	return group.corrected === undefined ? found : { ...found, corrected: group.corrected }
+}
+
+/** A search's hits as the wire sends them: a document's JSON, or a table's row by the answer's columns. */
+function hitsOf<T>(
+	hits: {
+		id?: string | undefined
+		value?: string | undefined
+		score?: number | undefined
+		row?: unknown[] | undefined
+		matches?: Parameters<typeof matchOf>[0][] | undefined
+		snippet?: Parameters<typeof snippetOf>[0] | undefined
+		textScore?: number | undefined
+		similarity?: number | undefined
+	}[],
+	columns: string[] | undefined,
+): Hit<T>[] {
+	return hits.map(hit => {
+		const value = (
+			columns === undefined
+				? parseJson(hit.value ?? 'null')
+				: rowsOf<T>(columns, [(hit.row ?? []) as SqlValue[]])[0]
+		) as T
+		const read: Hit<T> = { id: hit.id ?? '', value, score: hit.score ?? 0 }
+		if (hit.matches !== undefined) {
+			read.matches = hit.matches.map(matchOf)
+		}
+		if (hit.snippet !== undefined) {
+			read.snippet = snippetOf(hit.snippet)
+		}
+		if (hit.textScore !== undefined) {
+			read.textScore = hit.textScore
+		}
+		if (hit.similarity !== undefined) {
+			read.similarity = hit.similarity
+		}
+		return read
+	})
+}
 
 /** The open of a table's index: its name, its table and settings, and its database's handle. */
 export function tableIndexOpen(

@@ -7305,6 +7305,484 @@
     },
     {
       "fields": {
+        "among": {
+          "list": [
+            {
+              "fields": {
+                "boost": {
+                  "float": "3ff8000000000000"
+                },
+                "query": {
+                  "fields": {
+                    "handle": {
+                      "uint": "107"
+                    },
+                    "limit": {
+                      "uint": "807"
+                    },
+                    "matches": {
+                      "str": "matches"
+                    },
+                    "minSimilarity": {
+                      "float": "3ff8000000000000"
+                    },
+                    "offset": {
+                      "uint": "707"
+                    },
+                    "prefix": {
+                      "bool": true
+                    },
+                    "prefixEvery": {
+                      "bool": true
+                    },
+                    "rerank": {
+                      "bool": true
+                    },
+                    "snippet": {
+                      "fields": {
+                        "around": {
+                          "uint": "207"
+                        },
+                        "field": {
+                          "str": "field"
+                        },
+                        "unit": {
+                          "str": "unit"
+                        }
+                      }
+                    },
+                    "statements": {
+                      "list": [
+                        {
+                          "fields": {
+                            "text": {
+                              "str": "text"
+                            },
+                            "values": {
+                              "list": [
+                                {
+                                  "str": "values"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "text": {
+                      "str": "text"
+                    },
+                    "total": {
+                      "bool": true
+                    },
+                    "vector": {
+                      "bin": "01ff"
+                    },
+                    "vectorWeight": {
+                      "float": "3ff8000000000000"
+                    },
+                    "where": {
+                      "str": "{\"a\":1}"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "text": {
+          "str": "text"
+        }
+      },
+      "hex": "8201a474657874029182018f016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d6174636865730ccb3ff80000000000000d918201a4746578740291a676616c7565730ec30f8301a56669656c6402cccf03a4756e697402cb3ff8000000000000",
+      "message": "search.ManyQuery",
+      "name": "search.ManyQuery with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.ManyQuery",
+      "name": "search.ManyQuery with no field"
+    },
+    {
+      "fields": {
+        "boost": {
+          "float": "3ff8000000000000"
+        },
+        "query": {
+          "fields": {
+            "handle": {
+              "uint": "107"
+            },
+            "limit": {
+              "uint": "807"
+            },
+            "matches": {
+              "str": "matches"
+            },
+            "minSimilarity": {
+              "float": "3ff8000000000000"
+            },
+            "offset": {
+              "uint": "707"
+            },
+            "prefix": {
+              "bool": true
+            },
+            "prefixEvery": {
+              "bool": true
+            },
+            "rerank": {
+              "bool": true
+            },
+            "snippet": {
+              "fields": {
+                "around": {
+                  "uint": "207"
+                },
+                "field": {
+                  "str": "field"
+                },
+                "unit": {
+                  "str": "unit"
+                }
+              }
+            },
+            "statements": {
+              "list": [
+                {
+                  "fields": {
+                    "text": {
+                      "str": "text"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "values"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "text": {
+              "str": "text"
+            },
+            "total": {
+              "bool": true
+            },
+            "vector": {
+              "bin": "01ff"
+            },
+            "vectorWeight": {
+              "float": "3ff8000000000000"
+            },
+            "where": {
+              "str": "{\"a\":1}"
+            }
+          }
+        }
+      },
+      "hex": "82018f016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d6174636865730ccb3ff80000000000000d918201a4746578740291a676616c7565730ec30f8301a56669656c6402cccf03a4756e697402cb3ff8000000000000",
+      "message": "search.Among",
+      "name": "search.Among with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Among",
+      "name": "search.Among with no field"
+    },
+    {
+      "fields": {
+        "best": {
+          "list": [
+            {
+              "fields": {
+                "group": {
+                  "uint": "107"
+                },
+                "hit": {
+                  "uint": "207"
+                }
+              }
+            }
+          ]
+        },
+        "groups": {
+          "list": [
+            {
+              "fields": {
+                "columns": {
+                  "list": [
+                    {
+                      "str": "columns"
+                    }
+                  ]
+                },
+                "corrected": {
+                  "str": "corrected"
+                },
+                "failure": {
+                  "fields": {
+                    "code": {
+                      "str": "code"
+                    },
+                    "message": {
+                      "str": "message"
+                    },
+                    "what": {
+                      "names": {
+                        "a": {
+                          "str": "what"
+                        }
+                      }
+                    }
+                  }
+                },
+                "hits": {
+                  "list": [
+                    {
+                      "fields": {
+                        "id": {
+                          "str": "id"
+                        },
+                        "matches": {
+                          "list": [
+                            {
+                              "fields": {
+                                "end": {
+                                  "uint": "407"
+                                },
+                                "field": {
+                                  "str": "field"
+                                },
+                                "item": {
+                                  "uint": "207"
+                                },
+                                "start": {
+                                  "uint": "307"
+                                },
+                                "word": {
+                                  "str": "word"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "row": {
+                          "list": [
+                            {
+                              "str": "row"
+                            }
+                          ]
+                        },
+                        "score": {
+                          "float": "3ff8000000000000"
+                        },
+                        "similarity": {
+                          "float": "3ff8000000000000"
+                        },
+                        "snippet": {
+                          "fields": {
+                            "item": {
+                              "uint": "307"
+                            },
+                            "marks": {
+                              "list": [
+                                {
+                                  "fields": {
+                                    "end": {
+                                      "uint": "207"
+                                    },
+                                    "start": {
+                                      "uint": "107"
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "text": {
+                              "str": "text"
+                            }
+                          }
+                        },
+                        "textScore": {
+                          "float": "3ff8000000000000"
+                        },
+                        "value": {
+                          "str": "{\"a\":1}"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "index": {
+                  "str": "index"
+                },
+                "more": {
+                  "bool": true
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8201918601a5696e64657802918801a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726406cb3ff800000000000007cb3ff8000000000000088301a474657874029182016b02cccf03cd013303a9636f727265637465640491a7636f6c756d6e7305c3068301a4636f646502a76d6573736167650381a161a477686174029182016b02cccf",
+      "message": "search.ManyFound",
+      "name": "search.ManyFound with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.ManyFound",
+      "name": "search.ManyFound with no field"
+    },
+    {
+      "fields": {
+        "columns": {
+          "list": [
+            {
+              "str": "columns"
+            }
+          ]
+        },
+        "corrected": {
+          "str": "corrected"
+        },
+        "failure": {
+          "fields": {
+            "code": {
+              "str": "code"
+            },
+            "message": {
+              "str": "message"
+            },
+            "what": {
+              "names": {
+                "a": {
+                  "str": "what"
+                }
+              }
+            }
+          }
+        },
+        "hits": {
+          "list": [
+            {
+              "fields": {
+                "id": {
+                  "str": "id"
+                },
+                "matches": {
+                  "list": [
+                    {
+                      "fields": {
+                        "end": {
+                          "uint": "407"
+                        },
+                        "field": {
+                          "str": "field"
+                        },
+                        "item": {
+                          "uint": "207"
+                        },
+                        "start": {
+                          "uint": "307"
+                        },
+                        "word": {
+                          "str": "word"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "row": {
+                  "list": [
+                    {
+                      "str": "row"
+                    }
+                  ]
+                },
+                "score": {
+                  "float": "3ff8000000000000"
+                },
+                "similarity": {
+                  "float": "3ff8000000000000"
+                },
+                "snippet": {
+                  "fields": {
+                    "item": {
+                      "uint": "307"
+                    },
+                    "marks": {
+                      "list": [
+                        {
+                          "fields": {
+                            "end": {
+                              "uint": "207"
+                            },
+                            "start": {
+                              "uint": "107"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "text": {
+                      "str": "text"
+                    }
+                  }
+                },
+                "textScore": {
+                  "float": "3ff8000000000000"
+                },
+                "value": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          ]
+        },
+        "index": {
+          "str": "index"
+        },
+        "more": {
+          "bool": true
+        }
+      },
+      "hex": "8601a5696e64657802918801a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726406cb3ff800000000000007cb3ff8000000000000088301a474657874029182016b02cccf03cd013303a9636f727265637465640491a7636f6c756d6e7305c3068301a4636f646502a76d6573736167650381a161a477686174",
+      "message": "search.Group",
+      "name": "search.Group with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Group",
+      "name": "search.Group with no field"
+    },
+    {
+      "fields": {
+        "group": {
+          "uint": "107"
+        },
+        "hit": {
+          "uint": "207"
+        }
+      },
+      "hex": "82016b02cccf",
+      "message": "search.Best",
+      "name": "search.Best with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Best",
+      "name": "search.Best with no field"
+    },
+    {
+      "fields": {
         "advance": {
           "uint": "1500"
         },
@@ -8125,6 +8603,7 @@
     "search.list": 2825,
     "search.open": 2817,
     "search.search": 2822,
+    "search.searchMany": 2826,
     "search.set": 2818,
     "search.setMany": 2819,
     "search.status": 2823,

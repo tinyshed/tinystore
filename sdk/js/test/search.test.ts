@@ -240,6 +240,70 @@ for (const way of ways) {
 			expect(refused).toBeInstanceOf(InvalidError)
 		})
 
+		// contract: SRCH-25, SRCH-26, SRCH-27
+		test('one question of several indexes answers a group an index and every hit merged by rank', async () => {
+			const courses = store.index<{ title: string }>('box_courses', { fields: { title: 1 } })
+			const pages = store.index<{ title: string; plain: string; space_id: number }>('box_pages', {
+				fields: { title: 2, plain: 1 },
+				filters: ['space_id'],
+			})
+			const people = store.index<{ name: string }>('box_people', { fields: { name: 1 } })
+			await courses.setMany([
+				{ id: 'c-1', value: { title: 'Linear algebra' } },
+				{ id: 'c-2', value: { title: 'Algebra of logic' } },
+			])
+			await pages.setMany([
+				{
+					id: 'p-1',
+					value: { title: 'Notes', plain: 'In the term we read linear algebra.', space_id: 7 },
+				},
+				{ id: 'p-2', value: { title: 'Algebra', plain: 'Another space.', space_id: 8 } },
+			])
+			await people.set('u-1', { name: 'Ada' })
+			const found = await store.search({
+				text: 'algebra',
+				in: [
+					{ index: courses, boost: 2, limit: 1 },
+					{
+						index: pages,
+						where: { space_id: 7 },
+						limit: 5,
+						snippet: { field: 'plain', around: 12 },
+					},
+					{ index: people, limit: 5 },
+				],
+			})
+			expect(found.groups.map(group => group.index)).toEqual([
+				'box_courses',
+				'box_pages',
+				'box_people',
+			])
+			const [first, second, third] = found.groups
+			if (first === undefined || 'error' in first || second === undefined || 'error' in second) {
+				throw new Error('courses and pages answer')
+			}
+			expect([first.hits.length, first.more]).toEqual([1, true])
+			expect(second.hits.map(hit => hit.id)).toEqual(['p-1'])
+			expect(second.hits[0]?.snippet?.text).toBe('…read linear algebra.')
+			expect(third !== undefined && !('error' in third) && third.hits).toEqual([])
+			expect(found.best.map(best => [best.index, best.hit.id])).toEqual([
+				['box_courses', first.hits[0]?.id ?? ''],
+				['box_pages', 'p-1'],
+			])
+			expect(found.best[0]?.hit).toBe(first.hits[0] as never)
+			await store.dropIndex('box_people')
+			const failed = await store.search({
+				text: 'algebra',
+				in: [{ index: courses }, { index: people }],
+			})
+			const gone = failed.groups[1]
+			expect(gone !== undefined && 'error' in gone && gone.error.message).toContain(
+				'index box_people',
+			)
+			expect(failed.best.map(best => best.hit.id).sort()).toEqual(['c-1', 'c-2'])
+			expect(await caught(store.search({ text: 'algebra', in: [] }))).toBeInstanceOf(InvalidError)
+		})
+
 		test('a hit keeps each half of its score, and a floor keeps a far vector out of the sum', async () => {
 			const opinions = store.index<Product>('opinions', {
 				fields: ['title'],

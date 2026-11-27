@@ -660,3 +660,25 @@ mod table {
         store.close().await.unwrap();
     }
 }
+
+#[test]
+fn a_search_among_several_indexes_is_awaited_and_one_refused_for_its_shape_answers_in_its_first_poll() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = opened(&dir, false);
+    let articles = articles(&store);
+    let notes = store.index::<String>("notes").open().unwrap();
+    runtime().block_on(async {
+        articles.set("a-1", &article("Algebra", "", 1)).await.unwrap();
+        notes.set("n-1", &"algebra notes".to_owned()).await.unwrap();
+        let asked = store.search("algebra").among(&articles, |a| a.boost(2.0)).among(&notes, |a| a.limit(5));
+        let found = asked.run().await.unwrap();
+        let best: Vec<(&str, &str)> =
+            found.best.iter().map(|best| (best.index.as_str(), best.hit.id.as_str())).collect();
+        assert_eq!(best, [("articles", "a-1"), ("notes", "n-1")]);
+    });
+    let mut refused = pin!(store.search("algebra").run());
+    match polled_once(refused.as_mut()) {
+        std::task::Poll::Ready(Err(error)) => assert_eq!(error.kind(), ErrorKind::Invalid),
+        _ => panic!("a search among no index is refused in its first poll"),
+    }
+}

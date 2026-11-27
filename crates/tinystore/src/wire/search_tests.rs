@@ -3,8 +3,9 @@ use crate::pipe::fixture::Client;
 #[cfg(feature = "sql")]
 use crate::wire::codec::Cell;
 use crate::wire::protocol::{
-    Empty, Handle, SearchCut, SearchDeleted, SearchDocument, SearchDropped, SearchField, SearchFound, SearchGot,
-    SearchKey, SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, method,
+    Empty, Handle, SearchAmong, SearchCut, SearchDeleted, SearchDocument, SearchDropped, SearchField, SearchFound,
+    SearchGot, SearchKey, SearchListed, SearchManyFound, SearchManyQuery, SearchName, SearchOpen, SearchQuery,
+    SearchSet, SearchSetMany, SearchStatus, method,
 };
 #[cfg(feature = "sql")]
 use crate::wire::protocol::{SearchStatement, SearchTotal, SqlDone, SqlMigration, SqlOpen, SqlStatement};
@@ -302,4 +303,80 @@ fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
     assert!(refused.message.contains("written to the table"), "{}", refused.message);
     let named = SearchName { name: "articles_search".to_owned(), database: Some(database) };
     assert!(client.call::<SearchDropped>(method::SEARCH_DROP_INDEX, &named).unwrap().dropped);
+}
+
+fn among(handle: u64, boost: Option<f64>, query: SearchQuery) -> SearchAmong {
+    SearchAmong { query: SearchQuery { handle, ..query }, boost }
+}
+
+// contract: SRCH-26
+#[test]
+fn a_search_among_several_indexes_answers_each_group_and_best_by_its_groups_places() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let courses = open(&mut client, "courses");
+    let pages = open(&mut client, "pages");
+    set(&mut client, courses, ("c-1", r#"{"title":"algebra"}"#), &[1.0, 0.0, 0.0]);
+    set(&mut client, courses, ("c-2", r#"{"title":"algebra of logic"}"#), &[1.0, 0.0, 0.0]);
+    set(&mut client, pages, ("p-1", r#"{"title":"algebra notes","category":"mine"}"#), &[0.0, 1.0, 0.0]);
+    set(&mut client, pages, ("p-2", r#"{"title":"algebra again","category":"theirs"}"#), &[0.0, 1.0, 0.0]);
+    let mine = SearchQuery {
+        r#where: Some(r#"[{"eq":["category","mine"]}]"#.to_owned()),
+        snippet: Some(SearchCut { field: "title".to_owned(), around: Some(60), unit: "utf16".to_owned() }),
+        ..SearchQuery::default()
+    };
+    let asked = SearchManyQuery {
+        text: "algebra".to_owned(),
+        among: vec![
+            among(courses, Some(2.0), SearchQuery { limit: Some(1), ..SearchQuery::default() }),
+            among(pages, None, mine),
+        ],
+    };
+    let found: SearchManyFound = client.call(method::SEARCH_SEARCH_MANY, &asked).unwrap();
+    let groups: Vec<(&str, usize, bool)> =
+        found.groups.iter().map(|group| (group.index.as_str(), group.hits.len(), group.more)).collect();
+    assert_eq!(groups, [("courses", 1, true), ("pages", 1, false)]);
+    assert_eq!(found.groups[0].hits[0].id, "c-1");
+    assert_eq!(found.groups[1].hits[0].value, r#"{"category":"mine","title":"algebra notes"}"#);
+    assert!(found.groups[1].hits[0].snippet.is_some(), "each group with its own options");
+    let best: Vec<(u64, u64)> = found.best.iter().map(|best| (best.group, best.hit)).collect();
+    assert_eq!(best, [(0, 0), (1, 0)], "a group and a place in its hits, not a copy of the hit");
+}
+
+// contract: SRCH-25
+#[test]
+fn a_search_among_several_indexes_says_the_one_that_failed_and_refuses_what_only_one_takes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let courses = open(&mut client, "courses");
+    set(&mut client, courses, ("c-1", r#"{"title":"algebra"}"#), &[1.0, 0.0, 0.0]);
+    let unfiltered = SearchQuery { r#where: Some(r#"[{"eq":["nowhere",1]}]"#.to_owned()), ..SearchQuery::default() };
+    let failing = SearchManyQuery {
+        text: "algebra".to_owned(),
+        among: vec![among(courses, None, unfiltered.clone()), among(courses, None, SearchQuery::default())],
+    };
+    let found: SearchManyFound = client.call(method::SEARCH_SEARCH_MANY, &failing).unwrap();
+    let failure = found.groups[0].failure.as_ref().expect("the failed group says why");
+    assert_eq!(failure.code, "invalid");
+    assert!(failure.message.contains("index courses"), "{}", failure.message);
+    assert!(found.groups[0].hits.is_empty() && found.groups[1].failure.is_none());
+    let mut refused = |among: Vec<SearchAmong>| {
+        let asked = SearchManyQuery { text: "algebra".to_owned(), among };
+        let refused = client.call::<SearchManyFound>(method::SEARCH_SEARCH_MANY, &asked).unwrap_err();
+        assert_eq!(refused.code, "invalid", "{}", refused.message);
+        refused.message
+    };
+    assert!(refused(Vec::new()).contains("no index"));
+    let every = (0..33).map(|_| among(courses, None, SearchQuery::default())).collect();
+    assert!(refused(every).contains("33 indexes"));
+    let own_text = SearchQuery { text: "logic".to_owned(), ..SearchQuery::default() };
+    assert!(refused(vec![among(courses, None, own_text)]).contains("one text"));
+    let paged = SearchQuery { offset: 5, ..SearchQuery::default() };
+    assert!(refused(vec![among(courses, None, paged)]).contains("offset"));
+    let by_vector = SearchQuery { vector: Some(bytes(&[1.0, 0.0, 0.0])), ..SearchQuery::default() };
+    assert!(refused(vec![among(courses, None, by_vector)]).contains("vector"));
+    assert!(refused(vec![among(courses, Some(-1.0), SearchQuery::default())]).contains("boost"));
+    assert!(refused(vec![among(99, None, SearchQuery::default())]).contains("no such handle"));
+    let every_failing = refused(vec![among(courses, None, unfiltered)]);
+    assert!(every_failing.contains("index courses"), "every group failed: {every_failing}");
 }

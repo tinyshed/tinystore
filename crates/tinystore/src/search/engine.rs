@@ -523,6 +523,21 @@ impl Search {
         })
     }
 
+    /// Searches each index by its query in one snapshot of the file, so that
+    /// no write lands between two of them; one that fails is its own answer
+    /// alone, and the snapshot goes on to the next.
+    pub(crate) fn search_each(&self, asked: Vec<(&OpenIndex, Query)>) -> Result<Vec<Result<Answer>>> {
+        self.file.read(|connection| {
+            let answers = asked.into_iter().enumerate().map(|(at, (open, query))| {
+                super::many::before_group(at);
+                let serving = open.current().serving.clone();
+                let searched = self.search_on(connection, open, &serving, query, |_, _, _| Ok(()));
+                searched.map(|(answer, ())| answer)
+            });
+            Ok(answers.collect())
+        })
+    }
+
     /// Searches on the writer of a transaction that holds the file, seeing
     /// what it wrote. The index is read from the transaction's rows, never
     /// from the lock a change of the index holds while it waits for this

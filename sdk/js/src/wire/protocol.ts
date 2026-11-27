@@ -202,6 +202,10 @@ export const methods = {
 	'search.dropIndex': 0x0b08,
 	'search.list': 0x0b09,
 	/**
+	 * Fails only where every index failed, with the first failure.
+	 */
+	'search.searchMany': 0x0b0a,
+	/**
 	 * Stops the server as its closing does: the streams running finish, every
 	 * connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
 	 */
@@ -13181,6 +13185,52 @@ export const SearchListed = message(
 )
 
 /**
+ * A hit of best, by its group's place and its own place in that group's hits.
+ */
+export const SearchBest = message(
+	'search.Best',
+	{
+		group: [1, uint],
+		hit: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.group !== undefined) {
+				w.field(1)
+				w.uint(v.group)
+				n++
+			}
+			if (v.hit !== undefined) {
+				w.field(2)
+				w.uint(v.hit)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $group: number | undefined
+			let $hit: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$group = r.uint()
+						break
+					case 2:
+						$hit = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { group: $group, hit: $hit }
+		},
+	},
+)
+
+/**
  * A private server's clock: a time to set it to, a span to move it forward by,
  * or neither to read it. The answer is the time it reads once moved.
  */
@@ -15570,6 +15620,56 @@ export const SearchSnippet = message(
 )
 
 /**
+ * One index a ManyQuery asks, and its search as a query of it alone says it:
+ * its where, limit, prefix, matches and snippet; its own text, vector,
+ * offset or total are invalid.
+ */
+export const SearchAmong = message(
+	'search.Among',
+	{
+		/** limit 1 to 100, 10 when absent */
+		query: [1, SearchQuery],
+		/** what its hits weigh in best, above 0; 1 when absent */
+		boost: [2, float],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.query !== undefined) {
+				w.field(1)
+				SearchQuery.write(w, v.query)
+				n++
+			}
+			if (v.boost !== undefined) {
+				w.field(2)
+				w.float(v.boost)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $query: Read<typeof SearchQuery.fields> | undefined
+			let $boost: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$query = SearchQuery.read(r)
+						break
+					case 2:
+						$boost = r.float()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { query: $query, boost: $boost }
+		},
+	},
+)
+
+/**
  * A setting's line of explain.
  */
 export const ConfigLine = message(
@@ -15890,6 +15990,182 @@ export const SearchFound = message(
 )
 
 /**
+ * One question asked of several indexes in one call, as a "find anything"
+ * box asks it: the store's indexes of documents searched in one snapshot of
+ * search.db, a table's index in a snapshot of its database's file.
+ */
+export const SearchManyQuery = message(
+	'search.ManyQuery',
+	{
+		/** every index's, as a query's text */
+		text: [1, str],
+		/** 1 to 32, in order; the same index twice with another where */
+		among: [2, list(SearchAmong)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.text !== undefined) {
+				w.field(1)
+				w.str(v.text)
+				n++
+			}
+			if (v.among !== undefined) {
+				w.field(2)
+				w.array(v.among.length)
+				for (const item0 of v.among) {
+					SearchAmong.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $text: string | undefined
+			let $among: Read<typeof SearchAmong.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$text = r.str()
+						break
+					case 2: {
+						const items0: Read<typeof SearchAmong.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchAmong.read(r))
+						}
+						r.leave()
+						$among = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { text: $text, among: $among }
+		},
+	},
+)
+
+/**
+ * An index's hits, the best by its own scores first, or why its search failed.
+ */
+export const SearchGroup = message(
+	'search.Group',
+	{
+		/** the index's name */
+		index: [1, str],
+		/** none where it failed */
+		hits: [2, list(SearchHit)],
+		/** as search.Found's */
+		corrected: [3, str],
+		/** the columns of a table's index's rows */
+		columns: [4, list(str)],
+		/** the index has hits past the group's limit */
+		more: [5, bool],
+		/** why its search failed */
+		failure: [6, Failure],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.index !== undefined) {
+				w.field(1)
+				w.str(v.index)
+				n++
+			}
+			if (v.hits !== undefined) {
+				w.field(2)
+				w.array(v.hits.length)
+				for (const item0 of v.hits) {
+					SearchHit.write(w, item0)
+				}
+				n++
+			}
+			if (v.corrected !== undefined) {
+				w.field(3)
+				w.str(v.corrected)
+				n++
+			}
+			if (v.columns !== undefined) {
+				w.field(4)
+				w.array(v.columns.length)
+				for (const item0 of v.columns) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.more !== undefined) {
+				w.field(5)
+				w.bool(v.more)
+				n++
+			}
+			if (v.failure !== undefined) {
+				w.field(6)
+				Failure.write(w, v.failure)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $index: string | undefined
+			let $hits: Read<typeof SearchHit.fields>[] | undefined
+			let $corrected: string | undefined
+			let $columns: string[] | undefined
+			let $more: boolean | undefined
+			let $failure: Read<typeof Failure.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$index = r.str()
+						break
+					case 2: {
+						const items0: Read<typeof SearchHit.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchHit.read(r))
+						}
+						r.leave()
+						$hits = items0
+						break
+					}
+					case 3:
+						$corrected = r.str()
+						break
+					case 4: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$columns = items0
+						break
+					}
+					case 5:
+						$more = r.bool()
+						break
+					case 6:
+						$failure = Failure.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				index: $index,
+				hits: $hits,
+				corrected: $corrected,
+				columns: $columns,
+				more: $more,
+				failure: $failure,
+			}
+		},
+	},
+)
+
+/**
  * A config's value at a version of its changes, and where each setting's
  * value came from.
  */
@@ -15982,6 +16258,72 @@ export const ConfigValue = message(
 			}
 			r.leave()
 			return { handle: $handle, version: $version, value: $value, lines: $lines, notes: $notes }
+		},
+	},
+)
+
+/**
+ * Each index's group in the order asked, and every group's hits in one
+ * order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
+ * weighs boost / (60 + r); equal weights by the group asked first, then rank.
+ */
+export const SearchManyFound = message(
+	'search.ManyFound',
+	{
+		groups: [1, list(SearchGroup)],
+		best: [2, list(SearchBest)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.groups !== undefined) {
+				w.field(1)
+				w.array(v.groups.length)
+				for (const item0 of v.groups) {
+					SearchGroup.write(w, item0)
+				}
+				n++
+			}
+			if (v.best !== undefined) {
+				w.field(2)
+				w.array(v.best.length)
+				for (const item0 of v.best) {
+					SearchBest.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $groups: Read<typeof SearchGroup.fields>[] | undefined
+			let $best: Read<typeof SearchBest.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof SearchGroup.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchGroup.read(r))
+						}
+						r.leave()
+						$groups = items0
+						break
+					}
+					case 2: {
+						const items0: Read<typeof SearchBest.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchBest.read(r))
+						}
+						r.leave()
+						$best = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { groups: $groups, best: $best }
 		},
 	},
 )
