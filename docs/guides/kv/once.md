@@ -104,7 +104,7 @@ await books.under(course_id).clear()
 ```go
 books, err := kv.OpenOnce[GradeBook](store, "cabinet-books", kv.Fresh(10*time.Minute), kv.Keep(12*time.Hour))
 
-answer, err := books.Fetch(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
+answer, err := books.Fetch(ctx, strconv.Itoa(userID), func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
 // answer.Value, answer.Age, answer.Stale
 err = books.Under(courseID).Clear(ctx)
 ```
