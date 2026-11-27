@@ -13,6 +13,7 @@ use super::dedupe::Dedupe;
 use super::engine::Jobs;
 use super::gather::{self, Gather, Gathered};
 use super::policy::{Concurrency, Policy};
+use super::quiet::Quiet;
 use super::read::named::Which;
 use super::read::{self, Counts, Filter, Job, JobRef, Page};
 use super::run::{Outcome, Run};
@@ -125,6 +126,14 @@ where
     /// over it.
     pub fn keep(mut self, span: Duration) -> Self {
         self.policy.keep = span;
+        self
+    }
+
+    /// The hours in which the queue's jobs do not run: a time the store gives
+    /// a job inside them, its first or a retry's, a repeat's or a gather's,
+    /// becomes their end. A job's own, given to its call, wins over it.
+    pub fn quiet(mut self, quiet: Quiet) -> Self {
+        self.policy.quiet = Some(quiet);
         self
     }
 
@@ -519,7 +528,7 @@ where
         let named = self.named(asked.id());
         let written = || {
             self.refuse_gather_on_a_copy(tx.is_none())?;
-            let call = asked.prepare_gather(items, gather, self.jobs.now())?;
+            let call = asked.prepare_gather(items, gather, (self.jobs.now(), self.state.policy.quiet.as_ref()))?;
             let (bytes, work) = (call.value.len(), gathers(Arc::clone(&self.state), call));
             match tx {
                 None => self.jobs.file().write(bytes, work),
@@ -539,7 +548,8 @@ where
     pub(crate) fn gathering(&self, asked: Asked, items: &V, gather: Gather) -> GatherWriting {
         let named = self.named(asked.id());
         let now = self.jobs.now();
-        let ready = self.refuse_gather_on_a_copy(true).and_then(|()| asked.prepare_gather(items, gather, now));
+        let quiet = self.state.policy.quiet.as_ref();
+        let ready = self.refuse_gather_on_a_copy(true).and_then(|()| asked.prepare_gather(items, gather, (now, quiet)));
         GatherWriting { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), named, ready }
     }
 
@@ -659,7 +669,7 @@ where
             }
             _ => {}
         }
-        asked.prepare(value, self.jobs.now())
+        asked.prepare(value, (self.jobs.now(), self.state.policy.quiet.as_ref()))
     }
 
     /// Runs a write of the queue in a savepoint of `tx`, once the queue is

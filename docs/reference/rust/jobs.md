@@ -157,6 +157,17 @@ again: an `upsert`, a `set` or an `update` that names it renews it,
 as a key's `ttl` does. A job does not start at or after its term; a
 run under way finishes, and a repeat ends there.
 
+### JobCall.quiet
+
+```rust
+pub fn quiet(self, quiet: Quiet) -> Self
+```
+
+The hours in which this job does not run, in the place of its queue's,
+for its first run and every later one; `Quiet::none()` holds it by
+none. A time it is given inside them, `at` among them, becomes their
+end: the hours are a promise to the person, not a hint.
+
 ### JobCall.expires_at
 
 ```rust
@@ -684,6 +695,16 @@ How long a failed job stays, with its error, to be found and started
 again: a week; `Duration::ZERO` keeps it not at all. A job's own wins
 over it.
 
+### QueueBuilder.quiet
+
+```rust
+pub fn quiet(self, quiet: Quiet) -> Self
+```
+
+The hours in which the queue's jobs do not run: a time the store gives
+a job inside them, its first or a retry's, a repeat's or a gather's,
+becomes their end. A job's own, given to its call, wins over it.
+
 ### QueueBuilder.max_waiting
 
 ```rust
@@ -729,6 +750,31 @@ where
 ```
 
 Runs what is due; see `Queue::run_due`.
+
+## Quiet
+
+```rust
+pub struct Quiet { /* private fields */ }
+```
+
+Hours in which a queue's jobs, or one job, do not run: `Quiet::hours("23:00",
+"07:00", "Europe/Moscow")`, from 23:00 to 07:00 on Moscow's clock; a `from`
+after `to` wraps midnight. `Quiet::none()` on a call holds its job by no
+quiet hours, its queue's neither. The times and the zone are checked where
+the queue opens or the call is made: a time not `HH:MM`, the two the same,
+or a zone no one has is `invalid`.
+
+### Quiet.hours
+
+```rust
+pub fn hours(from: &str, to: &str, zone: &str) -> Quiet
+```
+
+### Quiet.none
+
+```rust
+pub fn none() -> Quiet
+```
 
 ## Counts
 
@@ -1353,6 +1399,15 @@ pub fn ttl(self, span: Duration) -> Self
 The job leaves its queue `span` after its last write unless written
 again; see `jobs::JobCall::ttl`.
 
+### aio::jobs::JobCall.quiet
+
+```rust
+pub fn quiet(self, quiet: Quiet) -> Self
+```
+
+The hours in which this job does not run, in the place of its queue's;
+see `jobs::JobCall::quiet`.
+
 ### aio::jobs::JobCall.expires_at
 
 ```rust
@@ -1769,6 +1824,14 @@ pub fn keep(self, span: Duration) -> Self
 
 How long a failed job stays, with its error, to be found and started
 again: a week; `Duration::ZERO` keeps it not at all.
+
+### aio::jobs::QueueBuilder.quiet
+
+```rust
+pub fn quiet(self, quiet: Quiet) -> Self
+```
+
+The hours in which the queue's jobs do not run; see `jobs::QueueBuilder::quiet`.
 
 ### aio::jobs::QueueBuilder.max_waiting
 

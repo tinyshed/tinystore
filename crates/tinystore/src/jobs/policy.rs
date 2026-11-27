@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::call::LONGEST_SPAN;
 use super::dedupe::Dedupe;
+use super::quiet::Quiet;
 use crate::clock::millis;
 use crate::{Error, Result};
 
@@ -48,6 +49,8 @@ pub(crate) struct Policy {
     pub(crate) dedupe: Option<Dedupe>,
     pub(crate) keep: Duration,
     pub(crate) max_waiting: u64,
+    /// The hours in which the queue's jobs do not run, which a job's own win over.
+    pub(crate) quiet: Option<Quiet>,
 }
 
 impl Default for Policy {
@@ -62,6 +65,7 @@ impl Default for Policy {
             dedupe: None,
             keep: Duration::from_hours(24 * 7),
             max_waiting: 10_000_000,
+            quiet: None,
         }
     }
 }
@@ -93,6 +97,11 @@ impl Policy {
         };
         if let Some(dedupe) = &self.dedupe {
             dedupe.check(true)?;
+        }
+        if let Some(quiet) = &self.quiet
+            && quiet.checked()?.is_none()
+        {
+            return Err(Error::invalid("a queue's quiet hours are hours: Quiet::none() is a call's"));
         }
         refused.map_or(Ok(()), |why| Err(Error::invalid(why)))
     }

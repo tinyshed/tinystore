@@ -563,6 +563,29 @@ func TestGatherAppendsWhatArrivesUnderOneIDToOneJobDueSettleAfterTheLast(t *test
 	})
 }
 
+// contract: JOB-24
+func TestAJobDueInsideItsQuietHoursIsDueAtTheirEndAndACallsOwnWins(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		now := time.Now().UTC()
+		hour := func(n int) string { return fmt.Sprintf("%02d:00", (now.Hour()+n+24)%24) }
+		pushes := ways.Must(jobs.OpenQueue[string](store, "pushes-at-night", jobs.Quiet(hour(-1), hour(2), "UTC")))
+		ways.Must(pushes.Add(ctx, "held", jobs.ID("held")))
+		ways.Must(pushes.Add(ctx, "urgent", jobs.ID("urgent"), jobs.NoQuiet()))
+		end := now.Truncate(time.Hour).Add(2 * time.Hour)
+		if held, _ := ways.Must2(pushes.Get(ctx, "held")); !held.At.Equal(end) {
+			t.Fatalf("held until %v: %+v", end, held)
+		}
+		if urgent, _ := ways.Must2(pushes.Get(ctx, "urgent")); urgent.At.Sub(now) > time.Minute {
+			t.Fatalf("no hours hold it: %+v", urgent)
+		}
+		_, err := pushes.Add(ctx, "x", jobs.Quiet("23:00", "23:00", "UTC"))
+		if !errors.Is(err, tinystore.ErrInvalid) {
+			t.Fatalf("the same two: %v", err)
+		}
+	})
+}
+
 // contract: JOB-17
 func TestUpsertAddsAJobOrBringsTheOneThereToTheCallAndKeepsItsTime(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {

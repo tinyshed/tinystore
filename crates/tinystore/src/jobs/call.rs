@@ -9,6 +9,7 @@ use super::gather::{self, Gather, Gathered, Gathering};
 #[cfg(any(feature = "wire", feature = "sql", feature = "async"))]
 use super::queue::Change;
 use super::queue::Queue;
+use super::quiet::{Hours, Quiet};
 use super::repeat::Asked as Repeat;
 use super::values::{self, Kept};
 use super::write::Prepared;
@@ -53,6 +54,7 @@ pub(crate) struct Asked {
     dedupe: Option<Dedupe>,
     keep: Option<Duration>,
     term: Option<Term>,
+    quiet: Option<Quiet>,
     /// A step the chain refused, which its last step reports.
     refused: Option<String>,
 }
@@ -139,6 +141,15 @@ where
     /// run under way finishes, and a repeat ends there.
     pub fn ttl(self, span: Duration) -> Self {
         self.term(Term::Ttl(span))
+    }
+
+    /// The hours in which this job does not run, in the place of its queue's,
+    /// for its first run and every later one; `Quiet::none()` holds it by
+    /// none. A time it is given inside them, `at` among them, becomes their
+    /// end: the hours are a promise to the person, not a hint.
+    pub fn quiet(mut self, quiet: Quiet) -> Self {
+        self.asked.quiet = Some(quiet);
+        self
     }
 
     /// The job leaves its queue at `time`, as `ttl` says; one already past
@@ -264,7 +275,7 @@ impl Asked {
     /// a ttl's span or 2 a time. Nothing when none is given.
     #[cfg(feature = "replication")]
     pub(crate) fn write_own(&self, out: &mut crate::replication::Out) {
-        if self.dedupe.is_none() && self.keep.is_none() && self.term.is_none() {
+        if self.dedupe.is_none() && self.keep.is_none() && self.term.is_none() && self.quiet.is_none() {
             return;
         }
         match &self.dedupe {
@@ -279,6 +290,10 @@ impl Asked {
             None => out.byte(0),
             Some(Term::Ttl(span)) => out.byte(1).span(span),
             Some(Term::At(time)) => out.byte(2).long(unix_millis(time) as u64),
+        };
+        match &self.quiet {
+            None => out.byte(0),
+            Some(quiet) => out.byte(1).text(&quiet.kept().unwrap_or_default()),
         };
     }
 
@@ -306,6 +321,14 @@ impl Asked {
             1 => Some(Term::Ttl(at.span()?)),
             2 => Some(Term::At(crate::clock::from_unix_millis(at.long()? as i64))),
             _ => return Err(super::forward::corrupt("a job's term")),
+        };
+        if at.done() {
+            return Ok(());
+        }
+        self.quiet = match at.byte()? {
+            0 => None,
+            1 => Some(Quiet::kept_as(&at.text()?).map_err(|_| super::forward::corrupt("a job's quiet hours"))?),
+            _ => return Err(super::forward::corrupt("a job's quiet hours")),
         };
         Ok(())
     }
@@ -352,7 +375,12 @@ impl Asked {
 
     /// A gather's call checked and its value encoded, as [`Asked::prepare`]
     /// does, its time the settle's.
-    pub(crate) fn prepare_gather<V: Serialize>(self, items: &V, asked: Gather, now: i64) -> Result<Prepared> {
+    pub(crate) fn prepare_gather<V: Serialize>(
+        self,
+        items: &V,
+        asked: Gather,
+        (now, queue): (i64, Option<&Quiet>),
+    ) -> Result<Prepared> {
         let beside = match (&self.id, &self.when, &self.repeat) {
             (None, _, _) => Some("a gather needs an id, which names the job it gathers into"),
             (_, Some(_), _) => Some("a gather's time is its settle's: no at or delay beside it"),
@@ -363,9 +391,9 @@ impl Asked {
             return Err(Error::invalid(why));
         }
         let (settled, latest) = asked.times(now)?;
-        let mut call = self.prepare(items, now)?;
+        let mut call = self.prepare(items, (now, queue))?;
         let count = gather::count(call.value.bytes())?;
-        call.at = latest.map_or(settled, |latest| latest.min(settled));
+        call.at = call.held(latest.map_or(settled, |latest| latest.min(settled)));
         if !in_years(call.at) {
             return Err(Error::invalid("a time outside the years 1 to 9999"));
         }
@@ -375,10 +403,11 @@ impl Asked {
 
     /// Checks what was asked and gathers what the write needs, the value
     /// encoded, before the write waits for the writer.
-    pub(crate) fn prepare<V: Serialize>(self, value: &V, now: i64) -> Result<Prepared> {
+    pub(crate) fn prepare<V: Serialize>(self, value: &V, (now, queue): (i64, Option<&Quiet>)) -> Result<Prepared> {
         if let Some(refused) = self.refused {
             return Err(Error::invalid(refused));
         }
+        let (quiet, hours) = quiet_of(self.quiet.as_ref(), queue)?;
         for (what, text) in [("an id", &self.id), ("a group", &self.group)] {
             if let Some(text) = text
                 && (text.is_empty() || text.len() > MAX_ID)
@@ -391,11 +420,12 @@ impl Asked {
             (Some(repeat), Some(id)) => Some(repeat.of(id)?),
             (None, _) => None,
         };
-        let at = match self.when {
+        let hold = |at: i64| hours.as_ref().map_or(at, |hours| hours.hold(at));
+        let at = hold(match self.when {
             Some(When::At(time)) => unix_millis(time),
             Some(When::After(span)) => now.saturating_add(millis(span)),
             None => repeat.as_ref().and_then(|repeat| repeat.next(now)).unwrap_or(now),
-        };
+        });
         if !in_years(at) {
             return Err(Error::invalid("a time outside the years 1 to 9999"));
         }
@@ -421,7 +451,7 @@ impl Asked {
             key: self.id,
             at,
             timed: self.when.is_some(),
-            repeated: repeat.as_ref().and_then(|repeat| repeat.next(now)),
+            repeated: repeat.as_ref().and_then(|repeat| repeat.next(now)).map(hold),
             repeat: repeat.map(|repeat| repeat.text()),
             group: self.group,
             dedupe: self.dedupe.map(|dedupe| dedupe.text()),
@@ -430,7 +460,18 @@ impl Asked {
             ttl,
             value: Kept::of(values::encode(value)?),
             gather: None,
+            quiet,
+            hours,
             now,
         })
+    }
+}
+
+/// What a job keeps of a call's quiet hours, and the hours that hold its
+/// time: the call's own, or its queue's when it gives none.
+fn quiet_of(own: Option<&Quiet>, queue: Option<&Quiet>) -> Result<(Option<String>, Option<Hours>)> {
+    match own {
+        Some(own) => Ok((Some(own.kept()?), own.checked()?)),
+        None => Ok((None, queue.map(Quiet::checked).transpose()?.flatten())),
     }
 }

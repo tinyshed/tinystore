@@ -3027,6 +3027,57 @@ JobsRate = Message(
 )
 
 
+def _write_jobs_quiet(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("from")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("to")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("time_zone")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_jobs_quiet(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["from"] = r.str()
+            case 2:
+                read["to"] = r.str()
+            case 3:
+                read["time_zone"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# Hours in which a job does not run: from and to, HH:MM on the wall clock of
+# timeZone; a from after to wraps midnight. A time the store gives a job
+# inside them is their end.
+JobsQuiet = Message(
+    "jobs.Quiet",
+    {
+        "from": (1, str_),
+        "to": (2, str_),
+        # an IANA name, UTC among them
+        "time_zone": (3, str_),
+    },
+    _write_jobs_quiet,
+    _read_jobs_quiet,
+)
+
+
 def _write_jobs_queue_open(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -3078,6 +3129,10 @@ def _write_jobs_queue_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(12)
         JobsCalendar.write(w, x)
         n += 1
+    if (x := v.get("quiet")) is not None:
+        w.uint(13)
+        JobsQuiet.write(w, x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -3110,6 +3165,8 @@ def _read_jobs_queue_open(r: Reader) -> dict[str, Any]:
                 read["group_rate"] = JobsRate.read(r)
             case 12:
                 read["dedupe_calendar"] = JobsCalendar.read(r)
+            case 13:
+                read["quiet"] = JobsQuiet.read(r)
             case _:
                 r.skip()
     r.leave()
@@ -3143,6 +3200,8 @@ JobsQueueOpen = Message(
         "group_rate": (11, JobsRate),
         # in the place of dedupe: until the local unit a job was done in ends
         "dedupe_calendar": (12, JobsCalendar),
+        # hours in which the queue's jobs do not run
+        "quiet": (13, JobsQuiet),
     },
     _write_jobs_queue_open,
     _read_jobs_queue_open,
@@ -3287,6 +3346,14 @@ def _write_jobs_call(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(14)
         w.uint(x)
         n += 1
+    if (x := v.get("quiet")) is not None:
+        w.uint(15)
+        JobsQuiet.write(w, x)
+        n += 1
+    if (x := v.get("no_quiet")) is not None:
+        w.uint(16)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -3323,6 +3390,10 @@ def _read_jobs_call(r: Reader) -> dict[str, Any]:
                 read["expires_at"] = r.int()
             case 14:
                 read["keep"] = r.uint()
+            case 15:
+                read["quiet"] = JobsQuiet.read(r)
+            case 16:
+                read["no_quiet"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -3355,6 +3426,10 @@ JobsCall = Message(
         "expires_at": (13, int_),
         # this job's own once it failed for good; 0 not at all
         "keep": (14, uint),
+        # this job's own hours in which it does not run, in the place of its queue's
+        "quiet": (15, JobsQuiet),
+        # no quiet hours hold this job, its queue's neither; not beside quiet
+        "no_quiet": (16, bool_),
     },
     _write_jobs_call,
     _read_jobs_call,
@@ -12947,6 +13022,7 @@ messages: dict[str, Message] = {
     "jobs.Calendar": JobsCalendar,
     "jobs.Backoff": JobsBackoff,
     "jobs.Rate": JobsRate,
+    "jobs.Quiet": JobsQuiet,
     "jobs.QueueOpen": JobsQueueOpen,
     "jobs.ScheduleOpen": JobsScheduleOpen,
     "jobs.Call": JobsCall,

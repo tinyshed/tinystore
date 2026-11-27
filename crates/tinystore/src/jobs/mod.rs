@@ -36,6 +36,7 @@ mod maintain;
 mod measure;
 mod policy;
 mod queue;
+mod quiet;
 mod rate;
 mod read;
 mod repeat;
@@ -56,6 +57,7 @@ pub use gather::{Gather, Gathered};
 pub use maintain::{Maintenance, maintain};
 pub use policy::Concurrency;
 pub use queue::{All, Claimed, Queue, QueueBuilder, Workers};
+pub use quiet::Quiet;
 pub use read::{Counts, Filter, Job, JobRef, LastRun, PAGE_JOBS, Page, State};
 pub use run::{Outcome, Run, When};
 pub use schedule::{Schedule, ScheduleBuilder};
@@ -105,6 +107,9 @@ mod gather_tests;
 #[cfg(test)]
 #[path = "queue_tests.rs"]
 mod queue_tests;
+#[cfg(test)]
+#[path = "quiet_tests.rs"]
+mod quiet_tests;
 #[cfg(test)]
 #[path = "watch_tests.rs"]
 mod watch_tests;

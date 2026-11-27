@@ -94,6 +94,7 @@ export type {
 	ListOptions,
 	Queue,
 	QueueOptions,
+	Quiet,
 	Run,
 	Schedule,
 	ScheduleOptions,

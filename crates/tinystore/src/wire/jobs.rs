@@ -18,8 +18,8 @@ use serde_json::value::RawValue;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, JobsAnswer, JobsCalendar, JobsCall, JobsChanged, JobsCounts, JobsGather, JobsGathered,
-    JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx,
-    JobsTxResults, JobsWork, method,
+    JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsQuiet, JobsScheduleOpen,
+    JobsStep, JobsTx, JobsTxResults, JobsWork, method,
 };
 use super::{Lent, Route};
 #[cfg(feature = "sql")]
@@ -28,8 +28,8 @@ use crate::clock::from_unix_millis;
 use crate::engine::Home;
 use crate::jobs::{
     Answers, Change, Concurrency, Counts, Dedupe, Ended, Filter, Gather, Gathered, Hand, Hears, How, Job, JobCall,
-    Lease, Queue, QueueBuilder, Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded, kept,
-    read_value, run_now_then, start_remote,
+    Lease, Queue, QueueBuilder, Quiet, Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded,
+    kept, read_value, run_now_then, start_remote,
 };
 use crate::limits::{ANSWER_BYTES, Limit, PROGRESS_BYTES};
 use crate::{Calendar, Error, ErrorKind, Store, Transaction, unix_millis};
@@ -354,6 +354,9 @@ fn open_queue(store: &Store, lent: Lent<'_>, open: JobsQueueOpen) -> Result<Queu
     if let Some(max_waiting) = open.max_waiting {
         builder = builder.max_waiting(max_waiting);
     }
+    if let Some(quiet) = &open.quiet {
+        builder = builder.quiet(quiet_of(quiet));
+    }
     Ok(builder.open()?)
 }
 
@@ -422,7 +425,17 @@ fn on_job<T>(
     if let Some(expires_at) = call.expires_at {
         job = job.expires_at(from_unix_millis(expires_at));
     }
+    job = match (&call.quiet, call.no_quiet) {
+        (None, false) => job,
+        (Some(quiet), false) => job.quiet(quiet_of(quiet)),
+        (None, true) => job.quiet(Quiet::none()),
+        (Some(_), true) => return Err(Failure::invalid("a job's quiet hours or none, not both")),
+    };
     Ok(write(job, value)?)
+}
+
+fn quiet_of(quiet: &JobsQuiet) -> Quiet {
+    Quiet::hours(&quiet.from, &quiet.to, &quiet.time_zone)
 }
 
 /// A dedupe as a message gives it: a span, or a calendar in its place.

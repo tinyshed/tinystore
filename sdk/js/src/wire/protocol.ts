@@ -3729,6 +3729,65 @@ export const JobsRate = message(
 )
 
 /**
+ * Hours in which a job does not run: from and to, HH:MM on the wall clock of
+ * timeZone; a from after to wraps midnight. A time the store gives a job
+ * inside them is their end.
+ */
+export const JobsQuiet = message(
+	'jobs.Quiet',
+	{
+		from: [1, str],
+		to: [2, str],
+		/** an IANA name, UTC among them */
+		timeZone: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.from !== undefined) {
+				w.field(1)
+				w.str(v.from)
+				n++
+			}
+			if (v.to !== undefined) {
+				w.field(2)
+				w.str(v.to)
+				n++
+			}
+			if (v.timeZone !== undefined) {
+				w.field(3)
+				w.str(v.timeZone)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $from: string | undefined
+			let $to: string | undefined
+			let $timeZone: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$from = r.str()
+						break
+					case 2:
+						$to = r.str()
+						break
+					case 3:
+						$timeZone = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { from: $from, to: $to, timeZone: $timeZone }
+		},
+	},
+)
+
+/**
  * Opens a queue; an option left out takes its default.
  */
 export const JobsQueueOpen = message(
@@ -3757,6 +3816,8 @@ export const JobsQueueOpen = message(
 		groupRate: [11, JobsRate],
 		/** in the place of dedupe: until the local unit a job was done in ends */
 		dedupeCalendar: [12, JobsCalendar],
+		/** hours in which the queue's jobs do not run */
+		quiet: [13, JobsQuiet],
 	},
 	{
 		write(w, v) {
@@ -3822,6 +3883,11 @@ export const JobsQueueOpen = message(
 				JobsCalendar.write(w, v.dedupeCalendar)
 				n++
 			}
+			if (v.quiet !== undefined) {
+				w.field(13)
+				JobsQuiet.write(w, v.quiet)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -3837,6 +3903,7 @@ export const JobsQueueOpen = message(
 			let $database: number | undefined
 			let $groupRate: Read<typeof JobsRate.fields> | undefined
 			let $dedupeCalendar: Read<typeof JobsCalendar.fields> | undefined
+			let $quiet: Read<typeof JobsQuiet.fields> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -3875,6 +3942,9 @@ export const JobsQueueOpen = message(
 					case 12:
 						$dedupeCalendar = JobsCalendar.read(r)
 						break
+					case 13:
+						$quiet = JobsQuiet.read(r)
+						break
 					default:
 						r.skip()
 				}
@@ -3893,6 +3963,7 @@ export const JobsQueueOpen = message(
 				database: $database,
 				groupRate: $groupRate,
 				dedupeCalendar: $dedupeCalendar,
+				quiet: $quiet,
 			}
 		},
 	},
@@ -4033,6 +4104,10 @@ export const JobsCall = message(
 		expiresAt: [13, int],
 		/** this job's own once it failed for good; 0 not at all */
 		keep: [14, uint],
+		/** this job's own hours in which it does not run, in the place of its queue's */
+		quiet: [15, JobsQuiet],
+		/** no quiet hours hold this job, its queue's neither; not beside quiet */
+		noQuiet: [16, bool],
 	},
 	{
 		write(w, v) {
@@ -4108,6 +4183,16 @@ export const JobsCall = message(
 				w.uint(v.keep)
 				n++
 			}
+			if (v.quiet !== undefined) {
+				w.field(15)
+				JobsQuiet.write(w, v.quiet)
+				n++
+			}
+			if (v.noQuiet !== undefined) {
+				w.field(16)
+				w.bool(v.noQuiet)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -4125,6 +4210,8 @@ export const JobsCall = message(
 			let $ttl: number | undefined
 			let $expiresAt: number | undefined
 			let $keep: number | undefined
+			let $quiet: Read<typeof JobsQuiet.fields> | undefined
+			let $noQuiet: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -4169,6 +4256,12 @@ export const JobsCall = message(
 					case 14:
 						$keep = r.uint()
 						break
+					case 15:
+						$quiet = JobsQuiet.read(r)
+						break
+					case 16:
+						$noQuiet = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -4189,6 +4282,8 @@ export const JobsCall = message(
 				ttl: $ttl,
 				expiresAt: $expiresAt,
 				keep: $keep,
+				quiet: $quiet,
+				noQuiet: $noQuiet,
 			}
 		},
 	},

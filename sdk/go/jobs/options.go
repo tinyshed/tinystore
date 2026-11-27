@@ -42,6 +42,7 @@ type queueOptions struct {
 	calendar    *wire.JobsCalendar
 	keep        *time.Duration
 	maxWaiting  *uint64
+	quiet       *wire.JobsQuiet
 	every       *time.Duration
 	cron        *cron
 	err         error
@@ -59,6 +60,8 @@ type jobOptions struct {
 	keep     *time.Duration
 	ttl      *time.Duration
 	expires  *time.Time
+	quiet    *wire.JobsQuiet
+	noQuiet  bool
 }
 
 type listOptions struct {
@@ -218,6 +221,27 @@ func ExpiresAt(t time.Time) expiresAt { return expiresAt(t) }
 
 func (e expiresAt) add(o *jobOptions) { v := time.Time(e); o.expires, o.ttl = &v, nil }
 func (e expiresAt) set(o *jobOptions) { e.add(o) }
+
+type quiet wire.JobsQuiet
+
+// Quiet is hours in which a job does not run: two wall-clock times of a day,
+// HH:MM, in a time zone, an IANA name; a from after to wraps midnight. A time
+// the store gives a job inside them, a retry's or a repeat's too, becomes
+// their end. A queue's, or a job's own in the place of its queue's:
+// jobs.Quiet("23:00", "07:00", "Europe/Moscow").
+func Quiet(from, to, timeZone string) quiet { return quiet{From: from, To: to, TimeZone: timeZone} }
+
+func (q quiet) queue(o *queueOptions) { v := wire.JobsQuiet(q); o.quiet = &v }
+func (q quiet) add(o *jobOptions)     { v := wire.JobsQuiet(q); o.quiet, o.noQuiet = &v, false }
+func (q quiet) set(o *jobOptions)     { q.add(o) }
+
+type noQuiet struct{}
+
+// NoQuiet holds a job by no quiet hours, its queue's neither.
+func NoQuiet() noQuiet { return noQuiet{} }
+
+func (noQuiet) add(o *jobOptions)   { o.quiet, o.noQuiet = nil, true }
+func (n noQuiet) set(o *jobOptions) { n.add(o) }
 
 type maxWaiting int
 

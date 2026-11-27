@@ -6,8 +6,8 @@ use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
     Empty, Handle, Hello, JobsAnswer, JobsCalendar, JobsCall, JobsChanged, JobsCounts, JobsGather, JobsGathered,
-    JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx,
-    JobsTxResults, JobsWork, method,
+    JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsQuiet, JobsScheduleOpen,
+    JobsStep, JobsTx, JobsTxResults, JobsWork, method,
 };
 use crate::{Options, Store};
 
@@ -562,6 +562,31 @@ fn a_client_upserts_a_job_alone_and_in_a_transaction() {
     let nameless = JobsCall { id: None, ..poll };
     let refused = client.call::<JobsChanged>(method::JOBS_UPSERT, &nameless).unwrap_err();
     assert_eq!(refused.code, "invalid", "{}", refused.message);
+}
+
+// contract: JOB-24
+#[test]
+fn a_queues_quiet_hours_hold_its_jobs_and_a_calls_none_or_own_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let now = jiff::Timestamp::now();
+    let hour = now.to_zoned(jiff::tz::TimeZone::UTC).hour();
+    let at = |offset: i8| format!("{:02}:00", (hour + offset).rem_euclid(24));
+    let quiet = JobsQuiet { from: at(-1), to: at(2), time_zone: "UTC".to_owned() };
+    let open = JobsQueueOpen { name: "pushes".to_owned(), quiet: Some(quiet.clone()), ..JobsQueueOpen::default() };
+    let handle = client.call::<Handle>(method::JOBS_QUEUE_OPEN, &open).unwrap().handle;
+    assert!(add(&mut client, &job(handle, "held", "1")));
+    assert!(add(&mut client, &JobsCall { no_quiet: true, ..job(handle, "urgent", "2") }));
+    let end = now.as_millisecond() / 3_600_000 * 3_600_000 + 2 * 3_600_000;
+    assert_eq!(get(&mut client, handle, "held").at, Some(end), "due at the hours' end");
+    assert!(get(&mut client, handle, "urgent").at.is_some_and(|at| at - now.as_millisecond() < 60_000));
+    let both = JobsCall { quiet: Some(quiet), no_quiet: true, ..job(handle, "both", "3") };
+    let refused = client.call::<JobsChanged>(method::JOBS_ADD, &both).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+    let same = JobsQuiet { from: "23:00".to_owned(), to: "23:00".to_owned(), time_zone: "UTC".to_owned() };
+    let refused =
+        client.call::<JobsChanged>(method::JOBS_ADD, &JobsCall { quiet: Some(same), ..job(handle, "same", "4") });
+    assert_eq!(refused.unwrap_err().code, "invalid");
 }
 
 // contract: JOB-22

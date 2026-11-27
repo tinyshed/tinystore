@@ -429,6 +429,8 @@ func NewMessage(name string) Message {
 		return &JobsBackoff{}
 	case "jobs.Rate":
 		return &JobsRate{}
+	case "jobs.Quiet":
+		return &JobsQuiet{}
 	case "jobs.QueueOpen":
 		return &JobsQueueOpen{}
 	case "jobs.ScheduleOpen":
@@ -4551,6 +4553,64 @@ func (m JobsRate) IsZero() bool {
 		m.Per == 0
 }
 
+// JobsQuiet is the schema's jobs.Quiet.
+//
+// Hours in which a job does not run: from and to, HH:MM on the wall clock of
+// timeZone; a from after to wraps midnight. A time the store gives a job
+// inside them is their end.
+type JobsQuiet struct {
+	From string `wire:"1,from"`
+	To   string `wire:"2,to"`
+	// an IANA name, UTC among them
+	TimeZone string `wire:"3,timeZone"`
+}
+
+func (m JobsQuiet) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.From != "" {
+		w.Uint(1)
+		w.Str(m.From)
+		n++
+	}
+	if m.To != "" {
+		w.Uint(2)
+		w.Str(m.To)
+		n++
+	}
+	if m.TimeZone != "" {
+		w.Uint(3)
+		w.Str(m.TimeZone)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *JobsQuiet) Read(r *Reader) {
+	*m = JobsQuiet{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.From = r.Str()
+		case 2:
+			m.To = r.Str()
+		case 3:
+			m.TimeZone = r.Str()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether JobsQuiet writes as no field at all.
+func (m JobsQuiet) IsZero() bool {
+	return m.From == "" &&
+		m.To == "" &&
+		m.TimeZone == ""
+}
+
 // JobsQueueOpen is the schema's jobs.QueueOpen.
 //
 // Opens a queue; an option left out takes its default.
@@ -4578,6 +4638,8 @@ type JobsQueueOpen struct {
 	GroupRate *JobsRate `wire:"11,groupRate"`
 	// in the place of dedupe: until the local unit a job was done in ends
 	DedupeCalendar *JobsCalendar `wire:"12,dedupeCalendar"`
+	// hours in which the queue's jobs do not run
+	Quiet *JobsQuiet `wire:"13,quiet"`
 }
 
 func (m JobsQueueOpen) Write(w *Writer) {
@@ -4643,6 +4705,11 @@ func (m JobsQueueOpen) Write(w *Writer) {
 		m.DedupeCalendar.Write(w)
 		n++
 	}
+	if m.Quiet != nil {
+		w.Uint(13)
+		m.Quiet.Write(w)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -4691,6 +4758,10 @@ func (m *JobsQueueOpen) Read(r *Reader) {
 			var v JobsCalendar
 			v.Read(r)
 			m.DedupeCalendar = &v
+		case 13:
+			var v JobsQuiet
+			v.Read(r)
+			m.Quiet = &v
 		default:
 			r.Skip()
 		}
@@ -4711,7 +4782,8 @@ func (m JobsQueueOpen) IsZero() bool {
 		m.MaxWaiting == nil &&
 		m.Database == nil &&
 		m.GroupRate == nil &&
-		m.DedupeCalendar == nil
+		m.DedupeCalendar == nil &&
+		m.Quiet == nil
 }
 
 // JobsScheduleOpen is the schema's jobs.ScheduleOpen.
@@ -4841,6 +4913,10 @@ type JobsCall struct {
 	ExpiresAt *int64 `wire:"13,expiresAt"`
 	// this job's own once it failed for good; 0 not at all
 	Keep *uint64 `wire:"14,keep"`
+	// this job's own hours in which it does not run, in the place of its queue's
+	Quiet *JobsQuiet `wire:"15,quiet"`
+	// no quiet hours hold this job, its queue's neither; not beside quiet
+	NoQuiet bool `wire:"16,noQuiet"`
 }
 
 func (m JobsCall) Write(w *Writer) {
@@ -4916,6 +4992,16 @@ func (m JobsCall) Write(w *Writer) {
 		w.Uint(*m.Keep)
 		n++
 	}
+	if m.Quiet != nil {
+		w.Uint(15)
+		m.Quiet.Write(w)
+		n++
+	}
+	if m.NoQuiet {
+		w.Uint(16)
+		w.Bool(m.NoQuiet)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -4965,6 +5051,12 @@ func (m *JobsCall) Read(r *Reader) {
 		case 14:
 			v := r.Uint()
 			m.Keep = &v
+		case 15:
+			var v JobsQuiet
+			v.Read(r)
+			m.Quiet = &v
+		case 16:
+			m.NoQuiet = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -4987,7 +5079,9 @@ func (m JobsCall) IsZero() bool {
 		m.DedupeCalendar == nil &&
 		m.Ttl == nil &&
 		m.ExpiresAt == nil &&
-		m.Keep == nil
+		m.Keep == nil &&
+		m.Quiet == nil &&
+		!m.NoQuiet
 }
 
 // JobsId is the schema's jobs.Id.

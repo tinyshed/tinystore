@@ -1761,6 +1761,28 @@
     },
     {
       "fields": {
+        "from": {
+          "str": "from"
+        },
+        "timeZone": {
+          "str": "timeZone"
+        },
+        "to": {
+          "str": "to"
+        }
+      },
+      "hex": "8301a466726f6d02a2746f03a874696d655a6f6e65",
+      "message": "jobs.Quiet",
+      "name": "jobs.Quiet with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Quiet",
+      "name": "jobs.Quiet with no field"
+    },
+    {
+      "fields": {
         "attempts": {
           "uint": "207"
         },
@@ -1819,6 +1841,19 @@
         "name": {
           "str": "name"
         },
+        "quiet": {
+          "fields": {
+            "from": {
+              "str": "from"
+            },
+            "timeZone": {
+              "str": "timeZone"
+            },
+            "to": {
+              "str": "to"
+            }
+          }
+        },
         "rate": {
           "fields": {
             "count": {
@@ -1833,7 +1868,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8c01a46e616d6502cccf038201cd05dc02cd05dc04cd05dc0582016b02cccf0682016b02cd05dc07cd05dc08cd05dc09cd038b0acd03ef0b82016b02cd05dc0c8201a863616c656e64617202a874696d655a6f6e65",
+      "hex": "8d01a46e616d6502cccf038201cd05dc02cd05dc04cd05dc0582016b02cccf0682016b02cd05dc07cd05dc08cd05dc09cd038b0acd03ef0b82016b02cd05dc0c8201a863616c656e64617202a874696d655a6f6e650d8301a466726f6d02a2746f03a874696d655a6f6e65",
       "message": "jobs.QueueOpen",
       "name": "jobs.QueueOpen with every field"
     },
@@ -1926,6 +1961,22 @@
         "keep": {
           "uint": "1500"
         },
+        "noQuiet": {
+          "bool": true
+        },
+        "quiet": {
+          "fields": {
+            "from": {
+              "str": "from"
+            },
+            "timeZone": {
+              "str": "timeZone"
+            },
+            "to": {
+              "str": "to"
+            }
+          }
+        },
         "timeZone": {
           "str": "timeZone"
         },
@@ -1936,7 +1987,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8e016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc",
+      "hex": "de0010016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc0f8301a466726f6d02a2746f03a874696d655a6f6e6510c3",
       "message": "jobs.Call",
       "name": "jobs.Call with every field"
     },
@@ -2028,6 +2079,22 @@
             "keep": {
               "uint": "1500"
             },
+            "noQuiet": {
+              "bool": true
+            },
+            "quiet": {
+              "fields": {
+                "from": {
+                  "str": "from"
+                },
+                "timeZone": {
+                  "str": "timeZone"
+                },
+                "to": {
+                  "str": "to"
+                }
+              }
+            },
             "timeZone": {
               "str": "timeZone"
             },
@@ -2046,7 +2113,7 @@
           "uint": "1500"
         }
       },
-      "hex": "83018e016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc02cd05dc03cd05dc",
+      "hex": "8301de0010016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc0f8301a466726f6d02a2746f03a874696d655a6f6e6510c302cd05dc03cd05dc",
       "message": "jobs.Gather",
       "name": "jobs.Gather with every field"
     },
@@ -2467,6 +2534,22 @@
             "keep": {
               "uint": "1500"
             },
+            "noQuiet": {
+              "bool": true
+            },
+            "quiet": {
+              "fields": {
+                "from": {
+                  "str": "from"
+                },
+                "timeZone": {
+                  "str": "timeZone"
+                },
+                "to": {
+                  "str": "to"
+                }
+              }
+            },
             "timeZone": {
               "str": "timeZone"
             },
@@ -2495,7 +2578,7 @@
           "uint": "107"
         }
       },
-      "hex": "83016b028e016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc0383016b02a2696403a3726f77",
+      "hex": "83016b02de0010016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc0f8301a466726f6d02a2746f03a874696d655a6f6e6510c30383016b02a2696403a3726f77",
       "message": "jobs.Op",
       "name": "jobs.Op with every field"
     },
@@ -2553,6 +2636,22 @@
                     "keep": {
                       "uint": "1500"
                     },
+                    "noQuiet": {
+                      "bool": true
+                    },
+                    "quiet": {
+                      "fields": {
+                        "from": {
+                          "str": "from"
+                        },
+                        "timeZone": {
+                          "str": "timeZone"
+                        },
+                        "to": {
+                          "str": "to"
+                        }
+                      }
+                    },
                     "timeZone": {
                       "str": "timeZone"
                     },
@@ -2585,7 +2684,7 @@
           ]
         }
       },
-      "hex": "81019183016b028e016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc0383016b02a2696403a3726f77",
+      "hex": "81019183016b02de0010016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc0f8301a466726f6d02a2746f03a874696d655a6f6e6510c30383016b02a2696403a3726f77",
       "message": "jobs.Tx",
       "name": "jobs.Tx with every field"
     },

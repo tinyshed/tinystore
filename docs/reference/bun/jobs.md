@@ -47,8 +47,24 @@ interface QueueOptions {
     keep?: Duration | undefined
     /** jobs that may wait; an add past it is LimitError: ten million */
     maxWaiting?: number | undefined
+    /** hours in which the queue's jobs do not run: a time inside them, a retry's or a repeat's too, becomes their end */
+    quiet?: Quiet | undefined
 }
 ```
+
+## Quiet
+
+```ts
+interface Quiet {
+    from: string
+    to: string
+    timeZone: string
+}
+```
+
+Hours in which a job does not run, two wall-clock times of a day in a time
+zone: `{ from: '23:00', to: '07:00', timeZone: 'Europe/Moscow' }`. A from
+after to wraps midnight; the same two, or a zone no one has, is InvalidError.
 
 ## Dedupe
 
@@ -87,6 +103,8 @@ interface JobOptions {
     ttl?: Duration | undefined
     /** it leaves its queue at this time; not beside ttl */
     expiresAt?: Time | undefined
+    /** this job's own hours in which it does not run, in the place of its queue's; false: no hours hold it */
+    quiet?: Quiet | false | undefined
 }
 ```
 
@@ -119,6 +137,8 @@ interface GatherOptions {
     ttl?: Duration | undefined
     /** it leaves its queue at this time; not beside ttl */
     expiresAt?: Time | undefined
+    /** this job's own hours in which it does not run, in the place of its queue's; false: no hours hold it */
+    quiet?: Quiet | false | undefined
 }
 ```
 

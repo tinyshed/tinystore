@@ -18,6 +18,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
     Migration::of(2, "0002_own_options.sql", include_str!("migrations/0002_own_options.sql")),
     Migration::of(3, "0003_gather.sql", include_str!("migrations/0003_gather.sql")),
+    Migration::of(4, "0004_quiet.sql", include_str!("migrations/0004_quiet.sql")),
 ];
 
 /// jobs' own file in the store's directory.

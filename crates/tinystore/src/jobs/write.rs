@@ -16,6 +16,7 @@
 use rusqlite::Connection;
 
 use super::gather::{self, Gathering, Wrote};
+use super::quiet::Hours;
 use super::read::Row;
 use super::rows::{self, Change, Failed, NewJob, Own};
 use super::state::QueueState;
@@ -46,6 +47,10 @@ pub(crate) struct Prepared {
     pub(crate) value: Kept,
     /// A gather's times and items.
     pub(crate) gather: Option<Gathering>,
+    /// The call's own quiet hours as the job keeps them, `none` among them.
+    pub(crate) quiet: Option<String>,
+    /// The hours that hold the call's times: its own, or its queue's.
+    pub(crate) hours: Option<Hours>,
     pub(crate) now: i64,
 }
 
@@ -73,7 +78,21 @@ impl Prepared {
     }
 
     fn own(&self) -> Own<'_> {
-        Own { dedupe: self.dedupe.as_deref(), keep: self.keep, expires: self.expires }
+        Own { dedupe: self.dedupe.as_deref(), keep: self.keep, expires: self.expires, quiet: self.quiet.as_deref() }
+    }
+
+    /// `at`, or the end of the call's quiet hours when it falls inside them.
+    pub(crate) fn held(&self, at: i64) -> i64 {
+        self.hours.as_ref().map_or(at, |hours| hours.hold(at))
+    }
+
+    /// The hours that hold a gather's time: the call's own, the job's own
+    /// when the call gives none, or else its queue's.
+    fn gathers_held(&self, kept: Option<&str>, at: i64) -> Result<i64> {
+        match (&self.quiet, kept) {
+            (None, Some(kept)) => Ok(Hours::parse(kept)?.map_or(at, |hours| hours.hold(at))),
+            _ => Ok(self.held(at)),
+        }
     }
 }
 
@@ -176,6 +195,7 @@ pub(crate) fn upsert(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
         || differs(call.group.as_deref(), shape.group.as_deref())
         || differs(call.dedupe.as_deref(), shape.dedupe.as_deref())
         || call.keep.is_some() && call.keep != shape.keep
+        || differs(call.quiet.as_deref(), shape.quiet.as_deref())
         || call.ttl.is_none() && call.expires.is_some() && call.expires != shape.expires;
     if !changed {
         // a renewal alone is written once a thirtieth of its ttl, as an idle key's is, and changes nothing
@@ -240,7 +260,8 @@ pub(crate) fn gather(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
         (true, None) => Some(0),
     };
     let latest = if first_since_claim { asked.latest } else { kept.latest.or(asked.latest) };
-    let due = latest.map_or(asked.settled, |latest| latest.min(asked.settled));
+    let due =
+        call.gathers_held(kept.quiet.as_deref(), latest.map_or(asked.settled, |latest| latest.min(asked.settled)))?;
     let value = Kept::of(joined);
     let change = Change { next: due, repeat: None, group: call.group.as_deref(), own: call.own(), value: &value };
     rows::gather(c, (queue.id, key), &there, (latest, taken, kept.held), &change)?;
