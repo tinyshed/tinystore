@@ -94,6 +94,18 @@ waits for no server (contract CLI-07).
   `--json`.** Colour follows the rule every logger keeps: on a terminal, or
   where `FORCE_COLOR` asks, never under `NO_COLOR` or `TERM=dumb`
   ([colours](../records/console.md#colours)).
+- **Times are in one zone, and JSON is UTC.** A time printed for a person,
+  and a time `--from`, `--to` or `--at` is given without its offset, is in
+  the zone `--tz` names: an IANA name such as `Asia/Tokyo`, `utc`, or
+  `local`, this machine's. Without the flag, `TINYSTORE_TZ` names it, and
+  without either it is this machine's. `--json` prints UTC whatever the
+  zone, and a zone nobody knows is told the nearest name:
+
+  ```sh
+  tinystore events ./data list audit --tz Asia/Kolkata --from 2026-11-25T09:00 --to 2026-11-25T18:00
+  TINYSTORE_TZ=utc tinystore logs ./data --since 1h
+  ```
+
 - **A mistake names the next command.** A misspelt command or flag is told
   the nearest one, `did you mean backup?` (contract CLI-02), and exits 2; a
   failure while running exits 1.

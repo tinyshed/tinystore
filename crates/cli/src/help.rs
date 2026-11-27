@@ -43,6 +43,9 @@ const fn under(heading: &'static str, name: &'static str, value: &'static str, m
 }
 
 const JSON: Flag = flag("--json", "", "one JSON document, for scripts");
+/// `--tz`, which every command takes and those that print or read a time show.
+const TZ: Flag =
+    flag("--tz", "<zone>", "times in this zone, as Asia/Tokyo, utc or local; TINYSTORE_TZ when absent; JSON stays UTC");
 
 pub(crate) const STATUS: Command = Command {
     name: "status",
@@ -51,6 +54,7 @@ pub(crate) const STATUS: Command = Command {
     flags: &[
         flag("--names", "", "each bucket, queue, set of files, stream, metric and index, with its count and bytes"),
         JSON,
+        TZ,
     ],
     examples: &["tinystore status ./data", "tinystore status ./data --names", "tinystore status ./data --json"],
     more: "A directory no server holds says so and exits 0. --names reads every bucket, queue, set of files, stream \
@@ -69,6 +73,7 @@ pub(crate) const LOGS: Command = Command {
         flag("--grep", "<text>", "lines that hold the text, in any case"),
         flag("--stream", "<name>", "one stream, as api"),
         flag("--json", "", "one JSON object a line"),
+        TZ,
     ],
     examples: &["tinystore logs ./data -f", "tinystore logs ./data --since 1h --level warn"],
     more: "It reads beside the program or server that holds the directory, and writes nothing.",
@@ -131,6 +136,7 @@ pub(crate) const JOBS_ADD: Command = Command {
         flag("--delay", "<span>", "run it this long from now, as 1m"),
         flag("--at", "<time>", "run it at this time, as 14:30 or 2026-10-27T09:00:00Z"),
         flag("--database", "<db>", "a queue the program opened from this database, kept in sql/<db>.db"),
+        TZ,
     ],
     examples: &[
         "tinystore jobs ./data add emails '{\"to\": \"ada@example.com\"}' --id welcome-42 --delay 1m",
@@ -152,6 +158,7 @@ pub(crate) const JOBS_LIST: Command = Command {
         flag("--after", "<next>", "the page after this one, as the end of the last one says"),
         flag("--database", "<db>", "a queue the program opened from this database, kept in sql/<db>.db"),
         JSON,
+        TZ,
     ],
     examples: &["tinystore jobs ./data list emails --state failed", "tinystore jobs ./data list emails welcome-"],
     more: "It reads beside the program or server that holds the directory. --json gives a line a job, and a last \
@@ -210,6 +217,7 @@ pub(crate) const FILES_LIST: Command = Command {
         flag("--limit", "<count>", "the files a page holds, 100 when not given, 1000 at most"),
         flag("--after", "<path>", "the page after this path, as the end of the last one says"),
         JSON,
+        TZ,
     ],
     examples: &["tinystore files ./data list avatars", "tinystore files ./data list avatars users/42/"],
     more: "It reads beside the program or server that holds the directory, in the byte order of the paths.",
@@ -539,13 +547,14 @@ pub(crate) const METRICS_READ: Command = Command {
         flag("--limit", "<count>", "how many samples a page holds; 1000 by default, 100000 at most"),
         flag("--after", "<next>", "the page after this one, as the end of the last one says"),
         flag("--json", "", "one JSON object a sample, the time in UTC, and the next page's last"),
+        TZ,
     ],
     examples: &[
         "tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h",
         "tinystore metrics ./data read ping_rtt_ms --from 14:30 --to 14:35 --gaps 5s",
     ],
-    more: "It reads beside the program or server that holds the directory. A time without its offset is this \
-           machine's, and the range is printed first with its zone.",
+    more: "It reads beside the program or server that holds the directory. A time without its offset is in --tz's \
+           zone, or this machine's, and the range is printed first with its zone.",
 };
 
 pub(crate) const METRICS_AGGREGATE: Command = Command {
@@ -563,6 +572,7 @@ pub(crate) const METRICS_AGGREGATE: Command = Command {
         flag("--limit", "<count>", "how many buckets a page holds; 1000 by default, 100000 at most"),
         flag("--after", "<next>", "the page after this one, as the end of the last one says"),
         flag("--json", "", "one JSON object a bucket, the time in UTC, and the next page's last"),
+        TZ,
     ],
     examples: &[
         "tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target",
@@ -611,7 +621,7 @@ pub(crate) const METRICS_REPLACE: Command = Command {
     name: "metrics replace",
     takes: "<dir> replace <name> [label=value]...",
     does: "replace a gauge's samples of a range with those on stdin",
-    flags: &[FROM, TO],
+    flags: &[FROM, TO, TZ],
     examples: &[
         "printf '2026-11-01T00:00Z 1000\\n2026-11-02T00:00Z 900\\n' | tinystore metrics ./data replace revenue \
          shop=msk --from 2026-11-01T00:00Z --to 2026-11-03T00:00Z",
@@ -633,6 +643,7 @@ pub(crate) const EVENTS_EXPORT: Command = Command {
         FROM,
         TO,
         flag("-o", "<file>", "write the file, whole once written, rather than stdout"),
+        TZ,
     ],
     examples: &[
         "tinystore events ./data export audit > audit.jsonl",
@@ -655,6 +666,7 @@ pub(crate) const EVENTS_LIST: Command = Command {
         flag("--limit", "<count>", "how many events a page holds; 100 by default, 10000 at most"),
         flag("--after", "<next>", "the page after one, as its end says"),
         flag("--json", "", "one JSON object an event, as logs --json prints"),
+        TZ,
     ],
     examples: &[
         "tinystore events ./data list audit --since 1h",
@@ -671,6 +683,7 @@ pub(crate) const EVENTS_APPEND: Command = Command {
         flag("--id", "<id>", "what names the event in its stream: an id it holds writes nothing"),
         flag("--at", "<time>", "when it happened: 14:30 today, 2026-10-25T03:00, or one with its offset"),
         flag("--level", "<level>", "trace, debug, info, warn or error"),
+        TZ,
     ],
     examples: &[
         "tinystore events ./data append audit role.changed user:=42 role=admin",
@@ -837,7 +850,13 @@ pub(crate) fn text(colours: bool) -> String {
     }
     help.push_str(&format!(
         "\n{}\n",
-        paint(dim, "tinystore help <command> · --version · --json for scripts · docs: tinyshed.org/tinystore")
+        paint(
+            dim,
+            concat!(
+                "tinystore help <command> · --version · --json for scripts · --tz <zone> for times · ",
+                "docs: tinyshed.org/tinystore"
+            )
+        )
     ));
     help
 }

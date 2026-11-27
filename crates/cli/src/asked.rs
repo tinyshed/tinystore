@@ -29,6 +29,9 @@ pub(crate) struct Asked {
     pub(crate) words: Vec<String>,
     /// `--dir`'s directory, which every command takes beside its words.
     pub(crate) dir: Option<PathBuf>,
+    /// `--tz`'s zone, which every command takes: the one its times print
+    /// and read in.
+    pub(crate) tz: Option<String>,
     flags: Vec<(&'static str, String)>,
 }
 
@@ -126,7 +129,10 @@ pub(crate) fn say(command: &str, message: impl fmt::Display) {
 /// is wrong for a mistake, and what `run` makes of what was asked otherwise.
 pub(crate) fn run(command: &'static Command, args: &[String], run: impl FnOnce(Asked) -> Done) -> ExitCode {
     match read(command, args) {
-        Ok(Some(asked)) => exit(command.name, run(asked)),
+        Ok(Some(asked)) => match crate::window::choose_zone(asked.tz.as_deref()) {
+            Ok(()) => exit(command.name, run(asked)),
+            Err(why) => end(command.name, Refused::Wrong(why)),
+        },
         Ok(None) => exit(command.name, help::print_command(command)),
         Err(why) => end(command.name, Refused::Wrong(why)),
     }
@@ -166,6 +172,9 @@ pub(crate) fn end(name: &str, refused: Refused) -> ExitCode {
     }
 }
 
+/// The flags every command takes beside its own.
+const COMMON: [&str; 2] = ["--dir", "--tz"];
+
 /// What was asked, or none when it was the command's help.
 fn read(command: &Command, args: &[String]) -> Result<Option<Asked>, String> {
     let mut asked = Asked::default();
@@ -178,10 +187,12 @@ fn read(command: &Command, args: &[String]) -> Result<Option<Asked>, String> {
                 break;
             }
             "--dir" => asked.dir = Some(PathBuf::from(args.next().ok_or("--dir takes a directory")?)),
+            "--tz" => asked.tz = Some(args.next().ok_or("--tz takes a zone, as Asia/Tokyo, utc or local")?.clone()),
+            flag if flag.starts_with("--tz=") => asked.tz = Some(flag["--tz=".len()..].to_owned()),
             flag if flag.starts_with('-') && flag.len() > 1 && flag.parse::<f64>().is_err() => {
                 let (name, inline) = flag.split_once('=').map_or((flag, None), |(name, value)| (name, Some(value)));
                 let Some(known) = command.flags.iter().find(|known| known.name == name) else {
-                    let names: Vec<&str> = command.flags.iter().map(|known| known.name).chain(["--dir"]).collect();
+                    let names: Vec<&str> = command.flags.iter().map(|known| known.name).chain(COMMON).collect();
                     return Err(format!("no flag {name}{}", crate::meant(name, &names)));
                 };
                 let value = match (known.value.is_empty(), inline) {
