@@ -148,7 +148,7 @@ row: every ask of it, waiting or new, is then refused at once
 success puts the key up again, and its failure pauses it again.
 
 A hold failed when its work answered an error, unless its permit said
-`Permit::succeeded`, or when it ran past its timeout or `max_hold`. A
+`Permit::healthy`, or when it ran past its timeout or `max_hold`. A
 success resets the count. The breaker lives in the memory of the
 process that holds the store, beside the lines: every program of the
 store sees one answer, and a restart of that process starts every key
@@ -387,15 +387,15 @@ A holding of a semaphore's key: one of its limit.
 pub fn lost(&self) -> bool
 ```
 
-### Permit.succeeded
+### Permit.healthy
 
 ```rust
-pub fn succeeded(&self)
+pub fn healthy(&self)
 ```
 
-Says the hold succeeded, so that the semaphore's breaker does not count
-it a failure though its work then answers an error: a 404 that is the
-caller's, not the service's.
+Says the guarded service is healthy, so that the semaphore's breaker
+does not count the hold a failure though its work then answers an
+error: a 404 that is the caller's, not the service's.
 
 ### Permit.waited
 
@@ -774,13 +774,13 @@ pub fn lost(&self) -> bool
 
 As `Lease::lost`: true too once its hold is over.
 
-### aio::locks::Permit.succeeded
+### aio::locks::Permit.healthy
 
 ```rust
-pub fn succeeded(&self)
+pub fn healthy(&self)
 ```
 
-As `crate::locks::Permit::succeeded`: the breaker does not count the
+As `crate::locks::Permit::healthy`: the breaker does not count the
 hold a failure though its future then answers an error.
 
 ### aio::locks::Permit.waited

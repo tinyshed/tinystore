@@ -21,7 +21,7 @@ type SearchOption interface {
 
 type boost float64
 
-// Boost is what an index's hits weigh in ManyResult.Best, a positive number,
+// Boost is what an index's hits weigh in ManyResult.Merged, a positive number,
 // 1 unless given.
 func Boost(b float64) AmongOption { return boost(b) }
 
@@ -77,22 +77,22 @@ type ManyGroup struct {
 	Err       error
 }
 
-// Best is a hit of ManyResult.Best: its group's index, the group's place
+// Merged is a hit of ManyResult.Merged: its group's index, the group's place
 // among the groups, and the hit its group holds.
-type Best struct {
+type Merged struct {
 	Index string
 	Group int
 	Hit   *Hit[any]
 }
 
 // ManyResult is what a search among several indexes found: a group an
-// index, in the order asked, and every group's hits in one order, Best, by
+// index, in the order asked, and every group's hits in one order, Merged, by
 // reciprocal rank fusion and never by score: the hit at rank r of its group,
 // from 1, weighs boost / (60 + r); of equal weights the group asked first
 // comes first, then the higher rank.
 type ManyResult struct {
 	Groups []ManyGroup
-	Best   []Best
+	Merged []Merged
 }
 
 // Many asks text of every index named, 1 to 32, in one call over one
@@ -146,7 +146,7 @@ func manyResult(found wire.SearchManyFound, among []Asked) (ManyResult, error) {
 	if len(found.Groups) != len(among) {
 		return ManyResult{}, core.Errorf(core.Protocol, "a search among %d indexes answered %d groups", len(among), len(found.Groups))
 	}
-	out := ManyResult{Groups: make([]ManyGroup, len(found.Groups)), Best: make([]Best, len(found.Best))}
+	out := ManyResult{Groups: make([]ManyGroup, len(found.Groups)), Merged: make([]Merged, len(found.Merged))}
 	for i, group := range found.Groups {
 		out.Groups[i] = ManyGroup{Index: group.Index, More: group.More}
 		if group.Failure != nil {
@@ -166,12 +166,12 @@ func manyResult(found wire.SearchManyFound, among []Asked) (ManyResult, error) {
 		}
 		out.Groups[i].Hits = hits
 	}
-	for i, best := range found.Best {
-		at, hit := int(best.Group), int(best.Hit)
+	for i, merged := range found.Merged {
+		at, hit := int(merged.Group), int(merged.Hit)
 		if at >= len(out.Groups) || hit >= len(out.Groups[at].Hits) {
-			return out, core.Errorf(core.Protocol, "best names hit %d of group %d, past its hits", hit, at)
+			return out, core.Errorf(core.Protocol, "merged names hit %d of group %d, past its hits", hit, at)
 		}
-		out.Best[i] = Best{Index: out.Groups[at].Index, Group: at, Hit: &out.Groups[at].Hits[hit]}
+		out.Merged[i] = Merged{Index: out.Groups[at].Index, Group: at, Hit: &out.Groups[at].Hits[hit]}
 	}
 	return out, nil
 }

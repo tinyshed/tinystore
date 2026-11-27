@@ -176,7 +176,7 @@ export {
 	type ValuePage,
 } from './metrics.ts'
 export type { Diff, Mirror, MirrorOptions, ReplaceOptions } from './mirror.ts'
-export type { Once, OnceAnswer, OnceOptions } from './once.ts'
+export type { Fetched, Once, OnceOptions } from './once.ts'
 export type { ColumnType, Query, RowPage, Table, TableOptions, UpsertOptions } from './query.ts'
 export type {
 	Aggregate as EventsAggregate,
@@ -216,7 +216,6 @@ export type {
 export type { StandardSchemaV1 } from './schema.ts'
 export {
 	type Among as SearchAmong,
-	type Best as SearchBest,
 	type Found as SearchFound,
 	type Hit as SearchHit,
 	type IndexDocument,
@@ -228,6 +227,7 @@ export {
 	type ManyGroup as SearchGroup,
 	type ManyQuery as SearchManyQuery,
 	type Match as SearchMatch,
+	type Merged as SearchMerged,
 	type Query as SearchQuery,
 	SearchIndex,
 	type Snippet as SearchSnippet,

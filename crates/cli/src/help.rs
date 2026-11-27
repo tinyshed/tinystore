@@ -587,13 +587,13 @@ pub(crate) const METRICS_EXPORT: Command = Command {
     takes: "[dir] export",
     does: "the newest sample of every series, as the Prometheus text a scrape reads",
     flags: &[
-        flag("--prefix", "<prefix>", "only the names that start with it"),
+        flag("--only-prefix", "<prefix>", "only the names that start with it"),
         flag("--since", "<span>", "only the series whose newest sample is at most this old; every series otherwise"),
         flag("-o", "<file>", "write the file, whole once written, rather than stdout, and say what it wrote"),
     ],
     examples: &[
         "tinystore metrics ./data export",
-        "tinystore metrics ./data export --prefix shop_ --since 5m -o shop.prom",
+        "tinystore metrics ./data export --only-prefix shop_ --since 5m -o shop.prom",
     ],
     more: "It reads beside the program or server that holds the directory. Each series is one line with its newest \
            value and that sample's time in milliseconds. A running program's instruments write their totals every \

@@ -37,7 +37,7 @@ pub(crate) struct Shape {
     pub(crate) table: String,
     pub(crate) key: Vec<String>,
     pub(crate) gone: Option<String>,
-    pub(crate) compare: Option<Vec<String>>,
+    pub(crate) change_on: Option<Vec<String>>,
 }
 
 /// The source's rows as cells: their columns once, and a value a column.
@@ -51,8 +51,8 @@ pub(crate) struct Listed {
 /// the list names alone.
 #[derive(Clone, Debug)]
 pub(crate) enum Mode {
-    Replace { scope: Vec<(String, Value)>, shrink: Option<f64> },
-    Patch,
+    Replace { scope: Vec<(String, Value)>, min_kept: Option<f64> },
+    Upsert,
 }
 
 /// What a call found, each row by `columns`: the list's columns, or the
@@ -201,7 +201,7 @@ impl Given {
         };
         let key: Vec<usize> = shape.key.iter().map(|column| carried(column, "key")).collect::<Result<_>>()?;
         let settable: Vec<usize> = (0..listed.columns.len()).filter(|index| !key.contains(index)).collect();
-        let compared = match &shape.compare {
+        let compared = match &shape.change_on {
             Some(columns) => columns.iter().map(|column| carried(column, "compared")).collect::<Result<_>>()?,
             None => settable.clone(),
         };
@@ -209,7 +209,7 @@ impl Given {
             Mode::Replace { scope, .. } => {
                 scope.iter().map(|(column, value)| Ok((carried(column, "scope")?, value))).collect::<Result<_>>()?
             }
-            Mode::Patch => Vec::new(),
+            Mode::Upsert => Vec::new(),
         };
         let mut given = Given { listed, key, compared, settable, by_key: HashMap::new() };
         given.index(shape, &scope)?;
@@ -294,7 +294,7 @@ fn held_rows(
             }
             rows.into_parts()
         }
-        Mode::Patch => keyed_rows(connection, shape, given, memory)?,
+        Mode::Upsert => keyed_rows(connection, shape, given, memory)?,
     };
     HeldRows::of(rows, shape, given)
 }
@@ -391,7 +391,7 @@ struct Plan {
     /// A held row live that the list left out.
     gone: Vec<usize>,
     same: u64,
-    /// The held rows live, which the shrink guard counts.
+    /// The held rows live, which the min_kept guard counts.
     live: usize,
 }
 
@@ -428,18 +428,18 @@ impl Plan {
         plan
     }
 
-    /// The answer, each row by the answer's columns, and whether the shrink
+    /// The answer, each row by the answer's columns, and whether the min_kept
     /// guard holds it back: a scope that held live rows and would keep fewer
     /// than its fraction of them.
     fn found(&self, given: &Given, held: &HeldRows, mode: &Mode) -> Result<Found> {
         let listed = &given.listed;
         let suspect = match mode {
-            Mode::Replace { shrink: Some(shrink), .. } => {
-                if !(*shrink > 0.0 && *shrink <= 1.0) {
-                    return Err(Error::invalid(format!("a shrink of {shrink}: a fraction above 0, and 1 at most")));
+            Mode::Replace { min_kept: Some(min_kept), .. } => {
+                if !(*min_kept > 0.0 && *min_kept <= 1.0) {
+                    return Err(Error::invalid(format!("a min_kept of {min_kept}: a fraction above 0, and 1 at most")));
                 }
                 let left = self.live - self.gone.len();
-                self.live > 0 && (left as f64) < shrink * self.live as f64
+                self.live > 0 && (left as f64) < min_kept * self.live as f64
             }
             _ => false,
         };

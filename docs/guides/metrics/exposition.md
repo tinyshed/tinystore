@@ -9,7 +9,7 @@ call.
 ```rust
 let stats = store.metrics()?;
 let mut body = Vec::new();
-let written = stats.exposition().prefix("shop_").write(&mut body)?; // Written { names, series }
+let written = stats.exposition().only_prefix("shop_").write(&mut body)?; // Written { names, series }
 ```
 
 ```text
@@ -23,7 +23,7 @@ and Go have no call for it. From any of them, and from a shell, the command
 line writes the same text beside the program that holds the store:
 
 ```sh
-tinystore metrics ./data export --prefix shop_
+tinystore metrics ./data export --only-prefix shop_
 ```
 
 [metrics export](../cli/metrics.md#export-for-prometheus) has its flags, and
@@ -86,7 +86,7 @@ and newest samples (MET-31).
 
 ## Which series
 
-`prefix` writes only the names that start with it. Without `since`, every
+`only_prefix` writes only the names that start with it. Without `since`, every
 series the store still keeps is written, however long it has been silent,
 with the time of its last sample: the caller is told what it was given, and
 Prometheus decides what is stale. `since` leaves out a series whose newest

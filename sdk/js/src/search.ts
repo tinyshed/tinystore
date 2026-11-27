@@ -441,7 +441,7 @@ const reached = new WeakMap<object, { link: Link; open: Open }>()
 /** An index a search among several asks, and its search as a search of it alone says it. */
 export interface Among {
 	index: SearchIndex<unknown> | TableIndex<unknown>
-	/** what its hits weigh in `best`, a positive number, 1 unless said */
+	/** what its hits weigh in `merged`, a positive number, 1 unless said */
 	boost?: number | undefined
 	where?: Where | undefined
 	/** 1 to 100, 10 unless said; `more` says whether the index has more */
@@ -462,8 +462,8 @@ export type ManyGroup =
 	| { index: string; hits: Hit<unknown>[]; more: boolean; corrected?: string | undefined }
 	| { index: string; error: TinystoreError }
 
-/** A hit of `best`: its group's index, the group's place among the groups, and the hit its group holds. */
-export interface Best {
+/** A hit of `merged`: its group's index, the group's place among the groups, and the hit its group holds. */
+export interface Merged {
 	index: string
 	group: number
 	hit: Hit<unknown>
@@ -477,7 +477,7 @@ export interface ManyFound {
 	 * at rank `r` of its group, from 1, weighs `boost / (60 + r)`; of equal
 	 * weights the group asked first comes first, then the higher rank
 	 */
-	best: Best[]
+	merged: Merged[]
 }
 
 /**
@@ -499,21 +499,21 @@ export async function searchMany(link: Link, query: ManyQuery): Promise<ManyFoun
 	})
 	const found = SearchManyFound.decode(answer)
 	const groups = (found.groups ?? []).map(groupOf)
-	const best = (found.best ?? []).map(({ group, hit }) => {
+	const merged = (found.merged ?? []).map(({ group, hit }) => {
 		const at = Number(group ?? 0)
 		const held = groups[at]
 		if (held === undefined || 'error' in held) {
-			throw new InvalidError(`a search among indexes: best names group ${at}, which holds no hit`)
+			throw new InvalidError(`a search among indexes: merged names group ${at}, which holds no hit`)
 		}
 		const named = held.hits[Number(hit ?? 0)]
 		if (named === undefined) {
 			throw new InvalidError(
-				`a search among indexes: best names hit ${hit} of group ${at}, past its hits`,
+				`a search among indexes: merged names hit ${hit} of group ${at}, past its hits`,
 			)
 		}
 		return { index: held.index, group: at, hit: named }
 	})
-	return { groups, best }
+	return { groups, merged }
 }
 
 /** An index a search among several asks: its open, and its part of the request once its handle is known. */

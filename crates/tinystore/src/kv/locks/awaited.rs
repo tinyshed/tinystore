@@ -241,7 +241,7 @@ impl Ends {
         self.0.ending() != Ending::Live
     }
 
-    pub(crate) fn succeed(&self) {
-        self.0.succeed();
+    pub(crate) fn healthy(&self) {
+        self.0.healthy();
     }
 }

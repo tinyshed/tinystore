@@ -206,7 +206,7 @@ message search.ManyQuery {
 # offset or total are invalid.
 message search.Among {
   1 query: search.Query              # limit 1 to 100, 10 when absent
-  2 boost: float?                    # what its hits weigh in best, above 0; 1 when absent
+  2 boost: float?                    # what its hits weigh in merged, above 0; 1 when absent
 }
 
 # Each index's group in the order asked, and every group's hits in one
@@ -214,7 +214,7 @@ message search.Among {
 # weighs boost / (60 + r); equal weights by the group asked first, then rank.
 message search.ManyFound {
   1 groups: [search.Group]
-  2 best: [search.Best]
+  2 merged: [search.Merged]
 }
 
 # An index's hits, the best by its own scores first, or why its search failed.
@@ -227,8 +227,8 @@ message search.Group {
   6 failure: Failure?                # why its search failed
 }
 
-# A hit of best, by its group's place and its own place in that group's hits.
-message search.Best {
+# A hit of merged, by its group's place and its own place in that group's hits.
+message search.Merged {
   1 group: uint
   2 hit: uint
 }

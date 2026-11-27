@@ -229,9 +229,9 @@ interface SessionsQuery extends Counted {
     /** the longest a session lasts: an event later than this after its first begins the next */
     max?: Duration
     /** each value's first sessions of the range alone, its later events passed over */
-    first?: number
+    firstSessions?: number
     /** the first events each session keeps, 1000 at most; none unless asked */
-    events?: number
+    maxEvents?: number
 }
 ```
 
@@ -249,7 +249,7 @@ interface Session {
     to: Date
     /** every event of it, however few it keeps */
     count: number
-    /** its first events, as many as `events` asked */
+    /** its first events, as many as `maxEvents` asked */
     events: Event[]
     /** whether it may go on outside what was read: its first event within gap of the range's start, or its last of its end */
     partial: boolean

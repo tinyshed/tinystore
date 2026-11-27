@@ -136,7 +136,7 @@ fn a_probe_that_fails_pauses_the_key_again_from_its_failure() {
 
 // contract: LOCK-12
 #[test]
-fn a_success_resets_the_count_and_a_hold_that_said_it_succeeded_is_no_failure() {
+fn a_success_resets_the_count_and_a_hold_that_said_its_service_is_healthy_is_no_failure() {
     let f = fixture();
     let lane = lane(&f);
     fail(&lane);
@@ -145,7 +145,7 @@ fn a_success_resets_the_count_and_a_hold_that_said_it_succeeded_is_no_failure() 
     assert!(lane.state("requests").unwrap().up, "not two in a row");
     for _ in 0..2 {
         let not_found = lane.hold("requests", |permit| {
-            permit.succeeded();
+            permit.healthy();
             Err::<(), _>(Error::not_found("no such student"))
         });
         assert_eq!(not_found.unwrap_err().kind(), ErrorKind::NotFound);

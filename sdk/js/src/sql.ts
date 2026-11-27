@@ -763,7 +763,7 @@ export interface Runner {
 	rows(statement: Sql, want: Want): Promise<Answered>
 	exec(statement: Sql): Promise<Done>
 	[walk]?<T = Row>(statement: Sql, order: readonly Ordered[] | undefined): AsyncGenerator<T>
-	/** the database's transaction, which a table's edit with `expect` runs in; a transaction is one already */
+	/** the database's transaction, which a table's edit with `ifVersion` runs in; a transaction is one already */
 	tx?<T>(fn: (tx: Runner) => Promise<T>): Promise<T>
 }
 
@@ -968,10 +968,10 @@ export class Database implements Runner, Home {
 
 	/**
 	 * A table that mirrors another system: its `replace` takes the source's
-	 * list of a scope and its `patch` a change of some rows, and each answers
+	 * list of a scope and its `upsert` a change of some rows, and each answers
 	 * what was added, changed and gone, writing only the difference.
 	 *
-	 *     const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', compare: ['grade'] })
+	 *     const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', changeOn: ['grade'] })
 	 */
 	mirror<T = Row>(table: string, options: MirrorOptions): Mirror<T> {
 		return new Mirror<T>(table, options, async asked => {

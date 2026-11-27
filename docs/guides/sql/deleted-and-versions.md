@@ -36,8 +36,8 @@ interface Task {
 const tasks = db.table<Task>('tasks', { deleted: 'deleted_at', version: 'version' })
 
 const seen = await tasks.where({ id: 1 }).one() // { id: 1, title: 'Draft', deleted_at: null, version: 0 }
-await tasks.where({ id: 1 }).update({ title: 'from Ann' }, { expect: seen!.version }) // version 1
-await tasks.where({ id: 1 }).update({ title: 'from Ben' }, { expect: seen!.version })
+await tasks.where({ id: 1 }).update({ title: 'from Ann' }, { ifVersion: seen!.version }) // version 1
+await tasks.where({ id: 1 }).update({ title: 'from Ben' }, { ifVersion: seen!.version })
 // ConflictError: sql app: table tasks: the row is at version 1, not 0
 
 await tasks.where({ id: 1 }).delete() // sets deleted_at, and the row stays in the file
@@ -56,8 +56,8 @@ class Task:
 tasks = db.table("tasks", Task, deleted="deleted_at", version="version")
 
 seen = await tasks.where(id=1).one()  # Task(id=1, title='Draft', deleted_at=None, version=0)
-await tasks.where(id=1).update({"title": "from Ann"}, expect=seen.version)  # version 1
-await tasks.where(id=1).update({"title": "from Ben"}, expect=seen.version)
+await tasks.where(id=1).update({"title": "from Ann"}, if_version=seen.version)  # version 1
+await tasks.where(id=1).update({"title": "from Ben"}, if_version=seen.version)
 # tinystore.ConflictError: sql app: table tasks: the row is at version 1, not 0
 
 await tasks.where(id=1).delete()  # sets deleted_at, and the row stays in the file
@@ -75,8 +75,8 @@ type Task struct {
 tasks := sqldb.OpenTable[Task](db, "tasks", sqldb.Deleted("deleted_at"), sqldb.Version("version"))
 
 seen, _, err := tasks.Where(sqldb.Eq{"id": 1}).One(ctx) // {ID:1 Title:Draft DeletedAt:<nil> Version:0}
-_, err = tasks.Where(sqldb.Eq{"id": 1}).Update(ctx, sqldb.Set{"title": "from Ann"}, sqldb.Expect(seen.Version))
-_, err = tasks.Where(sqldb.Eq{"id": 1}).Update(ctx, sqldb.Set{"title": "from Ben"}, sqldb.Expect(seen.Version))
+_, err = tasks.Where(sqldb.Eq{"id": 1}).Update(ctx, sqldb.Set{"title": "from Ann"}, sqldb.IfVersion(seen.Version))
+_, err = tasks.Where(sqldb.Eq{"id": 1}).Update(ctx, sqldb.Set{"title": "from Ben"}, sqldb.IfVersion(seen.Version))
 if errors.Is(err, tinystore.ErrConflict) {
 	// sql app: table tasks: the row is at version 1, not 0
 }
@@ -97,8 +97,8 @@ struct Task {
 let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
 
 let seen = tasks.filter(sql::eq("id", &1)).one()?.unwrap(); // Task { id: 1, title: "Draft", deleted_at: None, version: 0 }
-tasks.filter(sql::eq("id", &1)).expect(seen.version).update([("title", sql::value("from Ann"))])?; // version 1
-let ben = tasks.filter(sql::eq("id", &1)).expect(seen.version).update([("title", sql::value("from Ben"))]);
+tasks.filter(sql::eq("id", &1)).if_version(seen.version).update([("title", sql::value("from Ann"))])?; // version 1
+let ben = tasks.filter(sql::eq("id", &1)).if_version(seen.version).update([("title", sql::value("from Ben"))]);
 if ben.is_err_and(|error| error.kind() == ErrorKind::Conflict) {
     // sql app: table tasks: the row is at version 1, not 0: conflict
 }
@@ -170,7 +170,7 @@ handle adds one to the row's version (contract SQL-24). You never set the
 version yourself: an update or an upsert that names the version column fails
 with an invalid error.
 
-`expect` makes an update or a delete depend on the version you read:
+`ifVersion` makes an update or a delete depend on the version you read:
 
 - If every row that matches is at that version, the edit writes all of them.
 - If any row that matches is at another version, the edit writes nothing and
@@ -183,12 +183,12 @@ with an invalid error.
 One statement decides, so an edit of several rows writes all of them or none
 (contract SQL-23). When it changes nothing, a second read finds out why, in
 the same transaction as the statement. A handle from a transaction,
-`tx.table`, runs both in that transaction. `expect` on a table without a
-version column is an invalid error, and so is `expect` on a delete without a
-deleted column.
+`tx.table`, runs both in that transaction. `ifVersion` on a table without
+a version column is an invalid error, and so is `ifVersion` on a delete
+without a deleted column.
 
 A versioned edit costs one statement, as before. The second read runs only
-when the edit changed no row. Outside a transaction, an edit with `expect`
+when the edit changed no row. Outside a transaction, an edit with `ifVersion`
 runs in a transaction of its own, which holds the writer for that moment.
 
 ## Clean up deleted rows on a schedule

@@ -32,16 +32,16 @@ fn an_answer_younger_than_fresh_is_answered_as_it_is_and_says_its_age() {
     let f = fixture();
     let books = books(&f);
     let runs = Arc::new(AtomicUsize::new(0));
-    let first = books.answer("user-7", counted_book(&runs)).unwrap();
-    assert_eq!(first, Answer { value: "book 1".to_owned(), age: Duration::ZERO, stale: false });
+    let first = books.fetch("user-7", counted_book(&runs)).unwrap();
+    assert_eq!(first, Fetched { value: "book 1".to_owned(), age: Duration::ZERO, stale: false });
 
     f.clock.advance(10 * MINUTE - Duration::from_millis(1));
-    let kept = books.answer("user-7", counted_book(&runs)).unwrap();
-    assert_eq!(kept, Answer { value: "book 1".to_owned(), age: 10 * MINUTE - Duration::from_millis(1), stale: false });
+    let kept = books.fetch("user-7", counted_book(&runs)).unwrap();
+    assert_eq!(kept, Fetched { value: "book 1".to_owned(), age: 10 * MINUTE - Duration::from_millis(1), stale: false });
     assert_eq!(runs.load(Ordering::SeqCst), 1, "nothing built");
 
     let plain = f.store.once::<String>("books").keep(12 * HOUR).open().unwrap();
-    let seen = plain.answer("user-7", || -> Result<String> { panic!("ran beside a kept answer") }).unwrap();
+    let seen = plain.fetch("user-7", || -> Result<String> { panic!("ran beside a kept answer") }).unwrap();
     assert_eq!((seen.age, seen.stale), (10 * MINUTE - Duration::from_millis(1), false), "never stale without fresh");
 }
 
@@ -64,12 +64,12 @@ fn a_stale_answer_is_answered_at_once_while_one_build_makes_the_next() {
             Ok::<_, Error>(format!("book {}", runs.fetch_add(1, Ordering::SeqCst) + 1))
         }
     };
-    let stale = books.answer("user-7", slow).unwrap();
-    assert_eq!(stale, Answer { value: "book 1".to_owned(), age: 10 * MINUTE, stale: true }, "at once");
+    let stale = books.fetch("user-7", slow).unwrap();
+    assert_eq!(stale, Fetched { value: "book 1".to_owned(), age: 10 * MINUTE, stale: true }, "at once");
     starting.recv().unwrap();
     let beside = Arc::new(AtomicUsize::new(0));
     thread::scope(|scope| {
-        let callers: Vec<_> = (0..8).map(|_| scope.spawn(|| books.answer("user-7", counted_book(&beside)))).collect();
+        let callers: Vec<_> = (0..8).map(|_| scope.spawn(|| books.fetch("user-7", counted_book(&beside)))).collect();
         for caller in callers {
             assert_eq!(caller.join().unwrap().unwrap().value, "book 1", "the stale one, waiting for nothing");
         }
@@ -77,8 +77,8 @@ fn a_stale_answer_is_answered_at_once_while_one_build_makes_the_next() {
     release.send(()).unwrap();
     built(&f);
     assert_eq!(beside.load(Ordering::SeqCst), 0, "no second build beside the first");
-    let renewed = books.answer("user-7", counted_book(&runs)).unwrap();
-    assert_eq!(renewed, Answer { value: "book 2".to_owned(), age: Duration::ZERO, stale: false }, "both terms again");
+    let renewed = books.fetch("user-7", counted_book(&runs)).unwrap();
+    assert_eq!(renewed, Fetched { value: "book 2".to_owned(), age: Duration::ZERO, stale: false }, "both terms again");
     assert_eq!(runs.load(Ordering::SeqCst), 2, "one build in the background");
 
     f.clock.advance(12 * HOUR);

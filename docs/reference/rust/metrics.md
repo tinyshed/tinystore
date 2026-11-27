@@ -317,10 +317,10 @@ pub struct Exposition { /* private fields */ }
 What writes the newest sample of every series the store holds, its
 options before its `write`.
 
-### Exposition.prefix
+### Exposition.only_prefix
 
 ```rust
-pub fn prefix(self, prefix: impl Into<String>) -> Self
+pub fn only_prefix(self, prefix: impl Into<String>) -> Self
 ```
 
 Only the names that start with this text.
@@ -2263,10 +2263,10 @@ pub struct Exposition { /* private fields */ }
 What writes the newest sample of every series the store holds as
 Prometheus' text format, as `crate::metrics::Exposition` builds one.
 
-### aio::metrics::Exposition.prefix
+### aio::metrics::Exposition.only_prefix
 
 ```rust
-pub fn prefix(self, prefix: impl Into<String>) -> Exposition
+pub fn only_prefix(self, prefix: impl Into<String>) -> Exposition
 ```
 
 Only the names that start with this text.

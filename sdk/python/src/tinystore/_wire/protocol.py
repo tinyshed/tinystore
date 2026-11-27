@@ -9470,11 +9470,11 @@ def _write_records_sessions_asked(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(4)
         w.uint(x)
         n += 1
-    if (x := v.get("first")) is not None:
+    if (x := v.get("first_sessions")) is not None:
         w.uint(5)
         w.uint(x)
         n += 1
-    if (x := v.get("events")) is not None:
+    if (x := v.get("max_events")) is not None:
         w.uint(6)
         w.uint(x)
         n += 1
@@ -9497,9 +9497,9 @@ def _read_records_sessions_asked(r: Reader) -> dict[str, Any]:
             case 4:
                 read["max"] = r.uint()
             case 5:
-                read["first"] = r.uint()
+                read["first_sessions"] = r.uint()
             case 6:
-                read["events"] = r.uint()
+                read["max_events"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -9520,9 +9520,9 @@ RecordsSessionsAsked = Message(
         # a session ends this long after its first event, pause or none
         "max": (4, uint),
         # each value's first sessions alone, its later events passed over
-        "first": (5, uint),
+        "first_sessions": (5, uint),
         # the first events each session keeps, 1000 at most
-        "events": (6, uint),
+        "max_events": (6, uint),
     },
     _write_records_sessions_asked,
     _read_records_sessions_asked,
@@ -11093,7 +11093,7 @@ SearchListed = Message(
 )
 
 
-def _write_search_best(w: Writer, v: Mapping[str, Any]) -> None:
+def _write_search_merged(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
     if (x := v.get("group")) is not None:
@@ -11107,7 +11107,7 @@ def _write_search_best(w: Writer, v: Mapping[str, Any]) -> None:
     w.close_map(head, n)
 
 
-def _read_search_best(r: Reader) -> dict[str, Any]:
+def _read_search_merged(r: Reader) -> dict[str, Any]:
     read: dict[str, Any] = {}
     seen: set[int] = set()
     for _ in range(r.map()):
@@ -11122,15 +11122,15 @@ def _read_search_best(r: Reader) -> dict[str, Any]:
     return read
 
 
-# A hit of best, by its group's place and its own place in that group's hits.
-SearchBest = Message(
-    "search.Best",
+# A hit of merged, by its group's place and its own place in that group's hits.
+SearchMerged = Message(
+    "search.Merged",
     {
         "group": (1, uint),
         "hit": (2, uint),
     },
-    _write_search_best,
-    _read_search_best,
+    _write_search_merged,
+    _read_search_merged,
 )
 
 
@@ -12124,7 +12124,7 @@ def _write_sql_mirror(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(4)
         w.str(x)
         n += 1
-    if (x := v.get("compare")) is not None:
+    if (x := v.get("change_on")) is not None:
         w.uint(5)
         w.array(len(x))
         for item0 in x:
@@ -12150,7 +12150,7 @@ def _write_sql_mirror(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(9)
         SqlRows.write(w, x)
         n += 1
-    if (x := v.get("shrink")) is not None:
+    if (x := v.get("min_kept")) is not None:
         w.uint(10)
         w.float(x)
         n += 1
@@ -12175,7 +12175,7 @@ def _read_sql_mirror(r: Reader) -> dict[str, Any]:
             case 5:
                 items0 = [r.str() for _ in range(r.array())]
                 r.leave()
-                read["compare"] = items0
+                read["change_on"] = items0
             case 6:
                 read["mode"] = r.str()
             case 7:
@@ -12189,7 +12189,7 @@ def _read_sql_mirror(r: Reader) -> dict[str, Any]:
             case 9:
                 read["rows"] = SqlRows.read(r)
             case 10:
-                read["shrink"] = r.float()
+                read["min_kept"] = r.float()
             case _:
                 r.skip()
     r.leave()
@@ -12198,7 +12198,7 @@ def _read_sql_mirror(r: Reader) -> dict[str, Any]:
 
 # A table that mirrors another system, given the source's list: replace
 # makes the scope, the rows whose columns hold its values, what the list
-# lists, and patch writes what the list adds and changes. The table's key,
+# lists, and upsert writes what the list adds and changes. The table's key,
 # the columns that name a row at the source, is covered by a unique index or
 # its primary key. A row the same as held is not written.
 SqlMirror = Message(
@@ -12210,8 +12210,8 @@ SqlMirror = Message(
         # the column that marks what the source dropped with the store's time, rather than a delete
         "gone": (4, str_),
         # the columns whose change makes a row changed: every column of the rows but the key's when absent
-        "compare": (5, list_(str_)),
-        # replace or patch
+        "change_on": (5, list_(str_)),
+        # replace or upsert
         "mode": (6, str_),
         # replace: the columns of its scope
         "scope": (7, list_(str_)),
@@ -12220,7 +12220,7 @@ SqlMirror = Message(
         # the list, one message at most
         "rows": (9, SqlRows),
         # replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
-        "shrink": (10, float_),
+        "min_kept": (10, float_),
     },
     _write_sql_mirror,
     _read_sql_mirror,
@@ -13022,7 +13022,7 @@ SearchAmong = Message(
     {
         # limit 1 to 100, 10 when absent
         "query": (1, SearchQuery),
-        # what its hits weigh in best, above 0; 1 when absent
+        # what its hits weigh in merged, above 0; 1 when absent
         "boost": (2, float_),
     },
     _write_search_among,
@@ -13479,11 +13479,11 @@ def _write_search_many_found(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             SearchGroup.write(w, item0)
         n += 1
-    if (x := v.get("best")) is not None:
+    if (x := v.get("merged")) is not None:
         w.uint(2)
         w.array(len(x))
         for item0 in x:
-            SearchBest.write(w, item0)
+            SearchMerged.write(w, item0)
         n += 1
     w.close_map(head, n)
 
@@ -13498,9 +13498,9 @@ def _read_search_many_found(r: Reader) -> dict[str, Any]:
                 r.leave()
                 read["groups"] = items0
             case 2:
-                items0 = [SearchBest.read(r) for _ in range(r.array())]
+                items0 = [SearchMerged.read(r) for _ in range(r.array())]
                 r.leave()
-                read["best"] = items0
+                read["merged"] = items0
             case _:
                 r.skip()
     r.leave()
@@ -13514,7 +13514,7 @@ SearchManyFound = Message(
     "search.ManyFound",
     {
         "groups": (1, list_(SearchGroup)),
-        "best": (2, list_(SearchBest)),
+        "merged": (2, list_(SearchMerged)),
     },
     _write_search_many_found,
     _read_search_many_found,
@@ -13710,7 +13710,7 @@ messages: dict[str, Message] = {
     "search.Dropped": SearchDropped,
     "search.Index": SearchIndex,
     "search.Listed": SearchListed,
-    "search.Best": SearchBest,
+    "search.Merged": SearchMerged,
     "server.Clock": ServerClock,
     "sql.Migration": SqlMigration,
     "sql.Open": SqlOpen,

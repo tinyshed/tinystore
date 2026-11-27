@@ -11,7 +11,7 @@
 //! # fn main() -> tinystore::Result<()> {
 //! # let db = tinystore::Store::open("data", Default::default())?.database("lms").open()?;
 //! # let fetched: Vec<Work> = Vec::new();
-//! let works = db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").compare(["grade"]).open()?;
+//! let works = db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").change_on(["grade"]).open()?;
 //! let diff = works.replace(&[("course_id", 1)], &fetched)?;
 //! for changed in &diff.changed {
 //!     // changed.before.grade, then changed.after.grade
@@ -40,11 +40,11 @@ pub(crate) use list::{Found, Given, Listed, Mode, Running, Shape, mirror_on};
 
 impl Database {
     /// A table that mirrors another system, `T` its rows: its `replace`
-    /// takes the source's list of a scope and its `patch` a change of some
+    /// takes the source's list of a scope and its `upsert` a change of some
     /// rows, and each answers what was added, changed and gone. The key,
     /// what names a row at the source, is given before it opens.
     pub fn mirror<T>(&self, table: &str) -> MirrorBuilder<T> {
-        let shape = Shape { table: table.to_owned(), key: Vec::new(), gone: None, compare: None };
+        let shape = Shape { table: table.to_owned(), key: Vec::new(), gone: None, change_on: None };
         MirrorBuilder { db: self.clone(), shape, row: PhantomData }
     }
 }
@@ -79,8 +79,8 @@ impl<T> MirrorBuilder<T> {
     /// carry but the key's when not given. A row whose compared columns are
     /// the same is not written at all, even where its other columns differ:
     /// a `fetched_at` the source writes at every read changes nothing.
-    pub fn compare<I: IntoIterator<Item = S>, S: Into<String>>(mut self, columns: I) -> Self {
-        self.shape.compare = Some(columns.into_iter().map(Into::into).collect());
+    pub fn change_on<I: IntoIterator<Item = S>, S: Into<String>>(mut self, columns: I) -> Self {
+        self.shape.change_on = Some(columns.into_iter().map(Into::into).collect());
         self
     }
 
@@ -151,13 +151,13 @@ impl<T: Serialize + DeserializeOwned> Mirror<T> {
     /// A scope of mixed types takes `serde_json::Value`s, `json!(1)` beside
     /// `json!("fall")`.
     pub fn replace<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)], rows: &[T]) -> Result<Diff<T>> {
-        self.run(scope_of(scope).map(|scope| Mode::Replace { scope, shrink: None }), rows)
+        self.run(scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: None }), rows)
     }
 
     /// Writes what `rows` adds and changes, a delta of the source's, and
     /// marks nothing gone: its `gone` is always empty.
-    pub fn patch(&self, rows: &[T]) -> Result<Diff<T>> {
-        self.run(Ok(Mode::Patch), rows)
+    pub fn upsert(&self, rows: &[T]) -> Result<Diff<T>> {
+        self.run(Ok(Mode::Upsert), rows)
     }
 
     /// The mirror's `replace` guarded against an answer that cannot be
@@ -171,13 +171,13 @@ impl<T: Serialize + DeserializeOwned> Mirror<T> {
     /// # fn main() -> tinystore::Result<()> {
     /// # let db = tinystore::Store::open("data", Default::default())?.database("lms").open()?;
     /// # let works = db.mirror::<Work>("works").key(["course_id", "id"]).open()?;
-    /// let diff = works.shrink(0.5).replace(&[("course_id", 1)], &[])?;
+    /// let diff = works.min_kept(0.5).replace(&[("course_id", 1)], &[])?;
     /// assert!(diff.suspect); // a course that held works: nothing was deleted
     /// # Ok(())
     /// # }
     /// ```
-    pub fn shrink(&self, fraction: f64) -> Guarded<'_, T> {
-        Guarded { mirror: self, shrink: fraction }
+    pub fn min_kept(&self, fraction: f64) -> Guarded<'_, T> {
+        Guarded { mirror: self, min_kept: fraction }
     }
 
     fn run(&self, mode: Result<Mode>, rows: &[T]) -> Result<Diff<T>> {
@@ -228,17 +228,17 @@ impl Prepared {
     }
 }
 
-/// A mirror's `replace` with its shrink guard; [`Mirror::shrink`] makes one.
+/// A mirror's `replace` with its min_kept guard; [`Mirror::min_kept`] makes one.
 #[derive(Debug)]
 pub struct Guarded<'m, T> {
     mirror: &'m Mirror<T>,
-    shrink: f64,
+    min_kept: f64,
 }
 
 impl<T: Serialize + DeserializeOwned> Guarded<'_, T> {
     /// [`Mirror::replace`], which writes nothing when the guard holds it back.
     pub fn replace<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)], rows: &[T]) -> Result<Diff<T>> {
-        let mode = scope_of(scope).map(|scope| Mode::Replace { scope, shrink: Some(self.shrink) });
+        let mode = scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: Some(self.min_kept) });
         self.mirror.run(mode, rows)
     }
 }
@@ -316,12 +316,12 @@ impl<T> std::fmt::Debug for TxMirror<'_, T> {
 impl<T: Serialize + DeserializeOwned> TxMirror<'_, T> {
     /// [`Mirror::replace`], inside the transaction.
     pub fn replace<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)], rows: &[T]) -> Result<Diff<T>> {
-        self.run(scope_of(scope).map(|scope| Mode::Replace { scope, shrink: None }), rows)
+        self.run(scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: None }), rows)
     }
 
-    /// [`Mirror::patch`], inside the transaction.
-    pub fn patch(&self, rows: &[T]) -> Result<Diff<T>> {
-        self.run(Ok(Mode::Patch), rows)
+    /// [`Mirror::upsert`], inside the transaction.
+    pub fn upsert(&self, rows: &[T]) -> Result<Diff<T>> {
+        self.run(Ok(Mode::Upsert), rows)
     }
 
     fn run(&self, mode: Result<Mode>, rows: &[T]) -> Result<Diff<T>> {

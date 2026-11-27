@@ -407,7 +407,7 @@ def mirror[T](
     *,
     key: Sequence[str],
     gone: str | None = None,
-    compare: Sequence[str] | None = None,
+    change_on: Sequence[str] | None = None,
 ) -> Mirror[T]: ...
 @overload
 def mirror(
@@ -416,7 +416,7 @@ def mirror(
     *,
     key: Sequence[str],
     gone: str | None = None,
-    compare: Sequence[str] | None = None,
+    change_on: Sequence[str] | None = None,
 ) -> Mirror[dict[str, Any]]: ...
 def mirror(
     table: str,
@@ -424,19 +424,19 @@ def mirror(
     *,
     key: Sequence[str],
     gone: str | None = None,
-    compare: Sequence[str] | None = None,
+    change_on: Sequence[str] | None = None,
 ) -> Mirror[Any]: ...
 ```
 
-A table that mirrors another system: its ``replace`` and ``patch`` answer what was added, changed and gone.
+A table that mirrors another system: its ``replace`` and ``upsert`` answer what was added, changed and gone.
 
 ``key`` names a row at the source, and a unique index or the table's
 primary key covers it; ``gone`` marks what the source dropped with the
-store's time, unix milliseconds, instead of deleting it; ``compare``
+store's time, unix milliseconds, instead of deleting it; ``change_on``
 names the columns whose change makes a row changed, every column the
 rows carry but the key's when not given.
 
-    works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", compare=["grade"])
+    works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
 
 ### Database.table
 
@@ -937,28 +937,28 @@ async def update(
     values: Mapping[str, Any] | None = None,
     /,
     *,
-    expect: int | None = None,
+    if_version: int | None = None,
     **columns: Any,
 ) -> Done: ...
 ```
 
 Sets columns of the rows the conditions match, and says how many changed.
 
-A versioned table's version goes up by one. With ``expect``, the update
+A versioned table's version goes up by one. With ``if_version``, the update
 writes every row only if each is at that version, and otherwise
-nothing, raising ConflictError: ``await one.update({"title": t}, expect=seen.version)``.
+nothing, raising ConflictError: ``await one.update({"title": t}, if_version=seen.version)``.
 
 ### Query.delete
 
 ```python
-async def delete(*, expect: int | None = None) -> Done: ...
+async def delete(*, if_version: int | None = None) -> Done: ...
 ```
 
 Deletes the rows the conditions match, and says how many it deleted.
 
 On a table with a deleted column it marks the live ones instead, at
 this process's clock, and raises a versioned table's version;
-``expect`` is update's.
+``if_version`` is update's.
 
 ### Query.with_deleted
 
@@ -1015,7 +1015,7 @@ unix milliseconds of this process's clock: every query and write of the
 handle passes the marked rows by, unless ``with_deleted()`` or
 ``deleted_only()`` asks for them, and ``delete`` marks rather than
 deletes. ``version`` names an integer column, not null, default 0, that
-every update of the handle raises by one, and that ``expect`` checks.
+every update of the handle raises by one, and that ``if_version`` checks.
 
 ### Table.insert
 

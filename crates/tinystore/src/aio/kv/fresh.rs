@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::named;
 use super::once::{Run, keep};
 use crate::aio::run;
-use crate::kv::{Answer, Key, Value, WriteOptions};
+use crate::kv::{Fetched, Key, Value, WriteOptions};
 use crate::pool::Pool;
 use crate::{Error, Result};
 
@@ -70,7 +70,7 @@ impl<V: Value> FreshBuilder<V> {
 ///     .keep(Duration::from_hours(12))
 ///     .spawn(|build| drop(tokio::spawn(build)))
 ///     .open()?;
-/// let answer = books.answer(7, || book(7)).await?; // at once, stale or not, once one is kept
+/// let answer = books.fetch(7, || book(7)).await?; // at once, stale or not, once one is kept
 /// # Ok(())
 /// # }
 /// ```
@@ -82,15 +82,15 @@ pub struct Fresh<V> {
 
 impl<V: Value> Fresh<V> {
     /// The answer kept under `key`, with how old it is, or the answer of the
-    /// future `work` gives once none is kept, as [`crate::kv::Fresh::answer`]
+    /// future `work` gives once none is kept, as [`crate::kv::Fresh::fetch`]
     /// gives it. A kept answer older than `fresh` is answered at once,
     /// `stale`, and `work`'s future, given to `spawn`, makes the new one,
     /// unless a build of the key is under way or failed within its pause.
-    pub fn answer<K, E, W, F>(
+    pub fn fetch<K, E, W, F>(
         &self,
         key: K,
         work: W,
-    ) -> impl Future<Output = Result<Answer<V>, E>> + Send + use<K, V, E, W, F>
+    ) -> impl Future<Output = Result<Fetched<V>, E>> + Send + use<K, V, E, W, F>
     where
         K: Key,
         E: From<Error> + Send + 'static,
@@ -111,7 +111,7 @@ impl<V: Value> Fresh<V> {
         }
     }
 
-    /// [`Fresh::answer`]'s value alone.
+    /// [`Fresh::fetch`]'s value alone.
     pub fn run<K, E, W, F>(&self, key: K, work: W) -> impl Future<Output = Result<V, E>> + Send + use<K, V, E, W, F>
     where
         K: Key,
@@ -119,7 +119,7 @@ impl<V: Value> Fresh<V> {
         W: FnOnce() -> F + Send + 'static,
         F: Future<Output = Result<V, E>> + Send + 'static,
     {
-        let answer = self.answer(key, work);
+        let answer = self.fetch(key, work);
         async move { answer.await.map(|answer| answer.value) }
     }
 

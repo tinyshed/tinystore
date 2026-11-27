@@ -339,8 +339,8 @@ fn a_search_among_several_indexes_answers_each_group_and_best_by_its_groups_plac
     assert_eq!(found.groups[0].hits[0].id, "c-1");
     assert_eq!(found.groups[1].hits[0].value, r#"{"category":"mine","title":"algebra notes"}"#);
     assert!(found.groups[1].hits[0].snippet.is_some(), "each group with its own options");
-    let best: Vec<(u64, u64)> = found.best.iter().map(|best| (best.group, best.hit)).collect();
-    assert_eq!(best, [(0, 0), (1, 0)], "a group and a place in its hits, not a copy of the hit");
+    let merged: Vec<(u64, u64)> = found.merged.iter().map(|merged| (merged.group, merged.hit)).collect();
+    assert_eq!(merged, [(0, 0), (1, 0)], "a group and a place in its hits, not a copy of the hit");
 }
 
 // contract: SRCH-25

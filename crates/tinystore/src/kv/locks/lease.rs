@@ -163,17 +163,18 @@ pub(crate) enum Ending {
 #[derive(Default)]
 pub(crate) struct Watch {
     ending: AtomicU8,
-    /// The holder said its hold succeeded, whatever its work answers after.
-    succeeded: AtomicBool,
+    /// The holder said the guarded service is healthy, whatever its work
+    /// answers after.
+    healthy: AtomicBool,
 }
 
 impl Watch {
-    pub(crate) fn succeed(&self) {
-        self.succeeded.store(true, Ordering::Release);
+    pub(crate) fn healthy(&self) {
+        self.healthy.store(true, Ordering::Release);
     }
 
-    pub(crate) fn succeeded(&self) -> bool {
-        self.succeeded.load(Ordering::Acquire)
+    pub(crate) fn said_healthy(&self) -> bool {
+        self.healthy.load(Ordering::Acquire)
     }
 
     pub(crate) fn ending(&self) -> Ending {

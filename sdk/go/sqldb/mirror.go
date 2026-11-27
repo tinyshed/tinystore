@@ -9,8 +9,8 @@ import (
 	"tinyshed.org/tinystore/internal/wire"
 )
 
-// MirrorOptions is how a mirror opens: what names a row at the source, and
-// what marks and compares a row.
+// MirrorOptions is how a mirror opens: what names a row at the source, what
+// marks it gone, and what makes it changed.
 type MirrorOptions struct {
 	// Key is the columns that name a row at the source: a unique index or the
 	// table's primary key covers them.
@@ -18,13 +18,13 @@ type MirrorOptions struct {
 	// Gone is a column that marks what the source dropped with the store's
 	// time, unix milliseconds, instead of deleting it; empty deletes it.
 	Gone string
-	// Compare is the columns whose change makes a row changed; every column
+	// ChangeOn is the columns whose change makes a row changed; every column
 	// the rows carry but the key's when nil.
-	Compare []string
+	ChangeOn []string
 }
 
 // Mirror is a table that mirrors another system: its Replace takes the
-// source's list of a scope and its Patch a change of some rows, and each
+// source's list of a scope and its Upsert a change of some rows, and each
 // answers what was added, changed and gone. A row the list gives as it is
 // held is not written at all.
 type Mirror[T any] struct {
@@ -52,9 +52,9 @@ type Changed[T any] struct {
 // ReplaceOption guards a Replace.
 type ReplaceOption func(*float64)
 
-// Shrink writes nothing, and answers Suspect, when the list would leave fewer
-// than fraction of the scope's live rows live.
-func Shrink(fraction float64) ReplaceOption { return func(shrink *float64) { *shrink = fraction } }
+// MinKept writes nothing, and answers Suspect, when the list would leave
+// fewer than fraction of the scope's live rows live.
+func MinKept(fraction float64) ReplaceOption { return func(minKept *float64) { *minKept = fraction } }
 
 // OpenMirror is the table name of db mirroring another system, its rows Ts:
 //
@@ -85,17 +85,17 @@ func (m *Mirror[T]) Replace(ctx context.Context, scope map[string]any, rows []T,
 	}
 	asked := wire.SqlMirror{Mode: "replace", Scope: &columns, ScopeValues: &values}
 	for _, option := range options {
-		var shrink float64
-		option(&shrink)
-		asked.Shrink = &shrink
+		var minKept float64
+		option(&minKept)
+		asked.MinKept = &minKept
 	}
 	return m.run(ctx, asked, rows)
 }
 
-// Patch writes what rows adds and changes, a delta of the source's; its Gone
-// is always empty.
-func (m *Mirror[T]) Patch(ctx context.Context, rows []T) (Diff[T], error) {
-	return m.run(ctx, wire.SqlMirror{Mode: "patch"}, rows)
+// Upsert writes what rows adds and changes, a delta of the source's; its
+// Gone is always empty.
+func (m *Mirror[T]) Upsert(ctx context.Context, rows []T) (Diff[T], error) {
+	return m.run(ctx, wire.SqlMirror{Mode: "upsert"}, rows)
 }
 
 func (m *Mirror[T]) run(ctx context.Context, asked wire.SqlMirror, rows []T) (Diff[T], error) {
@@ -107,8 +107,8 @@ func (m *Mirror[T]) run(ctx context.Context, asked wire.SqlMirror, rows []T) (Di
 	if m.options.Gone != "" {
 		asked.Gone = &m.options.Gone
 	}
-	if m.options.Compare != nil {
-		asked.Compare = &m.options.Compare
+	if m.options.ChangeOn != nil {
+		asked.ChangeOn = &m.options.ChangeOn
 	}
 	var diff wire.SqlDiff
 	err = m.db.store.Link.Run(ctx, core.Writing, func(c *core.Connection) error {

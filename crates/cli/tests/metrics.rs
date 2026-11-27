@@ -404,7 +404,7 @@ fn an_export_is_the_prometheus_text_another_store_ingests_to_the_same_newest_sam
     let since = tinystore(&[&"metrics", &data, &"export", &"--since", &"10s", &"-o", &file]);
     assert!(said(&since).contains("wrote 0 series of 0 names"), "a minute silent: {}", said(&since));
     assert_eq!(std::fs::read(&file).unwrap(), b"");
-    let prefixed = tinystore(&[&"metrics", &data, &"export", &"--prefix", &"ping_", &"-o", &file]);
+    let prefixed = tinystore(&[&"metrics", &data, &"export", &"--only-prefix", &"ping_", &"-o", &file]);
     assert!(said(&prefixed).contains("wrote 3 series of 1 name to"), "{}", said(&prefixed));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), text, "the file is the text whole");
     let words = tinystore(&[&"metrics", &data, &"export", &"ping_"]);

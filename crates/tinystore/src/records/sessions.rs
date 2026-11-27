@@ -40,8 +40,8 @@ pub struct Sessions {
     by: Vec<String>,
     gap: Option<Duration>,
     max: Option<Duration>,
-    first: Option<usize>,
-    events: usize,
+    first_sessions: Option<usize>,
+    max_events: usize,
 }
 
 /// A session: the events of one value of each key of `by`, each within
@@ -56,7 +56,7 @@ pub struct Session {
     pub to: SystemTime,
     /// Its events, every one, however few it keeps.
     pub count: u64,
-    /// Its first events, as many as `events` asked.
+    /// Its first events, as many as `max_events` asked.
     pub events: Vec<Event>,
     /// Whether it may go on outside what was read: its first event within
     /// `gap` of the range's start, or its last within `gap` of its end.
@@ -87,14 +87,14 @@ impl Sessions {
 
     /// Only each value's first `sessions` of the range; its later events are
     /// passed over.
-    pub fn first(mut self, sessions: usize) -> Self {
-        self.first = Some(sessions);
+    pub fn first_sessions(mut self, sessions: usize) -> Self {
+        self.first_sessions = Some(sessions);
         self
     }
 
     /// The first events each session keeps, 1000 at most; none unless asked.
-    pub fn events(mut self, events: usize) -> Self {
-        self.events = events;
+    pub fn max_events(mut self, events: usize) -> Self {
+        self.max_events = events;
         self
     }
 
@@ -111,11 +111,11 @@ impl Sessions {
         if self.max.is_some_and(|max| max.is_zero()) {
             return Err(Error::invalid("a session's max: a span longer than none"));
         }
-        if self.first == Some(0) {
+        if self.first_sessions == Some(0) {
             return Err(Error::invalid("first 0 sessions: it takes 1 or more"));
         }
-        if self.events > MOST_KEPT {
-            return Err(Error::invalid(format!("{} events a session: it keeps 0 to {MOST_KEPT}", self.events)));
+        if self.max_events > MOST_KEPT {
+            return Err(Error::invalid(format!("{} events a session: it keeps 0 to {MOST_KEPT}", self.max_events)));
         }
         Ok((gap, self.max.map(nanos)))
     }
@@ -138,7 +138,7 @@ impl List {
     /// use tinystore::records::Sessions;
     /// let events = store.events("activity").open()?;
     /// let (month, minute) = (Duration::from_hours(30 * 24), Duration::from_secs(60));
-    /// let visits = Sessions::by(["userId"]).gap(minute * 30).max(minute * 240).first(1).events(50);
+    /// let visits = Sessions::by(["userId"]).gap(minute * 30).max(minute * 240).first_sessions(1).max_events(50);
     /// let first_visits = events.list().since(month).sessions(&visits)?;
     /// # Ok(())
     /// # }
@@ -171,7 +171,7 @@ struct Cut<'a> {
     /// The open session of each value of `by`, by its JSON.
     open: HashMap<String, Open>,
     closed: Vec<Open>,
-    /// How many sessions each value closed, while `first` counts them.
+    /// How many sessions each value closed, while `first_sessions` counts them.
     ended: HashMap<String, usize>,
     held: Reservation,
     bytes: u64,
@@ -185,7 +185,7 @@ impl<'a> Cut<'a> {
 
     /// Adds an event to its value's open session, or begins one: after a
     /// pause past `gap`, or past `max` from the session's first event, its
-    /// value's session ends, and once a value has its `first` sessions its
+    /// value's session ends, and once a value has its `first_sessions` its
     /// later events are passed over.
     fn add(&mut self, event: Event) -> Result<()> {
         let by: Vec<Value> = self.asked.by.iter().map(|key| value_of(&event, key).unwrap_or(Value::Null)).collect();
@@ -199,7 +199,7 @@ impl<'a> Cut<'a> {
             if within {
                 open.last = at;
                 open.count += 1;
-                return keep(open, event, self.asked.events, (&mut self.held, &mut self.bytes));
+                return keep(open, event, self.asked.max_events, (&mut self.held, &mut self.bytes));
             }
             self.close(&key)?;
             if self.has_its_first(&key) {
@@ -210,29 +210,31 @@ impl<'a> Cut<'a> {
     }
 
     fn has_its_first(&self, key: &str) -> bool {
-        self.asked.first.is_some_and(|first| self.ended.get(key).is_some_and(|ended| *ended >= first))
+        self.asked.first_sessions.is_some_and(|first| self.ended.get(key).is_some_and(|ended| *ended >= first))
     }
 
     /// Begins a session of the value `key` with its first event, within the
     /// sessions a cut holds.
     fn begin(&mut self, key: String, by: Vec<Value>, (at, event): (i64, Event)) -> Result<()> {
         if self.open.len() + self.closed.len() >= MOST_SESSIONS {
-            let refused = format!("past the {MOST_SESSIONS} sessions one read holds: ask a shorter range or first");
+            let refused = format!(
+                "past the {MOST_SESSIONS} sessions one read holds: ask a shorter range or fewer first sessions"
+            );
             return Err(SESSIONS.refuse(MOST_SESSIONS as u64 + 1, refused));
         }
         grow((&mut self.held, &mut self.bytes), HELD_EACH + key.len() as u64)?;
         let mut open = Open { by, first: at, last: at, count: 1, kept: Vec::new() };
-        keep(&mut open, event, self.asked.events, (&mut self.held, &mut self.bytes))?;
+        keep(&mut open, event, self.asked.max_events, (&mut self.held, &mut self.bytes))?;
         self.open.insert(key, open);
         Ok(())
     }
 
     /// Ends the open session of the value `key`, counting it toward its
-    /// `first`.
+    /// `first_sessions`.
     fn close(&mut self, key: &str) -> Result<()> {
         let Some(open) = self.open.remove(key) else { return Ok(()) };
         self.closed.push(open);
-        if self.asked.first.is_some() {
+        if self.asked.first_sessions.is_some() {
             if !self.ended.contains_key(key) {
                 grow((&mut self.held, &mut self.bytes), HELD_EACH + key.len() as u64)?;
             }

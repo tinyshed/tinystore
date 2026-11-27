@@ -28,7 +28,7 @@ pub(crate) fn check(connection: &Connection, shape: &Shape) -> Result<()> {
         return Err(Error::invalid(format!("the database has no table {:?}", shape.table)));
     }
     let named = |column: &String| found.iter().any(|(name, _)| name == column);
-    let compared = shape.compare.iter().flatten();
+    let compared = shape.change_on.iter().flatten();
     if let Some(column) = shape.key.iter().chain(&shape.gone).chain(compared).find(|column| !named(column)) {
         return Err(Error::invalid(format!("the table {:?} has no column {column:?}", shape.table)));
     }
@@ -65,8 +65,8 @@ fn refuse_overlaps(shape: &Shape) -> Result<()> {
     if let Some(gone) = shape.gone.as_ref().filter(|gone| shape.key.contains(gone)) {
         return Err(Error::invalid(format!("the column {gone:?} that marks what is gone is in the key")));
     }
-    if let Some(column) = shape.compare.iter().flatten().find(|column| shape.key.contains(column)) {
-        return Err(Error::invalid(format!("compare names the key's column {column:?}, which never changes")));
+    if let Some(column) = shape.change_on.iter().flatten().find(|column| shape.key.contains(column)) {
+        return Err(Error::invalid(format!("change_on names the key's column {column:?}, which never changes")));
     }
     Ok(())
 }

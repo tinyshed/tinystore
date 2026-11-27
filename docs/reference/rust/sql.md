@@ -316,7 +316,7 @@ pub fn mirror<T>(&self, table: &str) -> MirrorBuilder<T>
 ```
 
 A table that mirrors another system, `T` its rows: its `replace`
-takes the source's list of a scope and its `patch` a change of some
+takes the source's list of a scope and its `upsert` a change of some
 rows, and each answers what was added, changed and gone. The key,
 what names a row at the source, is given before it opens.
 
@@ -490,7 +490,7 @@ gone one as the table held them.
 pub struct Guarded<'m, T> { /* private fields */ }
 ```
 
-A mirror's `replace` with its shrink guard; `Mirror::shrink` makes one.
+A mirror's `replace` with its min_kept guard; `Mirror::min_kept` makes one.
 
 ### Guarded.replace
 
@@ -526,19 +526,19 @@ their numbers, and `"4"` is not `4`.
 A scope of mixed types takes `serde_json::Value`s, `json!(1)` beside
 `json!("fall")`.
 
-### Mirror.patch
+### Mirror.upsert
 
 ```rust
-pub fn patch(&self, rows: &[T]) -> Result<Diff<T>>
+pub fn upsert(&self, rows: &[T]) -> Result<Diff<T>>
 ```
 
 Writes what `rows` adds and changes, a delta of the source's, and
 marks nothing gone: its `gone` is always empty.
 
-### Mirror.shrink
+### Mirror.min_kept
 
 ```rust
-pub fn shrink(&self, fraction: f64) -> Guarded<'_, T>
+pub fn min_kept(&self, fraction: f64) -> Guarded<'_, T>
 ```
 
 The mirror's `replace` guarded against an answer that cannot be
@@ -548,7 +548,7 @@ nothing and answers what it would have done, `suspect`. A fraction
 outside `(0, 1]` is `Invalid`.
 
 ```rust
-let diff = works.shrink(0.5).replace(&[("course_id", 1)], &[])?;
+let diff = works.min_kept(0.5).replace(&[("course_id", 1)], &[])?;
 assert!(diff.suspect); // a course that held works: nothing was deleted
 ```
 
@@ -580,10 +580,10 @@ integer of Unix milliseconds, instead of deleting the row. A row
 marked is neither marked nor answered again, and one the source names
 once more loses its mark and is added again.
 
-### MirrorBuilder.compare
+### MirrorBuilder.change_on
 
 ```rust
-pub fn compare<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self
+pub fn change_on<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self
 ```
 
 The columns whose change makes a row changed; every column the rows
@@ -618,13 +618,13 @@ pub fn replace<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)], rows: &[T])
 
 `Mirror::replace`, inside the transaction.
 
-### TxMirror.patch
+### TxMirror.upsert
 
 ```rust
-pub fn patch(&self, rows: &[T]) -> Result<Diff<T>>
+pub fn upsert(&self, rows: &[T]) -> Result<Diff<T>>
 ```
 
-`Mirror::patch`, inside the transaction.
+`Mirror::upsert`, inside the transaction.
 
 ## and
 
@@ -707,27 +707,16 @@ pub fn value<T: Serialize + ?Sized>(value: &T) -> Sql
 
 A value as a piece of SQL, for a column an update sets.
 
-## Direction
+## AtVersion
 
 ```rust
-pub enum Direction {
-    Asc,
-    Desc,
-}
-```
-
-The way an order goes.
-
-## Expecting
-
-```rust
-pub struct Expecting<'r, T> { /* private fields */ }
+pub struct AtVersion<'r, T> { /* private fields */ }
 ```
 
 The edits of a query made from a version a program saw, from
-`Query::expect`: `tasks.filter(sql::eq("id", &1)).expect(3).update(…)`.
+`Query::if_version`: `tasks.filter(sql::eq("id", &1)).if_version(3).update(…)`.
 
-### Expecting.update
+### AtVersion.update
 
 ```rust
 pub fn update<I, S>(&self, sets: I) -> Result<Done>
@@ -738,7 +727,7 @@ where
 
 `Query::update` of the rows at the version, all of them or none.
 
-### Expecting.delete
+### AtVersion.delete
 
 ```rust
 pub fn delete(&self) -> Result<Done>
@@ -746,6 +735,17 @@ pub fn delete(&self) -> Result<Done>
 
 `Query::delete` of the rows at the version, all of them or none: a
 mark, on a table with a deleted column, which a delete for good is not.
+
+## Direction
+
+```rust
+pub enum Direction {
+    Asc,
+    Desc,
+}
+```
+
+The way an order goes.
 
 ## Page
 
@@ -965,10 +965,10 @@ shows: the marked ones of `Query::deleted_only`, or every one of
 refuses it, `Invalid`, so that nothing live is purged by a handle
 that forgot to ask.
 
-### Query.expect
+### Query.if_version
 
 ```rust
-pub fn expect(&self, version: i64) -> Expecting<'r, T>
+pub fn if_version(&self, version: i64) -> AtVersion<'r, T>
 ```
 
 The edits of a versioned table made from `version`: they write only
@@ -1044,7 +1044,7 @@ handle's.
 
 ```rust
 let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
-let edit = tasks.filter(sql::eq("id", &1)).expect(0).update([("title", sql::value("from b"))]);
+let edit = tasks.filter(sql::eq("id", &1)).if_version(0).update([("title", sql::value("from b"))]);
 if edit.as_ref().is_err_and(|error| error.kind() == ErrorKind::Conflict) {
     // sql app: table tasks: the row is at version 1, not 0
 }
@@ -1080,7 +1080,7 @@ pub fn version(self, column: &str) -> Self
 
 Counts a row's versions in `column`, an integer, not null, default 0:
 every update, delete, restore and upsert of the handle raises it by
-one, and an edit after `Query::expect` writes only rows at the
+one, and an edit after `Query::if_version` writes only rows at the
 version it names. The handle sets the column itself, and a value
 given for it is `Invalid`.
 
@@ -1344,7 +1344,7 @@ pub fn mirror<T>(&self, table: &str) -> MirrorBuilder<T>
 ```
 
 A table that mirrors another system, as `sql::Database::mirror`
-opens one: its `replace` and `patch` awaited.
+opens one: its `replace` and `upsert` awaited.
 
 ### aio::sql::Database.name
 
@@ -1767,13 +1767,13 @@ pub fn purge(&self) -> impl Future<Output = Result<Done>> + Send + 'static
 Deletes for good what the handle shows of the rows the conditions
 match, as `sql::Query::purge` does; refused on the live rows alone.
 
-### aio::sql::Query.expect
+### aio::sql::Query.if_version
 
 ```rust
-pub fn expect(&self, version: i64) -> Expecting<T>
+pub fn if_version(&self, version: i64) -> AtVersion<T>
 ```
 
-The edits made from `version`, as `sql::Query::expect` gives them.
+The edits made from `version`, as `sql::Query::if_version` gives them.
 
 ### aio::sql::Query.all
 
@@ -1907,16 +1907,16 @@ Upserts rows of one shape as one statement, all of them or none, as
 `sql::Table::upsert_all` does. The rows are encoded when the call is
 made.
 
-## aio::sql::Expecting
+## aio::sql::AtVersion
 
 ```rust
-pub struct Expecting<T> { /* private fields */ }
+pub struct AtVersion<T> { /* private fields */ }
 ```
 
 The awaited edits made from a version a program saw, as
-`sql::Expecting` has them.
+`sql::AtVersion` has them.
 
-### aio::sql::Expecting.update
+### aio::sql::AtVersion.update
 
 ```rust
 pub fn update<I, S>(&self, sets: I) -> impl Future<Output = Result<Done>> + Send + 'static
@@ -1927,7 +1927,7 @@ where
 
 An update of the rows at the version, all of them or none.
 
-### aio::sql::Expecting.delete
+### aio::sql::AtVersion.delete
 
 ```rust
 pub fn delete(&self) -> impl Future<Output = Result<Done>> + Send + 'static
@@ -1942,7 +1942,7 @@ version, all of them or none.
 pub struct Guarded<'m, T> { /* private fields */ }
 ```
 
-An awaited mirror's `replace` with its shrink guard; `Mirror::shrink`
+An awaited mirror's `replace` with its min_kept guard; `Mirror::min_kept`
 makes one.
 
 ### aio::sql::Guarded.replace
@@ -1979,21 +1979,21 @@ pub fn replace<S: AsRef<str>, V: Serialize>(
 
 The scope made what `rows` lists, as `sql::Mirror::replace` makes it.
 
-### aio::sql::Mirror.shrink
+### aio::sql::Mirror.min_kept
 
 ```rust
-pub fn shrink(&self, fraction: f64) -> Guarded<'_, T>
+pub fn min_kept(&self, fraction: f64) -> Guarded<'_, T>
 ```
 
-`replace` with its shrink guard, as `sql::Mirror::shrink` guards it.
+`replace` with its min_kept guard, as `sql::Mirror::min_kept` guards it.
 
-### aio::sql::Mirror.patch
+### aio::sql::Mirror.upsert
 
 ```rust
-pub fn patch(&self, rows: &[T]) -> impl Future<Output = Result<Diff<T>>> + Send + 'static
+pub fn upsert(&self, rows: &[T]) -> impl Future<Output = Result<Diff<T>>> + Send + 'static
 ```
 
-What `rows` adds and changes, as `sql::Mirror::patch` writes it.
+What `rows` adds and changes, as `sql::Mirror::upsert` writes it.
 
 ## aio::sql::MirrorBuilder
 
@@ -2019,13 +2019,13 @@ pub fn gone(self, column: &str) -> Self
 
 The column that marks what the source dropped, as `sql::MirrorBuilder::gone` says.
 
-### aio::sql::MirrorBuilder.compare
+### aio::sql::MirrorBuilder.change_on
 
 ```rust
-pub fn compare<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self
+pub fn change_on<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self
 ```
 
-The columns whose change makes a row changed, as `sql::MirrorBuilder::compare` says.
+The columns whose change makes a row changed, as `sql::MirrorBuilder::change_on` says.
 
 ### aio::sql::MirrorBuilder.open
 

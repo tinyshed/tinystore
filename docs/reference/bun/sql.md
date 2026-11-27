@@ -278,10 +278,10 @@ mirror<T = Row>(table: string, options: MirrorOptions): Mirror<T>
 ```
 
 A table that mirrors another system: its `replace` takes the source's
-list of a scope and its `patch` a change of some rows, and each answers
+list of a scope and its `upsert` a change of some rows, and each answers
 what was added, changed and gone, writing only the difference.
 
-    const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', compare: ['grade'] })
+    const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', changeOn: ['grade'] })
 
 ### Database.dropSearchIndex
 
@@ -530,7 +530,7 @@ interface TableOptions {
     deleted?: string
     /**
      * an integer column, not null, default 0, that every update of the handle
-     * raises by one; an update or a delete with `expect` writes only rows at
+     * raises by one; an update or a delete with `ifVersion` writes only rows at
      * the version it names
      */
     version?: string
@@ -758,11 +758,11 @@ update(values: {
 ```
 
 Sets columns of the rows the conditions match, and says how many
-changed. A versioned table's version goes up by one; with `expect`, the
+changed. A versioned table's version goes up by one; with `ifVersion`, the
 update writes every row only if each is at that version, and otherwise
 nothing, failing ConflictError.
 
-    await tasks.where({ id: 1 }).update({ title: 'from b' }, { expect: seen.version })
+    await tasks.where({ id: 1 }).update({ title: 'from b' }, { ifVersion: seen.version })
 
 ### Query.delete
 
@@ -772,7 +772,7 @@ delete(options?: EditOptions): Promise<Done>
 
 Deletes the rows the conditions match, and says how many it deleted. On
 a table with a deleted column it marks the live ones instead, at this
-process's clock, and raises a versioned table's version; `expect` is
+process's clock, and raises a versioned table's version; `ifVersion` is
 update's.
 
 ### Query.withDeleted

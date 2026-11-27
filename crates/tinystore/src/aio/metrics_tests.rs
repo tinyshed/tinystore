@@ -379,9 +379,9 @@ async fn an_exposition_awaited_writes_what_its_blocking_twin_writes() {
     let (_store, stats) = awaited(&f);
     let text = "# TYPE http_requests_total counter\nhttp_requests_total{route=\"/notes\"} 1027\nqueue_length -0\n";
     stats.prometheus().ingest(text).await.unwrap();
-    let (body, written) = stats.exposition().prefix("http_").write(Vec::new()).await.unwrap();
+    let (body, written) = stats.exposition().only_prefix("http_").write(Vec::new()).await.unwrap();
     let mut blocking = Vec::new();
-    let blocking_written = stats.blocking().exposition().prefix("http_").write(&mut blocking).unwrap();
+    let blocking_written = stats.blocking().exposition().only_prefix("http_").write(&mut blocking).unwrap();
     assert_eq!((String::from_utf8(body).unwrap(), written), (String::from_utf8(blocking).unwrap(), blocking_written));
     assert_eq!((written.names, written.series), (1, 1));
     f.store.close().unwrap();

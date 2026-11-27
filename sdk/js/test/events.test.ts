@@ -161,7 +161,12 @@ for (const way of ways) {
 				{ name: 'open', fields: { userId: 2 }, at: at(5) },
 				{ name: 'open', fields: { userId: 1 }, at: at(100) },
 			])
-			const sessions = await visits.sessions({ since: '5h', by: 'userId', gap: '30m', events: 1 })
+			const sessions = await visits.sessions({
+				since: '5h',
+				by: 'userId',
+				gap: '30m',
+				maxEvents: 1,
+			})
 			expect(
 				sessions.map(session => [session.by.userId, session.count, session.events.length]),
 			).toEqual([
@@ -172,13 +177,18 @@ for (const way of ways) {
 			expect(sessions[0]?.from).toEqual(at(0))
 			expect(sessions[0]?.to).toEqual(at(10))
 			expect(sessions[0]?.partial).toBe(false)
-			const first = await visits.sessions({ since: '5h', by: ['userId'], gap: '30m', first: 1 })
+			const first = await visits.sessions({
+				since: '5h',
+				by: ['userId'],
+				gap: '30m',
+				firstSessions: 1,
+			})
 			expect(first.map(session => [session.by.userId, session.events])).toEqual([
 				[1, []],
 				[2, []],
 			])
 			expect(
-				await caught(visits.sessions({ by: 'userId', gap: '30m', events: 1001 })),
+				await caught(visits.sessions({ by: 'userId', gap: '30m', maxEvents: 1001 })),
 			).toBeInstanceOf(InvalidError)
 		})
 

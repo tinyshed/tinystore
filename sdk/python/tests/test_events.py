@@ -152,13 +152,13 @@ async def test_sessions_cut_a_read_by_a_pause_two_visits_ninety_minutes_apart_ar
             Event("open", {"userId": 1}, at=at(100)),
         ]
     )
-    sessions = await visits.sessions(since="5h", by="userId", gap="30m", events=1)
+    sessions = await visits.sessions(since="5h", by="userId", gap="30m", max_events=1)
     assert [(each.by["userId"], each.count, len(each.events)) for each in sessions] == [(1, 2, 1), (2, 1, 1), (1, 1, 1)]
     assert (sessions[0].from_, sessions[0].to, sessions[0].partial) == (at(0), at(10), False)
-    first = await visits.sessions(since="5h", by=["userId"], gap="30m", first=1)
+    first = await visits.sessions(since="5h", by=["userId"], gap="30m", first_sessions=1)
     assert [(each.by["userId"], each.events) for each in first] == [(1, []), (2, [])]
     with pytest.raises(tinystore.InvalidError):
-        await visits.sessions(by="userId", gap="30m", events=1001)
+        await visits.sessions(by="userId", gap="30m", max_events=1001)
 
 
 # contract: REC-22

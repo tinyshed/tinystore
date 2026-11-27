@@ -6,7 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::thread;
 use std::time::Duration;
 
-use super::once::{Answer, BUILDS, FAILURES, Once, OnceBuilder, counted, not_kept, pause_after};
+use super::once::{BUILDS, FAILURES, Fetched, Once, OnceBuilder, counted, not_kept, pause_after};
 use super::path::Key;
 use super::value::{Raw, Value};
 use crate::clock::millis;
@@ -49,7 +49,7 @@ impl<V: Value> FreshBuilder<V> {
 /// let (fresh, keep) = (Duration::from_mins(10), Duration::from_hours(12));
 /// let books = store.once::<String>("cabinet-books").fresh(fresh).keep(keep).open()?;
 /// let user = 7;
-/// let answer = books.answer(user, move || book(user))?;
+/// let answer = books.fetch(user, move || book(user))?;
 /// println!("{} made {:?} ago, stale: {}", answer.value, answer.age, answer.stale);
 /// # Ok(())
 /// # }
@@ -77,7 +77,7 @@ impl<V: Value> Fresh<V> {
     /// answer older than `fresh` is answered at once, `stale`, and `work`
     /// makes the new one in the background, unless a build of the key is
     /// under way or failed within its pause.
-    pub fn answer<E, W>(&self, key: impl Key, work: W) -> Result<Answer<V>, E>
+    pub fn fetch<E, W>(&self, key: impl Key, work: W) -> Result<Fetched<V>, E>
     where
         E: From<Error> + Send + 'static,
         W: FnOnce() -> Result<V, E> + Send + 'static,
@@ -94,13 +94,13 @@ impl<V: Value> Fresh<V> {
         Ok(answer)
     }
 
-    /// [`Fresh::answer`]'s value alone.
+    /// [`Fresh::fetch`]'s value alone.
     pub fn run<E, W>(&self, key: impl Key, work: W) -> Result<V, E>
     where
         E: From<Error> + Send + 'static,
         W: FnOnce() -> Result<V, E> + Send + 'static,
     {
-        self.answer(key, work).map(|answer| answer.value)
+        self.fetch(key, work).map(|answer| answer.value)
     }
 
     /// The answer kept under `key`, stale or not.

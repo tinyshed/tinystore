@@ -15,7 +15,7 @@ use crate::{Error, Result};
 
 impl Database {
     /// A table that mirrors another system, as [`sql::Database::mirror`]
-    /// opens one: its `replace` and `patch` awaited.
+    /// opens one: its `replace` and `upsert` awaited.
     pub fn mirror<T>(&self, table: &str) -> MirrorBuilder<T> {
         MirrorBuilder { builder: self.db.mirror(table), pool: Arc::clone(&self.pool) }
     }
@@ -40,9 +40,9 @@ impl<T> MirrorBuilder<T> {
         MirrorBuilder { builder: self.builder.gone(column), pool: self.pool }
     }
 
-    /// The columns whose change makes a row changed, as [`sql::MirrorBuilder::compare`] says.
-    pub fn compare<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self {
-        MirrorBuilder { builder: self.builder.compare(columns), pool: self.pool }
+    /// The columns whose change makes a row changed, as [`sql::MirrorBuilder::change_on`] says.
+    pub fn change_on<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self {
+        MirrorBuilder { builder: self.builder.change_on(columns), pool: self.pool }
     }
 
     /// Opens the mirror as [`sql::MirrorBuilder::open`] does: a plain call,
@@ -68,18 +68,18 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Mirror<T> {
         scope: &[(S, V)],
         rows: &[T],
     ) -> impl Future<Output = Result<Diff<T>>> + Send + 'static {
-        let mode = sql::scope_of(scope).map(|scope| Mode::Replace { scope, shrink: None });
+        let mode = sql::scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: None });
         self.run(mode, rows)
     }
 
-    /// `replace` with its shrink guard, as [`sql::Mirror::shrink`] guards it.
-    pub fn shrink(&self, fraction: f64) -> Guarded<'_, T> {
-        Guarded { mirror: self, shrink: fraction }
+    /// `replace` with its min_kept guard, as [`sql::Mirror::min_kept`] guards it.
+    pub fn min_kept(&self, fraction: f64) -> Guarded<'_, T> {
+        Guarded { mirror: self, min_kept: fraction }
     }
 
-    /// What `rows` adds and changes, as [`sql::Mirror::patch`] writes it.
-    pub fn patch(&self, rows: &[T]) -> impl Future<Output = Result<Diff<T>>> + Send + 'static {
-        self.run(Ok(Mode::Patch), rows)
+    /// What `rows` adds and changes, as [`sql::Mirror::upsert`] writes it.
+    pub fn upsert(&self, rows: &[T]) -> impl Future<Output = Result<Diff<T>>> + Send + 'static {
+        self.run(Ok(Mode::Upsert), rows)
     }
 
     fn run(&self, mode: Result<Mode>, rows: &[T]) -> impl Future<Output = Result<Diff<T>>> + Send + 'static {
@@ -101,12 +101,12 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Mirror<T> {
     }
 }
 
-/// An awaited mirror's `replace` with its shrink guard; [`Mirror::shrink`]
+/// An awaited mirror's `replace` with its min_kept guard; [`Mirror::min_kept`]
 /// makes one.
 #[derive(Debug)]
 pub struct Guarded<'m, T> {
     mirror: &'m Mirror<T>,
-    shrink: f64,
+    min_kept: f64,
 }
 
 impl<T: Serialize + DeserializeOwned + Send + 'static> Guarded<'_, T> {
@@ -116,7 +116,7 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Guarded<'_, T> {
         scope: &[(S, V)],
         rows: &[T],
     ) -> impl Future<Output = Result<Diff<T>>> + Send + 'static {
-        let mode = sql::scope_of(scope).map(|scope| Mode::Replace { scope, shrink: Some(self.shrink) });
+        let mode = sql::scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: Some(self.min_kept) });
         self.mirror.run(mode, rows)
     }
 }

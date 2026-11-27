@@ -448,12 +448,12 @@
       "does": "the newest sample of every series, as the Prometheus text a scrape reads",
       "examples": [
         "tinystore metrics ./data export",
-        "tinystore metrics ./data export --prefix shop_ --since 5m -o shop.prom"
+        "tinystore metrics ./data export --only-prefix shop_ --since 5m -o shop.prom"
       ],
       "flags": [
         {
           "means": "only the names that start with it",
-          "name": "--prefix",
+          "name": "--only-prefix",
           "value": "<prefix>"
         },
         {

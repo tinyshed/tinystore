@@ -1,5 +1,5 @@
 //! One question of several indexes: the store's indexes of documents read in
-//! one snapshot, a failed index its group's error, `more` exact, and `best`
+//! one snapshot, a failed index its group's error, `more` exact, and `merged`
 //! by reciprocal rank fusion, never by score.
 
 use serde_json::{Value, json};
@@ -24,8 +24,8 @@ fn ids<V>(group: &Group<V>) -> Vec<&str> {
     group.hits.iter().map(|hit| hit.id.as_str()).collect()
 }
 
-fn best(found: &ManyFound) -> Vec<&str> {
-    found.best.iter().map(|best| best.hit.id.as_str()).collect()
+fn merged(found: &ManyFound) -> Vec<&str> {
+    found.merged.iter().map(|merged| merged.hit.id.as_str()).collect()
 }
 
 #[test]
@@ -39,8 +39,8 @@ fn every_index_answers_in_its_own_group_in_the_order_asked() {
     assert_eq!(ids(&found.groups[0]).len(), 2);
     assert_eq!(ids(&found.groups[1]), ["pages-0"]);
     assert!(found.groups.iter().all(|group| group.error.is_none() && !group.more));
-    assert_eq!(found.best.len(), 3, "every group's hits once");
-    assert_eq!(found.best[0].hit, found.groups[found.best[0].group].hits[0], "the same hit as its group's");
+    assert_eq!(found.merged.len(), 3, "every group's hits once");
+    assert_eq!(found.merged[0].hit, found.groups[found.merged[0].group].hits[0], "the same hit as its group's");
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn an_index_that_fails_is_its_groups_error_and_the_others_answer() {
     assert!(found.groups[1].hits.is_empty() && !found.groups[1].more);
     assert_eq!(ids(&found.groups[0]), ["courses-0"]);
     assert_eq!(ids(&found.groups[2]), ["people-0"]);
-    assert_eq!(best(&found), ["courses-0", "people-0"]);
+    assert_eq!(merged(&found), ["courses-0", "people-0"]);
     let filtered = f.store.search("algebra").among(&courses, |a| a.filter(eq("nowhere", &1))).among(&people, |a| a);
     let filtered = filtered.run().unwrap();
     assert_eq!(
@@ -127,12 +127,12 @@ fn best_merges_the_groups_by_rank_and_boost_never_by_score() {
     let even = f.store.search("algebra").among(&courses, |a| a).among(&pages, |a| a).run().unwrap();
     assert!(even.groups[1].hits[0].score > even.groups[0].hits[0].score, "scores that would put pages first");
     let (c, p) = (ids(&even.groups[0]), ids(&even.groups[1]));
-    assert_eq!(best(&even), [c[0], p[0], c[1], p[1]], "equal weights: the group asked first, then the rank");
+    assert_eq!(merged(&even), [c[0], p[0], c[1], p[1]], "equal weights: the group asked first, then the rank");
     let boosted = f.store.search("algebra").among(&courses, |a| a).among(&pages, |a| a.boost(2.0)).run().unwrap();
-    let boosted: Vec<&str> = best(&boosted);
+    let boosted: Vec<&str> = merged(&boosted);
     // pages at 2/61 and 2/62 before courses at 1/61
     assert_eq!(boosted[..2].iter().filter(|id| id.starts_with("pages")).count(), 2, "{boosted:?}");
-    let groups: Vec<usize> = even.best.iter().map(|best| best.group).collect();
+    let groups: Vec<usize> = even.merged.iter().map(|merged| merged.group).collect();
     assert_eq!(groups, [0, 1, 0, 1]);
 }
 
@@ -207,7 +207,7 @@ fn a_tables_index_answers_beside_the_stores_indexes_its_rows_as_json() {
     let found = f.store.search("algebra").among(&courses, |a| a).among(&people, |a| a.limit(5)).run().unwrap();
     assert_eq!(ids(&found.groups[1]), ["1"]);
     assert_eq!(found.groups[1].hits[0].value, json!({ "id": 1, "name": "Ada of algebra" }));
-    assert_eq!(best(&found), ["courses-0", "1"]);
+    assert_eq!(merged(&found), ["courses-0", "1"]);
 }
 
 /// One search of 13 small indexes against 13 searches of one each, in the

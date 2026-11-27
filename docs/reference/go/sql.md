@@ -262,15 +262,15 @@ type EditOption interface {
 }
 ```
 
-EditOption is how an Update or a Delete writes: Expect.
+EditOption is how an Update or a Delete writes: IfVersion.
 
-### Expect
+### IfVersion
 
 ```go
-func Expect(version int64) EditOption
+func IfVersion(version int64) EditOption
 ```
 
-Expect writes only if every row the conditions match is at version, all of them, and otherwise nothing, failing with tinystore.ErrConflict and the version a row is at. No row at all is no conflict: the edit changes none.
+IfVersion writes only if every row the conditions match is at version, all of them, and otherwise nothing, failing with tinystore.ErrConflict and the version a row is at. No row at all is no conflict: the edit changes none.
 
 ## Eq
 
@@ -314,7 +314,7 @@ type Mirror[T any] struct {
 }
 ```
 
-Mirror is a table that mirrors another system: its Replace takes the source's list of a scope and its Patch a change of some rows, and each answers what was added, changed and gone. A row the list gives as it is held is not written at all.
+Mirror is a table that mirrors another system: its Replace takes the source's list of a scope and its Upsert a change of some rows, and each answers what was added, changed and gone. A row the list gives as it is held is not written at all.
 
 ### OpenMirror
 
@@ -327,14 +327,6 @@ OpenMirror is the table name of db mirroring another system, its rows Ts:
 	works := sqldb.OpenMirror[Work](db, "works", sqldb.MirrorOptions{Key: []string{"course_id", "id"}, Gone: "gone_at"})
 	diff, err := works.Replace(ctx, map[string]any{"course_id": 1}, fetched)
 
-### Mirror.Patch
-
-```go
-func (m *Mirror[T]) Patch(ctx context.Context, rows []T) (Diff[T], error)
-```
-
-Patch writes what rows adds and changes, a delta of the source's; its Gone is always empty.
-
 ### Mirror.Replace
 
 ```go
@@ -342,6 +334,14 @@ func (m *Mirror[T]) Replace(ctx context.Context, scope map[string]any, rows []T,
 ```
 
 Replace makes the scope, the rows whose columns hold its values, nil for the whole table, what rows lists: it adds what the table lacks, writes what changed, and deletes, or marks gone, what the list leaves out. A row outside the scope is invalid. Values compare as SQLite's is does, so "4" is not 4.
+
+### Mirror.Upsert
+
+```go
+func (m *Mirror[T]) Upsert(ctx context.Context, rows []T) (Diff[T], error)
+```
+
+Upsert writes what rows adds and changes, a delta of the source's; its Gone is always empty.
 
 ## MirrorOptions
 
@@ -353,13 +353,13 @@ type MirrorOptions struct {
 	// Gone is a column that marks what the source dropped with the store's
 	// time, unix milliseconds, instead of deleting it; empty deletes it.
 	Gone string
-	// Compare is the columns whose change makes a row changed; every column
+	// ChangeOn is the columns whose change makes a row changed; every column
 	// the rows carry but the key's when nil.
-	Compare []string
+	ChangeOn []string
 }
 ```
 
-MirrorOptions is how a mirror opens: what names a row at the source, and what marks and compares a row.
+MirrorOptions is how a mirror opens: what names a row at the source, what marks it gone, and what makes it changed.
 
 ## Option
 
@@ -547,7 +547,7 @@ Count counts every row the conditions match, without the order and the limit.
 func (q *Query[T]) Delete(ctx context.Context, opts ...EditOption) (Result, error)
 ```
 
-Delete deletes the rows the conditions match, and says how many it deleted. On a table with a deleted column it marks the live ones instead, at this process's clock, and raises a versioned table's version; Expect is Update's.
+Delete deletes the rows the conditions match, and says how many it deleted. On a table with a deleted column it marks the live ones instead, at this process's clock, and raises a versioned table's version; IfVersion is Update's.
 
 ### Query.DeletedOnly
 
@@ -675,7 +675,7 @@ SQL is the text and the values the query sends, to read or to log.
 func (q *Query[T]) Update(ctx context.Context, set Set, opts ...EditOption) (Result, error)
 ```
 
-Update sets columns of the rows the conditions match, and says how many changed. A versioned table's version goes up by one, and with Expect the update writes only rows at that version.
+Update sets columns of the rows the conditions match, and says how many changed. A versioned table's version goes up by one, and with IfVersion the update writes only rows at that version.
 
 ### Query.Where
 
@@ -701,13 +701,13 @@ type ReplaceOption func(*float64)
 
 ReplaceOption guards a Replace.
 
-### Shrink
+### MinKept
 
 ```go
-func Shrink(fraction float64) ReplaceOption
+func MinKept(fraction float64) ReplaceOption
 ```
 
-Shrink writes nothing, and answers Suspect, when the list would leave fewer than fraction of the scope's live rows live.
+MinKept writes nothing, and answers Suspect, when the list would leave fewer than fraction of the scope's live rows live.
 
 ## Result
 
@@ -847,7 +847,7 @@ Deleted marks a row deleted rather than deleting it: column, a nullable integer,
 func Version(column string) TableOption
 ```
 
-Version counts a row's versions in column, an integer, not null, default 0: every update of the table raises it by one, and an edit with Expect writes only rows at the version it names.
+Version counts a row's versions in column, an integer, not null, default 0: every update of the table raises it by one, and an edit with IfVersion writes only rows at the version it names.
 
 ## Tx
 

@@ -228,7 +228,7 @@ search, `status` and `ready`: see [A table's index](table-index.md#async-rust).
 | [Vectors](vectors.md)                     | dimensions, exact search, `recall` and clusters     |
 | [Words and vectors together](hybrid.md)   | `vectorWeight`, `minSimilarity`, `rerank`           |
 | [A table's index](table-index.md)         | `db.searchIndex`, triggers, `ready`                 |
-| [Ask several indexes at once](many.md)    | `store.search`: groups, `more`, `best` by rank      |
+| [Ask several indexes at once](many.md)    | `store.search`: groups, `more`, `merged` by rank    |
 | [Rebuilds](rebuilds.md)                   | changing fields and filters while the index answers |
 
 New to Search? [Finding old messages](../../handbook/chat/finding-old-messages.md)

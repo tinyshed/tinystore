@@ -20,7 +20,7 @@ const found = await store.search({
 	],
 })
 found.groups // [{ index: 'courses', hits, more: true }, { index: 'pages', hits, more: false }, …]
-found.best // [{ index: 'courses', group: 0, hit }, { index: 'pages', group: 1, hit }, …]
+found.merged // [{ index: 'courses', group: 0, hit }, { index: 'pages', group: 1, hit }, …]
 ```
 
 ```python
@@ -37,7 +37,7 @@ found = await store.search(
     ],
 )
 found.groups  # [ManyGroup(index='courses', hits=[…], more=True, …), …]
-found.best  # [Best(index='courses', group=0, hit=Hit(…)), …]
+found.merged  # [Merged(index='courses', group=0, hit=Hit(…)), …]
 ```
 
 ```go
@@ -50,7 +50,7 @@ found, err := search.Many(ctx, store, "algebra",
 	search.Among(pages, search.Where{"space_id": 7}, search.Limit(5), search.Snippet("plain", 60)),
 	search.Among(people, search.Limit(5)))
 found.Groups // [{Index: "courses", Hits: […], More: true}, …]
-found.Best   // [{Index: "courses", Group: 0, Hit: &found.Groups[0].Hits[0]}, …]
+found.Merged // [{Index: "courses", Group: 0, Hit: &found.Groups[0].Hits[0]}, …]
 ```
 
 ```rust
@@ -67,7 +67,7 @@ let found = store
     .among(&people, |a| a.limit(5))
     .run()?;
 found.groups[0].more // true: courses has more than five
-found.best[0].hit.id // the best of all three, by rank
+found.merged[0].hit.id // the best of all three, by rank
 ```
 
 The text is the call's, and every index reads it as a search of that index
@@ -125,15 +125,15 @@ first group's error. A call that asks no index, more than 32, a limit
 outside 1 to 100 or a boost that is not a positive number is refused as
 `invalid` before any index is searched, and so is an index of another store.
 
-## Best of all: by rank, not by score
+## Merged: by rank, not by score
 
-`best` holds every group's hits in one list. Each entry names its group, by
+`merged` holds every group's hits in one list. Each entry names its group, by
 the index's name and the group's place in `groups`, and carries the same hit
 as its group: in Bun, Python and Go the same object.
 
 A score orders the hits of one index and means nothing beside another's,
 since each index scores by the words of its own documents: a word rare in
-courses and common in pages scores differently in each. So `best` never
+courses and common in pages scores differently in each. So `merged` never
 compares scores. It merges by reciprocal rank fusion: the hit at rank `r` of
 its group, counted from 1, weighs `boost / (60 + r)`.
 
@@ -165,7 +165,7 @@ groups from different files are not one moment.
 | an entry's own options    | `where`, `limit`, `prefix`, `matches`, `snippet` |
 | an entry's text or vector | not taken: the text is the call's                |
 | `offset` and `total`      | not taken: `more` says whether there are more    |
-| `best`                    | every group's hits, by reciprocal rank fusion    |
+| `merged`                  | every group's hits, by reciprocal rank fusion    |
 
 Over the wire, an entry that gives its own text, a vector, an offset or a
 total is refused as `invalid`; the SDKs do not offer them.

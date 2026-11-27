@@ -164,13 +164,13 @@ fn a_prefix_and_a_since_choose_the_names_and_the_series_written() {
         let written = exposition.write(&mut text).unwrap();
         (String::from_utf8(text).unwrap(), written)
     };
-    let (text, written) = write(stats.exposition().prefix("shop_"));
+    let (text, written) = write(stats.exposition().only_prefix("shop_"));
     assert_eq!((written.names, written.series), (1, 2), "a silent series is still written: {text}");
     assert!(!text.contains("cpu"));
-    let (text, written) = write(stats.exposition().prefix("shop_").since(HOUR));
+    let (text, written) = write(stats.exposition().only_prefix("shop_").since(HOUR));
     assert_eq!((written.names, written.series), (1, 1));
     assert!(text.contains("host=\"a\"") && !text.contains("host=\"b\""), "{text}");
-    let (text, written) = write(stats.exposition().prefix("nothing_"));
+    let (text, written) = write(stats.exposition().only_prefix("nothing_"));
     assert_eq!((text.as_str(), written), ("", Written::default()));
 }
 

@@ -5,7 +5,7 @@
 //! ```no_run
 //! # fn f(stats: tinystore::metrics::Metrics) -> tinystore::Result<()> {
 //! let mut body = Vec::new();
-//! let written = stats.exposition().prefix("shop_").write(&mut body)?;
+//! let written = stats.exposition().only_prefix("shop_").write(&mut body)?;
 //! println!("{} series of {} names", written.series, written.names);
 //! # Ok(())
 //! # }
@@ -104,7 +104,7 @@ impl Metrics {
 
 impl Exposition {
     /// Only the names that start with this text.
-    pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
+    pub fn only_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.prefix = prefix.into();
         self
     }

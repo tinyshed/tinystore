@@ -6100,10 +6100,7 @@
             }
           ]
         },
-        "events": {
-          "uint": "607"
-        },
-        "first": {
+        "firstSessions": {
           "uint": "507"
         },
         "gap": {
@@ -6111,6 +6108,9 @@
         },
         "max": {
           "uint": "1500"
+        },
+        "maxEvents": {
+          "uint": "607"
         },
         "query": {
           "fields": {
@@ -7925,20 +7925,6 @@
     },
     {
       "fields": {
-        "best": {
-          "list": [
-            {
-              "fields": {
-                "group": {
-                  "uint": "107"
-                },
-                "hit": {
-                  "uint": "207"
-                }
-              }
-            }
-          ]
-        },
         "groups": {
           "list": [
             {
@@ -8052,6 +8038,20 @@
                 },
                 "more": {
                   "bool": true
+                }
+              }
+            }
+          ]
+        },
+        "merged": {
+          "list": [
+            {
+              "fields": {
+                "group": {
+                  "uint": "107"
+                },
+                "hit": {
+                  "uint": "207"
                 }
               }
             }
@@ -8201,14 +8201,14 @@
         }
       },
       "hex": "82016b02cccf",
-      "message": "search.Best",
-      "name": "search.Best with every field"
+      "message": "search.Merged",
+      "name": "search.Merged with every field"
     },
     {
       "fields": {},
       "hex": "80",
-      "message": "search.Best",
-      "name": "search.Best with no field"
+      "message": "search.Merged",
+      "name": "search.Merged with no field"
     },
     {
       "fields": {
@@ -8766,10 +8766,10 @@
     },
     {
       "fields": {
-        "compare": {
+        "changeOn": {
           "list": [
             {
-              "str": "compare"
+              "str": "changeOn"
             }
           ]
         },
@@ -8785,6 +8785,9 @@
               "str": "key"
             }
           ]
+        },
+        "minKept": {
+          "float": "3ff8000000000000"
         },
         "mode": {
           "str": "mode"
@@ -8825,14 +8828,11 @@
             }
           ]
         },
-        "shrink": {
-          "float": "3ff8000000000000"
-        },
         "table": {
           "str": "table"
         }
       },
-      "hex": "8a016b02a57461626c650391a36b657904a4676f6e650591a7636f6d7061726506a46d6f64650791a573636f70650891ab73636f706556616c75657309820191a7636f6c756d6e73029191a4726f77730acb3ff8000000000000",
+      "hex": "8a016b02a57461626c650391a36b657904a4676f6e650591a86368616e67654f6e06a46d6f64650791a573636f70650891ab73636f706556616c75657309820191a7636f6c756d6e73029191a4726f77730acb3ff8000000000000",
       "message": "sql.Mirror",
       "name": "sql.Mirror with every field"
     },

@@ -10,7 +10,7 @@
 //! ```text
 //! courses, boost 2: c1 c2     pages: p1 p2
 //! c1 2/61 = .0328   c2 2/62 = .0323   p1 1/61 = .0164   p2 1/62 = .0161
-//! best: c1 c2 p1 p2
+//! merged: c1 c2 p1 p2
 //! ```
 
 use std::sync::Arc;
@@ -59,16 +59,16 @@ impl Store {
     ///     .among(&pages, |a| a.filter(eq("space_id", &7)).limit(5).snippet("plain", 60))
     ///     .among(&people, |a| a.limit(5))
     ///     .run()?;
-    /// for best in &found.best {
-    ///     println!("{} {}", best.index, best.hit.id);
+    /// for merged in &found.merged {
+    ///     println!("{} {}", merged.index, merged.hit.id);
     /// }
     /// # Ok(())
     /// # }
     /// ```
     ///
     /// Each group holds its index's best by its own scores, and says whether
-    /// it has more; [`best`](ManyFound::best) merges them by reciprocal rank
-    /// fusion, since scores of two indexes cannot be compared. An index that
+    /// it has more; [`merged`](ManyFound::merged) holds them merged by
+    /// reciprocal rank fusion, since scores of two indexes cannot be compared. An index that
     /// fails is its group's error, and the others answer; the call fails
     /// only when every group does. The store's indexes of documents are
     /// searched in one snapshot of search.db, so that no write lands between
@@ -143,7 +143,7 @@ impl Default for Among {
 }
 
 impl Among {
-    /// What the group's hits weigh in [`ManyFound::best`], a positive number,
+    /// What the group's hits weigh in [`ManyFound::merged`], a positive number,
     /// 1 unless said: a hit of a group of 2 weighs what a hit of half its
     /// rank would in a group of 1, near enough.
     pub fn boost(mut self, boost: f64) -> Self {
@@ -306,7 +306,7 @@ pub struct ManyFound {
     /// Every group's hits by reciprocal rank fusion, never by score: the hit
     /// at rank `r` of its group, from 1, weighs `boost / (60 + r)`, and of
     /// equal weights the group asked first comes first, then the higher rank.
-    pub best: Vec<Best>,
+    pub merged: Vec<Merged>,
 }
 
 /// An index's hits in a [`ManySearch`], the best by its own scores first, or
@@ -326,11 +326,11 @@ pub struct Group<V = Value> {
     pub error: Option<Error>,
 }
 
-/// A hit of [`ManyFound::best`]: its group's index, the group's place among
+/// A hit of [`ManyFound::merged`]: its group's index, the group's place among
 /// the groups, and the hit as its group holds it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub struct Best {
+pub struct Merged {
     pub index: String,
     pub group: usize,
     pub hit: Hit<Value>,
@@ -360,21 +360,21 @@ impl Reading<Value> for Json {
     }
 }
 
-/// The groups of a search, and `best` as each hit's group and its place there.
+/// The groups of a search, and `merged` as each hit's group and its place there.
 pub(crate) struct Many<V> {
     pub(crate) groups: Vec<Group<V>>,
-    pub(crate) best: Vec<(usize, usize)>,
+    pub(crate) merged: Vec<(usize, usize)>,
 }
 
 /// Runs a search of `text` among the indexes asked, its hits' values JSON.
 pub(crate) fn search_among(store: &Store, text: &str, among: &[(Index<Value>, Among)]) -> Result<ManyFound> {
-    let Many { groups, best } = searched(store, text, among, &Json)?;
-    let best = best.into_iter().map(|(group, at)| Best {
+    let Many { groups, merged } = searched(store, text, among, &Json)?;
+    let merged = merged.into_iter().map(|(group, at)| Merged {
         index: groups[group].index.clone(),
         group,
         hit: groups[group].hits[at].clone(),
     });
-    Ok(ManyFound { best: best.collect(), groups })
+    Ok(ManyFound { merged: merged.collect(), groups })
 }
 
 /// Runs a search of `text` among the indexes asked, each hit's value read as
@@ -397,8 +397,8 @@ pub(crate) fn searched<V>(
         let first = groups.iter_mut().find_map(|group| group.error.take());
         return Err(first.unwrap_or_else(|| Error::internal("a search among no index")));
     }
-    let best = fused(&groups, among.iter().map(|(_, among)| among.boost));
-    Ok(Many { groups, best })
+    let merged = fused(&groups, among.iter().map(|(_, among)| among.boost));
+    Ok(Many { groups, merged })
 }
 
 /// Refuses a call of no index, or past 32, and a group's options no group takes.

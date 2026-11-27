@@ -23,13 +23,13 @@ class Permit:
 
 A holding of a semaphore's key: one of its limit.
 
-### Permit.succeeded
+### Permit.healthy
 
 ```python
-def succeeded() -> None: ...
+def healthy() -> None: ...
 ```
 
-Says the hold succeeded, so that the breaker does not count it a failure though the block then raises.
+Says the guarded service is healthy, so that the breaker counts no failure though the block then raises.
 
 ## Breaker
 
@@ -43,7 +43,7 @@ class Breaker:
 A semaphore's breaker: ``failures`` failed holds of a key in a row put it down for ``pause``.
 
 A hold failed when its block raised, unless its permit said
-``succeeded()``, or when it ran past its timeout or max_hold; a success
+``healthy()``, or when it ran past its timeout or max_hold; a success
 resets the count. While the key is down every hold is UnavailableError at
 once. Once the pause is over, one hold goes through: its success puts the
 key up, its failure pauses it again. The store's process keeps it in

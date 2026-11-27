@@ -160,7 +160,7 @@ message sql.Described {
 
 # A table that mirrors another system, given the source's list: replace
 # makes the scope, the rows whose columns hold its values, what the list
-# lists, and patch writes what the list adds and changes. The table's key,
+# lists, and upsert writes what the list adds and changes. The table's key,
 # the columns that name a row at the source, is covered by a unique index or
 # its primary key. A row the same as held is not written.
 message sql.Mirror {
@@ -168,12 +168,12 @@ message sql.Mirror {
   2 table: str
   3 key: [str]
   4 gone: str?            # the column that marks what the source dropped with the store's time, rather than a delete
-  5 compare: [str]?       # the columns whose change makes a row changed: every column of the rows but the key's when absent
-  6 mode: str             # replace or patch
+  5 changeOn: [str]?      # the columns whose change makes a row changed: every column of the rows but the key's when absent
+  6 mode: str             # replace or upsert
   7 scope: [str]?         # replace: the columns of its scope
   8 scopeValues: [cell]?  # and their values, in their order
   9 rows: sql.Rows        # the list, one message at most
-  10 shrink: float?       # replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
+  10 minKept: float?      # replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
 }
 
 # What a mirror's call changed, each row by columns: the list's, or the

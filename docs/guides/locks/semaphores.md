@@ -210,14 +210,14 @@ match cabinet.key("requests").timeout(Duration::from_secs(15)).hold(|_| fetch_gr
 - Each key has its own breaker, like its own places.
 
 Some errors are yours, not the service's, such as a student who does not
-exist. Say so with `succeeded`, and the hold does not count as a failure even
+exist. Say the service is up with `healthy`, and the hold does not count as a failure even
 if the function then throws:
 
 ```ts
 await cabinet.hold('requests', async permit => {
 	const response = await fetch(url, { signal: permit.signal })
 	if (response.status === 404) {
-		permit.succeeded() // the cabinet answered: it is up
+		permit.healthy() // the cabinet answered: it is up
 		throw new NotFound(user.id)
 	}
 	return response.json()
@@ -228,7 +228,7 @@ await cabinet.hold('requests', async permit => {
 async with cabinet.hold("requests") as permit:
     response = await client.get(url)
     if response.status_code == 404:
-        permit.succeeded()  # the cabinet answered: it is up
+        permit.healthy()  # the cabinet answered: it is up
         raise NotFound(user.id)
 ```
 
@@ -236,7 +236,7 @@ async with cabinet.hold("requests") as permit:
 err = cabinet.Hold(ctx, "requests", func(ctx context.Context, permit *locks.Lease) error {
 	response, err := get(ctx, url)
 	if err == nil && response.StatusCode == http.StatusNotFound {
-		permit.Succeeded() // the cabinet answered: it is up
+		permit.Healthy() // the cabinet answered: it is up
 		return errNotFound
 	}
 	return err
@@ -247,7 +247,7 @@ err = cabinet.Hold(ctx, "requests", func(ctx context.Context, permit *locks.Leas
 cabinet.hold("requests", |permit| {
     let response = get(&url)?;
     if response.status() == 404 {
-        permit.succeeded(); // the cabinet answered: it is up
+        permit.healthy(); // the cabinet answered: it is up
         return Err(not_found(&user.id));
     }
     Ok(response)

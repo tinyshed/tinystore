@@ -619,9 +619,9 @@ fn a_second_writer_from_the_old_version_is_refused_and_a_deleted_row_is_gone_fro
     let one = tasks.filter(sql::eq("id", &1));
     let seen = one.one().unwrap().unwrap().version;
 
-    let a = one.expect(seen).update([("title", sql::value("from a"))]).unwrap();
+    let a = one.if_version(seen).update([("title", sql::value("from a"))]).unwrap();
     assert_eq!(a.changes, 1);
-    let b = one.expect(seen).update([("title", sql::value("from b"))]).unwrap_err();
+    let b = one.if_version(seen).update([("title", sql::value("from b"))]).unwrap_err();
     assert_eq!(b.kind(), ErrorKind::Conflict, "{b}");
     assert_eq!(b.to_string(), "sql sp: table tasks: the row is at version 1, not 0: conflict");
     assert_eq!(one.one().unwrap().unwrap().title, "from a", "b wrote nothing");
@@ -696,41 +696,41 @@ fn an_upsert_onto_a_marked_row_brings_it_back_and_raises_its_version() {
 
 // contract: SQL-23
 #[test]
-fn an_edit_with_expect_writes_every_row_at_its_version_or_none() {
+fn an_edit_with_if_version_writes_every_row_at_its_version_or_none() {
     let f = fixture();
     let db = tasks_db(&f);
     let tasks = db.table::<Task>("tasks").version("version");
     tasks.insert_all(&[task(1, "a"), task(2, "b")]).unwrap();
     tasks.filter(sql::eq("id", &2)).update([("title", sql::value("b2"))]).unwrap();
     let both = tasks.filter(sql::is_in("id", &[1, 2]));
-    let refused = both.expect(0).update([("title", sql::value("z"))]).unwrap_err();
+    let refused = both.if_version(0).update([("title", sql::value("z"))]).unwrap_err();
     assert_eq!(refused.to_string(), "sql sp: table tasks: the row is at version 1, not 0: conflict");
     let read = tasks.order_by("id", Direction::Asc).all().unwrap();
     assert_eq!((titles(read.clone()), read[0].version), (vec!["a".to_owned(), "b2".to_owned()], 0), "none");
     tasks.filter(sql::eq("id", &1)).update([("title", sql::value("a2"))]).unwrap();
-    assert_eq!(both.expect(1).update([("title", sql::value("z"))]).unwrap().changes, 2, "all of them");
+    assert_eq!(both.if_version(1).update([("title", sql::value("z"))]).unwrap().changes, 2, "all of them");
 
-    assert_eq!(tasks.filter(sql::eq("id", &9)).expect(0).update([("title", sql::value("z"))]).unwrap().changes, 0);
+    assert_eq!(tasks.filter(sql::eq("id", &9)).if_version(0).update([("title", sql::value("z"))]).unwrap().changes, 0);
     let unversioned =
-        db.table::<Task>("tasks").filter(sql::eq("id", &1)).expect(0).update([("title", sql::value("z"))]);
+        db.table::<Task>("tasks").filter(sql::eq("id", &1)).if_version(0).update([("title", sql::value("z"))]);
     assert_eq!(unversioned.unwrap_err().kind(), ErrorKind::Invalid);
-    let hard = tasks.filter(sql::eq("id", &1)).expect(2).delete().unwrap_err();
-    assert!(hard.to_string().contains("expect on a delete is a mark's"), "{hard}");
+    let hard = tasks.filter(sql::eq("id", &1)).if_version(2).delete().unwrap_err();
+    assert!(hard.to_string().contains("if_version on a delete is a mark's"), "{hard}");
 }
 
 // contract: SQL-23
 #[test]
-fn an_edit_with_expect_inside_a_transaction_is_the_transactions() {
+fn an_edit_with_if_version_inside_a_transaction_is_the_transactions() {
     let f = fixture();
     let db = tasks_db(&f);
     db.table::<Task>("tasks").insert(&task(1, "a")).unwrap();
     let ran = db.tx(|tx| -> crate::Result<()> {
         let tasks = tx.table::<Task>("tasks").deleted("deleted_at").version("version");
         let one = tasks.filter(sql::eq("id", &1));
-        assert_eq!(one.expect(0).update([("title", sql::value("in tx"))])?.changes, 1);
-        let again = one.expect(0).delete().unwrap_err();
+        assert_eq!(one.if_version(0).update([("title", sql::value("in tx"))])?.changes, 1);
+        let again = one.if_version(0).delete().unwrap_err();
         assert_eq!(again.kind(), ErrorKind::Conflict, "{again}");
-        assert_eq!(one.expect(1).delete()?.changes, 1, "the transaction goes on after a conflict");
+        assert_eq!(one.if_version(1).delete()?.changes, 1, "the transaction goes on after a conflict");
         Ok(())
     });
     ran.unwrap();

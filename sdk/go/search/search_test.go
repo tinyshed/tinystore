@@ -317,13 +317,13 @@ func TestOneQuestionOfSeveralIndexesAnswersAGroupAnIndexAndEveryHitMergedByRank(
 		if len(third.Hits) != 0 || third.More || third.Err != nil {
 			t.Fatalf("people %+v", third)
 		}
-		if len(found.Best) != 2 || found.Best[0].Hit != &first.Hits[0] || found.Best[1].Index != "box_pages" {
-			t.Fatalf("best %+v", found.Best)
+		if len(found.Merged) != 2 || found.Merged[0].Hit != &first.Hits[0] || found.Merged[1].Index != "box_pages" {
+			t.Fatalf("merged %+v", found.Merged)
 		}
 		ways.Must(search.Drop(ctx, store, "box_people"))
 		failed := ways.Must(search.Many(ctx, store, "algebra", search.Among(courses), search.Among(people)))
 		is(t, failed.Groups[1].Err, tinystore.ErrInvalid)
-		if len(failed.Best) != 2 || failed.Groups[0].Err != nil {
+		if len(failed.Merged) != 2 || failed.Groups[0].Err != nil {
 			t.Fatalf("the others answer: %+v", failed)
 		}
 		_, err := search.Many(ctx, store, "algebra")

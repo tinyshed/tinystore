@@ -90,7 +90,7 @@ fn answers<T>(store: &Store, name: &str, (keep, fresh): (Duration, Option<Durati
 /// An answer with how old it is: `stale` once it is older than the `fresh`
 /// its answers opened with, and never for answers opened without one.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Answer<V> {
+pub struct Fetched<V> {
     pub value: V,
     pub age: Duration,
     pub stale: bool,
@@ -356,12 +356,12 @@ impl<V: Value> Once<V> {
     /// # fn main() -> tinystore::Result<()> {
     /// # let store = tinystore::Store::open("data", Default::default())?;
     /// let charges = store.once::<String>("charges").open()?;
-    /// let receipt = charges.answer("key-7f", || Ok::<_, tinystore::Error>("receipt 1".to_owned()))?;
+    /// let receipt = charges.fetch("key-7f", || Ok::<_, tinystore::Error>("receipt 1".to_owned()))?;
     /// println!("{} made {:?} ago", receipt.value, receipt.age);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn answer<E: From<Error>>(&self, key: impl Key, work: impl FnOnce() -> Result<V, E>) -> Result<Answer<V>, E> {
+    pub fn fetch<E: From<Error>>(&self, key: impl Key, work: impl FnOnce() -> Result<V, E>) -> Result<Fetched<V>, E> {
         let key = key.text();
         let found = self.answers.read_cell(&key)?;
         self.build(&key, found, work)
@@ -376,7 +376,7 @@ impl<V: Value> Once<V> {
     /// kept is still returned, to this caller and to those that waited for this
     /// run, and the failure logged.
     pub fn run<E: From<Error>>(&self, key: impl Key, work: impl FnOnce() -> Result<V, E>) -> Result<V, E> {
-        self.answer(key, work).map(|answer| answer.value)
+        self.fetch(key, work).map(|answer| answer.value)
     }
 
     /// The answer `found` kept under `key`, or once no run holds the key, the
@@ -387,7 +387,7 @@ impl<V: Value> Once<V> {
         key: &str,
         mut found: Option<Cell>,
         work: impl FnOnce() -> Result<V, E>,
-    ) -> Result<Answer<V>, E> {
+    ) -> Result<Fetched<V>, E> {
         #[cfg(feature = "replication")]
         if found.is_none() && self.answers.is_copy() {
             return self.run_at_home(key, work).map(made);
@@ -416,11 +416,11 @@ impl<V: Value> Once<V> {
     }
 
     /// A kept cell's answer, how old it is and whether it is stale.
-    pub(super) fn answered(&self, key: &str, cell: &Cell) -> Result<Answer<V>> {
+    pub(super) fn answered(&self, key: &str, cell: &Cell) -> Result<Fetched<V>> {
         let value =
             super::bucket::decode(&cell.raw).map_err(|error| error.within(self.answers.scope.shown_key(key)))?;
         let (age, stale) = aged(&self.answers, cell, self.fresh);
-        Ok(Answer { value, age, stale })
+        Ok(Fetched { value, age, stale })
     }
 
     /// Counts a stale answer answered.
@@ -430,7 +430,7 @@ impl<V: Value> Once<V> {
 
     /// The answer kept under `key`, with its age, for the async API's runs.
     #[cfg(feature = "async")]
-    pub(crate) fn kept(&self, key: &str) -> Result<Option<Answer<V>>> {
+    pub(crate) fn kept(&self, key: &str) -> Result<Option<Fetched<V>>> {
         let found = self.answers.read_cell(key)?;
         found.map(|cell| self.answered(key, &cell)).transpose()
     }
@@ -562,8 +562,8 @@ impl<V> Clone for Once<V> {
 }
 
 /// An answer just made, or one a run made could not keep.
-pub(crate) fn made<V>(value: V) -> Answer<V> {
-    Answer { value, age: Duration::ZERO, stale: false }
+pub(crate) fn made<V>(value: V) -> Fetched<V> {
+    Fetched { value, age: Duration::ZERO, stale: false }
 }
 
 impl<V> fmt::Debug for Once<V> {

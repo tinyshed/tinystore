@@ -282,13 +282,13 @@ class Query[T]:
         return [str(row[detail]) for row in answered.rows]
 
     async def update(
-        self, values: Mapping[str, Any] | None = None, /, *, expect: int | None = None, **columns: Any
+        self, values: Mapping[str, Any] | None = None, /, *, if_version: int | None = None, **columns: Any
     ) -> Done:
         """Sets columns of the rows the conditions match, and says how many changed.
 
-        A versioned table's version goes up by one. With ``expect``, the update
+        A versioned table's version goes up by one. With ``if_version``, the update
         writes every row only if each is at that version, and otherwise
-        nothing, raising ConflictError: ``await one.update({"title": t}, expect=seen.version)``.
+        nothing, raising ConflictError: ``await one.update({"title": t}, if_version=seen.version)``.
         """
         self._refuse_every_row("an update")
         sets = {**(values or {}), **columns}
@@ -306,25 +306,25 @@ class Query[T]:
             else:
                 texts.append(f"{ident_of(name)} = ?")
                 out.append(field_of(value, name))
-        return await self._edit(texts, out, self._parts.sees, expect)
+        return await self._edit(texts, out, self._parts.sees, if_version)
 
-    async def delete(self, *, expect: int | None = None) -> Done:
+    async def delete(self, *, if_version: int | None = None) -> Done:
         """Deletes the rows the conditions match, and says how many it deleted.
 
         On a table with a deleted column it marks the live ones instead, at
         this process's clock, and raises a versioned table's version;
-        ``expect`` is update's.
+        ``if_version`` is update's.
         """
         self._refuse_every_row("a delete")
         deleted = self._parts.deleted
         if deleted is None:
-            if expect is not None:
-                raise self._refusal("expect on a delete is a mark's: open the table with a deleted column")
+            if if_version is not None:
+                raise self._refusal("if_version on a delete is a mark's: open the table with a deleted column")
             where = _conditions_text(self._parts.conditions)
             return await self._runner.exec_piece(
                 Sql(f"delete from {ident_of(self._parts.table)} where {where.text}", where.values)
             )
-        return await self._edit([f"{ident_of(deleted)} = ?"], [time.time_ns() // 1_000_000], "live", expect)
+        return await self._edit([f"{ident_of(deleted)} = ?"], [time.time_ns() // 1_000_000], "live", if_version)
 
     def with_deleted(self) -> Query[T]:
         """The query of every row, those the deleted column marks among them."""
@@ -362,10 +362,10 @@ class Query[T]:
             Sql(f"delete from {ident_of(self._parts.table)} where {where.text}", where.values)
         )
 
-    async def _edit(self, sets: list[str], values: list[SqlArg], sees: _Sees, expect: int | None) -> Done:
+    async def _edit(self, sets: list[str], values: list[SqlArg], sees: _Sees, if_version: int | None) -> Done:
         """An update of the rows sees shows of those the conditions match: update, a marking delete, restore.
 
-        A versioned table's version goes up by one. With expect, one statement
+        A versioned table's version goes up by one. With if_version, one statement
         writes every row the conditions match or none, guarded by a read of a
         row at another version, and after one that wrote none, the same read
         in the same transaction tells a conflict from no row at all.
@@ -375,14 +375,14 @@ class Query[T]:
             sets.append(f"{version} = {version} + 1")
         table = ident_of(self._parts.table)
         named = _with_mark(self._parts.conditions, _mark(self._parts, sees))
-        if expect is None:
+        if if_version is None:
             where = _conditions_text(named)
             return await self._runner.exec_piece(
                 Sql(f"update {table} set {', '.join(sets)} where {where.text}", (*values, *where.values))
             )
         if version is None:
-            raise self._refusal("expect is a versioned table's: open the table with a version column")
-        at = _whole(expect, "a version")
+            raise self._refusal("if_version is a versioned table's: open the table with a version column")
+        at = _whole(if_version, "a version")
         other = _conditions_text((*named, _Kept(Sql(f"{version} is not ?", (at,)), True)))
         guard = _Kept(Sql(f"not exists (select 1 from {table} where {other.text})", other.values), True)
         where = _conditions_text((*named, _Kept(Sql(f"{version} = ?", (at,)), True), guard))
@@ -469,7 +469,7 @@ class Table[T](Query[T]):
     handle passes the marked rows by, unless ``with_deleted()`` or
     ``deleted_only()`` asks for them, and ``delete`` marks rather than
     deletes. ``version`` names an integer column, not null, default 0, that
-    every update of the handle raises by one, and that ``expect`` checks.
+    every update of the handle raises by one, and that ``if_version`` checks.
     """
 
     def __init__(

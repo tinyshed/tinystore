@@ -88,7 +88,7 @@ is until `keep` ends, so a source that is down still gets the last good one.
 ```ts
 const books = store.once<GradeBook>('cabinet-books', { fresh: '10m', keep: '12h' })
 
-const { value, age, stale } = await books.answer(String(userId), () => cabinet.book(userId))
+const { value, age, stale } = await books.fetch(String(userId), () => cabinet.book(userId))
 const book = await books.run(String(userId), () => cabinet.book(userId)) // the value alone
 await books.under(courseId).clear() // a branch and every branch under it, in one commit
 ```
@@ -96,7 +96,7 @@ await books.under(courseId).clear() // a branch and every branch under it, in on
 ```python
 books = store.once("cabinet-books", GradeBook, fresh="10m", keep="12h")
 
-answer = await books.answer(str(user_id), lambda: cabinet.book(user_id))  # answer.value, .age, .stale
+answer = await books.fetch(str(user_id), lambda: cabinet.book(user_id))  # answer.value, .age, .stale
 book = await books.run(str(user_id), lambda: cabinet.book(user_id))
 await books.under(course_id).clear()
 ```
@@ -104,7 +104,7 @@ await books.under(course_id).clear()
 ```go
 books, err := kv.OpenOnce[GradeBook](store, "cabinet-books", kv.Fresh(10*time.Minute), kv.Keep(12*time.Hour))
 
-answer, err := books.Answer(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
+answer, err := books.Fetch(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
 // answer.Value, answer.Age, answer.Stale
 err = books.Under(courseID).Clear(ctx)
 ```
@@ -113,7 +113,7 @@ err = books.Under(courseID).Clear(ctx)
 let books = store.once::<GradeBook>("cabinet-books").fresh(Duration::from_mins(10)).keep(Duration::from_hours(12)).open()?;
 
 let cabinet = cabinet.clone(); // the build may outlive the call, so it owns what it uses
-let answer = books.answer(user_id, move || cabinet.book(user_id))?; // answer.value, answer.age, answer.stale
+let answer = books.fetch(user_id, move || cabinet.book(user_id))?; // answer.value, answer.age, answer.stale
 books.under(course_id).clear()?;
 ```
 
@@ -134,7 +134,7 @@ books.under(course_id).clear()?;
   that a source that is down is not asked by every call. The pause is kept in
   memory and forgotten at a restart (contract KV-17).
 - `age` is how old the answer is on the store's clock, and `stale` says it is
-  older than `fresh`; without `fresh`, `answer` gives the age and `stale` is
+  older than `fresh`; without `fresh`, `fetch` gives the age and `stale` is
   always false (contract KV-18). The store keeps when an answer ends, not when
   it was made, so a handle opened with another `keep` than the one that
   wrote an answer reads its age shifted by the difference, within `[0, keep]`.
@@ -142,7 +142,7 @@ books.under(course_id).clear()?;
   one commit (contract KV-19). A build under way meanwhile keeps its answer
   when it ends.
 - In Rust the build runs on the store's threads, so its function is
-  `Send + 'static`: `fresh` opens a `Fresh`, whose `run` and `answer` take
+  `Send + 'static`: `fresh` opens a `Fresh`, whose `run` and `fetch` take
   such a function, while `Once` keeps its own. A build holds one of the
   store's sixteen threads while it runs. Over the protocol, in TypeScript,
   Python and Go, the build runs in the program that asked, beside its caller:
@@ -196,7 +196,7 @@ let books = store
     .keep(Duration::from_hours(12))
     .spawn(|build| drop(tokio::spawn(build)))
     .open()?;
-let answer = books.answer(user_id, move || cabinet.book(user_id)).await?;
+let answer = books.fetch(user_id, move || cabinet.book(user_id)).await?;
 ```
 
 A build dropped before its end, by a runtime shutting down, keeps nothing and

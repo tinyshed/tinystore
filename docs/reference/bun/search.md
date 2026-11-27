@@ -376,7 +376,7 @@ commit that makes it.
 ```ts
 interface Among {
     index: SearchIndex<unknown> | TableIndex<unknown>
-    /** what its hits weigh in `best`, a positive number, 1 unless said */
+    /** what its hits weigh in `merged`, a positive number, 1 unless said */
     boost?: number | undefined
     where?: Where | undefined
     /** 1 to 100, 10 unless said; `more` says whether the index has more */
@@ -419,17 +419,17 @@ type ManyGroup = {
 
 An index's hits, the best by its own scores first and whether it has more, or why its search failed.
 
-## Best
+## Merged
 
 ```ts
-interface Best {
+interface Merged {
     index: string
     group: number
     hit: Hit<unknown>
 }
 ```
 
-A hit of `best`: its group's index, the group's place among the groups, and the hit its group holds.
+A hit of `merged`: its group's index, the group's place among the groups, and the hit its group holds.
 
 ## ManyFound
 
@@ -441,7 +441,7 @@ interface ManyFound {
      * at rank `r` of its group, from 1, weighs `boost / (60 + r)`; of equal
      * weights the group asked first comes first, then the higher rank
      */
-    best: Best[]
+    merged: Merged[]
 }
 ```
 

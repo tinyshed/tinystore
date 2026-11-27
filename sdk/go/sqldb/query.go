@@ -158,7 +158,7 @@ func (d deletedOption) table(o *tableOptions) { o.deleted = string(d) }
 type versionOption string
 
 // Version counts a row's versions in column, an integer, not null, default
-// 0: every update of the table raises it by one, and an edit with Expect
+// 0: every update of the table raises it by one, and an edit with IfVersion
 // writes only rows at the version it names.
 func Version(column string) TableOption { return versionOption(column) }
 
@@ -540,21 +540,21 @@ func (q *Query[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error
 	return Page[T]{rows, cursorText(values, digest)}, nil
 }
 
-// EditOption is how an Update or a Delete writes: Expect.
+// EditOption is how an Update or a Delete writes: IfVersion.
 type EditOption interface{ edit(*editOptions) }
 
-type editOptions struct{ expect *int64 }
+type editOptions struct{ ifVersion *int64 }
 
-type expectOption int64
+type ifVersionOption int64
 
-// Expect writes only if every row the conditions match is at version, all of
-// them, and otherwise nothing, failing with tinystore.ErrConflict and the
+// IfVersion writes only if every row the conditions match is at version, all
+// of them, and otherwise nothing, failing with tinystore.ErrConflict and the
 // version a row is at. No row at all is no conflict: the edit changes none.
-func Expect(version int64) EditOption { return expectOption(version) }
+func IfVersion(version int64) EditOption { return ifVersionOption(version) }
 
-func (e expectOption) edit(o *editOptions) {
+func (e ifVersionOption) edit(o *editOptions) {
 	version := int64(e)
-	o.expect = &version
+	o.ifVersion = &version
 }
 
 func editOf(opts []EditOption) editOptions {
@@ -566,8 +566,8 @@ func editOf(opts []EditOption) editOptions {
 }
 
 // Update sets columns of the rows the conditions match, and says how many
-// changed. A versioned table's version goes up by one, and with Expect the
-// update writes only rows at that version.
+// changed. A versioned table's version goes up by one, and with IfVersion
+// the update writes only rows at that version.
 func (q *Query[T]) Update(ctx context.Context, set Set, opts ...EditOption) (Result, error) {
 	if err := q.refuseEveryRow("an update"); err != nil {
 		return Result{}, err
@@ -606,27 +606,27 @@ func (q *Query[T]) Update(ctx context.Context, set Set, opts ...EditOption) (Res
 		texts = append(texts, column+" = ?")
 		values = append(values, cell)
 	}
-	return q.edit(ctx, texts, values, q.parts.sees, editOf(opts).expect)
+	return q.edit(ctx, texts, values, q.parts.sees, editOf(opts).ifVersion)
 }
 
 // Delete deletes the rows the conditions match, and says how many it
 // deleted. On a table with a deleted column it marks the live ones instead,
-// at this process's clock, and raises a versioned table's version; Expect is
-// Update's.
+// at this process's clock, and raises a versioned table's version;
+// IfVersion is Update's.
 func (q *Query[T]) Delete(ctx context.Context, opts ...EditOption) (Result, error) {
 	if err := q.refuseEveryRow("a delete"); err != nil {
 		return Result{}, err
 	}
-	expect := editOf(opts).expect
+	ifVersion := editOf(opts).ifVersion
 	if q.parts.deleted == "" {
-		if expect != nil {
-			return Result{}, q.refusal("expect on a delete is a mark's: open the table with a deleted column")
+		if ifVersion != nil {
+			return Result{}, q.refusal("IfVersion on a delete is a mark's: open the table with a deleted column")
 		}
 		where := conditionsText(q.parts.conditions)
 		return q.runner.exec(ctx, Piece{text: "delete from " + mustIdent(q.parts.table) + " where " + where.text, values: where.values, err: where.err})
 	}
 	mark := []string{mustIdent(q.parts.deleted) + " = ?"}
-	return q.edit(ctx, mark, []any{time.Now().UnixMilli()}, seesLive, expect)
+	return q.edit(ctx, mark, []any{time.Now().UnixMilli()}, seesLive, ifVersion)
 }
 
 // WithDeleted is the query of every row, those the deleted column marks among them.
@@ -674,11 +674,11 @@ func (q *Query[T]) Purge(ctx context.Context) (Result, error) {
 
 // edit is an update of the rows s shows of those the conditions match, which
 // Update, a marking Delete and Restore are. A versioned table's version goes
-// up by one. With expect, one statement writes every row the conditions
+// up by one. With ifVersion, one statement writes every row the conditions
 // match or none, guarded by a read of a row at another version, and after
 // one that wrote none, the same read in the same transaction tells a
 // conflict from no row at all.
-func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees, expect *int64) (Result, error) {
+func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees, ifVersion *int64) (Result, error) {
 	version := ""
 	if q.version != "" {
 		version = mustIdent(q.version)
@@ -686,16 +686,16 @@ func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees
 	}
 	table := mustIdent(q.parts.table)
 	named := withMark(q.parts.conditions, markOf(q.parts, s, ""))
-	if expect == nil {
+	if ifVersion == nil {
 		where := conditionsText(named)
 		text := "update " + table + " set " + strings.Join(sets, ", ") + " where " + where.text
 		return q.runner.exec(ctx, Piece{text: text, values: append(values, where.values...), err: where.err})
 	}
 	if version == "" {
-		return Result{}, q.refusal("expect is a versioned table's: open the table with a version column")
+		return Result{}, q.refusal("IfVersion is a versioned table's: open the table with a version column")
 	}
 	at := func(test string) kept {
-		return kept{Piece{text: version + " " + test + " ?", values: []any{*expect}}, true}
+		return kept{Piece{text: version + " " + test + " ?", values: []any{*ifVersion}}, true}
 	}
 	other := conditionsText(append(append([]kept{}, named...), at("is not")))
 	guard := kept{Piece{text: "not exists (select 1 from " + table + " where " + other.text + ")", values: other.values}, true}
@@ -714,7 +714,7 @@ func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees
 		if err != nil || len(found.rows) == 0 {
 			return done, err
 		}
-		return done, core.Errorf(core.Conflict, "%s: table %s: the row is at version %v, not %d", q.runner.describeIt(), q.parts.table, found.rows[0][0], *expect)
+		return done, core.Errorf(core.Conflict, "%s: table %s: the row is at version %v, not %d", q.runner.describeIt(), q.parts.table, found.rows[0][0], *ifVersion)
 	}
 	db, ok := q.runner.(*DB)
 	if !ok {

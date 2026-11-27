@@ -70,8 +70,8 @@ use crate::{Key, Result};
 #[cfg(feature = "sql")]
 pub use crate::search::TxTableIndex;
 pub use crate::search::{
-    Among, Best, Condition, Document, Found, Group, Hit, Listed, ManyFound, Match, Rebuild, Searched, Snippet, Status,
-    and, eq, is_in, missing, or, range,
+    Among, Condition, Document, Found, Group, Hit, Listed, ManyFound, Match, Merged, Rebuild, Searched, Snippet,
+    Status, and, eq, is_in, missing, or, range,
 };
 
 impl Store {

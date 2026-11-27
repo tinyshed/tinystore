@@ -18,16 +18,16 @@ import (
 // background.
 type Once[T any] struct {
 	parts
-	// aged opens the handle that Answer asks through, which reads each
+	// aged opens the handle that Fetch asks through, which reads each
 	// answer's age: Run without Fresh opens as an older client did, and so
 	// still reaches an older server.
 	aged   *core.Opener
 	values core.Values[T]
 }
 
-// Answer is an answer with how old it is: Stale once it is older than the
+// Fetched is an answer with how old it is: Stale once it is older than the
 // Fresh its answers opened with.
-type Answer[T any] struct {
+type Fetched[T any] struct {
 	Value T
 	Age   time.Duration
 	Stale bool
@@ -79,18 +79,18 @@ func (o *Once[T]) Run(ctx context.Context, key string, fn func(ctx context.Conte
 	return answer.Value, err
 }
 
-// Answer is Run's answer with how old it is. Opened with Fresh, a kept answer
+// Fetch is Run's answer with how old it is. Opened with Fresh, a kept answer
 // older than it comes back at once, Stale, and fn may make the next one in
 // the background, on a context that the caller's cancel does not reach: its
 // answer replaces the kept one, and its error, which no caller sees, keeps it
 // until Keep ends.
 //
-//	book, err := books.Answer(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
-func (o *Once[T]) Answer(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (Answer[T], error) {
+//	book, err := books.Fetch(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
+func (o *Once[T]) Fetch(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (Fetched[T], error) {
 	return o.ask(ctx, o.aged, key, fn)
 }
 
-func (o *Once[T]) ask(ctx context.Context, opener *core.Opener, key string, fn func(ctx context.Context) (T, error)) (Answer[T], error) {
+func (o *Once[T]) ask(ctx context.Context, opener *core.Opener, key string, fn func(ctx context.Context) (T, error)) (Fetched[T], error) {
 	stream, kept, err := o.claim(ctx, opener, key)
 	if err != nil || stream == nil {
 		return kept, err
@@ -103,12 +103,12 @@ func (o *Once[T]) ask(ctx context.Context, opener *core.Opener, key string, fn f
 	if err != nil {
 		// fn's own error is the one to give
 		_ = end(ctx, stream, wire.Encode(&wire.KvAnswer{}))
-		return Answer[T]{}, err
+		return Fetched[T]{}, err
 	}
 	if err := end(ctx, stream, answer); err != nil {
-		return Answer[T]{}, err
+		return Fetched[T]{}, err
 	}
-	return Answer[T]{Value: made}, nil
+	return Fetched[T]{Value: made}, nil
 }
 
 // made runs fn and encodes what it answered as the run's last DATA.
@@ -140,9 +140,9 @@ func (o *Once[T]) build(ctx context.Context, stream *core.Stream, fn func(ctx co
 // claim asks for key's run: the answer kept for it, or the run the core
 // handed over, which a connection lost before the answer asks for again. A
 // run handed over with a kept answer, Stale, is a build in the background.
-func (o *Once[T]) claim(ctx context.Context, opener *core.Opener, key string) (*core.Stream, Answer[T], error) {
+func (o *Once[T]) claim(ctx context.Context, opener *core.Opener, key string) (*core.Stream, Fetched[T], error) {
 	var stream *core.Stream
-	var kept Answer[T]
+	var kept Fetched[T]
 	err := o.store.Link.Run(ctx, core.Reading, func(c *core.Connection) error {
 		handle, err := core.HandleOn(ctx, c, opener)
 		if err != nil {
@@ -180,7 +180,7 @@ func (o *Once[T]) claim(ctx context.Context, opener *core.Opener, key string) (*
 }
 
 // kept is an answer the core kept, with its age.
-func (o *Once[T]) kept(offered wire.KvAnswer) (Answer[T], error) {
+func (o *Once[T]) kept(offered wire.KvAnswer) (Fetched[T], error) {
 	var raw wire.Raw
 	if offered.Value != nil {
 		raw = *offered.Value
@@ -190,7 +190,7 @@ func (o *Once[T]) kept(offered wire.KvAnswer) (Answer[T], error) {
 	if offered.Age != nil {
 		age = time.Duration(*offered.Age) * time.Millisecond
 	}
-	return Answer[T]{Value: value, Age: age, Stale: offered.Stale}, err
+	return Fetched[T]{Value: value, Age: age, Stale: offered.Stale}, err
 }
 
 // end sends the run's answer as the stream's last DATA, and waits for the

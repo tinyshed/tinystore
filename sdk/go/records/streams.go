@@ -61,7 +61,7 @@ func (e *Events) Aggregate(ctx context.Context, q Query) ([]Row, error) {
 // what they keep.
 //
 //	visits, err := events.Sessions(ctx, records.Query{Since: 30 * 24 * time.Hour,
-//		By: []string{"userId"}, Gap: 30 * time.Minute, Max: 4 * time.Hour, First: 1, Events: 50})
+//		By: []string{"userId"}, Gap: 30 * time.Minute, Max: 4 * time.Hour, FirstSessions: 1, MaxEvents: 50})
 func (e *Events) Sessions(ctx context.Context, q Query) ([]Session, error) {
 	return e.reads().sessions(ctx, q)
 }

@@ -34,11 +34,11 @@ async fn a_stale_answer_is_answered_at_once_and_its_new_one_built_where_spawn_ru
         })
         .open()
         .unwrap();
-    let first = books.answer("user-7", || async { Ok::<_, Error>("book 1".to_owned()) }).await.unwrap();
+    let first = books.fetch("user-7", || async { Ok::<_, Error>("book 1".to_owned()) }).await.unwrap();
     assert_eq!((first.value.as_str(), first.age, first.stale), ("book 1", Duration::ZERO, false));
 
     f.clock.advance(MINUTE);
-    let stale = books.answer("user-7", || async { Ok::<_, Error>("book 2".to_owned()) }).await.unwrap();
+    let stale = books.fetch("user-7", || async { Ok::<_, Error>("book 2".to_owned()) }).await.unwrap();
     assert_eq!((stale.value.as_str(), stale.age, stale.stale), ("book 1", MINUTE, true), "the kept one, at once");
     let blocking = f.store.once::<String>("books").open().unwrap();
     until("the new answer", || blocking.get("user-7").unwrap().as_deref() == Some("book 2")).await;

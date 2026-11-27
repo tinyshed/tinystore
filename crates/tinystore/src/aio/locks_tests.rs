@@ -423,7 +423,7 @@ async fn an_awaited_hold_that_fails_counts_and_one_whose_future_is_dropped_count
     }
     assert!(lane.state("requests").unwrap().up, "two futures dropped: the caller gave up, not the service");
     let vouched = lane.hold("requests", move |permit| async move {
-        permit.succeeded();
+        permit.healthy();
         Err::<(), _>(Error::not_found("no such student"))
     });
     assert_eq!(vouched.await.unwrap_err().kind(), ErrorKind::NotFound);

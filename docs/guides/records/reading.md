@@ -486,14 +486,14 @@ minutes of the one before, with up to 50 of its events.
 
 ```ts
 const visits = await events.sessions({
-	since: '30d', by: 'userId', gap: '30m', max: '4h', first: 1, events: 50,
+	since: '30d', by: 'userId', gap: '30m', max: '4h', firstSessions: 1, maxEvents: 50,
 	where: { userId: db.statement`select id from students where first_seen_at > ${from}` },
 }) // Session[]: [{ by: { userId: 1 }, from, to, count: 2, events: [{ at, name, fields… }, …], partial }]
 ```
 
 ```python
 visits = await events.sessions(
-    since="30d", by="userId", gap="30m", max="4h", first=1, events=50,
+    since="30d", by="userId", gap="30m", max="4h", first_sessions=1, max_events=50,
     where={"userId": db.statement("select id from students where first_seen_at > ?", start)},
 )  # list[Session]: Session(by={"userId": 1}, from_=…, to=…, count=2, events=[Event(…), …], partial=False)
 ```
@@ -501,23 +501,23 @@ visits = await events.sessions(
 ```go
 newcomers := db.Statement("select id from students where first_seen_at > ?", from)
 visits, err := events.Sessions(ctx, records.Query{Since: 30 * 24 * time.Hour, By: []string{"userId"},
-	Gap: 30 * time.Minute, Max: 4 * time.Hour, First: 1, Events: 50, Where: records.Where{"userId": newcomers}})
+	Gap: 30 * time.Minute, Max: 4 * time.Hour, FirstSessions: 1, MaxEvents: 50, Where: records.Where{"userId": newcomers}})
 ```
 
 ```rust
 use tinystore::records::Sessions;
 let newcomers = db.statement(tinystore::sql!("select id from students where first_seen_at > ?", from));
-let visit = Sessions::by(["userId"]).gap(minute * 30).max(minute * 240).first(1).events(50);
+let visit = Sessions::by(["userId"]).gap(minute * 30).max(minute * 240).first_sessions(1).max_events(50);
 let visits = events.list().since(day * 30).filter("userId", &newcomers).sessions(&visit)?; // Vec<Session>
 ```
 
-| A session's  | Is                                                              |
-|--------------|-----------------------------------------------------------------|
-| `by`         | each key's value, null for events without it                    |
-| `from`, `to` | its first event's time and its last's                           |
-| `count`      | every event of it, however few it keeps                         |
-| `events`     | its first `events`, as `list` gives an event; none unless asked |
-| `partial`    | it may go on outside what was read, the range cutting it        |
+| A session's  | Is                                                                 |
+|--------------|--------------------------------------------------------------------|
+| `by`         | each key's value, null for events without it                       |
+| `from`, `to` | its first event's time and its last's                              |
+| `count`      | every event of it, however few it keeps                            |
+| `events`     | its first `maxEvents`, as `list` gives an event; none unless asked |
+| `partial`    | it may go on outside what was read, the range cutting it           |
 
 - `by` takes keys as `aggregate` does: a field's, else a context's, or
   `stream`, `name` or `level`. A session is the events of one value of each,
@@ -526,7 +526,7 @@ let visits = events.list().since(day * 30).filter("userId", &newcomers).sessions
 - A pause longer than `gap` begins the next session. `max` ends a session that
   long after its first event, pause or none, and the next event begins a new
   one.
-- `first` keeps each value's first sessions of the range; once a value has
+- `firstSessions` keeps each value's first sessions of the range; once a value has
   them, its later events are passed over as they are read.
 - A session that the range's start or end cuts is answered, with `partial`:
   its first event lies within `gap` of the start, or its last within `gap` of
@@ -535,8 +535,8 @@ let visits = events.list().since(day * 30).filter("userId", &newcomers).sessions
   answer comes whole, in the order of the sessions' first events and then of
   their `by`, 10,000 sessions at most, open ones among them, and 64 MiB of
   what they keep: past either it is `limit`, never fewer sessions. It is not
-  paged yet; a shorter range, `first` or a `where` keeps it within them.
-- `events` keeps 1,000 a session at most. It takes a query as `count` does,
+  paged yet; a shorter range, `firstSessions` or a `where` keeps it within them.
+- `maxEvents` keeps 1,000 a session at most. It takes a query as `count` does,
   without `newest`, `limit` and `after`.
 - Not built yet: a funnel over sessions, and a link from a metric's sample to
   an event.

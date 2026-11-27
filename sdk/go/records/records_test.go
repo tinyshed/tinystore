@@ -248,7 +248,7 @@ func TestSessionsCutAReadByAPauseTwoVisitsNinetyMinutesApartAreTwo(t *testing.T)
 			{Name: "open", Fields: records.Fields{"userId": 2}, At: at(5)},
 			{Name: "open", Fields: records.Fields{"userId": 1}, At: at(100)},
 		}))
-		query := records.Query{Since: 5 * time.Hour, By: []string{"userId"}, Gap: 30 * time.Minute, Events: 1}
+		query := records.Query{Since: 5 * time.Hour, By: []string{"userId"}, Gap: 30 * time.Minute, MaxEvents: 1}
 		sessions := ways.Must(visits.Sessions(ctx, query))
 		var shown []string
 		for _, session := range sessions {
@@ -260,11 +260,11 @@ func TestSessionsCutAReadByAPauseTwoVisitsNinetyMinutesApartAreTwo(t *testing.T)
 		if !sessions[0].From.Equal(at(0)) || !sessions[0].To.Equal(at(10)) || sessions[0].Partial {
 			t.Fatalf("%+v", sessions[0])
 		}
-		query.First, query.Events = 1, 0
+		query.FirstSessions, query.MaxEvents = 1, 0
 		if first := ways.Must(visits.Sessions(ctx, query)); len(first) != 2 || len(first[0].Events) != 0 {
 			t.Fatalf("%+v", first)
 		}
-		_, err := visits.Sessions(ctx, records.Query{By: []string{"userId"}, Gap: 30 * time.Minute, Events: 1001})
+		_, err := visits.Sessions(ctx, records.Query{By: []string{"userId"}, Gap: 30 * time.Minute, MaxEvents: 1001})
 		is(t, err, tinystore.ErrInvalid)
 	})
 }

@@ -9,7 +9,7 @@ use super::named;
 use crate::aio::oneshot::pending;
 use crate::aio::{Store, run};
 use crate::cancel::{self, Captured};
-use crate::kv::{Answer, Handed, Key, Value, WriteOptions, made};
+use crate::kv::{Fetched, Handed, Key, Value, WriteOptions, made};
 use crate::pool::Pool;
 use crate::{Error, Result};
 
@@ -92,17 +92,17 @@ impl<V: Value> Once<V> {
         W: FnOnce() -> F + Send,
         F: Future<Output = Result<V, E>> + Send,
     {
-        let answer = self.answer(key, work);
+        let answer = self.fetch(key, work);
         async move { answer.await.map(|answer| answer.value) }
     }
 
     /// [`Once::run`]'s answer with how old it is, as
-    /// [`crate::kv::Once::answer`] gives it.
-    pub fn answer<K, E, W, F>(
+    /// [`crate::kv::Once::fetch`] gives it.
+    pub fn fetch<K, E, W, F>(
         &self,
         key: K,
         work: W,
-    ) -> impl Future<Output = Result<Answer<V>, E>> + Send + use<K, V, E, W, F>
+    ) -> impl Future<Output = Result<Fetched<V>, E>> + Send + use<K, V, E, W, F>
     where
         K: Key,
         E: From<Error> + Send,
@@ -164,7 +164,7 @@ pub(super) struct Run<V> {
 /// How a run's claim ended.
 enum Start<V> {
     /// An answer kept, or the one the run waited for could not keep.
-    Kept(Answer<V>),
+    Kept(Fetched<V>),
     Yours(Box<Handed>),
 }
 
@@ -176,7 +176,7 @@ impl<V: Value> Run<V> {
     /// The answer `found` kept, or once no run holds the key, the answer of
     /// the future `work` gives, which is then kept: a run's steps after its
     /// first read.
-    pub(super) async fn build<E, W, F>(self, found: Option<Answer<V>>, work: W) -> Result<Answer<V>, E>
+    pub(super) async fn build<E, W, F>(self, found: Option<Fetched<V>>, work: W) -> Result<Fetched<V>, E>
     where
         E: From<Error>,
         W: FnOnce() -> F,
@@ -206,7 +206,7 @@ impl<V: Value> Run<V> {
     /// The answer `found` kept, or the key claimed for this run: a run under
     /// way is waited for by a waiter the engine calls as it ends, which wakes
     /// this task, and its answer read again.
-    async fn claim(&self, mut found: Option<Answer<V>>) -> Result<Start<V>> {
+    async fn claim(&self, mut found: Option<Fetched<V>>) -> Result<Start<V>> {
         loop {
             if let Some(answer) = found {
                 return Ok(Start::Kept(answer));
@@ -231,7 +231,7 @@ impl<V: Value> Run<V> {
     }
 
     /// The answer kept under the key, with its age, read as a point read.
-    pub(super) async fn kept(&self) -> Result<Option<Answer<V>>> {
+    pub(super) async fn kept(&self) -> Result<Option<Fetched<V>>> {
         let (once, key) = (self.once.clone(), self.key.clone());
         let what = named(self.shown_key(), "a kept answer");
         self.tokens.run(None, || run::point(&self.pool, what, move || once.kept(&key))).await
