@@ -6992,6 +6992,8 @@ pub(crate) struct LocksState {
     pub(crate) last_failure: Option<i64>,
     pub(crate) waiting: u64,
     pub(crate) holding: u64,
+    /// The failed holds in a row the breaker counts now, reset by a success.
+    pub(crate) failures: u64,
 }
 
 #[cfg(feature = "locks")]
@@ -7008,6 +7010,7 @@ impl Message for LocksState {
                 3 => message.last_failure = Some(codec::int(r, "lastFailure")?),
                 4 => message.waiting = codec::uint(r, "waiting")?,
                 5 => message.holding = codec::uint(r, "holding")?,
+                6 => message.failures = codec::uint(r, "failures")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -7036,6 +7039,10 @@ impl Message for LocksState {
             map.field(out, 5);
             codec::write_uint(out, &self.holding);
         }
+        if self.failures != 0 {
+            map.field(out, 6);
+            codec::write_uint(out, &self.failures);
+        }
         map.close(out);
     }
 
@@ -7046,6 +7053,7 @@ impl Message for LocksState {
             + self.last_failure.map_or(0, |_| 10)
             + 10
             + 10
+            + 10
     }
 
     fn is_zero(&self) -> bool {
@@ -7054,6 +7062,7 @@ impl Message for LocksState {
             && self.last_failure.is_none()
             && self.waiting == 0
             && self.holding == 0
+            && self.failures == 0
     }
 }
 

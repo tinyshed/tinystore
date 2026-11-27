@@ -90,6 +90,40 @@ fn failed_holds_in_a_row_put_the_key_down_and_every_ask_waiting_or_new_is_refuse
     assert!(lane.try_hold("other", |_| Ok::<_, Error>(())).unwrap().is_some(), "a breaker a key");
 }
 
+// contract: LOCK-15
+#[test]
+fn a_keys_state_counts_its_failed_holds_in_a_row_as_its_breaker_does() {
+    let f = fixture();
+    let lane = f.store.semaphore("cabinet").limit(1).breaker(3, PAUSE).open().unwrap();
+    let failures = || lane.state("requests").unwrap().failures;
+    assert_eq!(failures(), 0, "none yet");
+    fail(&lane);
+    fail(&lane);
+    assert_eq!(failures(), 2, "2 of 3");
+    succeed(&lane).unwrap();
+    assert_eq!(failures(), 0, "a success resets the count");
+
+    fail(&lane);
+    move_clock(&f, PAUSE);
+    assert_eq!(failures(), 0, "a pause with no failure resets it too");
+    fail(&lane);
+    fail(&lane);
+    fail(&lane);
+    let down = lane.state("requests").unwrap();
+    assert!(!down.up);
+    assert_eq!(down.failures, 3, "while down, the failures that put it down");
+    move_clock(&f, PAUSE);
+    fail(&lane);
+    assert_eq!(failures(), 3, "a probe that failed keeps it down, not counted past what tripped it");
+    move_clock(&f, PAUSE);
+    succeed(&lane).unwrap();
+    assert_eq!((lane.state("requests").unwrap().up, failures()), (true, 0), "up again, counting from none");
+
+    let plain = f.store.semaphore("plain").limit(1).open().unwrap();
+    plain.hold("requests", |_| Err::<(), _>(bad_gateway())).unwrap_err();
+    assert_eq!(plain.state("requests").unwrap().failures, 0, "no breaker counts nothing");
+}
+
 // contract: LOCK-13
 #[test]
 fn once_the_pause_is_over_one_ask_goes_through_and_its_success_puts_the_key_up() {

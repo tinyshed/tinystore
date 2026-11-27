@@ -307,16 +307,17 @@ class _BadGatewayError(Exception):
     pass
 
 
-# contract: LOCK-12, LOCK-13, LOCK-14
+# contract: LOCK-12, LOCK-13, LOCK-14, LOCK-15
 async def test_failed_holds_in_a_row_put_the_key_down_and_one_hold_after_the_pause_puts_it_up(
     store: tinystore.Store,
 ) -> None:
     flaky = store.semaphore("flaky", limit=1, breaker=tinystore.Breaker(failures=2, pause="300ms"))
     assert (await flaky.state("requests")).up
-    for _ in range(2):
+    for failures in (1, 2):
         with pytest.raises(_BadGatewayError):
             async with flaky.hold("requests"):
                 raise _BadGatewayError
+        assert (await flaky.state("requests")).failures == failures
     with pytest.raises(tinystore.UnavailableError, match="after 2 failed holds in a row"):
         async with flaky.hold("requests"):
             pass
@@ -328,7 +329,7 @@ async def test_failed_holds_in_a_row_put_the_key_down_and_one_hold_after_the_pau
     async with flaky.hold("requests") as permit:
         assert permit is not None
     up = await flaky.state("requests")
-    assert (up.up, up.down_since, up.waiting, up.holding) == (True, None, 0, 0)
+    assert (up.up, up.down_since, up.waiting, up.holding, up.failures) == (True, None, 0, 0, 0)
 
     for _ in range(2):
         with pytest.raises(KeyError):

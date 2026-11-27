@@ -3570,6 +3570,9 @@
         "downSince": {
           "int": "1790000000000"
         },
+        "failures": {
+          "uint": "607"
+        },
         "holding": {
           "uint": "507"
         },
@@ -3583,7 +3586,7 @@
           "uint": "407"
         }
       },
-      "hex": "8501c302cf000001a0c4506c0003cf000001a0c4506c0004cd019705cd01fb",
+      "hex": "8601c302cf000001a0c4506c0003cf000001a0c4506c0004cd019705cd01fb06cd025f",
       "message": "locks.State",
       "name": "locks.State with every field"
     },

@@ -69,10 +69,11 @@ type KeyState struct {
 	LastFailure time.Time
 	Waiting     int
 	Holding     int
+	Failures    int
 }
 ```
 
-KeyState is how a semaphore's key stands now: Up is false from the failure that put the key down until a hold after the pause succeeds, and always true without a Breaker; DownSince and LastFailure are zero when there are none, the last failure kept until a success after it.
+KeyState is how a semaphore's key stands now: Up is false from the failure that put the key down until a hold after the pause succeeds, and always true without a Breaker; DownSince and LastFailure are zero when there are none, the last failure kept until a success after it. Failures is the failed holds in a row the breaker counts now, toward its failures: reset by a success, and by a pause with no failure; while the key is down, those that put it down; 0 without a Breaker.
 
 ## Lease
 

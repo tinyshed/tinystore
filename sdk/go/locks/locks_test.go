@@ -350,7 +350,7 @@ func TestAHoldsTimeoutCountsFromItsGrantAndEndsTheHoldLost(t *testing.T) {
 	})
 }
 
-// contract: LOCK-12, LOCK-13, LOCK-14
+// contract: LOCK-12, LOCK-13, LOCK-14, LOCK-15
 func TestFailedHoldsInARowPutTheKeyDownAndOneHoldAfterThePausePutsItUp(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
@@ -360,9 +360,12 @@ func TestFailedHoldsInARowPutTheKeyDownAndOneHoldAfterThePausePutsItUp(t *testin
 		if state := ways.Must(flaky.State(ctx, "requests")); !state.Up {
 			t.Fatalf("down before any hold: %+v", state)
 		}
-		for range 2 {
+		for failures := 1; failures <= 2; failures++ {
 			if err := flaky.Hold(ctx, "requests", failing); !errors.Is(err, badGateway) {
 				t.Fatalf("got %v, want fn's own error", err)
+			}
+			if state := ways.Must(flaky.State(ctx, "requests")); state.Failures != failures {
+				t.Fatalf("%d failures in a row, the state says %+v", failures, state)
 			}
 		}
 		err := flaky.Hold(ctx, "requests", nothing)
@@ -379,7 +382,7 @@ func TestFailedHoldsInARowPutTheKeyDownAndOneHoldAfterThePausePutsItUp(t *testin
 		}
 		time.Sleep(350 * time.Millisecond)
 		ways.Must(0, flaky.Hold(ctx, "requests", nothing))
-		if up := ways.Must(flaky.State(ctx, "requests")); !up.Up || !up.DownSince.IsZero() || up.Holding != 0 {
+		if up := ways.Must(flaky.State(ctx, "requests")); !up.Up || !up.DownSince.IsZero() || up.Holding != 0 || up.Failures != 0 {
 			t.Fatalf("not up after the hold that went through: %+v", up)
 		}
 		notFound := errors.New("no such student")

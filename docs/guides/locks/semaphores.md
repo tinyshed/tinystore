@@ -264,20 +264,25 @@ cabinet.hold("requests", |permit| {
 `state` returns the key's current status, for example for a status line:
 
 ```ts
-const { up, downSince, lastFailure, waiting, holding } = await cabinet.state('requests')
+const { up, downSince, lastFailure, failures, waiting, holding } = await cabinet.state('requests')
 if (!up) banner(`The cabinet is down since ${downSince?.toLocaleTimeString()}`)
+else if (failures > 0) banner(`${failures} of 3 failures`) // the breaker's failures
 ```
 
 ```python
 state = await cabinet.state("requests")
 if not state.up:
     banner(f"The cabinet is down since {state.down_since:%H:%M}")
+elif state.failures > 0:
+    banner(f"{state.failures} of 3 failures")
 ```
 
 ```go
 state, err := cabinet.State(ctx, "requests")
 if !state.Up {
 	banner("The cabinet is down since " + state.DownSince.Format(time.Kitchen))
+} else if state.Failures > 0 {
+	banner(fmt.Sprintf("%d of 3 failures", state.Failures))
 }
 ```
 
@@ -285,6 +290,8 @@ if !state.Up {
 let state = cabinet.state("requests")?;
 if !state.up {
     banner(&format!("The cabinet is down since {:?}", state.down_since));
+} else if state.failures > 0 {
+    banner(&format!("{} of 3 failures", state.failures));
 }
 ```
 
@@ -294,6 +301,15 @@ stays set until a hold succeeds after it. While the key is up, it is also
 cleared once a `pause` passes after it. `waiting` counts the holds in line,
 and `holding` counts the holds that have a place. Both work without a
 breaker too, and then `up` is always true (contract LOCK-14).
+
+`failures` is the number of failed holds in a row that the breaker counts
+right now: the same count that puts the key down when it reaches the
+breaker's `failures`. So a status page can show "2 of 3" before the key goes
+down, and a service failing every other call shows up as 1, 0, 1, 0 instead
+of looking healthy. A success resets it to 0, and so does a `pause` with no
+failure. While the key is down, it stays at the count that put it down; a
+failed hold after the pause keeps the key down without adding to it. Without
+a breaker it is always 0 (contract LOCK-15).
 
 ### What a breaker does not do
 

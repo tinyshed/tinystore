@@ -8126,6 +8126,8 @@ type LocksState struct {
 	LastFailure *int64 `wire:"3,lastFailure"`
 	Waiting     uint64 `wire:"4,waiting"`
 	Holding     uint64 `wire:"5,holding"`
+	// the failed holds in a row the breaker counts now, reset by a success
+	Failures uint64 `wire:"6,failures"`
 }
 
 func (m LocksState) Write(w *Writer) {
@@ -8156,6 +8158,11 @@ func (m LocksState) Write(w *Writer) {
 		w.Uint(m.Holding)
 		n++
 	}
+	if m.Failures != 0 {
+		w.Uint(6)
+		w.Uint(m.Failures)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -8176,6 +8183,8 @@ func (m *LocksState) Read(r *Reader) {
 			m.Waiting = r.Uint()
 		case 5:
 			m.Holding = r.Uint()
+		case 6:
+			m.Failures = r.Uint()
 		default:
 			r.Skip()
 		}
@@ -8189,7 +8198,8 @@ func (m LocksState) IsZero() bool {
 		m.DownSince == nil &&
 		m.LastFailure == nil &&
 		m.Waiting == 0 &&
-		m.Holding == 0
+		m.Holding == 0 &&
+		m.Failures == 0
 }
 
 // MetricsCondition is the schema's metrics.Condition.

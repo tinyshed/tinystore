@@ -5962,6 +5962,10 @@ def _write_locks_state(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(5)
         w.uint(x)
         n += 1
+    if (x := v.get("failures")) is not None:
+        w.uint(6)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5980,6 +5984,8 @@ def _read_locks_state(r: Reader) -> dict[str, Any]:
                 read["waiting"] = r.uint()
             case 5:
                 read["holding"] = r.uint()
+            case 6:
+                read["failures"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -5997,6 +6003,8 @@ LocksState = Message(
         "last_failure": (3, int_),
         "waiting": (4, uint),
         "holding": (5, uint),
+        # the failed holds in a row the breaker counts now, reset by a success
+        "failures": (6, uint),
     },
     _write_locks_state,
     _read_locks_state,

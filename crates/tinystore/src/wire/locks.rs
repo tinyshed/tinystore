@@ -58,6 +58,7 @@ pub(crate) fn call(store: &Store, called: u16, body: &[u8]) -> Answered {
                 last_failure: time(standing.last_failure),
                 waiting: u64::from(standing.waiting),
                 holding: u64::from(standing.holding),
+                failures: u64::from(standing.failures),
             }
             .encode())
         }

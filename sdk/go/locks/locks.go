@@ -73,13 +73,17 @@ func (l *Lease) Healthy() {
 // KeyState is how a semaphore's key stands now: Up is false from the failure
 // that put the key down until a hold after the pause succeeds, and always
 // true without a Breaker; DownSince and LastFailure are zero when there are
-// none, the last failure kept until a success after it.
+// none, the last failure kept until a success after it. Failures is the
+// failed holds in a row the breaker counts now, toward its failures: reset by
+// a success, and by a pause with no failure; while the key is down, those that
+// put it down; 0 without a Breaker.
 type KeyState struct {
 	Up          bool
 	DownSince   time.Time
 	LastFailure time.Time
 	Waiting     int
 	Holding     int
+	Failures    int
 }
 
 // Option is how a lock or a semaphore opens.
@@ -388,7 +392,7 @@ func (s *Semaphore) State(ctx context.Context, key any) (KeyState, error) {
 	}
 	return KeyState{
 		Up: state.Up, DownSince: at(state.DownSince), LastFailure: at(state.LastFailure),
-		Waiting: int(state.Waiting), Holding: int(state.Holding),
+		Waiting: int(state.Waiting), Holding: int(state.Holding), Failures: int(state.Failures),
 	}, nil
 }
 

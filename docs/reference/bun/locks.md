@@ -53,6 +53,12 @@ interface KeyState {
     lastFailure?: Date | undefined
     waiting: number
     holding: number
+    /**
+     * the failed holds in a row the breaker counts now, toward its `failures`:
+     * reset by a success, and by a pause with no failure; while the key is
+     * down, those that put it down; 0 without a breaker
+     */
+    failures: number
 }
 ```
 

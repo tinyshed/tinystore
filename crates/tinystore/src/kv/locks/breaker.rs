@@ -148,6 +148,12 @@ impl Breaker {
         self.last_failure
     }
 
+    /// The failed holds in a row it counts now: while the key is down, those
+    /// that put it down.
+    pub(super) fn in_a_row(&self) -> u32 {
+        self.in_a_row
+    }
+
     /// What every ask of a down key is answered.
     pub(super) fn refusal(&self, since: i64, now: i64) -> Error {
         let failures = self.tripped_at;
@@ -176,6 +182,10 @@ pub struct KeyState {
     pub last_failure: Option<std::time::SystemTime>,
     pub waiting: u32,
     pub holding: u32,
+    /// The failed holds in a row the breaker counts now, toward its
+    /// `failures`: reset by a success, and by a pause with no failure; while
+    /// the key is down, those that put it down. Always 0 without a breaker.
+    pub failures: u32,
 }
 
 #[cfg(test)]

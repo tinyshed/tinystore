@@ -562,6 +562,7 @@ impl State {
             last_failure: breaker.and_then(Breaker::last_failure).map(from_unix_millis),
             waiting: count(line.map_or(0, Line::waiting)),
             holding: count(line.map_or(0, |line| line.holders.len())),
+            failures: breaker.map_or(0, Breaker::in_a_row),
         }
     }
 

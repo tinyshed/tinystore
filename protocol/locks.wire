@@ -48,6 +48,7 @@ message locks.State {
   3 lastFailure: time?   # kept until a success after it
   4 waiting: uint
   5 holding: uint
+  6 failures: uint       # the failed holds in a row the breaker counts now, reset by a success
 }
 
 # Answers once the key is held, or held past the wait, `in_use`; a CANCEL

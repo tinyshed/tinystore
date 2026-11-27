@@ -58,6 +58,7 @@ pub struct KeyState {
     pub last_failure: Option<SystemTime>,
     pub waiting: u32,
     pub holding: u32,
+    pub failures: u32,
 }
 ```
 

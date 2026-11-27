@@ -118,6 +118,7 @@ These contracts are what does not.
 - **LOCK-12** A semaphore's key whose holds failed `failures` times in a row, each within `pause` of the one before, a hold that ran past its timeout or `max_hold` among them and none whose client went or whose permit said `healthy`, MUST be down for `pause`: every ask of it, waiting or new, MUST be refused at once `unavailable`, naming the key and since when it is down; a success of a hold asked with the breaker MUST reset the count.
 - **LOCK-13** Once a down key's pause is over, one ask of it MUST go through while the others are refused: its success MUST put the key up, its failure MUST pause it again, and if its holder goes without saying, the next ask MUST go through.
 - **LOCK-14** A key's state MUST say whether it is up, since when it is down, its last failed hold, and how many wait for it and hold it; a key of a semaphore without a breaker MUST be up.
+- **LOCK-15** A key's state MUST say how many holds failed in a row as LOCK-12 counts them: none after a success or a pause with no failure, the count that put the key down while it is down, and none without a breaker.
 
 ### Channels
 

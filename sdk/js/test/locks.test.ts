@@ -297,15 +297,16 @@ for (const way of ways) {
 			expect(await hung).toBeInstanceOf(LostError)
 		})
 
-		// contract: LOCK-12, LOCK-13, LOCK-14
+		// contract: LOCK-12, LOCK-13, LOCK-14, LOCK-15
 		test('failed holds in a row put the key down, and one hold after the pause puts it up', async () => {
 			const flaky = store.semaphore('flaky', { limit: 1, breaker: { failures: 2, pause: '300ms' } })
 			const badGateway = () => {
 				throw new Error('the cabinet answered 502')
 			}
-			expect((await flaky.state('requests')).up).toBe(true)
-			for (const _ of [1, 2]) {
+			expect((await flaky.state('requests')).failures).toBe(0)
+			for (const failures of [1, 2]) {
 				expect(await caught(flaky.hold('requests', badGateway))).toBeInstanceOf(Error)
+				expect((await flaky.state('requests')).failures).toBe(failures)
 			}
 			const refused = await caught(flaky.hold('requests', () => 'answered'))
 			expect(refused).toBeInstanceOf(UnavailableError)
@@ -317,7 +318,13 @@ for (const way of ways) {
 			await sleep(350)
 			expect(await flaky.hold('requests', () => 'answered')).toBe('answered')
 			const up = await flaky.state('requests')
-			expect([up.up, up.downSince, up.waiting, up.holding]).toEqual([true, undefined, 0, 0])
+			expect([up.up, up.downSince, up.waiting, up.holding, up.failures]).toEqual([
+				true,
+				undefined,
+				0,
+				0,
+				0,
+			])
 
 			for (const _ of [1, 2]) {
 				const notFound = await caught(

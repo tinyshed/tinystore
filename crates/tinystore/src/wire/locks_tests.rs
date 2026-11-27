@@ -160,7 +160,7 @@ fn state(client: &mut Client, kind: &str) -> Result<LocksState, Failure> {
     client.call(method::LOCKS_STATE, &asked)
 }
 
-// contract: LOCK-12, LOCK-14
+// contract: LOCK-12, LOCK-14, LOCK-15
 #[test]
 fn releases_that_say_their_holds_failed_put_the_key_down_and_its_state_says_since_when() {
     let dir = tempfile::tempdir().unwrap();
@@ -173,6 +173,7 @@ fn releases_that_say_their_holds_failed_put_the_key_down_and_its_state_says_sinc
         assert_eq!(standing.holding, 1);
         let failed = LocksLease { lease: held.lease, failed: true };
         client.call::<Empty>(method::LOCKS_RELEASE, &failed).unwrap();
+        assert_eq!(state(&mut client, "semaphore").unwrap().failures, u64::from(request), "failures in a row");
     }
     let refused = client.call::<LocksHeld>(method::LOCKS_HOLD, &breaking(3)).unwrap_err();
     assert_eq!(refused.code, "unavailable", "{refused:?}");

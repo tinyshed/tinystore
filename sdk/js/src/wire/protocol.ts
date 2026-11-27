@@ -7367,6 +7367,8 @@ export const LocksState = message(
 		lastFailure: [3, int],
 		waiting: [4, uint],
 		holding: [5, uint],
+		/** the failed holds in a row the breaker counts now, reset by a success */
+		failures: [6, uint],
 	},
 	{
 		write(w, v) {
@@ -7397,6 +7399,11 @@ export const LocksState = message(
 				w.uint(v.holding)
 				n++
 			}
+			if (v.failures !== undefined) {
+				w.field(6)
+				w.uint(v.failures)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -7405,6 +7412,7 @@ export const LocksState = message(
 			let $lastFailure: number | undefined
 			let $waiting: number | undefined
 			let $holding: number | undefined
+			let $failures: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -7422,6 +7430,9 @@ export const LocksState = message(
 					case 5:
 						$holding = r.uint()
 						break
+					case 6:
+						$failures = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -7433,6 +7444,7 @@ export const LocksState = message(
 				lastFailure: $lastFailure,
 				waiting: $waiting,
 				holding: $holding,
+				failures: $failures,
 			}
 		},
 	},
