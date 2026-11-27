@@ -1036,7 +1036,7 @@ function insertOf(
 }
 
 /** A row's field as it is written: an array or an object as its JSON. */
-function fieldOf(value: unknown, name: string, types: Record<string, ColumnType>): SqlArg {
+export function fieldOf(value: unknown, name: string, types: Record<string, ColumnType>): SqlArg {
 	if (value === undefined) {
 		throw new InvalidError(
 			`${name} is undefined, which never sets a column to null: leave the field out, or say null`,
@@ -1055,6 +1055,17 @@ function fieldOf(value: unknown, name: string, types: Record<string, ColumnType>
 }
 
 /** A stored value as its column's type reads it. */
+/** A row's cells as its columns' types read them, as a table's handle reads its rows. */
+export function typedRow(types: Record<string, ColumnType>, row: Row): Row {
+	const typed: Row = { ...row }
+	for (const [column, type] of Object.entries(types)) {
+		if (column in typed) {
+			typed[column] = typedOf(typed[column] as SqlValue, type, column) as SqlValue
+		}
+	}
+	return typed
+}
+
 function typedOf(value: SqlValue, type: ColumnType, column: string): unknown {
 	if (value === null) {
 		return null

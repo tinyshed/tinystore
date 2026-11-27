@@ -292,6 +292,17 @@ A bucket or a queue opened from the database joins it through
 and so does a stream opened from it: its events are written to the
 stream once the transaction commits, before this returns.
 
+### Database.mirror
+
+```rust
+pub fn mirror<T>(&self, table: &str) -> MirrorBuilder<T>
+```
+
+A table that mirrors another system, `T` its rows: its `replace`
+takes the source's list of a scope and its `patch` a change of some
+rows, and each answers what was added, changed and gone. The key,
+what names a row at the source, is given before it opens.
+
 ### Database.table
 
 ```rust
@@ -424,6 +435,179 @@ let db = store
     .migrations([("0001_notes.sql", "create table notes (id text primary key, title text not null) strict")])
     .open()?;
 ```
+
+## Changed
+
+```rust
+pub struct Changed<T> {
+    pub before: T,
+    pub after: T,
+}
+```
+
+A row that changed: as the table held it, and as the source gave it.
+
+## Diff
+
+```rust
+pub struct Diff<T> {
+    pub added: Vec<T>,
+    pub changed: Vec<Changed<T>>,
+    pub gone: Vec<T>,
+    pub same: u64,
+    pub suspect: bool,
+}
+```
+
+What a mirror's call changed, each row a `T`: the rows added, the rows
+changed as they were and as they are, the rows the source dropped, and
+how many it named as they were held. A suspect answer wrote nothing.
+
+A row answers by the columns the list's rows carry: an added row and a
+changed one's `after` as the list gave it, a changed one's `before` and a
+gone one as the table held them.
+
+## Guarded
+
+```rust
+pub struct Guarded<'m, T> { /* private fields */ }
+```
+
+A mirror's `replace` with its shrink guard; `Mirror::shrink` makes one.
+
+### Guarded.replace
+
+```rust
+pub fn replace<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)], rows: &[T]) -> Result<Diff<T>>
+```
+
+`Mirror::replace`, which writes nothing when the guard holds it back.
+
+## Mirror
+
+```rust
+pub struct Mirror<T> { /* private fields */ }
+```
+
+A table that mirrors another system; `Database::mirror` opens one.
+Clones share it.
+
+### Mirror.replace
+
+```rust
+pub fn replace<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)], rows: &[T]) -> Result<Diff<T>>
+```
+
+Makes the scope, the rows whose columns hold the scope's values, `&[]`
+for the whole table, what `rows` lists, in one write, all of it or
+none: adds what the table lacks, writes the compared columns' changes,
+and deletes, or marks gone, what the list leaves out. A row the list
+names outside the scope is `Invalid`. Values compare as SQLite's `is`
+does, with no column's affinity between: an integer and a real by
+their numbers, and `"4"` is not `4`.
+
+A scope of mixed types takes `serde_json::Value`s, `json!(1)` beside
+`json!("fall")`.
+
+### Mirror.patch
+
+```rust
+pub fn patch(&self, rows: &[T]) -> Result<Diff<T>>
+```
+
+Writes what `rows` adds and changes, a delta of the source's, and
+marks nothing gone: its `gone` is always empty.
+
+### Mirror.shrink
+
+```rust
+pub fn shrink(&self, fraction: f64) -> Guarded<'_, T>
+```
+
+The mirror's `replace` guarded against an answer that cannot be
+right: when the scope holds live rows and the list would leave fewer
+than `fraction` of them live, an empty list among them, it writes
+nothing and answers what it would have done, `suspect`. A fraction
+outside `(0, 1]` is `Invalid`.
+
+```rust
+let diff = works.shrink(0.5).replace(&[("course_id", 1)], &[])?;
+assert!(diff.suspect); // a course that held works: nothing was deleted
+```
+
+## MirrorBuilder
+
+```rust
+pub struct MirrorBuilder<T> { /* private fields */ }
+```
+
+How a mirror opens; `Database::mirror` makes one.
+
+### MirrorBuilder.key
+
+```rust
+pub fn key<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self
+```
+
+The columns that name a row at the source, `["course_id", "id"]`: a
+unique index or the table's primary key must cover them.
+
+### MirrorBuilder.gone
+
+```rust
+pub fn gone(self, column: &str) -> Self
+```
+
+A column that marks what the source dropped with the store's time, an
+integer of Unix milliseconds, instead of deleting the row. A row
+marked is neither marked nor answered again, and one the source names
+once more loses its mark and is added again.
+
+### MirrorBuilder.compare
+
+```rust
+pub fn compare<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self
+```
+
+The columns whose change makes a row changed; every column the rows
+carry but the key's when not given. A row whose compared columns are
+the same is not written at all, even where its other columns differ:
+a `fetched_at` the source writes at every read changes nothing.
+
+### MirrorBuilder.open
+
+```rust
+pub fn open(self) -> Result<Mirror<T>>
+```
+
+Opens the mirror once its table has every column it names and its
+key names one row; `Invalid` otherwise.
+
+## TxMirror
+
+```rust
+pub struct TxMirror<'t, T> { /* private fields */ }
+```
+
+A mirror's calls inside a transaction of its database, `tx.with(&works)`:
+what they write commits with the transaction or not at all, and they see
+what it wrote.
+
+### TxMirror.replace
+
+```rust
+pub fn replace<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)], rows: &[T]) -> Result<Diff<T>>
+```
+
+`Mirror::replace`, inside the transaction.
+
+### TxMirror.patch
+
+```rust
+pub fn patch(&self, rows: &[T]) -> Result<Diff<T>>
+```
+
+`Mirror::patch`, inside the transaction.
 
 ## and
 
@@ -998,6 +1182,15 @@ An application's database whose calls are awaited: the same file,
 writer and readers as `sql::Database`, and the same database when one
 is made from the other. Clones share it, and it closes with its store.
 
+### aio::sql::Database.mirror
+
+```rust
+pub fn mirror<T>(&self, table: &str) -> MirrorBuilder<T>
+```
+
+A table that mirrors another system, as `sql::Database::mirror`
+opens one: its `replace` and `patch` awaited.
+
 ### aio::sql::Database.name
 
 ```rust
@@ -1489,5 +1682,105 @@ pub fn upsert_all(
 Upserts rows of one shape as one statement, all of them or none, as
 `sql::Table::upsert_all` does. The rows are encoded when the call is
 made.
+
+## aio::sql::Guarded
+
+```rust
+pub struct Guarded<'m, T> { /* private fields */ }
+```
+
+An awaited mirror's `replace` with its shrink guard; `Mirror::shrink`
+makes one.
+
+### aio::sql::Guarded.replace
+
+```rust
+pub fn replace<S: AsRef<str>, V: Serialize>(
+    &self,
+    scope: &[(S, V)],
+    rows: &[T],
+) -> impl Future<Output = Result<Diff<T>>> + Send + 'static
+```
+
+`Mirror::replace`, which writes nothing when the guard holds it back.
+
+## aio::sql::Mirror
+
+```rust
+pub struct Mirror<T> { /* private fields */ }
+```
+
+A table that mirrors another system whose calls are awaited, the same
+mirror as `sql::Mirror`. Each call checks and converts its rows when it
+is made, so that its future borrows nothing, and writes in its first poll.
+
+### aio::sql::Mirror.replace
+
+```rust
+pub fn replace<S: AsRef<str>, V: Serialize>(
+    &self,
+    scope: &[(S, V)],
+    rows: &[T],
+) -> impl Future<Output = Result<Diff<T>>> + Send + 'static
+```
+
+The scope made what `rows` lists, as `sql::Mirror::replace` makes it.
+
+### aio::sql::Mirror.shrink
+
+```rust
+pub fn shrink(&self, fraction: f64) -> Guarded<'_, T>
+```
+
+`replace` with its shrink guard, as `sql::Mirror::shrink` guards it.
+
+### aio::sql::Mirror.patch
+
+```rust
+pub fn patch(&self, rows: &[T]) -> impl Future<Output = Result<Diff<T>>> + Send + 'static
+```
+
+What `rows` adds and changes, as `sql::Mirror::patch` writes it.
+
+## aio::sql::MirrorBuilder
+
+```rust
+pub struct MirrorBuilder<T> { /* private fields */ }
+```
+
+How an awaited mirror opens, with the blocking builder's options.
+
+### aio::sql::MirrorBuilder.key
+
+```rust
+pub fn key<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self
+```
+
+The columns that name a row at the source, as `sql::MirrorBuilder::key` takes them.
+
+### aio::sql::MirrorBuilder.gone
+
+```rust
+pub fn gone(self, column: &str) -> Self
+```
+
+The column that marks what the source dropped, as `sql::MirrorBuilder::gone` says.
+
+### aio::sql::MirrorBuilder.compare
+
+```rust
+pub fn compare<I: IntoIterator<Item = S>, S: Into<String>>(self, columns: I) -> Self
+```
+
+The columns whose change makes a row changed, as `sql::MirrorBuilder::compare` says.
+
+### aio::sql::MirrorBuilder.open
+
+```rust
+pub fn open(self) -> Result<Mirror<T>>
+```
+
+Opens the mirror as `sql::MirrorBuilder::open` does: a plain call,
+which reads the table's columns and indexes.
 
 <!-- Generated by task reference from crates/tinystore through rustdoc. Edit the doc comments there, not this file. -->

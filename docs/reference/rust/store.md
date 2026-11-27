@@ -886,6 +886,14 @@ pub const ROWS_BYTES: Limit
 The values one call reads from a database: past them, read a page at a
 time or a row at a time.
 
+## MIRROR_ROWS
+
+```rust
+pub const MIRROR_ROWS: Limit
+```
+
+The rows of a mirror's list, and those its scope holds.
+
 ## EVENT_BYTES
 
 ```rust

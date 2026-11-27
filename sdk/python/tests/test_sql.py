@@ -291,6 +291,67 @@ async def test_describe_names_the_columns_of_a_statement_that_answers_no_row_in_
         await app.describe("select tss from readings")
 
 
+@dataclass
+class Work:
+    course_id: int
+    id: str
+    title: str
+    grade: float | None
+
+
+# contract: SQL-17, SQL-20
+async def test_a_mirror_answers_what_was_added_changed_and_gone_and_its_guard_writes_nothing(
+    app: tinystore.Database,
+) -> None:
+    await app.exec(
+        "create table works (course_id integer, id text, title text, grade real, gone_at integer,"
+        " primary key (course_id, id))"
+    )
+    works = app.mirror("works", Work, key=["course_id", "id"], gone="gone_at", compare=["grade"])
+
+    def work(id: str, grade: float | None, title: str = "Essay") -> Work:
+        return Work(1, id, title, grade)
+
+    first = await works.replace({"course_id": 1}, [work("a", 4.0), work("b", None), work("c", 3.0)])
+    assert (first.added, first.same, first.suspect) == ([work("a", 4.0), work("b", None), work("c", 3.0)], 0, False)
+    diff = await works.replace({"course_id": 1}, [work("a", 4.0, "Essay (v2)"), work("b", 5.0), work("d", None)])
+    assert diff.added == [work("d", None)]
+    assert diff.changed == [tinystore.Changed(work("b", None), work("b", 5.0))]
+    assert (diff.gone, diff.same) == ([work("c", 3.0)], 1)
+    assert isinstance(await app.scalar("select gone_at from works where id = 'c'"), int)
+    held = await works.replace({"course_id": 1}, [], shrink=0.5)
+    assert (len(held.gone), held.suspect) == (3, True)
+    assert await app.scalar("select count(*) from works where gone_at is null") == 3
+    patched = await works.patch([work("e", 1.0)])
+    assert (patched.added, patched.gone) == ([work("e", 1.0)], [])
+    with pytest.raises(tinystore.InvalidError, match='row \\(course_id 1, id "a"\\)'):
+        await works.replace({"course_id": 2}, [work("a", 4.0)])
+
+
+@dataclass
+class MarkedWork:
+    course_id: int
+    id: str
+    title: str
+    gone_at: int | None = None
+
+
+async def test_a_dataclass_that_carries_the_gone_column_is_mirrored_while_it_is_none(
+    app: tinystore.Database,
+) -> None:
+    await app.exec(
+        "create table marked (course_id integer, id text, title text, gone_at integer, primary key (course_id, id))"
+    )
+    works = app.mirror("marked", MarkedWork, key=["course_id", "id"], gone="gone_at")
+    first = await works.replace({"course_id": 1}, [MarkedWork(1, "a", "Essay"), MarkedWork(1, "b", "Quiz")])
+    assert first.added == [MarkedWork(1, "a", "Essay"), MarkedWork(1, "b", "Quiz")]
+    dropped = await works.replace({"course_id": 1}, [MarkedWork(1, "a", "Essay")])
+    assert (dropped.same, dropped.gone) == (1, [MarkedWork(1, "b", "Quiz")])
+    assert isinstance(await app.scalar("select gone_at from marked where id = 'b'"), int)
+    with pytest.raises(tinystore.InvalidError, match='row 1: it marks "gone_at"'):
+        await works.replace({"course_id": 1}, [MarkedWork(1, "a", "Essay", 5)])
+
+
 async def test_columns_past_one_message_come_in_parts_and_are_whole(app: tinystore.Database) -> None:
     rows = 150_000
     columns = await app.columns(

@@ -475,7 +475,6 @@ impl Database {
     }
 
     /// The database as an error names it: `sql app`.
-    #[cfg(feature = "async")]
     pub(crate) fn shown(&self) -> String {
         self.base.describe()
     }

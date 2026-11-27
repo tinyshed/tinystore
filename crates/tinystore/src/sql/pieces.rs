@@ -212,10 +212,17 @@ pub(crate) fn joined_with(pieces: Vec<Sql>, joiner: &str) -> Sql {
 
 /// A name as SQL quotes it: `"u"."created_at"`, each part on its own.
 pub(crate) fn quote(name: &str) -> Result<String, String> {
+    quote_one(name)?;
+    Ok(name.split('.').map(crate::sqlite::quote_ident).collect::<Vec<_>>().join("."))
+}
+
+/// A table's own column as SQL quotes it, one name whatever it holds: a
+/// column `a.b` is `"a.b"`, as the table that declared it names it.
+pub(crate) fn quote_one(name: &str) -> Result<String, String> {
     if name.is_empty() || name.contains('\0') {
         return Err(format!("the name {name:?}: a name is text without NUL"));
     }
-    Ok(name.split('.').map(crate::sqlite::quote_ident).collect::<Vec<_>>().join("."))
+    Ok(crate::sqlite::quote_ident(name))
 }
 
 /// Each of `names` as SQL quotes it, or why one cannot be a name.

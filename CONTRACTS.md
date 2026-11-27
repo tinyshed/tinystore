@@ -161,6 +161,10 @@ These contracts are what does not.
 - **SQL-14** A read inside a transaction MUST carry the rows the same read carries outside it, through every way a store is reached.
 - **SQL-15** An upsert of a list MUST write every row or none, in one statement.
 - **SQL-16** `describe` MUST answer a statement's columns in the statement's order, each with the type its table declares where it is a table's own column, whether or not the statement answers a row, and MUST run nothing of it.
+- **SQL-17** A mirror's `replace` and `patch` MUST answer exactly the rows they added, the rows they changed as they were and as they are, the rows the source dropped, and how many the list gave as they were held; `patch` MUST mark nothing gone.
+- **SQL-18** A mirror's call MUST write all of its difference or none of it.
+- **SQL-19** A mirror MUST NOT write a row the list gives as it is held, nor one whose compared columns are as held.
+- **SQL-20** A `replace` its shrink guard holds back MUST write nothing and answer what it would have written, `suspect`.
 
 ### Blobs
 

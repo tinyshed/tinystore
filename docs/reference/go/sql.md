@@ -58,6 +58,17 @@ func Scalar[T any](ctx context.Context, r Runner, text string, args ...any) (T, 
 
 Scalar is the one value of the one row a statement gives, as count(\*) does; T's zero for NULL.
 
+## Changed
+
+```go
+type Changed[T any] struct {
+	Before T
+	After  T
+}
+```
+
+Changed is a row that changed: as the table held it, and as the source gave it.
+
 ## Column
 
 ```go
@@ -181,6 +192,20 @@ func (db *DB) Via(string) core.Via
 
 Via is how a handle kept in the database's file reaches the store outside a transaction.
 
+## Diff
+
+```go
+type Diff[T any] struct {
+	Added   []T
+	Changed []Changed[T]
+	Gone    []T
+	Same    int
+	Suspect bool
+}
+```
+
+Diff is what a mirror's call changed; a Suspect one wrote nothing.
+
 ## Direction
 
 ```go
@@ -233,6 +258,61 @@ func Limit(n int) ListOption
 ```
 
 Limit is how many rows a page holds: 100 unless given.
+
+## Mirror
+
+```go
+type Mirror[T any] struct {
+	// contains filtered or unexported fields
+}
+```
+
+Mirror is a table that mirrors another system: its Replace takes the source's list of a scope and its Patch a change of some rows, and each answers what was added, changed and gone. A row the list gives as it is held is not written at all.
+
+### OpenMirror
+
+```go
+func OpenMirror[T any](db *DB, table string, options MirrorOptions) *Mirror[T]
+```
+
+OpenMirror is the table name of db mirroring another system, its rows Ts:
+
+	works := sqldb.OpenMirror[Work](db, "works", sqldb.MirrorOptions{Key: []string{"course_id", "id"}, Gone: "gone_at"})
+	diff, err := works.Replace(ctx, map[string]any{"course_id": 1}, fetched)
+
+### Mirror.Patch
+
+```go
+func (m *Mirror[T]) Patch(ctx context.Context, rows []T) (Diff[T], error)
+```
+
+Patch writes what rows adds and changes, a delta of the source's; its Gone is always empty.
+
+### Mirror.Replace
+
+```go
+func (m *Mirror[T]) Replace(ctx context.Context, scope map[string]any, rows []T, options ...ReplaceOption) (Diff[T], error)
+```
+
+Replace makes the scope, the rows whose columns hold its values, nil for the whole table, what rows lists: it adds what the table lacks, writes what changed, and deletes, or marks gone, what the list leaves out. A row outside the scope is invalid. Values compare as SQLite's is does, so "4" is not 4.
+
+## MirrorOptions
+
+```go
+type MirrorOptions struct {
+	// Key is the columns that name a row at the source: a unique index or the
+	// table's primary key covers them.
+	Key []string
+	// Gone is a column that marks what the source dropped with the store's
+	// time, unix milliseconds, instead of deleting it; empty deletes it.
+	Gone string
+	// Compare is the columns whose change makes a row changed; every column
+	// the rows carry but the key's when nil.
+	Compare []string
+}
+```
+
+MirrorOptions is how a mirror opens: what names a row at the source, and what marks and compares a row.
 
 ## Option
 
@@ -533,6 +613,22 @@ func (q *Query[T]) Where(conditions ...Condition) *Query[T]
 ```
 
 Where adds conditions with and: equal values, sqldb.Eq{"status": "paid"}, nil as is null and a slice as in (...); or a piece of SQL from sqldb.SQL.
+
+## ReplaceOption
+
+```go
+type ReplaceOption func(*float64)
+```
+
+ReplaceOption guards a Replace.
+
+### Shrink
+
+```go
+func Shrink(fraction float64) ReplaceOption
+```
+
+Shrink writes nothing, and answers Suspect, when the list would leave fewer than fraction of the scope's live rows live.
 
 ## Result
 

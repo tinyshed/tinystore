@@ -77,6 +77,9 @@ pub const PROGRESS_BYTES: Limit = Limit { name: "progress bytes", bound: 4 << 10
 /// time or a row at a time.
 #[cfg(feature = "sql")]
 pub const ROWS_BYTES: Limit = Limit { name: "bytes of a call's rows", bound: 64 << 20 };
+/// The rows of a mirror's list, and those its scope holds.
+#[cfg(feature = "sql")]
+pub const MIRROR_ROWS: Limit = Limit { name: "mirror rows", bound: 100_000 };
 
 /// One event, its name, fields and text together.
 #[cfg(feature = "records")]
@@ -186,6 +189,7 @@ const ALL: &[Limit] = &[
     JOB_BYTES,
     PROGRESS_BYTES,
     ROWS_BYTES,
+    MIRROR_ROWS,
     EVENT_BYTES,
     APPEND_BYTES,
     AGGREGATE_ROWS,

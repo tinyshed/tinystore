@@ -171,6 +171,7 @@ methods: dict[str, int] = {
     "sql.tx": 0x0305,
     "sql.columns": 0x0306,
     "sql.describe": 0x0307,
+    "sql.mirror": 0x0308,
 }
 
 
@@ -11207,6 +11208,252 @@ SqlDescribed = Message(
 )
 
 
+def _write_sql_mirror(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("handle")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("table")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("key")) is not None:
+        w.uint(3)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("gone")) is not None:
+        w.uint(4)
+        w.str(x)
+        n += 1
+    if (x := v.get("compare")) is not None:
+        w.uint(5)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("mode")) is not None:
+        w.uint(6)
+        w.str(x)
+        n += 1
+    if (x := v.get("scope")) is not None:
+        w.uint(7)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("scope_values")) is not None:
+        w.uint(8)
+        w.array(len(x))
+        for item0 in x:
+            sql_value.write(w, item0)
+        n += 1
+    if (x := v.get("rows")) is not None:
+        w.uint(9)
+        SqlRows.write(w, x)
+        n += 1
+    if (x := v.get("shrink")) is not None:
+        w.uint(10)
+        w.float(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_sql_mirror(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["handle"] = r.uint()
+            case 2:
+                read["table"] = r.str()
+            case 3:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["key"] = items0
+            case 4:
+                read["gone"] = r.str()
+            case 5:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["compare"] = items0
+            case 6:
+                read["mode"] = r.str()
+            case 7:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["scope"] = items0
+            case 8:
+                items0 = [sql_value.read(r) for _ in range(r.array())]
+                r.leave()
+                read["scope_values"] = items0
+            case 9:
+                read["rows"] = SqlRows.read(r)
+            case 10:
+                read["shrink"] = r.float()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A table that mirrors another system, given the source's list: replace
+# makes the scope, the rows whose columns hold its values, what the list
+# lists, and patch writes what the list adds and changes. The table's key,
+# the columns that name a row at the source, is covered by a unique index or
+# its primary key. A row the same as held is not written.
+SqlMirror = Message(
+    "sql.Mirror",
+    {
+        "handle": (1, uint),
+        "table": (2, str_),
+        "key": (3, list_(str_)),
+        # the column that marks what the source dropped with the store's time, rather than a delete
+        "gone": (4, str_),
+        # the columns whose change makes a row changed: every column of the rows but the key's when absent
+        "compare": (5, list_(str_)),
+        # replace or patch
+        "mode": (6, str_),
+        # replace: the columns of its scope
+        "scope": (7, list_(str_)),
+        # and their values, in their order
+        "scope_values": (8, list_(sql_value)),
+        # the list, one message at most
+        "rows": (9, SqlRows),
+        # replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
+        "shrink": (10, float_),
+    },
+    _write_sql_mirror,
+    _read_sql_mirror,
+)
+
+
+def _write_sql_diff(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("columns")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("added")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            w.array(len(item0))
+            for item1 in item0:
+                sql_value.write(w, item1)
+        n += 1
+    if (x := v.get("before")) is not None:
+        w.uint(3)
+        w.array(len(x))
+        for item0 in x:
+            w.array(len(item0))
+            for item1 in item0:
+                sql_value.write(w, item1)
+        n += 1
+    if (x := v.get("after")) is not None:
+        w.uint(4)
+        w.array(len(x))
+        for item0 in x:
+            w.array(len(item0))
+            for item1 in item0:
+                sql_value.write(w, item1)
+        n += 1
+    if (x := v.get("gone")) is not None:
+        w.uint(5)
+        w.array(len(x))
+        for item0 in x:
+            w.array(len(item0))
+            for item1 in item0:
+                sql_value.write(w, item1)
+        n += 1
+    if (x := v.get("same")) is not None:
+        w.uint(6)
+        w.uint(x)
+        n += 1
+    if (x := v.get("suspect")) is not None:
+        w.uint(7)
+        w.bool(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_sql_diff(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["columns"] = items0
+            case 2:
+                items0: list[Any] = []
+                for _ in range(r.array()):
+                    items1 = [sql_value.read(r) for _ in range(r.array())]
+                    r.leave()
+                    items0.append(items1)
+                r.leave()
+                read["added"] = items0
+            case 3:
+                items0: list[Any] = []
+                for _ in range(r.array()):
+                    items1 = [sql_value.read(r) for _ in range(r.array())]
+                    r.leave()
+                    items0.append(items1)
+                r.leave()
+                read["before"] = items0
+            case 4:
+                items0: list[Any] = []
+                for _ in range(r.array()):
+                    items1 = [sql_value.read(r) for _ in range(r.array())]
+                    r.leave()
+                    items0.append(items1)
+                r.leave()
+                read["after"] = items0
+            case 5:
+                items0: list[Any] = []
+                for _ in range(r.array()):
+                    items1 = [sql_value.read(r) for _ in range(r.array())]
+                    r.leave()
+                    items0.append(items1)
+                r.leave()
+                read["gone"] = items0
+            case 6:
+                read["same"] = r.uint()
+            case 7:
+                read["suspect"] = r.bool()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# What a mirror's call changed, each row by columns: the list's, or the
+# table's when the list names none. A changed row is before as it was held
+# and after as the list gave it, in the same order; suspect wrote nothing.
+SqlDiff = Message(
+    "sql.Diff",
+    {
+        "columns": (1, list_(str_)),
+        "added": (2, list_(list_(sql_value))),
+        "before": (3, list_(list_(sql_value))),
+        "after": (4, list_(list_(sql_value))),
+        "gone": (5, list_(list_(sql_value))),
+        "same": (6, uint),
+        "suspect": (7, bool_),
+    },
+    _write_sql_diff,
+    _read_sql_diff,
+)
+
+
 def _write_blobs_filled(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -12256,6 +12503,8 @@ messages: dict[str, Message] = {
     "sql.TxAnswer": SqlTxAnswer,
     "sql.DescribedColumn": SqlDescribedColumn,
     "sql.Described": SqlDescribed,
+    "sql.Mirror": SqlMirror,
+    "sql.Diff": SqlDiff,
     "blobs.Filled": BlobsFilled,
     "channels.Batch": ChannelsBatch,
     "config.Given": ConfigGiven,

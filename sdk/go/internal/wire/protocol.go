@@ -162,6 +162,7 @@ const (
 	MethodSqlTx       = 0x0305
 	MethodSqlColumns  = 0x0306
 	MethodSqlDescribe = 0x0307
+	MethodSqlMirror   = 0x0308
 )
 
 // methodNames is every method by its name in the schema.
@@ -296,6 +297,7 @@ var methodNames = []struct {
 	{"sql.tx", MethodSqlTx},
 	{"sql.columns", MethodSqlColumns},
 	{"sql.describe", MethodSqlDescribe},
+	{"sql.mirror", MethodSqlMirror},
 }
 
 // Methods is every method by its name in the schema.
@@ -719,6 +721,10 @@ func NewMessage(name string) Message {
 		return &SqlDescribedColumn{}
 	case "sql.Described":
 		return &SqlDescribed{}
+	case "sql.Mirror":
+		return &SqlMirror{}
+	case "sql.Diff":
+		return &SqlDiff{}
 	}
 	return nil
 }
@@ -15196,4 +15202,341 @@ func (m *SqlDescribed) Read(r *Reader) {
 // IsZero says whether SqlDescribed writes as no field at all.
 func (m SqlDescribed) IsZero() bool {
 	return len(m.Columns) == 0
+}
+
+// SqlMirror is the schema's sql.Mirror.
+//
+// A table that mirrors another system, given the source's list: replace
+// makes the scope, the rows whose columns hold its values, what the list
+// lists, and patch writes what the list adds and changes. The table's key,
+// the columns that name a row at the source, is covered by a unique index or
+// its primary key. A row the same as held is not written.
+type SqlMirror struct {
+	Handle uint64   `wire:"1,handle"`
+	Table  string   `wire:"2,table"`
+	Key    []string `wire:"3,key"`
+	// the column that marks what the source dropped with the store's time, rather than a delete
+	Gone *string `wire:"4,gone"`
+	// the columns whose change makes a row changed: every column of the rows but the key's when absent
+	Compare *[]string `wire:"5,compare"`
+	// replace or patch
+	Mode string `wire:"6,mode"`
+	// replace: the columns of its scope
+	Scope *[]string `wire:"7,scope"`
+	// and their values, in their order
+	ScopeValues *[]Cell `wire:"8,scopeValues"`
+	// the list, one message at most
+	Rows SqlRows `wire:"9,rows"`
+	// replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
+	Shrink *float64 `wire:"10,shrink"`
+}
+
+func (m SqlMirror) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Handle != 0 {
+		w.Uint(1)
+		w.Uint(m.Handle)
+		n++
+	}
+	if m.Table != "" {
+		w.Uint(2)
+		w.Str(m.Table)
+		n++
+	}
+	if len(m.Key) > 0 {
+		w.Uint(3)
+		w.Array(len(m.Key))
+		for _, item0 := range m.Key {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Gone != nil {
+		w.Uint(4)
+		w.Str(*m.Gone)
+		n++
+	}
+	if m.Compare != nil {
+		w.Uint(5)
+		w.Array(len(*m.Compare))
+		for _, item0 := range *m.Compare {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Mode != "" {
+		w.Uint(6)
+		w.Str(m.Mode)
+		n++
+	}
+	if m.Scope != nil {
+		w.Uint(7)
+		w.Array(len(*m.Scope))
+		for _, item0 := range *m.Scope {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.ScopeValues != nil {
+		w.Uint(8)
+		w.Array(len(*m.ScopeValues))
+		for _, item0 := range *m.ScopeValues {
+			w.Cell(item0)
+		}
+		n++
+	}
+	if !m.Rows.IsZero() {
+		w.Uint(9)
+		m.Rows.Write(w)
+		n++
+	}
+	if m.Shrink != nil {
+		w.Uint(10)
+		w.Float(*m.Shrink)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SqlMirror) Read(r *Reader) {
+	*m = SqlMirror{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Handle = r.Uint()
+		case 2:
+			m.Table = r.Str()
+		case 3:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Key = v
+		case 4:
+			v := r.Str()
+			m.Gone = &v
+		case 5:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Compare = &v
+		case 6:
+			m.Mode = r.Str()
+		case 7:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Scope = &v
+		case 8:
+			v := []Cell{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Cell()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.ScopeValues = &v
+		case 9:
+			m.Rows.Read(r)
+		case 10:
+			v := r.Float()
+			m.Shrink = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SqlMirror writes as no field at all.
+func (m SqlMirror) IsZero() bool {
+	return m.Handle == 0 &&
+		m.Table == "" &&
+		len(m.Key) == 0 &&
+		m.Gone == nil &&
+		m.Compare == nil &&
+		m.Mode == "" &&
+		m.Scope == nil &&
+		m.ScopeValues == nil &&
+		m.Rows.IsZero() &&
+		m.Shrink == nil
+}
+
+// SqlDiff is the schema's sql.Diff.
+//
+// What a mirror's call changed, each row by columns: the list's, or the
+// table's when the list names none. A changed row is before as it was held
+// and after as the list gave it, in the same order; suspect wrote nothing.
+type SqlDiff struct {
+	Columns []string `wire:"1,columns"`
+	Added   [][]Cell `wire:"2,added"`
+	Before  [][]Cell `wire:"3,before"`
+	After   [][]Cell `wire:"4,after"`
+	Gone    [][]Cell `wire:"5,gone"`
+	Same    uint64   `wire:"6,same"`
+	Suspect bool     `wire:"7,suspect"`
+}
+
+func (m SqlDiff) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Columns) > 0 {
+		w.Uint(1)
+		w.Array(len(m.Columns))
+		for _, item0 := range m.Columns {
+			w.Str(item0)
+		}
+		n++
+	}
+	if len(m.Added) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Added))
+		for _, item0 := range m.Added {
+			w.Array(len(item0))
+			for _, item1 := range item0 {
+				w.Cell(item1)
+			}
+		}
+		n++
+	}
+	if len(m.Before) > 0 {
+		w.Uint(3)
+		w.Array(len(m.Before))
+		for _, item0 := range m.Before {
+			w.Array(len(item0))
+			for _, item1 := range item0 {
+				w.Cell(item1)
+			}
+		}
+		n++
+	}
+	if len(m.After) > 0 {
+		w.Uint(4)
+		w.Array(len(m.After))
+		for _, item0 := range m.After {
+			w.Array(len(item0))
+			for _, item1 := range item0 {
+				w.Cell(item1)
+			}
+		}
+		n++
+	}
+	if len(m.Gone) > 0 {
+		w.Uint(5)
+		w.Array(len(m.Gone))
+		for _, item0 := range m.Gone {
+			w.Array(len(item0))
+			for _, item1 := range item0 {
+				w.Cell(item1)
+			}
+		}
+		n++
+	}
+	if m.Same != 0 {
+		w.Uint(6)
+		w.Uint(m.Same)
+		n++
+	}
+	if m.Suspect {
+		w.Uint(7)
+		w.Bool(m.Suspect)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SqlDiff) Read(r *Reader) {
+	*m = SqlDiff{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Columns = v
+		case 2:
+			v := [][]Cell{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := []Cell{}
+				for k1 := r.Array(); k1 > 0; k1-- {
+					item1 := r.Cell()
+					item0 = append(item0, item1)
+				}
+				r.Leave()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Added = v
+		case 3:
+			v := [][]Cell{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := []Cell{}
+				for k1 := r.Array(); k1 > 0; k1-- {
+					item1 := r.Cell()
+					item0 = append(item0, item1)
+				}
+				r.Leave()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Before = v
+		case 4:
+			v := [][]Cell{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := []Cell{}
+				for k1 := r.Array(); k1 > 0; k1-- {
+					item1 := r.Cell()
+					item0 = append(item0, item1)
+				}
+				r.Leave()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.After = v
+		case 5:
+			v := [][]Cell{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := []Cell{}
+				for k1 := r.Array(); k1 > 0; k1-- {
+					item1 := r.Cell()
+					item0 = append(item0, item1)
+				}
+				r.Leave()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Gone = v
+		case 6:
+			m.Same = r.Uint()
+		case 7:
+			m.Suspect = r.Bool()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SqlDiff writes as no field at all.
+func (m SqlDiff) IsZero() bool {
+	return len(m.Columns) == 0 &&
+		len(m.Added) == 0 &&
+		len(m.Before) == 0 &&
+		len(m.After) == 0 &&
+		len(m.Gone) == 0 &&
+		m.Same == 0 &&
+		!m.Suspect
 }

@@ -720,6 +720,9 @@ impl<T> fmt::Debug for Table<T> {
 
 #[path = "sql_each.rs"]
 mod each;
+#[path = "sql_mirror.rs"]
+mod mirror;
+pub use mirror::{Guarded, Mirror, MirrorBuilder};
 
 #[cfg(test)]
 #[path = "sql_tests.rs"]

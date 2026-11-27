@@ -38,7 +38,7 @@ research's submodule is pinned to `v0.1.0-rc.5`.
 |----------------|----------------------------------------------------------------------------------------------------|------------------------------------------------------|
 | runtime        | the store, its `LOCK`, clock, memory budget, background work, errors and each file's durability    | [inside](docs/handbook/inside/journey-of-a-write.md) |
 | SQLite adapter | the pinned build, one writer a file with grouped commits, `query_only` readers, checked migrations | [SQLite](docs/handbook/inside/sqlite.md)             |
-| sql            | the application's databases, migrations, tables, a query builder, batches and transactions         | [sql](docs/guides/sql/README.md)                     |
+| sql            | the application's databases, migrations, tables, a query builder, batches, transactions, mirrors   | [sql](docs/guides/sql/README.md)                     |
 | kv             | buckets, branches, expiry, versions, encrypted values, counters, rate limits, quotas, `once`       | [kv](docs/guides/kv/README.md)                       |
 | jobs           | queues, ids, repeats and cron, schedules, concurrency, rate, retries, steps, workers               | [jobs](docs/guides/jobs/README.md)                   |
 | blobs          | files by path, uploads, conditions, copies, expiry, a ceiling, checked reads, a scrub, directories | [blobs](docs/guides/blobs/README.md)                 |

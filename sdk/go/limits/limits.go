@@ -37,6 +37,8 @@ var (
 	// RowsBytes is the values one call reads from a database: past them, read
 	// a page at a time.
 	RowsBytes = Limit{"bytes of a call's rows", 64 << 20}
+	// MirrorRows is the rows of a mirror's list, and those its scope holds.
+	MirrorRows = Limit{"mirror rows", 100_000}
 	// EventBytes is one event, its name, fields and text together.
 	EventBytes = Limit{"event bytes", 256 << 10}
 	// AppendBytes is the events of one append together.
@@ -97,7 +99,7 @@ var (
 
 // all is every bound above, which testdata/wire/limits.json holds.
 var all = []Limit{
-	ValueBytes, SettingBytes, ConfigBytes, LockWaiters, Subscriptions, JobBytes, ProgressBytes, RowsBytes,
+	ValueBytes, SettingBytes, ConfigBytes, LockWaiters, Subscriptions, JobBytes, ProgressBytes, RowsBytes, MirrorRows,
 	EventBytes, AppendBytes, AggregateRows, CountBytes, IngestSamples, IngestBytes, ReplaceSamples, ReplaceBytes,
 	TextSamples, TextBytes,
 	QuerySeries, QueryBytes, QuerySamples, QueryAnswer, SetManyDocuments, SetManyBytes, DocumentBytes,

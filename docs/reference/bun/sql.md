@@ -243,6 +243,18 @@ same name, and never version its name.
 
     const articles = db.searchIndex<Article>('articles_search', { table: 'articles', fields: { title: 2, body: 1 } })
 
+### Database.mirror
+
+```ts
+mirror<T = Row>(table: string, options: MirrorOptions): Mirror<T>
+```
+
+A table that mirrors another system: its `replace` takes the source's
+list of a scope and its `patch` a change of some rows, and each answers
+what was added, changed and gone, writing only the difference.
+
+    const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', compare: ['grade'] })
+
 ### Database.dropSearchIndex
 
 ```ts

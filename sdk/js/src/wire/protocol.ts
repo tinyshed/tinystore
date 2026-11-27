@@ -205,6 +205,7 @@ export const methods = {
 	'sql.tx': 0x0305,
 	'sql.columns': 0x0306,
 	'sql.describe': 0x0307,
+	'sql.mirror': 0x0308,
 } as const
 
 export type Method = keyof typeof methods
@@ -13646,6 +13647,373 @@ export const SqlDescribed = message(
 			}
 			r.leave()
 			return { columns: $columns }
+		},
+	},
+)
+
+/**
+ * A table that mirrors another system, given the source's list: replace
+ * makes the scope, the rows whose columns hold its values, what the list
+ * lists, and patch writes what the list adds and changes. The table's key,
+ * the columns that name a row at the source, is covered by a unique index or
+ * its primary key. A row the same as held is not written.
+ */
+export const SqlMirror = message(
+	'sql.Mirror',
+	{
+		handle: [1, uint],
+		table: [2, str],
+		key: [3, list(str)],
+		/** the column that marks what the source dropped with the store's time, rather than a delete */
+		gone: [4, str],
+		/** the columns whose change makes a row changed: every column of the rows but the key's when absent */
+		compare: [5, list(str)],
+		/** replace or patch */
+		mode: [6, str],
+		/** replace: the columns of its scope */
+		scope: [7, list(str)],
+		/** and their values, in their order */
+		scopeValues: [8, list(sqlValue)],
+		/** the list, one message at most */
+		rows: [9, SqlRows],
+		/** replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live */
+		shrink: [10, float],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.table !== undefined) {
+				w.field(2)
+				w.str(v.table)
+				n++
+			}
+			if (v.key !== undefined) {
+				w.field(3)
+				w.array(v.key.length)
+				for (const item0 of v.key) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.gone !== undefined) {
+				w.field(4)
+				w.str(v.gone)
+				n++
+			}
+			if (v.compare !== undefined) {
+				w.field(5)
+				w.array(v.compare.length)
+				for (const item0 of v.compare) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.mode !== undefined) {
+				w.field(6)
+				w.str(v.mode)
+				n++
+			}
+			if (v.scope !== undefined) {
+				w.field(7)
+				w.array(v.scope.length)
+				for (const item0 of v.scope) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.scopeValues !== undefined) {
+				w.field(8)
+				w.array(v.scopeValues.length)
+				for (const item0 of v.scopeValues) {
+					sqlValue.write(w, item0)
+				}
+				n++
+			}
+			if (v.rows !== undefined) {
+				w.field(9)
+				SqlRows.write(w, v.rows)
+				n++
+			}
+			if (v.shrink !== undefined) {
+				w.field(10)
+				w.float(v.shrink)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $table: string | undefined
+			let $key: string[] | undefined
+			let $gone: string | undefined
+			let $compare: string[] | undefined
+			let $mode: string | undefined
+			let $scope: string[] | undefined
+			let $scopeValues: (SqlValue | boolean)[] | undefined
+			let $rows: Read<typeof SqlRows.fields> | undefined
+			let $shrink: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$table = r.str()
+						break
+					case 3: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$key = items0
+						break
+					}
+					case 4:
+						$gone = r.str()
+						break
+					case 5: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$compare = items0
+						break
+					}
+					case 6:
+						$mode = r.str()
+						break
+					case 7: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$scope = items0
+						break
+					}
+					case 8: {
+						const items0: (SqlValue | boolean)[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(sqlValue.read(r))
+						}
+						r.leave()
+						$scopeValues = items0
+						break
+					}
+					case 9:
+						$rows = SqlRows.read(r)
+						break
+					case 10:
+						$shrink = r.float()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				handle: $handle,
+				table: $table,
+				key: $key,
+				gone: $gone,
+				compare: $compare,
+				mode: $mode,
+				scope: $scope,
+				scopeValues: $scopeValues,
+				rows: $rows,
+				shrink: $shrink,
+			}
+		},
+	},
+)
+
+/**
+ * What a mirror's call changed, each row by columns: the list's, or the
+ * table's when the list names none. A changed row is before as it was held
+ * and after as the list gave it, in the same order; suspect wrote nothing.
+ */
+export const SqlDiff = message(
+	'sql.Diff',
+	{
+		columns: [1, list(str)],
+		added: [2, list(list(sqlValue))],
+		before: [3, list(list(sqlValue))],
+		after: [4, list(list(sqlValue))],
+		gone: [5, list(list(sqlValue))],
+		same: [6, uint],
+		suspect: [7, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.columns !== undefined) {
+				w.field(1)
+				w.array(v.columns.length)
+				for (const item0 of v.columns) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.added !== undefined) {
+				w.field(2)
+				w.array(v.added.length)
+				for (const item0 of v.added) {
+					w.array(item0.length)
+					for (const item1 of item0) {
+						sqlValue.write(w, item1)
+					}
+				}
+				n++
+			}
+			if (v.before !== undefined) {
+				w.field(3)
+				w.array(v.before.length)
+				for (const item0 of v.before) {
+					w.array(item0.length)
+					for (const item1 of item0) {
+						sqlValue.write(w, item1)
+					}
+				}
+				n++
+			}
+			if (v.after !== undefined) {
+				w.field(4)
+				w.array(v.after.length)
+				for (const item0 of v.after) {
+					w.array(item0.length)
+					for (const item1 of item0) {
+						sqlValue.write(w, item1)
+					}
+				}
+				n++
+			}
+			if (v.gone !== undefined) {
+				w.field(5)
+				w.array(v.gone.length)
+				for (const item0 of v.gone) {
+					w.array(item0.length)
+					for (const item1 of item0) {
+						sqlValue.write(w, item1)
+					}
+				}
+				n++
+			}
+			if (v.same !== undefined) {
+				w.field(6)
+				w.uint(v.same)
+				n++
+			}
+			if (v.suspect !== undefined) {
+				w.field(7)
+				w.bool(v.suspect)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $columns: string[] | undefined
+			let $added: (SqlValue | boolean)[][] | undefined
+			let $before: (SqlValue | boolean)[][] | undefined
+			let $after: (SqlValue | boolean)[][] | undefined
+			let $gone: (SqlValue | boolean)[][] | undefined
+			let $same: number | undefined
+			let $suspect: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$columns = items0
+						break
+					}
+					case 2: {
+						const items0: (SqlValue | boolean)[][] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							const items1: (SqlValue | boolean)[] = []
+							for (let i1 = r.array(); i1 > 0; i1--) {
+								items1.push(sqlValue.read(r))
+							}
+							r.leave()
+							items0.push(items1)
+						}
+						r.leave()
+						$added = items0
+						break
+					}
+					case 3: {
+						const items0: (SqlValue | boolean)[][] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							const items1: (SqlValue | boolean)[] = []
+							for (let i1 = r.array(); i1 > 0; i1--) {
+								items1.push(sqlValue.read(r))
+							}
+							r.leave()
+							items0.push(items1)
+						}
+						r.leave()
+						$before = items0
+						break
+					}
+					case 4: {
+						const items0: (SqlValue | boolean)[][] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							const items1: (SqlValue | boolean)[] = []
+							for (let i1 = r.array(); i1 > 0; i1--) {
+								items1.push(sqlValue.read(r))
+							}
+							r.leave()
+							items0.push(items1)
+						}
+						r.leave()
+						$after = items0
+						break
+					}
+					case 5: {
+						const items0: (SqlValue | boolean)[][] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							const items1: (SqlValue | boolean)[] = []
+							for (let i1 = r.array(); i1 > 0; i1--) {
+								items1.push(sqlValue.read(r))
+							}
+							r.leave()
+							items0.push(items1)
+						}
+						r.leave()
+						$gone = items0
+						break
+					}
+					case 6:
+						$same = r.uint()
+						break
+					case 7:
+						$suspect = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				columns: $columns,
+				added: $added,
+				before: $before,
+				after: $after,
+				gone: $gone,
+				same: $same,
+				suspect: $suspect,
+			}
 		},
 	},
 )

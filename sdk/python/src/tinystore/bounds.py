@@ -47,6 +47,8 @@ PROGRESS_BYTES = Limit("progress bytes", 4 << 10)
 """A run's progress, as JSON."""
 ROWS_BYTES = Limit("bytes of a call's rows", 64 << 20)
 """The values one call reads from a database: past them, read a page at a time."""
+MIRROR_ROWS = Limit("mirror rows", 100_000)
+"""The rows of a mirror's list, and those its scope holds."""
 EVENT_BYTES = Limit("event bytes", 256 << 10)
 """One event, its name, fields and text together."""
 APPEND_BYTES = Limit("append bytes", 4 << 20)

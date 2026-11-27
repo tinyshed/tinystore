@@ -32,6 +32,7 @@ of repeating them.
 | writes in one shared commit        | 1,024, or 8 MiB                                            |
 | values of one statement            | 32,766: an `insert` or `upsert` list's rows times columns  |
 | readers                            | one per processor, 4 to 16, idle ones close after a minute |
+| a mirror's list, and its scope     | 100,000 rows each                                          |
 | statements compiled per connection | 128                                                        |
 
 ## KV
@@ -211,6 +212,7 @@ Each constant has the name below in its language's case:
 | `JOB_BYTES`          | `job bytes`              | 1 MiB     | a job's payload, result or step's answer, as JSON                  |
 | `PROGRESS_BYTES`     | `progress bytes`         | 4 KiB     | a run's progress, as JSON                                          |
 | `ROWS_BYTES`         | `bytes of a call's rows` | 64 MiB    | the values one call reads from a database                          |
+| `MIRROR_ROWS`        | `mirror rows`            | 100,000   | the rows of a mirror's list, and those its scope holds             |
 | `EVENT_BYTES`        | `event bytes`            | 256 KiB   | one event                                                          |
 | `APPEND_BYTES`       | `append bytes`           | 4 MiB     | the events of one append                                           |
 | `AGGREGATE_ROWS`     | `aggregate rows`         | 10,000    | the rows of one `aggregate` of events                              |
