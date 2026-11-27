@@ -102,6 +102,9 @@ pub(crate) mod wire;
 #[cfg(feature = "client")]
 #[doc(hidden)]
 pub use wire::client;
+#[cfg(all(any(test, feature = "fuzzing"), feature = "wire"))]
+#[doc(hidden)]
+pub use wire::fuzzing as wire_fuzzing;
 
 #[cfg(any(feature = "metrics", feature = "records", feature = "jobs"))]
 pub use calendar::Calendar;

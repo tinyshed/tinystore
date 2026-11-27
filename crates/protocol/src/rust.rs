@@ -276,11 +276,11 @@ fn write_rewrite(out: &mut String, schema: &Schema) {
 ",
     );
     out.push_str(
-        "/// within that size; `None` for a name it lacks.
+        "/// within that size, and for the wire's fuzz target; `None` for a name it lacks.
 ",
     );
     out.push_str(
-        "#[cfg(test)]
+        "#[cfg(any(test, feature = \"fuzzing\"))]
 ",
     );
     out.push_str(

@@ -77,7 +77,7 @@ mcp = ["typos"]
 testing = ["store"]
 # the bodies of the fuzz targets in fuzz/, which reach decoders the library
 # keeps to itself
-fuzzing = ["records", "metrics"]
+fuzzing = ["records", "metrics", "wire"]
 
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the
