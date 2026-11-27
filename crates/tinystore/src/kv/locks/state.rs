@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use super::breaker::{Admission, Breaker, KeyState, Outcome, Rule};
 use super::lease::{Answer, Ask, Ending, Fence, Granted, LeaseId, Place, Priority, Reply, RequestId, Watch};
+use crate::clock::from_unix_millis;
 use crate::encryption::random;
 use crate::limits::LOCK_WAITERS;
 use crate::{Error, Result};
@@ -32,8 +34,9 @@ impl Mint {
         let expires = ask.ttl.map(|ttl| now.saturating_add(millis(ttl)));
         let watch = Arc::new(Watch::default());
         let revokes = ask.max_hold.map(|bound| now.saturating_add(millis(bound)));
+        let granted = Granted { lease, fence, expires, revokes, watch };
         let background = ask.priority == Priority::Background;
-        Ok(Holder { granted: Granted { lease, fence, expires, revokes, watch }, request: ask.request, background })
+        Ok(Holder { granted, request: ask.request, background, breaker: ask.breaker, probe: ask.probe })
     }
 }
 
@@ -76,6 +79,8 @@ pub(super) struct Holder {
     pub(super) granted: Granted,
     request: Option<RequestId>,
     background: bool,
+    breaker: Option<Rule>,
+    probe: bool,
 }
 
 struct Waiter {
@@ -223,6 +228,14 @@ pub(super) struct State {
     leases: HashMap<LeaseId, Place>,
     requests: HashMap<RequestId, Asked>,
     waiting: HashMap<u64, Place>,
+    /// The keys whose holds failed since their last success, or that are
+    /// down: empty for a store whose semaphores keep no breaker, so that an
+    /// ask of one costs a branch.
+    breakers: HashMap<Place, Breaker>,
+    /// How many breakers are kept before the stale ones are swept out, as
+    /// the next is made: twice those left by the sweep before, so that a
+    /// key failed once and never asked again costs its memory a pause.
+    breakers_swept_at: usize,
     /// When each key next comes due. An entry goes stale when its key
     /// changes; a stale one costs a look and is dropped.
     due: BinaryHeap<Reverse<(i64, Place)>>,
@@ -240,7 +253,17 @@ enum Asked {
 impl State {
     /// Grants the key, puts the ask in line, or answers busy; says the
     /// waiter's id when it waits.
-    pub(super) fn ask(&mut self, ask: Ask, reply: Reply, now: i64, mint: &Mint, effects: &mut Effects) -> Option<u64> {
+    ///
+    /// A key its breaker put down refuses the ask at once, unless its pause
+    /// is over and no other ask goes through: this one does.
+    pub(super) fn ask(
+        &mut self,
+        mut ask: Ask,
+        reply: Reply,
+        now: i64,
+        mint: &Mint,
+        effects: &mut Effects,
+    ) -> Option<u64> {
         if self.closed {
             effects.answer(reply, Err(Error::closed(ask.place.to_string())));
             return None;
@@ -250,16 +273,47 @@ impl State {
             Err(waits) => return waits,
         };
         let place = ask.place.clone();
+        // the holds that ended unsettled speak first: one past its time may
+        // put the key down, a probe whose lease ran out lets this ask through
         self.settle(&place, now, mint, effects);
+        match self.admit(&place, now) {
+            Admission::Open => {}
+            Admission::Probe => ask.probe = true,
+            Admission::Refused(refused) => {
+                effects.answer(reply, Err(refused.within(&place)));
+                self.keep_or_forget(&place, effects);
+                return None;
+            }
+        }
+        let probe = ask.probe;
         let line = self.lines.entry(place.clone()).or_default();
-        let waits = if line.admits(&ask) {
-            self.grant_at_once(ask, reply, now, mint, effects);
-            None
+        let (granted, waits) = if line.admits(&ask) {
+            (self.grant_at_once(ask, reply, now, mint, effects), None)
         } else {
-            self.wait(ask, reply, now, effects)
+            (false, self.wait(ask, reply, now, effects))
         };
+        if probe && !granted && waits.is_none() {
+            self.probe_left(&place);
+        }
         self.keep_or_forget(&place, effects);
         waits
+    }
+
+    /// What the key's breaker lets an ask do: a store with no breaker kept
+    /// looks up nothing.
+    fn admit(&mut self, place: &Place, now: i64) -> Admission {
+        if self.breakers.is_empty() {
+            return Admission::Open;
+        }
+        self.breakers.get_mut(place).map_or(Admission::Open, |breaker| breaker.admit(now))
+    }
+
+    /// The probe of a down key left without its outcome: the next ask goes
+    /// through.
+    fn probe_left(&mut self, place: &Place) {
+        if let Some(breaker) = self.breakers.get_mut(place) {
+            breaker.probe_abandoned();
+        }
     }
 
     /// Answers a request asked before, by its id: the lease it holds, or its
@@ -317,13 +371,18 @@ impl State {
         }
     }
 
-    fn grant_at_once(&mut self, ask: Ask, reply: Reply, now: i64, mint: &Mint, effects: &mut Effects) {
+    /// Grants the key; says whether it was given.
+    fn grant_at_once(&mut self, ask: Ask, reply: Reply, now: i64, mint: &Mint, effects: &mut Effects) -> bool {
         match mint.grant(&ask, now) {
             Ok(holder) => {
                 effects.answer(reply, Ok(Answer::Granted(holder.granted.clone())));
                 self.hold(&ask.place, holder);
+                true
             }
-            Err(error) => effects.answer(reply, Err(error.within(&ask.place))),
+            Err(error) => {
+                effects.answer(reply, Err(error.within(&ask.place)));
+                false
+            }
         }
     }
 
@@ -359,11 +418,19 @@ impl State {
         let given_up = line.given_up(now);
         for holder in ended {
             self.forget_lease(&holder);
+            // revoked at its max_hold or timeout, the work ran past its time; run out
+            // first, its client went, however late the key is settled
+            let (revokes, expires) = (holder.granted.revokes, holder.granted.expires);
+            let revoked = revokes.is_some_and(|at| at <= now && expires.is_none_or(|expires| at < expires));
+            self.tell(place, &holder, if revoked { Outcome::Failed } else { Outcome::Abandoned }, now, effects);
             effects.lost.push(Arc::clone(place.name()));
             effects.endings.push((holder.granted.watch, Ending::Lost));
         }
         for waiter in given_up {
             self.forget_waiter(&waiter);
+            if waiter.ask.probe {
+                self.probe_left(place);
+            }
             effects.answer(waiter.reply, Ok(Answer::Busy));
         }
         self.give_on(place, now, mint, effects);
@@ -415,14 +482,105 @@ impl State {
         }
     }
 
-    /// Lets go of a lease its holder ended, and gives the key on. Says
-    /// whether the lease was still held.
-    pub(super) fn release(&mut self, lease: &LeaseId, now: i64, mint: &Mint, effects: &mut Effects) -> bool {
+    /// Tells the key's breaker how a hold ended. A probe's success puts the
+    /// key up and its failure pauses it again; any other hold's failure
+    /// counts by its rule, and the one that puts the key down refuses every
+    /// ask in its lines. A success while the key is up forgets its count.
+    fn tell(&mut self, place: &Place, holder: &Holder, ended: Outcome, now: i64, effects: &mut Effects) {
+        if holder.probe {
+            match ended {
+                Outcome::Succeeded => drop(self.breakers.remove(place)),
+                Outcome::Failed => {
+                    if let Some(breaker) = self.breakers.get_mut(place) {
+                        breaker.probe_failed(now);
+                    }
+                }
+                Outcome::Abandoned => self.probe_left(place),
+            }
+            return;
+        }
+        match (ended, holder.breaker) {
+            (Outcome::Failed, Some(rule)) => {
+                if !self.breakers.contains_key(place) {
+                    self.sweep_breakers(now);
+                }
+                let breaker = self.breakers.entry(place.clone()).or_insert_with(|| Breaker::new(rule));
+                if breaker.failed(rule, now) {
+                    self.refuse_waiters(place, now, effects);
+                }
+            }
+            // A hold asked without the breaker says nothing of it: a client
+            // older than breakers releases every hold as a success.
+            //
+            // The emptiness first, so that a store with no breaker looks up nothing.
+            (Outcome::Succeeded, Some(_))
+                if !self.breakers.is_empty() && self.breakers.get(place).is_some_and(|breaker| !breaker.down()) =>
+            {
+                self.breakers.remove(place);
+            }
+            _ => {}
+        }
+    }
+
+    /// Forgets the breakers with nothing left to say, once as many are kept
+    /// as the last sweep left room for.
+    fn sweep_breakers(&mut self, now: i64) {
+        const FEWEST_SWEPT: usize = 64;
+        if self.breakers.len() < self.breakers_swept_at.max(FEWEST_SWEPT) {
+            return;
+        }
+        self.breakers.retain(|_, breaker| !breaker.stale(now));
+        self.breakers_swept_at = 2 * self.breakers.len();
+    }
+
+    /// Answers every ask in the key's lines as its breaker refuses a new one.
+    fn refuse_waiters(&mut self, place: &Place, now: i64, effects: &mut Effects) {
+        let Some(breaker) = self.breakers.get(place) else { return };
+        let Some(since) = breaker.down_since() else { return };
+        let refusal = breaker.refusal(since, now).within(place);
+        let Some(line) = self.lines.get_mut(place) else { return };
+        let refused: Vec<Waiter> = line.waiters.drain(..).chain(line.background.drain(..)).collect();
+        for waiter in refused {
+            self.forget_waiter(&waiter);
+            effects.answer(waiter.reply, Err(refusal.duplicate()));
+        }
+    }
+
+    /// How a key stands at `now`: its breaker's word, and its lines'.
+    pub(super) fn state_of(&mut self, place: &Place, now: i64, mint: &Mint, effects: &mut Effects) -> KeyState {
+        self.settle(place, now, mint, effects);
+        self.keep_or_forget(place, effects);
+        if self.breakers.get(place).is_some_and(|breaker| breaker.stale(now)) {
+            self.breakers.remove(place);
+        }
+        let line = self.lines.get(place);
+        let breaker = self.breakers.get(place);
+        let count = |count: usize| u32::try_from(count).unwrap_or(u32::MAX);
+        KeyState {
+            up: !breaker.is_some_and(Breaker::down),
+            down_since: breaker.and_then(Breaker::down_since).map(from_unix_millis),
+            last_failure: breaker.and_then(Breaker::last_failure).map(from_unix_millis),
+            waiting: count(line.map_or(0, Line::waiting)),
+            holding: count(line.map_or(0, |line| line.holders.len())),
+        }
+    }
+
+    /// Lets go of a lease its holder ended, as it ended, and gives the key
+    /// on. Says whether the lease was still held.
+    pub(super) fn release(
+        &mut self,
+        lease: &LeaseId,
+        ended: Outcome,
+        now: i64,
+        mint: &Mint,
+        effects: &mut Effects,
+    ) -> bool {
         let Some(place) = self.leases.get(lease).cloned() else { return false };
         let Some(line) = self.lines.get_mut(&place) else { return false };
         let Some(at) = line.holders.iter().position(|holder| &holder.granted.lease == lease) else { return false };
         let holder = line.take_holder(at);
         self.forget_lease(&holder);
+        self.tell(&place, &holder, ended, now, effects);
         self.settle(&place, now, mint, effects);
         self.keep_or_forget(&place, effects);
         true
@@ -487,6 +645,9 @@ impl State {
         });
         if let Some(waiter) = removed {
             self.forget_waiter(&waiter);
+            if waiter.ask.probe {
+                self.probe_left(&place);
+            }
         }
         if self.lines.get(&place).is_some_and(Line::is_empty) {
             self.lines.remove(&place);
@@ -540,6 +701,11 @@ impl State {
         self.waiting.len()
     }
 
+    #[cfg(test)]
+    pub(super) fn breakers(&self) -> usize {
+        self.breakers.len()
+    }
+
     /// How many asks wait in line and how many leases are held, by the name
     /// of their lock or semaphore.
     pub(super) fn by_name(&self) -> HashMap<Arc<str>, Standing> {
@@ -555,7 +721,7 @@ impl State {
     /// The keys, leases, requests and waiters the state keeps.
     #[cfg(all(test, feature = "wire"))]
     pub(super) fn kept(&self) -> usize {
-        self.lines.len() + self.leases.len() + self.requests.len() + self.waiting.len()
+        self.lines.len() + self.leases.len() + self.requests.len() + self.waiting.len() + self.breakers.len()
     }
 
     /// Ends every lease and answers every waiter: the store closed.
@@ -572,6 +738,7 @@ impl State {
         self.leases.clear();
         self.requests.clear();
         self.waiting.clear();
+        self.breakers.clear();
         self.due.clear();
     }
 }

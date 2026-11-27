@@ -23,6 +23,46 @@ class Permit:
 
 A holding of a semaphore's key: one of its limit.
 
+### Permit.succeeded
+
+```python
+def succeeded() -> None: ...
+```
+
+Says the hold succeeded, so that the breaker does not count it a failure though the block then raises.
+
+## Breaker
+
+```python
+@dataclass(frozen=True, slots=True)
+class Breaker:
+    failures: int
+    pause: Duration
+```
+
+A semaphore's breaker: ``failures`` failed holds of a key in a row put it down for ``pause``.
+
+A hold failed when its block raised, unless its permit said
+``succeeded()``, or when it ran past its timeout or max_hold; a success
+resets the count. While the key is down every hold is UnavailableError at
+once. Once the pause is over, one hold goes through: its success puts the
+key up, its failure pauses it again. The store's process keeps it in
+memory, so a restart of that process puts every key up.
+
+## KeyState
+
+```python
+@dataclass(frozen=True, slots=True)
+class KeyState:
+    up: bool  # false from the failure that put the key down until a hold after the pause succeeds; true without a breaker
+    down_since: datetime | None
+    last_failure: datetime | None  # the last failed hold's end, kept until a success after it
+    waiting: int
+    holding: int
+```
+
+How a semaphore's key stands now: ``await semaphore.state(key)``.
+
 ## Holding
 
 ```python
@@ -73,6 +113,18 @@ class Semaphore:
 ```
 
 Keys held by up to their limit at a time: ``store.semaphore(name, limit=3)``.
+
+### Semaphore.state
+
+```python
+async def state(key: Key) -> KeyState: ...
+```
+
+How key stands now: up or down and since when, its last failed hold, how many wait and hold it:
+
+state = await cabinet.state("requests")
+if not state.up:
+    print(f"the cabinet is down since {state.down_since}")
 
 ### Semaphore.hold
 

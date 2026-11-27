@@ -3,7 +3,9 @@ use std::time::Duration;
 use crate::pipe::Capability;
 use crate::pipe::fixture::{Client, answered};
 use crate::wire::frame::Kind;
-use crate::wire::protocol::{Empty, Failure, LocksHeld, LocksHold, LocksLease, LocksRenew, method};
+use crate::wire::protocol::{
+    Empty, Failure, LocksHeld, LocksHold, LocksLease, LocksRenew, LocksState, LocksStateAsked, method,
+};
 use crate::{Options, Store};
 
 fn hold(key: &str, wait: u64, request: u8) -> LocksHold {
@@ -25,7 +27,7 @@ fn renew(client: &mut Client, lease: &[u8]) -> Result<Empty, Failure> {
 }
 
 fn release(client: &mut Client, lease: &[u8]) {
-    client.call::<Empty>(method::LOCKS_RELEASE, &LocksLease { lease: lease.to_vec() }).unwrap();
+    client.call::<Empty>(method::LOCKS_RELEASE, &LocksLease { lease: lease.to_vec(), failed: false }).unwrap();
 }
 
 #[test]
@@ -146,4 +148,40 @@ fn an_urgent_hold_over_the_wire_passes_the_background_ones_which_keep_to_their_p
     let wider = LocksHold { background: 3, request: vec![8; 16], ..cabinet(8, "") };
     assert_eq!(refused(&mut client, &wider), "invalid", "a background past the limit");
     assert_eq!(refused(&mut client, &cabinet(9, "later")), "invalid", "a priority of neither");
+}
+
+/// A hold of a semaphore of one place, down 30 s after two failed holds.
+fn breaking(request: u8) -> LocksHold {
+    LocksHold { failures: 2, pause: Some(30_000), ..cabinet(request, "") }
+}
+
+fn state(client: &mut Client, kind: &str) -> Result<LocksState, Failure> {
+    let asked = LocksStateAsked { kind: kind.to_owned(), name: "cabinet".to_owned(), key: "requests".to_owned() };
+    client.call(method::LOCKS_STATE, &asked)
+}
+
+// contract: LOCK-12, LOCK-14
+#[test]
+fn releases_that_say_their_holds_failed_put_the_key_down_and_its_state_says_since_when() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let up = state(&mut client, "semaphore").unwrap();
+    assert!(up.up && up.down_since.is_none() && up.waiting == 0 && up.holding == 0, "{up:?}");
+    for request in 1..=2 {
+        let held: LocksHeld = client.call(method::LOCKS_HOLD, &breaking(request)).unwrap();
+        let standing = state(&mut client, "semaphore").unwrap();
+        assert_eq!(standing.holding, 1);
+        let failed = LocksLease { lease: held.lease, failed: true };
+        client.call::<Empty>(method::LOCKS_RELEASE, &failed).unwrap();
+    }
+    let refused = client.call::<LocksHeld>(method::LOCKS_HOLD, &breaking(3)).unwrap_err();
+    assert_eq!(refused.code, "unavailable", "{refused:?}");
+    let down = state(&mut client, "semaphore").unwrap();
+    assert!(!down.up, "{down:?}");
+    assert!(down.down_since.is_some() && down.down_since == down.last_failure, "{down:?}");
+
+    let hold = |client: &mut Client, asked: &LocksHold| client.call::<LocksHeld>(method::LOCKS_HOLD, asked);
+    let alone = LocksHold { pause: None, ..breaking(4) };
+    assert_eq!(hold(&mut client, &alone).unwrap_err().code, "invalid", "failures without a pause");
+    assert_eq!(state(&mut client, "mutex").unwrap_err().code, "invalid", "neither a lock nor a semaphore");
 }

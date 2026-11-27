@@ -94,13 +94,8 @@ impl fmt::Display for Origin {
     }
 }
 
-/// A time in UTC to the second: `2026-10-13 14:03:05 UTC`.
 fn utc(at: SystemTime) -> String {
-    let millis = unix_millis(at);
-    let (days, seconds) = (millis.div_euclid(86_400_000), millis.rem_euclid(86_400_000) / 1000);
-    let (year, month, day) = crate::clock::civil_from_days(days);
-    let (hour, minute, second) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
-    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
+    crate::clock::utc(unix_millis(at))
 }
 
 /// The settings as a table, the notes after it:

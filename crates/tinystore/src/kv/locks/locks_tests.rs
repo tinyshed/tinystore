@@ -319,7 +319,18 @@ fn names_keys_limits_and_bounds_are_checked() {
 #[cfg(feature = "wire")]
 fn remote(key: &str, ttl: Duration, wait: Duration, request: Option<lease::RequestId>) -> Ask {
     let place = Place::new(Kind::Lock, Arc::from("invoices"), key.to_owned());
-    Ask { place, limit: 1, priority: Priority::Urgent, background: None, ttl: Some(ttl), max_hold: None, wait, request }
+    Ask {
+        place,
+        limit: 1,
+        priority: Priority::Urgent,
+        background: None,
+        ttl: Some(ttl),
+        max_hold: None,
+        wait,
+        request,
+        breaker: None,
+        probe: false,
+    }
 }
 
 #[cfg(feature = "wire")]
@@ -363,8 +374,8 @@ fn a_lease_through_a_connection_lasts_its_ttl_from_its_last_renewal() {
     assert_eq!(first.watch.ending(), Ending::Lost, "the first is told it lost the key");
     let renewed = locks.renew(&first.lease, 10 * SECOND).unwrap_err();
     assert_eq!(renewed.kind(), ErrorKind::Lost, "a lease that ran out is never renewed");
-    assert!(!locks.release(&first.lease), "nor let go of the key another holds now");
-    assert!(locks.release(&second.lease));
+    assert!(!locks.release(&first.lease, Outcome::Succeeded), "nor let go of the key another holds now");
+    assert!(locks.release(&second.lease, Outcome::Succeeded));
 }
 
 #[cfg(feature = "wire")]
@@ -386,7 +397,7 @@ fn a_request_asked_again_answers_its_lease_or_takes_over_its_place_in_line() {
     assert_eq!(waiting_again, waiting, "the place taken over keeps its waiter's id, which a cancel names");
     assert_eq!(lost.recv_timeout(PATIENCE).unwrap().err().map(|error| error.kind()), Some(ErrorKind::Cancelled));
     assert_eq!(locks.waiting(), 1, "one place in line");
-    assert!(locks.release(&lease.lease));
+    assert!(locks.release(&lease.lease, Outcome::Succeeded));
     granted(&taken_over);
 }
 
@@ -409,7 +420,7 @@ fn a_request_asked_again_once_its_lease_ran_out_is_asked_afresh_and_the_key_is_h
     let (_, other) = asked(&locks, remote("42", 10 * SECOND, Duration::ZERO, None));
     let busy = other.recv_timeout(PATIENCE).unwrap().unwrap();
     assert!(matches!(busy, Answer::Busy), "one holder at a time");
-    assert!(locks.release(&again.lease));
+    assert!(locks.release(&again.lease, Outcome::Succeeded));
 }
 
 // contract: LOCK-01
@@ -435,7 +446,7 @@ fn a_request_asked_again_late_in_its_lease_holds_it_for_its_ttl_from_the_answer(
     assert!(matches!(busy, Answer::Busy), "the client still holds it, as it believes");
     assert_eq!(lease.watch.ending(), Ending::Live);
     locks.renew(&lease.lease, 10 * SECOND).unwrap();
-    assert!(locks.release(&lease.lease));
+    assert!(locks.release(&lease.lease, Outcome::Succeeded));
 }
 
 // contract: LOCK-05
@@ -464,7 +475,7 @@ fn a_cancelled_waiter_leaves_its_line() {
     let (_, next) = asked(&locks, remote("42", 10 * SECOND, MINUTE, None));
     locks.cancel(waiting.unwrap());
     assert_eq!(locks.waiting(), 1);
-    assert!(locks.release(&held.lease));
+    assert!(locks.release(&held.lease, Outcome::Succeeded));
     granted(&next);
     assert!(gone.try_recv().is_err(), "a cancelled waiter is answered nothing");
 }

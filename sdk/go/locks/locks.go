@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"tinyshed.org/tinystore"
@@ -56,6 +57,29 @@ const math64 = 1<<64 - 1
 type Lease struct {
 	Fence  Fence
 	Waited time.Duration
+
+	succeeded *atomic.Bool
+}
+
+// Succeeded says a semaphore's hold succeeded, so that its Breaker does not
+// count it a failure though fn then returns an error: a 404 that is the
+// caller's, not the service's.
+func (l *Lease) Succeeded() {
+	if l.succeeded != nil {
+		l.succeeded.Store(true)
+	}
+}
+
+// KeyState is how a semaphore's key stands now: Up is false from the failure
+// that put the key down until a hold after the pause succeeds, and always
+// true without a Breaker; DownSince and LastFailure are zero when there are
+// none, the last failure kept until a success after it.
+type KeyState struct {
+	Up          bool
+	DownSince   time.Time
+	LastFailure time.Time
+	Waiting     int
+	Holding     int
 }
 
 // Option is how a lock or a semaphore opens.
@@ -76,6 +100,22 @@ func Limit(n int) Option { return func(k *keys) { k.limit = n } }
 // take at once, 1 to its Limit, so that urgent holds always find the rest;
 // every place unless given.
 func Background(n int) Option { return func(k *keys) { k.background = &n } }
+
+// Breaker puts a semaphore's key down for pause once failures holds of it
+// failed in a row: every hold is then ErrUnavailable at once. A hold failed
+// when fn returned an error, unless its lease said Succeeded, or when it ran
+// past its Timeout or MaxHold; a success resets the count. Once the pause is
+// over, one hold goes through: its success puts the key up, its failure
+// pauses it again. The store's process keeps it in memory, so a restart of
+// that process puts every key up.
+func Breaker(failures int, pause time.Duration) Option {
+	return func(k *keys) { k.breaker = &breaker{failures, pause} }
+}
+
+type breaker struct {
+	failures int
+	pause    time.Duration
+}
 
 // HoldOption is how a hold asks for its key.
 type HoldOption func(*asked)
@@ -119,6 +159,7 @@ type keys struct {
 	name       string
 	limit      int
 	background *int
+	breaker    *breaker
 	ttl        time.Duration
 	maxHold    *time.Duration
 }
@@ -141,8 +182,16 @@ func open(store *tinystore.Store, kind, name string, opts []Option) (*keys, erro
 	if _, err := core.Millis(k.ttl, kind+" "+name+": its ttl"); err != nil {
 		return nil, err
 	}
+	if k.breaker != nil && (kind != "semaphore" || k.breaker.failures < 1 || k.breaker.pause < time.Millisecond) {
+		return nil, core.Errorf(core.Invalid, "%s %s: a breaker of %d failures and %v, not 1 or more and 1 ms or more",
+			kind, name, k.breaker.failures, k.breaker.pause)
+	}
 	if kind == "semaphore" {
-		if err := keepShape(k.store, name, shape{k.limit, k.backgroundOrZero()}); err != nil {
+		given := shape{limit: k.limit, background: k.backgroundOrZero()}
+		if k.breaker != nil {
+			given.breaker = *k.breaker
+		}
+		if err := keepShape(k.store, name, given); err != nil {
 			return nil, err
 		}
 	}
@@ -156,9 +205,12 @@ func (k *keys) backgroundOrZero() int {
 	return *k.background
 }
 
-// shape is what a semaphore's first open in a program gives: its limit, and
-// its background, zero for none.
-type shape struct{ limit, background int }
+// shape is what a semaphore's first open in a program gives: its limit, its
+// background, zero for none, and its breaker, zero for none.
+type shape struct {
+	limit, background int
+	breaker           breaker
+}
 
 // keepShape keeps the limit and the background a semaphore's first open on
 // store gives: another is ErrInvalid, naming both. One name keeps one of each
@@ -178,6 +230,16 @@ func keepShape(store *core.Store, name string, given shape) error {
 		}
 		return core.Errorf(core.Invalid, "semaphore %s: open in this program with a background of %s, not %s",
 			name, shown(first.background), shown(given.background))
+	}
+	if first.breaker != given.breaker {
+		shown := func(b breaker) string {
+			if b.failures == 0 {
+				return "none"
+			}
+			return fmt.Sprintf("%d failures and %v", b.failures, b.pause)
+		}
+		return core.Errorf(core.Invalid, "semaphore %s: open in this program with a breaker of %s, not %s",
+			name, shown(first.breaker), shown(given.breaker))
 	}
 	return nil
 }
@@ -293,12 +355,41 @@ func (k *keys) hold(ctx context.Context, given any, a asked, fn func(context.Con
 	defer cancel(nil)
 	lease := newLeasing(k, place, answer, cancel)
 	defer lease.stop()
-	ran := fn(inner, &Lease{Fence: fenceOf(answer.Fence), Waited: waited})
+	succeeded := new(atomic.Bool)
+	ran := fn(inner, &Lease{Fence: fenceOf(answer.Fence), Waited: waited, succeeded: succeeded})
 	if lost := lease.stop(); lost != nil {
 		return true, lost
 	}
-	k.release(answer.Lease)
+	k.release(answer.Lease, ran != nil && !succeeded.Load())
 	return true, ran
+}
+
+// State says how key stands now: up or down and since when, its last failed
+// hold, and how many wait for it and hold it.
+func (s *Semaphore) State(ctx context.Context, key any) (KeyState, error) {
+	text, err := core.KeyText(key)
+	if err != nil {
+		return KeyState{}, err
+	}
+	body := wire.LocksStateAsked{Kind: s.keys.kind, Name: s.keys.name, Key: text}
+	answer, err := s.keys.link.Call(ctx, core.Reading, wire.MethodLocksState, wire.Encode(&body))
+	if err != nil {
+		return KeyState{}, core.Wrap(core.KindOf(err), err, "%s", s.keys.place(text))
+	}
+	var state wire.LocksState
+	if err := wire.Decode(answer, &state); err != nil {
+		return KeyState{}, core.Wrap(core.Protocol, err, "an answer that does not read")
+	}
+	at := func(ms *int64) time.Time {
+		if ms == nil {
+			return time.Time{}
+		}
+		return time.UnixMilli(*ms).UTC()
+	}
+	return KeyState{
+		Up: state.Up, DownSince: at(state.DownSince), LastFailure: at(state.LastFailure),
+		Waiting: int(state.Waiting), Holding: int(state.Holding),
+	}, nil
 }
 
 // ask is the key once the store gives it, or that it was held for all of
@@ -314,6 +405,10 @@ func (k *keys) ask(ctx context.Context, key string, a asked) (wire.LocksHeld, er
 	}
 	if a.background {
 		body.Priority = "background"
+	}
+	if k.breaker != nil {
+		pause := uint64(k.breaker.pause / time.Millisecond)
+		body.Failures, body.Pause = uint64(k.breaker.failures), &pause
 	}
 	bound := k.maxHold
 	if a.timeout != nil && (bound == nil || *a.timeout < *bound) {
@@ -334,11 +429,13 @@ func (k *keys) ask(ctx context.Context, key string, a asked) (wire.LocksHeld, er
 	return held, nil
 }
 
-// release lets the key go: a lease that ran out meanwhile lets go nothing another holds now.
-func (k *keys) release(lease []byte) {
+// release lets the key go, saying whether the hold failed, which the key's
+// breaker counts: a lease that ran out meanwhile lets go nothing another
+// holds now.
+func (k *keys) release(lease []byte, failed bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, _ = k.link.Call(ctx, core.Reading, wire.MethodLocksRelease, wire.Encode(&wire.LocksLease{Lease: lease}))
+	_, _ = k.link.Call(ctx, core.Reading, wire.MethodLocksRelease, wire.Encode(&wire.LocksLease{Lease: lease, Failed: failed}))
 }
 
 // leasing renews a lease while its holder runs, and ends the holder's ctx

@@ -113,6 +113,9 @@ These contracts are what does not.
 - **LOCK-09** A semaphore's place MUST be given to an urgent hold waiting before any background hold, and a background hold waiting MUST NOT keep an urgent one from a free place.
 - **LOCK-10** A semaphore's background holds of a key MUST NOT hold more of its places at once than its `background`.
 - **LOCK-11** A hold's `timeout` MUST count from its grant, not its ask, and a hold past it MUST lose its place and fail `lost`, as at `max_hold`.
+- **LOCK-12** A semaphore's key whose holds failed `failures` times in a row, each within `pause` of the one before, a hold that ran past its timeout or `max_hold` among them and none whose client went or whose permit said `healthy`, MUST be down for `pause`: every ask of it, waiting or new, MUST be refused at once `unavailable`, naming the key and since when it is down; a success of a hold asked with the breaker MUST reset the count.
+- **LOCK-13** Once a down key's pause is over, one ask of it MUST go through while the others are refused: its success MUST put the key up, its failure MUST pause it again, and if its holder goes without saying, the next ask MUST go through.
+- **LOCK-14** A key's state MUST say whether it is up, since when it is down, its last failed hold, and how many wait for it and hold it; a key of a semaphore without a breaker MUST be up.
 
 ### Channels
 
@@ -389,3 +392,4 @@ The server `tinystore mcp` runs, and a program's own through the `mcp` feature.
 - **NOT-11** Nothing before `v0.1.0` is compatible: formats, schemas and the protocol change without migration.
 - **NOT-12** Records' events of one time that v0.1.0 packed keep the order v0.1.0 read them in, which is not always the order they were appended: a stream's late events apart from its others, and the streams by the blocks their events lie in (REC-04).
 - **NOT-13** A semaphore's background hold is promised no place: it waits while urgent holds keep coming and take the room, its `wait` at most (LOCK-09).
+- **NOT-14** A semaphore's breaker lives in the memory of the process that holds the store: a restart of that process puts every key up with no failure counted (LOCK-12).

@@ -6423,6 +6423,10 @@ pub(crate) struct LocksHold {
     pub(crate) priority: String,
     /// How many places background holds may take, 1 to limit; 0 for every place.
     pub(crate) background: u64,
+    /// A breaker's failed holds in a row that put the key down; 0 for none.
+    pub(crate) failures: u64,
+    /// How long the key is down once they failed, given with failures. Milliseconds.
+    pub(crate) pause: Option<u64>,
 }
 
 #[cfg(feature = "locks")]
@@ -6444,6 +6448,8 @@ impl Message for LocksHold {
                 8 => message.request = codec::bin(r, "request")?,
                 9 => message.priority = codec::str(r, "priority")?,
                 10 => message.background = codec::uint(r, "background")?,
+                11 => message.failures = codec::uint(r, "failures")?,
+                12 => message.pause = Some(codec::uint(r, "pause")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -6492,6 +6498,14 @@ impl Message for LocksHold {
             map.field(out, 10);
             codec::write_uint(out, &self.background);
         }
+        if self.failures != 0 {
+            map.field(out, 11);
+            codec::write_uint(out, &self.failures);
+        }
+        if let Some(pause) = &self.pause {
+            map.field(out, 12);
+            codec::write_uint(out, pause);
+        }
         map.close(out);
     }
 
@@ -6507,6 +6521,8 @@ impl Message for LocksHold {
             + 1 + 5 + self.request.len()
             + 1 + 5 + self.priority.len()
             + 10
+            + 10
+            + self.pause.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -6520,6 +6536,8 @@ impl Message for LocksHold {
             && self.request.is_empty()
             && self.priority.is_empty()
             && self.background == 0
+            && self.failures == 0
+            && self.pause.is_none()
     }
 }
 
@@ -6646,6 +6664,8 @@ impl Message for LocksRenew {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LocksLease {
     pub(crate) lease: Vec<u8>,
+    /// A release: the hold's work failed, which the key's breaker counts.
+    pub(crate) failed: bool,
 }
 
 #[cfg(feature = "locks")]
@@ -6658,6 +6678,7 @@ impl Message for LocksLease {
         for _ in 0..codec::fields(r, Self::NAME)? {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.lease = codec::bin(r, "lease")?,
+                2 => message.failed = codec::bool(r, "failed")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -6670,16 +6691,157 @@ impl Message for LocksLease {
             map.field(out, 1);
             codec::write_bin(out, &self.lease);
         }
+        if self.failed {
+            map.field(out, 2);
+            codec::write_bool(out, &self.failed);
+        }
         map.close(out);
     }
 
     fn size(&self) -> usize {
         3
             + 1 + 5 + self.lease.len()
+            + 2
     }
 
     fn is_zero(&self) -> bool {
         self.lease.is_empty()
+            && !self.failed
+    }
+}
+
+/// A key of a lock or a semaphore whose standing is read.
+#[cfg(feature = "locks")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LocksStateAsked {
+    /// Lock or semaphore.
+    pub(crate) kind: String,
+    pub(crate) name: String,
+    pub(crate) key: String,
+}
+
+#[cfg(feature = "locks")]
+impl Message for LocksStateAsked {
+    const NAME: &'static str = "locks.StateAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.kind = codec::str(r, "kind")?,
+                2 => message.name = codec::str(r, "name")?,
+                3 => message.key = codec::str(r, "key")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.kind.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.kind);
+        }
+        if !self.name.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.name);
+        }
+        if !self.key.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.key);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.kind.len()
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.key.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.kind.is_empty()
+            && self.name.is_empty()
+            && self.key.is_empty()
+    }
+}
+
+/// How a key stands: whether what it guards is up, as its breaker says, and its line.
+#[cfg(feature = "locks")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LocksState {
+    pub(crate) up: bool,
+    /// The failure that put the key down. Unix milliseconds.
+    pub(crate) down_since: Option<i64>,
+    /// Kept until a success after it. Unix milliseconds.
+    pub(crate) last_failure: Option<i64>,
+    pub(crate) waiting: u64,
+    pub(crate) holding: u64,
+}
+
+#[cfg(feature = "locks")]
+impl Message for LocksState {
+    const NAME: &'static str = "locks.State";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.up = codec::bool(r, "up")?,
+                2 => message.down_since = Some(codec::int(r, "downSince")?),
+                3 => message.last_failure = Some(codec::int(r, "lastFailure")?),
+                4 => message.waiting = codec::uint(r, "waiting")?,
+                5 => message.holding = codec::uint(r, "holding")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.up {
+            map.field(out, 1);
+            codec::write_bool(out, &self.up);
+        }
+        if let Some(down_since) = &self.down_since {
+            map.field(out, 2);
+            codec::write_int(out, down_since);
+        }
+        if let Some(last_failure) = &self.last_failure {
+            map.field(out, 3);
+            codec::write_int(out, last_failure);
+        }
+        if self.waiting != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.waiting);
+        }
+        if self.holding != 0 {
+            map.field(out, 5);
+            codec::write_uint(out, &self.holding);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+            + self.down_since.map_or(0, |_| 10)
+            + self.last_failure.map_or(0, |_| 10)
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.up
+            && self.down_since.is_none()
+            && self.last_failure.is_none()
+            && self.waiting == 0
+            && self.holding == 0
     }
 }
 
@@ -14115,6 +14277,9 @@ pub(crate) mod method {
     pub(crate) const LOCKS_RENEW: u16 = 0x0902;
     #[cfg(feature = "locks")]
     pub(crate) const LOCKS_RELEASE: u16 = 0x0903;
+    /// Up, with nobody waiting or holding, for a key nothing was ever asked of.
+    #[cfg(feature = "locks")]
+    pub(crate) const LOCKS_STATE: u16 = 0x0904;
     #[cfg(feature = "metrics")]
     pub(crate) const METRICS_READ: u16 = 0x0601;
     #[cfg(feature = "metrics")]
@@ -14393,6 +14558,8 @@ pub(crate) mod method {
             LOCKS_RENEW => Some(Access::Write),
             #[cfg(feature = "locks")]
             LOCKS_RELEASE => Some(Access::Write),
+            #[cfg(feature = "locks")]
+            LOCKS_STATE => Some(Access::Read),
             #[cfg(feature = "metrics")]
             METRICS_READ => Some(Access::Read),
             #[cfg(feature = "metrics")]
@@ -14656,6 +14823,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("locks.renew", 0x0902, "call"),
     #[cfg(feature = "locks")]
     ("locks.release", 0x0903, "call"),
+    #[cfg(feature = "locks")]
+    ("locks.state", 0x0904, "call"),
     #[cfg(feature = "metrics")]
     ("metrics.read", 0x0601, "download"),
     #[cfg(feature = "metrics")]
@@ -14957,6 +15126,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "locks.Renew" => LocksRenew::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "locks")]
         "locks.Lease" => LocksLease::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "locks")]
+        "locks.StateAsked" => LocksStateAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "locks")]
+        "locks.State" => LocksState::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Condition" => MetricsCondition::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]

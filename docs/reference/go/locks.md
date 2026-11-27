@@ -60,16 +60,39 @@ func Wait(d time.Duration) HoldOption
 
 Wait is how long a hold waits in line for its key, 10 s unless given: a key still held past it is ErrInUse.
 
+## KeyState
+
+```go
+type KeyState struct {
+	Up          bool
+	DownSince   time.Time
+	LastFailure time.Time
+	Waiting     int
+	Holding     int
+}
+```
+
+KeyState is how a semaphore's key stands now: Up is false from the failure that put the key down until a hold after the pause succeeds, and always true without a Breaker; DownSince and LastFailure are zero when there are none, the last failure kept until a success after it.
+
 ## Lease
 
 ```go
 type Lease struct {
 	Fence  Fence
 	Waited time.Duration
+	// contains filtered or unexported fields
 }
 ```
 
 Lease is a holding of a key: a lock's Fence, none for a semaphore's, and how long the hold Waited for it, from its call to the grant, the round trip included.
+
+### Lease.Succeeded
+
+```go
+func (l *Lease) Succeeded()
+```
+
+Succeeded says a semaphore's hold succeeded, so that its Breaker does not count it a failure though fn then returns an error: a 404 that is the caller's, not the service's.
 
 ## Lock
 
@@ -120,6 +143,14 @@ func Background(n int) Option
 ```
 
 Background is how many of a semaphore's key's places background holds may take at once, 1 to its Limit, so that urgent holds always find the rest; every place unless given.
+
+### Breaker
+
+```go
+func Breaker(failures int, pause time.Duration) Option
+```
+
+Breaker puts a semaphore's key down for pause once failures holds of it failed in a row: every hold is then ErrUnavailable at once. A hold failed when fn returned an error, unless its lease said Succeeded, or when it ran past its Timeout or MaxHold; a success resets the count. Once the pause is over, one hold goes through: its success puts the key up, its failure pauses it again. The store's process keeps it in memory, so a restart of that process puts every key up.
 
 ### Limit
 
@@ -172,6 +203,14 @@ func (s *Semaphore) Hold(ctx context.Context, key any, fn func(ctx context.Conte
 Hold waits for one of key's places in line and holds it while fn runs, as a lock's Hold does; InBackground and Timeout say in which line it waits and how long it may keep its place:
 
 	err = cabinet.Hold(ctx, "requests", sync, locks.InBackground(), locks.Timeout(15*time.Second))
+
+### Semaphore.State
+
+```go
+func (s *Semaphore) State(ctx context.Context, key any) (KeyState, error)
+```
+
+State says how key stands now: up or down and since when, its last failed hold, and how many wait for it and hold it.
 
 ### Semaphore.TryHold
 

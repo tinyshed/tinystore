@@ -129,6 +129,10 @@ export const methods = {
 	 */
 	'locks.renew': 0x0902,
 	'locks.release': 0x0903,
+	/**
+	 * Up, with nobody waiting or holding, for a key nothing was ever asked of.
+	 */
+	'locks.state': 0x0904,
 	'metrics.read': 0x0601,
 	'metrics.latest': 0x0602,
 	'metrics.aggregate': 0x0603,
@@ -6769,6 +6773,10 @@ export const LocksHold = message(
 		priority: [9, str],
 		/** how many places background holds may take, 1 to limit; 0 for every place */
 		background: [10, uint],
+		/** a breaker's failed holds in a row that put the key down; 0 for none */
+		failures: [11, uint],
+		/** how long the key is down once they failed, given with failures */
+		pause: [12, uint],
 	},
 	{
 		write(w, v) {
@@ -6824,6 +6832,16 @@ export const LocksHold = message(
 				w.uint(v.background)
 				n++
 			}
+			if (v.failures !== undefined) {
+				w.field(11)
+				w.uint(v.failures)
+				n++
+			}
+			if (v.pause !== undefined) {
+				w.field(12)
+				w.uint(v.pause)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -6837,6 +6855,8 @@ export const LocksHold = message(
 			let $request: Uint8Array | undefined
 			let $priority: string | undefined
 			let $background: number | undefined
+			let $failures: number | undefined
+			let $pause: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -6869,6 +6889,12 @@ export const LocksHold = message(
 					case 10:
 						$background = r.uint()
 						break
+					case 11:
+						$failures = r.uint()
+						break
+					case 12:
+						$pause = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -6885,6 +6911,8 @@ export const LocksHold = message(
 				request: $request,
 				priority: $priority,
 				background: $background,
+				failures: $failures,
+				pause: $pause,
 			}
 		},
 	},
@@ -7007,6 +7035,8 @@ export const LocksLease = message(
 	'locks.Lease',
 	{
 		lease: [1, bin],
+		/** a release: the hold's work failed, which the key's breaker counts */
+		failed: [2, bool],
 	},
 	{
 		write(w, v) {
@@ -7017,21 +7047,171 @@ export const LocksLease = message(
 				w.bin(v.lease)
 				n++
 			}
+			if (v.failed !== undefined) {
+				w.field(2)
+				w.bool(v.failed)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $lease: Uint8Array | undefined
+			let $failed: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
 						$lease = r.bytes()
+						break
+					case 2:
+						$failed = r.bool()
 						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { lease: $lease }
+			return { lease: $lease, failed: $failed }
+		},
+	},
+)
+
+/**
+ * A key of a lock or a semaphore whose standing is read.
+ */
+export const LocksStateAsked = message(
+	'locks.StateAsked',
+	{
+		/** lock or semaphore */
+		kind: [1, str],
+		name: [2, str],
+		key: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.kind !== undefined) {
+				w.field(1)
+				w.str(v.kind)
+				n++
+			}
+			if (v.name !== undefined) {
+				w.field(2)
+				w.str(v.name)
+				n++
+			}
+			if (v.key !== undefined) {
+				w.field(3)
+				w.str(v.key)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $kind: string | undefined
+			let $name: string | undefined
+			let $key: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$kind = r.str()
+						break
+					case 2:
+						$name = r.str()
+						break
+					case 3:
+						$key = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { kind: $kind, name: $name, key: $key }
+		},
+	},
+)
+
+/**
+ * How a key stands: whether what it guards is up, as its breaker says, and its line.
+ */
+export const LocksState = message(
+	'locks.State',
+	{
+		up: [1, bool],
+		/** the failure that put the key down */
+		downSince: [2, int],
+		/** kept until a success after it */
+		lastFailure: [3, int],
+		waiting: [4, uint],
+		holding: [5, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.up !== undefined) {
+				w.field(1)
+				w.bool(v.up)
+				n++
+			}
+			if (v.downSince !== undefined) {
+				w.field(2)
+				w.int(v.downSince)
+				n++
+			}
+			if (v.lastFailure !== undefined) {
+				w.field(3)
+				w.int(v.lastFailure)
+				n++
+			}
+			if (v.waiting !== undefined) {
+				w.field(4)
+				w.uint(v.waiting)
+				n++
+			}
+			if (v.holding !== undefined) {
+				w.field(5)
+				w.uint(v.holding)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $up: boolean | undefined
+			let $downSince: number | undefined
+			let $lastFailure: number | undefined
+			let $waiting: number | undefined
+			let $holding: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$up = r.bool()
+						break
+					case 2:
+						$downSince = r.int()
+						break
+					case 3:
+						$lastFailure = r.int()
+						break
+					case 4:
+						$waiting = r.uint()
+						break
+					case 5:
+						$holding = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				up: $up,
+				downSince: $downSince,
+				lastFailure: $lastFailure,
+				waiting: $waiting,
+				holding: $holding,
+			}
 		},
 	},
 )

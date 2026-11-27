@@ -25,19 +25,25 @@
 
 #[cfg(feature = "async")]
 mod awaited;
+mod breaker;
 mod engine;
 mod lease;
 mod state;
 
 use std::cell::RefCell;
 use std::fmt;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "async")]
 pub(crate) use self::awaited::{Ends, Held};
+pub use self::breaker::KeyState;
+pub(crate) use self::breaker::Outcome;
+use self::breaker::Rule;
 pub(crate) use self::engine::Locks;
+use self::engine::Shape;
 pub use self::lease::Fence;
 pub(crate) use self::lease::{Answer, Granted};
 use self::lease::{Ask, Ending, Kind, Place, Priority};
@@ -66,6 +72,7 @@ pub struct SemaphoreBuilder {
     name: String,
     limit: Option<u32>,
     background: Option<u32>,
+    breaker: Option<Rule>,
     max_hold: Option<Duration>,
 }
 
@@ -78,7 +85,14 @@ impl Store {
 
     /// Keys held by up to `limit` holders at a time.
     pub fn semaphore(&self, name: &str) -> SemaphoreBuilder {
-        SemaphoreBuilder { store: self.clone(), name: name.to_owned(), limit: None, background: None, max_hold: None }
+        SemaphoreBuilder {
+            store: self.clone(),
+            name: name.to_owned(),
+            limit: None,
+            background: None,
+            breaker: None,
+            max_hold: None,
+        }
     }
 }
 
@@ -114,6 +128,22 @@ impl SemaphoreBuilder {
         self
     }
 
+    /// Puts a key down for `pause` once `failures` holds of it failed in a
+    /// row: every ask of it, waiting or new, is then refused at once
+    /// `Unavailable`. When the pause is over, one ask goes through. Its
+    /// success puts the key up again, and its failure pauses it again.
+    ///
+    /// A hold failed when its work answered an error, unless its permit said
+    /// [`Permit::succeeded`], or when it ran past its timeout or `max_hold`. A
+    /// success resets the count. The breaker lives in the memory of the
+    /// process that holds the store, beside the lines: every program of the
+    /// store sees one answer, and a restart of that process starts every key
+    /// up. A name keeps one breaker in a program, as it keeps its limit.
+    pub fn breaker(mut self, failures: u32, pause: Duration) -> Self {
+        self.breaker = Some(Rule { failures, pause });
+        self
+    }
+
     pub fn max_hold(mut self, bound: Duration) -> Self {
         self.max_hold = Some(bound);
         self
@@ -128,9 +158,12 @@ impl SemaphoreBuilder {
         if let Some(places) = self.background.filter(|places| !(1..=limit).contains(places)) {
             return Err(Error::invalid(format!("a background of {places}, not 1 to its limit {limit}")).within(shown()));
         }
+        check_breaker(self.breaker).map_err(|error| error.within(shown()))?;
         let mut opened = Opened::open(&self.store, Kind::Semaphore, &self.name, limit, self.max_hold)?;
         opened.background = self.background;
-        opened.locks.keep_shape(&self.name, limit, self.background).map_err(|error| error.within(shown()))?;
+        opened.breaker = self.breaker;
+        let shape = Shape { limit, background: self.background, breaker: self.breaker };
+        opened.locks.keep_shape(&self.name, shape).map_err(|error| error.within(shown()))?;
         Ok(Semaphore { opened })
     }
 }
@@ -189,6 +222,23 @@ impl Semaphore {
     /// the background and how long it may keep its place.
     pub fn key(&self, key: impl Key) -> SemaphoreKey<'_> {
         SemaphoreKey { opened: &self.opened, key: key.text().into_owned(), terms: Terms::default() }
+    }
+
+    /// How `key` stands now: up or down and since when, its last failed
+    /// hold, and how many wait for it and hold it. Up always without a
+    /// breaker.
+    pub fn state(&self, key: impl Key) -> Result<KeyState> {
+        let place = self.opened.place(&key.text())?;
+        Ok(self.opened.locks.state(&place))
+    }
+}
+
+/// Refuses a breaker that would never trip or never pause.
+fn check_breaker(breaker: Option<Rule>) -> Result<()> {
+    match breaker {
+        Some(rule) if rule.failures == 0 => Err(Error::invalid("a breaker of zero failures")),
+        Some(rule) if rule.pause.is_zero() => Err(Error::invalid("a breaker's pause of zero")),
+        _ => Ok(()),
     }
 }
 
@@ -314,6 +364,13 @@ impl Permit<'_> {
         self.holding.ended()
     }
 
+    /// Says the hold succeeded, so that the semaphore's breaker does not count
+    /// it a failure though its work then answers an error: a 404 that is the
+    /// caller's, not the service's.
+    pub fn succeeded(&self) {
+        self.holding.granted.watch.succeed();
+    }
+
     /// How long the hold waited for its place, from its call to the grant.
     pub fn waited(&self) -> Duration {
         self.holding.waited
@@ -329,6 +386,7 @@ struct Opened {
     name: Arc<str>,
     limit: u32,
     background: Option<u32>,
+    breaker: Option<Rule>,
     max_hold: Option<Duration>,
 }
 
@@ -340,7 +398,7 @@ impl Opened {
             return Err(Error::invalid("a max_hold of zero").within(shown()));
         }
         let locks = Locks::of(store)?;
-        Ok(Opened { locks, kind, name: Arc::from(name), limit, background: None, max_hold })
+        Ok(Opened { locks, kind, name: Arc::from(name), limit, background: None, breaker: None, max_hold })
     }
 
     fn place(&self, key: &str) -> Result<Place> {
@@ -386,6 +444,8 @@ impl Opened {
             max_hold,
             wait: terms.wait,
             request: None,
+            breaker: self.breaker,
+            probe: false,
         })
     }
 
@@ -405,6 +465,7 @@ impl Opened {
                 place: place.clone(),
                 granted,
                 waited: asked.elapsed(),
+                finished: Finished::new(Outcome::Failed),
                 _mark: Some(mark),
             }),
             Answer::Busy => None,
@@ -423,6 +484,9 @@ pub(crate) struct Remote<'a> {
     pub(crate) priority: &'a str,
     /// Zero for none.
     pub(crate) background: u32,
+    /// The breaker's failures in a row, zero for none, and its pause.
+    pub(crate) failures: u32,
+    pub(crate) pause: Option<Duration>,
     pub(crate) ttl: Duration,
     pub(crate) max_hold: Option<Duration>,
     pub(crate) wait: Duration,
@@ -452,6 +516,12 @@ pub(crate) fn remote_ask(store: &Store, remote: &Remote<'_>) -> Result<(Arc<Lock
         let shown = format!("a background of {}, not 1 to its limit {}", remote.background, remote.limit);
         return Err(Error::invalid(shown).within(place));
     }
+    let breaker = match (remote.failures, remote.pause) {
+        (0, None) => None,
+        (failures, Some(pause)) => Some(Rule { failures, pause }),
+        (_, None) => return Err(Error::invalid("a breaker's failures without its pause").within(place)),
+    };
+    check_breaker(breaker).map_err(|error| error.within(&place))?;
     let ask = Ask {
         place,
         limit: remote.limit,
@@ -461,8 +531,23 @@ pub(crate) fn remote_ask(store: &Store, remote: &Remote<'_>) -> Result<(Arc<Lock
         max_hold: remote.max_hold,
         wait: remote.wait,
         request: Some(remote.request),
+        breaker,
+        probe: false,
     };
     Ok((opened.locks, ask))
+}
+
+/// How the key a client through a connection names stands now.
+#[cfg(feature = "wire")]
+pub(crate) fn key_state(store: &Store, kind: &str, name: &str, key: &str) -> Result<KeyState> {
+    let kind = match kind {
+        "lock" => Kind::Lock,
+        "semaphore" => Kind::Semaphore,
+        other => return Err(Error::invalid(format!("a kind of {other:?}, not lock or semaphore"))),
+    };
+    let opened = Opened::open(store, kind, name, 1, None)?;
+    let place = opened.place(key)?;
+    Ok(opened.locks.state(&place))
 }
 
 /// A key held; dropping it, a panic's unwinding included, lets the key go to
@@ -475,7 +560,35 @@ struct Holding {
     granted: Granted,
     /// From the hold's ask to its grant, as its caller saw it.
     waited: Duration,
+    finished: Finished,
     _mark: Option<Mark>,
+}
+
+/// How a hold's work ended, which its key's breaker counts when the key is
+/// let go: a success, a failure, or what it is when the work never answered,
+/// a panic's unwinding or an awaited hold's future dropped.
+struct Finished(AtomicU8);
+
+impl Finished {
+    fn new(unanswered: Outcome) -> Finished {
+        Finished(AtomicU8::new(unanswered as u8))
+    }
+
+    fn answered(&self, succeeded: bool) {
+        let outcome = if succeeded { Outcome::Succeeded } else { Outcome::Failed };
+        self.0.store(outcome as u8, Ordering::Release);
+    }
+
+    /// The outcome, a success whatever the work answered once the holder
+    /// said so.
+    fn outcome(&self, watch: &lease::Watch) -> Outcome {
+        match self.0.load(Ordering::Acquire) {
+            _ if watch.succeeded() => Outcome::Succeeded,
+            code if code == Outcome::Succeeded as u8 => Outcome::Succeeded,
+            code if code == Outcome::Failed as u8 => Outcome::Failed,
+            _ => Outcome::Abandoned,
+        }
+    }
 }
 
 impl Holding {
@@ -487,8 +600,9 @@ impl Holding {
     /// hold, as the function's own error would. The key goes when the holding
     /// is dropped.
     fn run<T, E: From<Error>>(&self, work: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
-        let value = work()?;
-        self.kept(value)
+        let worked = work();
+        self.finished.answered(worked.is_ok());
+        self.kept(worked?)
     }
 
     /// What a hold answers once its function answered `value`: the value,
@@ -508,7 +622,7 @@ impl Holding {
 impl Drop for Holding {
     fn drop(&mut self) {
         if let Some(locks) = self.locks.upgrade() {
-            locks.release(&self.granted.lease);
+            locks.release(&self.granted.lease, self.finished.outcome(&self.granted.watch));
         }
     }
 }
@@ -613,3 +727,7 @@ mod tests;
 #[cfg(test)]
 #[path = "priority_tests.rs"]
 mod priority_tests;
+
+#[cfg(test)]
+#[path = "breaker_tests.rs"]
+mod breaker_tests;

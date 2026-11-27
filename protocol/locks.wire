@@ -12,6 +12,8 @@ message locks.Hold {
   8 request: bin         # 16 random bytes: asked again, the lease given answers
   9 priority: str        # urgent or background; empty is urgent
   10 background: uint    # how many places background holds may take, 1 to limit; 0 for every place
+  11 failures: uint      # a breaker's failed holds in a row that put the key down; 0 for none
+  12 pause: duration?    # how long the key is down once they failed, given with failures
 }
 
 # A lease, or the key held by others when the hold would not wait.
@@ -29,11 +31,30 @@ message locks.Renew {
 
 message locks.Lease {
   1 lease: bin
+  2 failed: bool         # a release: the hold's work failed, which the key's breaker counts
+}
+
+# A key of a lock or a semaphore whose standing is read.
+message locks.StateAsked {
+  1 kind: str            # lock or semaphore
+  2 name: str
+  3 key: str
+}
+
+# How a key stands: whether what it guards is up, as its breaker says, and its line.
+message locks.State {
+  1 up: bool
+  2 downSince: time?     # the failure that put the key down
+  3 lastFailure: time?   # kept until a success after it
+  4 waiting: uint
+  5 holding: uint
 }
 
 # Answers once the key is held, or held past the wait, `in_use`; a CANCEL
 # takes the ask out of its line.
-write 0x0901 locks.hold(locks.Hold)     -> locks.Held
+write 0x0901 locks.hold(locks.Hold)        -> locks.Held
 # A lease that ran out or was revoked is `lost`.
-write 0x0902 locks.renew(locks.Renew)   -> Empty
-write 0x0903 locks.release(locks.Lease) -> Empty
+write 0x0902 locks.renew(locks.Renew)      -> Empty
+write 0x0903 locks.release(locks.Lease)    -> Empty
+# Up, with nobody waiting or holding, for a key nothing was ever asked of.
+read  0x0904 locks.state(locks.StateAsked) -> locks.State

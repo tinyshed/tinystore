@@ -73,7 +73,7 @@ from .jobs import (
 )
 from .kv import Bucket, Counters, Entry, Page
 from .limits import Allowance, Quota, RateLimit, WindowUse
-from .locks import Holding, Lease, Lock, Permit, Semaphore
+from .locks import Breaker, Holding, KeyState, Lease, Lock, Permit, Priority, Semaphore
 from .logger import Levels, Logger, logger, secrets
 from .metrics import (
     Aggregate,
@@ -142,6 +142,7 @@ __all__ = [
     "Appending",
     "Backoff",
     "Backup",
+    "Breaker",
     "Bucket",
     "CallCancelledError",
     "Changed",
@@ -193,6 +194,7 @@ __all__ = [
     "Job",
     "JobCounts",
     "JobPage",
+    "KeyState",
     "LastRun",
     "Lease",
     "Levels",
@@ -223,6 +225,7 @@ __all__ = [
     "Plan",
     "Point",
     "PollBatch",
+    "Priority",
     "ProtocolError",
     "Query",
     "Queue",

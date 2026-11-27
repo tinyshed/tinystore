@@ -55,7 +55,7 @@ from .jobs import (
 )
 from .kv import Bucket, Counters, Parts, bucket_open, counters_open
 from .limits import Quota, RateLimit, quota_open, rate_limit_open
-from .locks import Lock, Semaphore
+from .locks import Breaker, Lock, Semaphore
 from .logger import Level, Levels, Logger, LoggerOptions, LogHandler, new_store_logger
 from .metrics import Metrics
 from .once import Once, once_open
@@ -326,6 +326,7 @@ class Store:
         *,
         limit: int,
         background: int | None = None,
+        breaker: Breaker | None = None,
         ttl: Duration = "10s",
         max_hold: Duration | None = None,
     ) -> Semaphore:
@@ -336,9 +337,10 @@ class Store:
             await upload(file)
 
         ``background`` is how many of a key's places background holds may take
-        at once, 1 to limit; every place unless given.
+        at once, 1 to limit; every place unless given. ``breaker`` puts a key
+        down for a pause once its holds failed so many times in a row.
         """
-        return Semaphore(self._link, name, limit, ttl, max_hold, background)
+        return Semaphore(self._link, name, limit, ttl, max_hold, background, breaker)
 
     def files(
         self,

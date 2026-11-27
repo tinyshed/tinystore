@@ -303,6 +303,57 @@ async def test_a_holds_timeout_counts_from_its_grant_and_ends_the_block_lost(sto
         await timed
 
 
+class _BadGatewayError(Exception):
+    pass
+
+
+# contract: LOCK-12, LOCK-13, LOCK-14
+async def test_failed_holds_in_a_row_put_the_key_down_and_one_hold_after_the_pause_puts_it_up(
+    store: tinystore.Store,
+) -> None:
+    flaky = store.semaphore("flaky", limit=1, breaker=tinystore.Breaker(failures=2, pause="300ms"))
+    assert (await flaky.state("requests")).up
+    for _ in range(2):
+        with pytest.raises(_BadGatewayError):
+            async with flaky.hold("requests"):
+                raise _BadGatewayError
+    with pytest.raises(tinystore.UnavailableError, match="after 2 failed holds in a row"):
+        async with flaky.hold("requests"):
+            pass
+    down = await flaky.state("requests")
+    assert not down.up
+    assert down.down_since is not None
+    assert down.last_failure == down.down_since
+    await asyncio.sleep(0.35)
+    async with flaky.hold("requests") as permit:
+        assert permit is not None
+    up = await flaky.state("requests")
+    assert (up.up, up.down_since, up.waiting, up.holding) == (True, None, 0, 0)
+
+    for _ in range(2):
+        with pytest.raises(KeyError):
+            async with flaky.hold("requests") as permit:
+                permit.succeeded()
+                raise KeyError("no such student")
+    assert (await flaky.state("requests")).up
+
+    # a holding entered again forgets the health its last hold said
+    again = flaky.hold("requests")
+    with pytest.raises(KeyError):
+        async with again as permit:
+            permit.healthy()
+            raise KeyError("no such student")
+    for _ in range(2):
+        with pytest.raises(_BadGatewayError):
+            async with again:
+                raise _BadGatewayError
+    assert not (await flaky.state("requests")).up, "two failures in a row, the first hold's healthy forgotten"
+    with pytest.raises(tinystore.InvalidError, match="with a breaker of 2 failures and 300ms, not none"):
+        store.semaphore("flaky", limit=1)
+    assert tinystore.Priority is not None
+    assert tinystore.Fetched is not None
+
+
 def test_names_and_limits_are_checked_before_anything_is_sent(store: tinystore.Store) -> None:
     with pytest.raises(tinystore.InvalidError):
         store.lock("Invoices")

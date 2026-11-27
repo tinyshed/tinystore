@@ -113,7 +113,9 @@ export type {
 } from './kv.ts'
 export type { Allowance, Quota, Rate, RateLimit, RateLimitOptions, WindowUse } from './limits.ts'
 export type {
+	Breaker,
 	HoldOptions,
+	KeyState,
 	Lease,
 	Lock,
 	LockOptions,

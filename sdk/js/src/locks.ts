@@ -16,7 +16,15 @@ import { insideDatabaseTx } from './sql.ts'
 import { type Duration, type DurationText, ms, spelled } from './time.ts'
 import { insideStoreTx } from './tx.ts'
 import type { Key } from './wire/codec.ts'
-import { LocksHeld, LocksHold, LocksLease, LocksRenew, methods } from './wire/protocol.ts'
+import {
+	LocksHeld,
+	LocksHold,
+	LocksLease,
+	LocksRenew,
+	LocksState,
+	LocksStateAsked,
+	methods,
+} from './wire/protocol.ts'
 
 /** How long a lease lasts between renewals, and a hold waits, unless said. */
 const defaultTtl = 10_000
@@ -34,6 +42,32 @@ export interface SemaphoreOptions extends LockOptions {
 	limit: number
 	/** how many of a key's places background holds may take at once, 1 to limit: every place unless said */
 	background?: number | undefined
+	/** puts a key down for `pause` once `failures` holds of it failed in a row: every ask is then UnavailableError at once */
+	breaker?: Breaker | undefined
+}
+
+/**
+ * A semaphore's breaker. A hold failed when its function threw, unless its
+ * permit said `succeeded()`, or when it ran past its timeout or maxHold; a
+ * success resets the count. Once the pause is over, one hold goes through:
+ * its success puts the key up, its failure pauses it again. The store's
+ * process keeps it in memory, so a restart of that process puts every key up.
+ */
+export interface Breaker {
+	/** failed holds in a row, 1 or more */
+	failures: number
+	pause: Duration
+}
+
+/** How a semaphore's key stands now: `semaphore.state(key)`. */
+export interface KeyState {
+	/** false from the failure that put the key down until a hold after the pause succeeds; true without a breaker */
+	up: boolean
+	downSince?: Date | undefined
+	/** the last failed hold's end, kept until a success after it */
+	lastFailure?: Date | undefined
+	waiting: number
+	holding: number
 }
 
 export interface HoldOptions {
@@ -76,6 +110,8 @@ export interface Permit {
 	readonly signal: AbortSignal
 	/** how long the hold waited for its place, from its call to the grant, the round trip included */
 	readonly waited: DurationText
+	/** says the hold succeeded, so that the breaker does not count it a failure though fn then throws: a 404 that is the caller's */
+	succeeded(): void
 }
 
 /** Keys held one holder at a time: open them with `store.lock(name)`. */
@@ -135,12 +171,10 @@ export class Semaphore {
 			)
 		}
 		const breaker = breakerOf(name, options.breaker)
-		// a background of the limit is every place, as none is
-		const shaped = background === limit ? undefined : background
-		keepShape(link, name, [limit, shaped, breaker?.failures, breaker?.pause])
+		keepShape(link, name, [limit, background, breaker?.failures, breaker?.pause])
 		this.name = name
 		this.limit = limit
-		this.#keys = new Keys(link, 'semaphore', name, limit, options)
+		this.#keys = new Keys(link, 'semaphore', name, limit, { ...options, breaker })
 	}
 
 	/**
@@ -166,32 +200,69 @@ export class Semaphore {
 	): Promise<Tried<T>> {
 		return this.#keys.hold(key, fn, { wait: 0, ...termsOf(this.name, options) }, permitOf)
 	}
+
+	/**
+	 * How key stands now: whether what it guards is up, since when it is
+	 * down, its last failed hold, and how many wait for it and hold it.
+	 *
+	 *     const { up, downSince } = await cabinet.state('requests')
+	 */
+	state(key: Key): Promise<KeyState> {
+		return this.#keys.state(key)
+	}
 }
 
-// The limit and the background each semaphore's first open gave, by the link
-// of the store that opened it: one name keeps one of each in a program, and
-// two stores are two programs, each of whose holds the store admits by its own.
-const opened = new WeakMap<Link, Map<string, readonly [number, number | undefined]>>()
+/** A breaker in milliseconds, checked. */
+interface Breaking {
+	failures: number
+	pause: number
+}
 
-/** Keeps the limit and the background a semaphore's first open on this store gives: another is refused, naming both. */
-function keepShape(link: Link, name: string, limit: number, background: number | undefined): void {
+function breakerOf(name: string, breaker: Breaker | undefined): Breaking | undefined {
+	if (breaker === undefined) {
+		return undefined
+	}
+	const pause = ms(breaker.pause)
+	if (!Number.isInteger(breaker.failures) || breaker.failures < 1 || pause === 0) {
+		throw new InvalidError(
+			`semaphore ${name}: a breaker of ${breaker.failures} failures and a pause of ${spelled(pause)}, not 1 or more and above zero`,
+		)
+	}
+	return { failures: breaker.failures, pause }
+}
+
+/** What a semaphore's first open gives: its limit, background, and breaker's failures and pause. */
+type Shape = readonly [number, number | undefined, number | undefined, number | undefined]
+
+// The shape each semaphore's first open gave, by the link of the store that
+// opened it: one name keeps one in a program, and two stores are two
+// programs, each of whose holds the store admits by its own.
+const opened = new WeakMap<Link, Map<string, Shape>>()
+
+/** Keeps the shape a semaphore's first open on this store gives: another is refused, naming both. */
+function keepShape(link: Link, name: string, given: Shape): void {
 	let shapes = opened.get(link)
 	if (shapes === undefined) {
 		shapes = new Map()
 		opened.set(link, shapes)
 	}
-	const [first, firstBackground] = shapes.get(name) ?? [limit, background]
-	if (first !== limit) {
-		throw new InvalidError(
-			`semaphore ${name}: open in this program with a limit of ${first}, not ${limit}`,
+	const first = shapes.get(name) ?? given
+	const refuse = (what: string, before: string, now: string) =>
+		new InvalidError(
+			`semaphore ${name}: open in this program with a ${what} of ${before}, not ${now}`,
 		)
+	if (first[0] !== given[0]) {
+		throw refuse('limit', String(first[0]), String(given[0]))
 	}
-	if (firstBackground !== background) {
-		throw new InvalidError(
-			`semaphore ${name}: open in this program with a background of ${firstBackground ?? 'none'}, not ${background ?? 'none'}`,
-		)
+	if (first[1] !== given[1]) {
+		throw refuse('background', String(first[1] ?? 'none'), String(given[1] ?? 'none'))
 	}
-	shapes.set(name, [first, firstBackground])
+	if (first[2] !== given[2] || first[3] !== given[3]) {
+		const shown = (shape: Shape) =>
+			shape[2] === undefined ? 'none' : `${shape[2]} failures and ${spelled(shape[3] ?? 0)}`
+		throw refuse('breaker', shown(first), shown(given))
+	}
+	shapes.set(name, first)
 }
 
 function waitOf(options: HoldOptions | undefined): number {
@@ -233,7 +304,11 @@ const leaseOf = (holding: Holding): Lease => ({
 	signal: holding.signal,
 	waited: holding.waited,
 })
-const permitOf = (holding: Holding): Permit => ({ signal: holding.signal, waited: holding.waited })
+const permitOf = (holding: Holding): Permit => ({
+	signal: holding.signal,
+	waited: holding.waited,
+	succeeded: () => holding.succeed(),
+})
 
 // The keys the caller holds or waits for, as its async context carries them,
 // each with the link of the store it is of.
@@ -251,6 +326,7 @@ class Keys {
 	readonly #name: string
 	readonly #limit: number
 	readonly #background: number | undefined
+	readonly #breaker: Breaking | undefined
 	readonly #ttl: number
 	readonly #maxHold: number | undefined
 
@@ -259,13 +335,16 @@ class Keys {
 		kind: 'lock' | 'semaphore',
 		name: string,
 		limit: number,
-		options: (LockOptions & Pick<SemaphoreOptions, 'background'>) | undefined,
+		options:
+			| (LockOptions & { background?: number | undefined; breaker?: Breaking | undefined })
+			| undefined,
 	) {
 		this.#link = link
 		this.#kind = kind
 		this.#name = name
 		this.#limit = limit
 		this.#background = options?.background
+		this.#breaker = options?.breaker
 		this.#ttl = ms(options?.ttl ?? defaultTtl)
 		this.#maxHold = options?.maxHold === undefined ? undefined : ms(options.maxHold)
 	}
@@ -295,9 +374,26 @@ class Keys {
 			const inside = [...(holding.getStore() ?? []), [this.#link, place] as const]
 			const value = await holding.run(inside, () => fn(viewOf(lease)))
 			lease.check()
+			lease.answered(true)
 			return { acquired: true, value }
 		} finally {
 			await lease.end()
+		}
+	}
+
+	async state(key: Key): Promise<KeyState> {
+		const body = LocksStateAsked.encode({ kind: this.#kind, name: this.#name, key: keyText(key) })
+		const answer = await this.#link.run('read', connection =>
+			connection.session.call(methods['locks.state'], body, currentSignal()),
+		)
+		const state = LocksState.decode(answer)
+		const time = (at: number | undefined) => (at === undefined ? undefined : new Date(at))
+		return {
+			up: state.up === true,
+			downSince: time(state.downSince),
+			lastFailure: time(state.lastFailure),
+			waiting: state.waiting ?? 0,
+			holding: state.holding ?? 0,
 		}
 	}
 
@@ -334,6 +430,8 @@ class Keys {
 			request: crypto.getRandomValues(new Uint8Array(16)),
 			priority: priority === 'background' ? priority : undefined,
 			background: this.#background,
+			failures: this.#breaker?.failures,
+			pause: this.#breaker?.pause,
 		})
 		const answer = await this.#link.run('read', connection =>
 			connection.session.call(methods['locks.hold'], body, currentSignal()),
@@ -355,6 +453,7 @@ class Holding {
 	readonly #lease: Uint8Array
 	readonly #ttl: number
 	readonly #lost = new AbortController()
+	#succeeded = false
 	readonly #renewing: ReturnType<typeof setInterval>
 	#runningOut: ReturnType<typeof setTimeout> | undefined
 	readonly #revoking: ReturnType<typeof setTimeout> | undefined
@@ -394,10 +493,27 @@ class Holding {
 		}
 	}
 
-	/** Stops renewing and lets the key go; a lease lost already lets nothing go. */
+	/** Keeps whether fn answered, for the release to tell the key's breaker. */
+	answered(succeeded: boolean): void {
+		this.#succeeded ||= succeeded
+	}
+
+	succeed(): void {
+		this.#succeeded = true
+	}
+
+	/**
+	 * Stops renewing and lets the key go, saying whether the hold failed: fn
+	 * threw and its permit never said it succeeded. A lease lost already lets
+	 * nothing go, and the store counted it a failure itself if it ran past its
+	 * time.
+	 */
 	async end(): Promise<void> {
 		this.#stop()
-		const body = LocksLease.encode({ lease: this.#lease })
+		const body = LocksLease.encode({
+			lease: this.#lease,
+			failed: this.#succeeded ? undefined : true,
+		})
 		await this.#link
 			.run('read', connection => connection.session.call(methods['locks.release'], body))
 			.catch(() => {})

@@ -266,6 +266,7 @@ def semaphore(
     *,
     limit: int,
     background: int | None = None,
+    breaker: Breaker | None = None,
     ttl: Duration = '10s',
     max_hold: Duration | None = None,
 ) -> Semaphore: ...
@@ -278,7 +279,8 @@ async with uploads.hold(user.id):
     await upload(file)
 
 ``background`` is how many of a key's places background holds may take
-at once, 1 to limit; every place unless given.
+at once, 1 to limit; every place unless given. ``breaker`` puts a key
+down for a pause once its holds failed so many times in a row.
 
 ### Store.files
 
