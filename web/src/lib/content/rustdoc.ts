@@ -630,8 +630,9 @@ function isRust(lang: string): boolean {
 
 /**
  * A doc comment as the site's markdown: an intra-doc link `[`Bucket`]` as
- * its code, a fence without a language as Rust, and the lines rustdoc hides
- * in an example, `# use …`, left out.
+ * its code and one with a path, `[text](super::Type)`, as its text, a fence
+ * without a language as Rust, and the lines rustdoc hides in an example,
+ * `# use …`, left out.
  */
 export function docOf(docs: string | null): string {
 	if (docs === null) {
@@ -654,7 +655,15 @@ export function docOf(docs: string | null): string {
 			if (fence === 'rust' && /^\s*#(\s|$)/.test(line)) {
 				return []
 			}
-			return [fence === 'none' ? line.replace(/\[(`[^`\]]+`)\](?![([])/g, '$1') : line]
+			if (fence !== 'none') {
+				return [line]
+			}
+			// an intra-doc link with a path, `[text](super::Type::call)`, keeps its text
+			const linked = line.replace(
+				/\[([^\]]+)\]\((?:(?:crate|super|self)(?:::\w+)+!?|\w+(?:::\w+)+!?|[A-Z]\w*)\)/g,
+				'$1',
+			)
+			return [linked.replace(/\[(`[^`\]]+`)\](?![([])/g, '$1')]
 		})
 		.join('\n')
 		.trim()

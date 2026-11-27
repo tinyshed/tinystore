@@ -58,7 +58,7 @@ const sources: Record<string, Sources> = {
 		bun: ['store', 'connection', 'clock', 'errors', 'handles', 'cancel', 'time', 'wire/codec'],
 		python: ['store', 'clock', 'errors', 'bounds'],
 	},
-	sql: { go: 'sqldb', bun: ['sql', 'query'], python: ['sql', 'query'] },
+	sql: { go: 'sqldb', bun: ['sql', 'query', 'mirror'], python: ['sql', 'query', 'mirror'] },
 	kv: {
 		go: 'kv',
 		bun: ['kv', 'limits', 'once', 'tx'],
