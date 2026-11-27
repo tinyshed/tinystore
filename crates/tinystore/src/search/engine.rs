@@ -269,7 +269,7 @@ impl Search {
         if let Some(followed) = open.current().serving.settings.table.clone() {
             self.follow(&open, &followed, made)?;
         }
-        self.opened(open.id())?;
+        self.opened(&open.name)?;
         Ok(open)
     }
 

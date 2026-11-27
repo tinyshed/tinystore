@@ -69,9 +69,12 @@ const READ_PROGRESS: &str = "select (select next_doc from _tinystore_search_inde
     copied_through, failed, why from _tinystore_search_indexes where id = ?1";
 const WRITE_COPIED: &str = "update _tinystore_search_indexes set copied_through = ?2 where id = ?1";
 const WRITE_FAILED: &str = "update _tinystore_search_indexes set failed = ?2 where id = ?1";
+/// The rebuilt rows take the serving rows' name, their read of a table and
+/// when a program last opened the index, which the rebuild followed.
 const SWITCH: &str = "update _tinystore_search_indexes set name = ?2, beside_of = null, why = null,
     filling = (select filling from _tinystore_search_indexes where id = ?3),
-    filled_through = (select filled_through from _tinystore_search_indexes where id = ?3) where id = ?1";
+    filled_through = (select filled_through from _tinystore_search_indexes where id = ?3),
+    opened_at = (select opened_at from _tinystore_search_indexes where id = ?3) where id = ?1";
 const READ_DOCS: &str = "select doc, id, value from _tinystore_search_docs
     where index_id = ?1 and doc > ?2 order by doc limit cast(?3 as integer)";
 const STILL_THERE: &str = "select exists (select 1 from _tinystore_search_docs where index_id = ?1 and doc = ?2)";
@@ -80,7 +83,10 @@ const BESIDE_LIVE: &str = "select exists (select 1 from _tinystore_search_indexe
 const READ_NUMBERS: &str = "select documents, next_doc from _tinystore_search_indexes where id = ?1";
 const READ_DROPPING: &str = "select id from _tinystore_search_indexes where dropping = 1";
 const DROP_ROW: &str = "delete from _tinystore_search_indexes where id = ?1";
-const WRITE_OPENED: &str = "update _tinystore_search_indexes set opened_at = ?2 where id = ?1";
+/// By the name, which the serving rows hold whichever rows serve, so that an
+/// open written as a rebuild switches in lands on the rows switched in.
+const WRITE_OPENED: &str = "update _tinystore_search_indexes set opened_at = ?2
+    where name = ?1 and beside_of is null and dropping = 0";
 const LIST: &str = "select id, name, documents, vectors, opened_at from _tinystore_search_indexes
     where dropping = 0 and beside_of is null order by name";
 
@@ -594,12 +600,15 @@ impl Search {
 
     /// Records that a program opened an index now; a copy's programs open
     /// its home's indexes, and record nothing.
-    pub(crate) fn opened(&self, id: i64) -> Result<()> {
+    pub(crate) fn opened(&self, name: &str) -> Result<()> {
         if self.file.is_copy() {
             return Ok(());
         }
         let at = self.clock.now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() as i64);
-        self.file.write(16, move |tx| execute(tx, WRITE_OPENED, (id, at), "write when an index was opened")).map(drop)
+        let name = name.to_owned();
+        self.file
+            .write(16, move |tx| execute(tx, WRITE_OPENED, (&name, at), "write when an index was opened"))
+            .map(drop)
     }
 
     /// Every index search.db holds, by name.

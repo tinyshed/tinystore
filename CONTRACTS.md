@@ -312,6 +312,7 @@ These contracts are what does not.
 - **SRCH-25** An index of a search among several that fails MUST be said in its own group, its error's kind and message and no hit, while every other group answers; the call MUST fail only when every group fails, with the first group's error, or when its cancel or its timeout stops it, `cancelled`, whichever group it stopped in.
 - **SRCH-26** A search among several indexes MUST order `merged` by reciprocal rank fusion, the hit at rank `r` of its group, from 1, weighing `boost / (60 + r)`, equal weights by the group asked first and then by rank, and MUST NOT compare the scores of two indexes; each entry MUST name its group and carry the hit its group holds.
 - **SRCH-27** A group's `more` MUST say exactly whether its index has a hit past the group's limit under the group's filter: false at exactly the limit, true at one past it.
+- **SRCH-28** An index rebuilt beside itself MUST be listed, once its rebuild switches in, with the time a program last opened it, the open the rebuild followed among them, never as never opened.
 
 ## 5. Replication
 

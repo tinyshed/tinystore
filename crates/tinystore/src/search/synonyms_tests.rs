@@ -255,3 +255,31 @@ fn a_synonym_found_by_a_prefix_marks_the_text_that_stands_there() {
     assert_eq!(matched, ["КМЗИ"], "the short form, by its phrase's word begun");
     assert_eq!(marks, 1);
 }
+
+// contract: SRCH-28
+#[test]
+fn an_index_rebuilt_for_new_synonyms_lists_the_open_the_rebuild_followed() {
+    let dir = tempfile::tempdir().unwrap();
+    let start = std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    let clock = Arc::new(crate::TestClock::new(start));
+    let options = crate::Options { clock: Some(clock.clone()), background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let plain = store.index::<Value>("catalog").field("name", 1.0).open().unwrap();
+    for n in 0..300 {
+        plain.set(n, &json!({ "name": format!("Machine learning, part {n}") })).unwrap();
+    }
+    clock.set(start + Duration::from_secs(60)).unwrap();
+    let synonyms = store.index::<Value>("catalog").field("name", 1.0).synonyms([("ml", "machine learning")]);
+    let rich = synonyms.open().unwrap();
+    assert!(matches!(rich.status().unwrap(), crate::search::Status::Rebuilding { .. }));
+    clock.set(start + Duration::from_secs(120)).unwrap();
+    while matches!(rich.status().unwrap(), crate::search::Status::Rebuilding { .. }) {
+        crate::search::maintain(&store).unwrap();
+    }
+    let listed = crate::search::list(&store).unwrap();
+    assert_eq!(listed.len(), 1, "the old rows dropped, the rebuilt ones under the index's name");
+    let opened = Some(start + Duration::from_secs(60));
+    assert_eq!(listed[0].opened, opened, "the open with synonyms, which the switch kept");
+    assert_eq!(found(&rich, "ml").len(), 10, "the program's handle answers from the rebuilt rows");
+    drop(store);
+}

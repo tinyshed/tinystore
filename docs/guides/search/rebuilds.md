@@ -200,8 +200,10 @@ let indexes = tinystore::search::list(&store)?;
 store.drop_index("products")?;
 ```
 
-An index no program opens any more is kept until it is dropped, because
-another version of the program may open it again. A handle of a dropped
+`opened` is the last time a program opened the index. A rebuild keeps it, so
+an index that a program reopened with new settings shows that open after the
+rebuild switches in. An index no program opens any more is kept until it is
+dropped, because another version of the program may open it again. A handle of a dropped
 index is refused from then on, and opening the name again makes a new, empty
 index.
 

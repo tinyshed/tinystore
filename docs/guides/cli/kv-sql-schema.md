@@ -145,6 +145,10 @@ one holds it, drop the index through it with `dropIndex`. An index no program
 opens any more is kept until it is dropped, as
 [Listing and dropping](../search/rebuilds.md#listing-and-dropping) explains.
 
+`opened` is the last time a program opened the index. An index that the store
+[rebuilt](../search/rebuilds.md) under the same name keeps that time, so the
+open that started the rebuild still shows after it.
+
 ## See also
 
 - [The command line](README.md).
