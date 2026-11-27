@@ -142,7 +142,9 @@ pub(crate) fn still_stale<T>(answers: &Bucket<T>, key: &str, fresh: Option<Durat
 #[cfg(any(feature = "wire", feature = "replication"))]
 pub(crate) struct Kept {
     pub(crate) raw: Raw,
+    #[cfg_attr(not(feature = "wire"), expect(dead_code, reason = "a node's claim reads only the answer"))]
     pub(crate) age: Duration,
+    #[cfg_attr(not(feature = "wire"), expect(dead_code, reason = "a node's claim reads only the answer"))]
     pub(crate) stale: bool,
 }
 
@@ -153,7 +155,14 @@ pub(crate) enum Hand {
     Kept(Kept),
     /// The answer kept, stale, and a new one for the client to make in the
     /// background: its answer replaces the kept one, its failure keeps it.
-    Refresh(Kept, Handed),
+    Refresh(
+        Kept,
+        #[cfg_attr(
+            not(feature = "wire"),
+            expect(dead_code, reason = "a node's claim asks for no fresh, so never refreshes")
+        )]
+        Handed,
+    ),
     /// The run is the client's: it runs its function and keeps what it answers.
     Yours(Handed),
     /// Another run holds the key; the waiter is called once it ends.
