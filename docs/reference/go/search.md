@@ -93,12 +93,25 @@ type Hit[T any] struct {
 	Value      T
 	Score      float64
 	Matches    []Match
+	Snippet    *HitSnippet
 	TextScore  *float64
 	Similarity *float64
 }
 ```
 
-Hit is a document a search found, and the score that ordered it among this search's hits; Matches says where the search's words matched it, when the search asked with Matches. TextScore is the score its words gave it, as a search by its words alone scores it, nil where they did not find it among their best; Similarity the cosine of its vector with the search's, from -1 to 1, nil where either has none.
+Hit is a document a search found, and the score that ordered it among this search's hits; Matches says where the search's words matched it, when the search asked with Matches. TextScore is the score its words gave it, as a search by its words alone scores it, nil where they did not find it among their best; Similarity the cosine of its vector with the search's, from -1 to 1, nil where either has none. Snippet is the piece of a field around its first match, when the search asked with Snippet and the hit holds the field.
+
+## HitSnippet
+
+```go
+type HitSnippet struct {
+	Text  string
+	Marks []Mark
+	Item  int
+}
+```
+
+HitSnippet is the piece of a field around a hit's first match there: the field's own text, "…" where it was cut, and every match inside it as bytes Start to End of Text. Item is the string's place in a field that holds a list, 0 in one that holds a string. The store adds no markup and escapes nothing.
 
 ## Hybrid
 
@@ -223,6 +236,17 @@ func List(ctx context.Context, store *tinystore.Store) ([]Listed, error)
 
 List is every index the store holds, by name.
 
+## Mark
+
+```go
+type Mark struct {
+	Start int
+	End   int
+}
+```
+
+Mark is where a search's word matched inside a snippet: Text\[Start:End].
+
 ## Match
 
 ```go
@@ -311,7 +335,7 @@ type QueryOption interface {
 }
 ```
 
-QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Matches, Limit, Offset, Hybrid.
+QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Matches, Snippet, Limit, Offset, Hybrid.
 
 ### Limit
 
@@ -360,6 +384,14 @@ func PrefixEvery() QueryOption
 ```
 
 PrefixEvery reads every word as the start of a word too, as people shorten each word of a name: "лин алг" finds "Линейная алгебра". Each word of two letters or more is read so, the first eight, whatever follows it; a document that holds a word for each word of the text comes first, its score raised above the rest. In place of Prefix.
+
+### Snippet
+
+```go
+func Snippet(field string, around int) QueryOption
+```
+
+Snippet has each hit carry the piece of field, a path the index reads, around the field's first match, in Hit.Snippet: its own text from around characters before it to around after it, 1 to 1000 and 80 when 0, cut where a word starts and ends, "…" where text was cut. A hit that matched elsewhere, or by its vector alone, gets the field's first 2 × around characters and no mark.
 
 ### Total
 

@@ -201,6 +201,7 @@ enum Mode {
 }
 
 pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<Answer> {
+    check_snippet(&asked)?;
     let (moment, documents, words_version) = moment(connection, asked.index)?;
     let mode = mode(&asked)?;
     let mut behind = false;
@@ -238,10 +239,22 @@ pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<An
     let hits = hits.collect::<Result<_>>()?;
     let sought = match &asked.query.matches {
         Some(ask) if !matches!(mode, Mode::Vector) => Some(sought(connection, &asked, ask)?),
+        // a search by its vector alone matched no word, and cuts each snippet at its field's start
+        Some(ask) if ask.snippet.is_some() => Some(Sought::new(ask.clone(), &asked.settings.fields)),
         _ => None,
     };
     let total = asked.query.total.then(|| total(connection, &asked, held)).transpose()?;
     Ok(Answer { hits, corrected, behind, sought, total })
+}
+
+/// Refuses a snippet of a field the index does not read.
+fn check_snippet(asked: &Asked<'_>) -> Result<()> {
+    let Some(cut) = asked.query.matches.as_ref().and_then(|ask| ask.snippet.as_ref()) else { return Ok(()) };
+    if asked.settings.fields.iter().any(|field| field.path == cut.field) {
+        return Ok(());
+    }
+    let read: Vec<&str> = asked.settings.fields.iter().map(|field| field.path.as_str()).collect();
+    Err(Error::invalid(format!("a snippet of the field {:?}, which the index does not read: {read:?}", cut.field)))
 }
 
 /// The keys the search's words found documents by, each with the place of

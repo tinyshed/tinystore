@@ -104,6 +104,27 @@ class Match:
 
 
 @dataclass(frozen=True, slots=True)
+class Mark:
+    """Where a search's word matched inside a snippet: ``snippet.text[start:end]``, in code points."""
+
+    start: int
+    end: int
+
+
+@dataclass(frozen=True, slots=True)
+class Snippet:
+    """The piece of a field around a hit's first match there, the field's own text, … where it was cut.
+
+    Its marks are every match inside it. The store adds no markup and escapes nothing.
+    """
+
+    text: str
+    marks: list[Mark]
+    item: int | None = None
+    """the string's place in a field that holds a list"""
+
+
+@dataclass(frozen=True, slots=True)
 class Hit[T]:
     """A document a search found, and the score that ordered it among this search's hits."""
 
@@ -112,6 +133,8 @@ class Hit[T]:
     score: float
     matches: list[Match] | None = None
     """where the search's words matched it, when the search asked with matches"""
+    snippet: Snippet | None = None
+    """the piece of a field around its first match, when the search asked with snippet and it holds the field"""
     text_score: float | None = None
     """the score its words gave it, as a search by its words alone scores it, where they found it among their best"""
     similarity: float | None = None
@@ -219,6 +242,7 @@ class _Searchable[T]:
         min_similarity: float | None = None,
         prefix: bool | Literal["every"] = False,
         matches: bool = False,
+        snippet: Mapping[str, Any] | None = None,
         total: bool = False,
         limit: int | None = None,
         offset: int | None = None,
@@ -237,7 +261,13 @@ class _Searchable[T]:
         With matches, each hit says where the search's words matched it, as a
         search box shows them in bold: ranges of code points of each field's
         text, a word found as written, by its stem or once corrected whole,
-        and a word a prefix began by the letters typed. With min_similarity,
+        and a word a prefix began by the letters typed. With snippet,
+        {"field": "plain", "around": 60}, each hit's snippet of that field:
+        its own text from around characters before the field's first match to
+        around after it, 1 to 1000 and 80 unless said, cut where a word
+        starts and ends, … where text was cut; a hit that matched elsewhere,
+        or by its vector alone, gets the field's first 2 × around characters.
+        With min_similarity,
         the least cosine a document's vector has with the search's for the
         vector to find it: a search by its vector alone leaves out the hits
         under it, and one by words too adds nothing for them to the sum.
@@ -258,6 +288,7 @@ class _Searchable[T]:
             min_similarity=min_similarity,
             prefix=prefix,
             matches=matches,
+            snippet=_cut(snippet),
             total=total,
             limit=limit,
             offset=offset,
@@ -274,6 +305,7 @@ class _Searchable[T]:
                     self._read({**hit, "columns": found.get("columns")}),
                     hit.get("score", 0.0),
                     _matches_of(hit.get("matches")),
+                    _snippet_of(hit.get("snippet")),
                     hit.get("text_score"),
                     hit.get("similarity"),
                 )
@@ -473,6 +505,7 @@ def _query(
     min_similarity: float | None,
     prefix: bool | Literal["every"],
     matches: bool,
+    snippet: dict[str, Any] | None,
     total: bool,
     limit: int | None,
     offset: int | None,
@@ -492,6 +525,7 @@ def _query(
             prefix_every=True if prefix == "every" else None,
             # Python slices a str by its code points
             matches="chars" if matches else None,
+            snippet=snippet,
             where=where,
             statements=statements,
             total=total,
@@ -506,6 +540,24 @@ def _total_of(total: dict[str, Any] | None) -> Total | None:
     if total is None:
         return None
     return Total(total.get("count", 0), total.get("at_least", False))
+
+
+def _cut(snippet: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The snippet a search asks for, its marks counted in code points as Python slices a str."""
+    if snippet is None:
+        return None
+    unknown = set(snippet) - {"field", "around"}
+    field = snippet.get("field")
+    if unknown or not isinstance(field, str):
+        raise InvalidError(f'a snippet of {dict(snippet)!r}: {{"field": str, "around": int}}')
+    return {"field": field, "around": snippet.get("around"), "unit": "chars"}
+
+
+def _snippet_of(found: dict[str, Any] | None) -> Snippet | None:
+    if found is None:
+        return None
+    marks = [Mark(mark.get("start", 0), mark.get("end", 0)) for mark in found.get("marks", [])]
+    return Snippet(found.get("text", ""), marks, found.get("item"))
 
 
 def _matches_of(found: list[dict[str, Any]] | None) -> list[Match] | None:

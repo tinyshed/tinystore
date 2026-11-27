@@ -231,3 +231,69 @@ fn a_prefix_covers_the_letters_typed_and_what_lies_between_them() {
     assert_eq!(&normal[typed(normal, &word, 3)], "o're");
     assert_eq!(&normal[typed(normal, &word, 7)], "o'reilly");
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Page {
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plain: Option<String>,
+}
+
+fn page(title: &str, plain: Option<&str>) -> Page {
+    Page { title: title.to_owned(), plain: plain.map(str::to_owned) }
+}
+
+/// Each hit's snippet as its id, its text, and what each of its marks slices.
+fn snipped(found: &Found<Page>) -> Vec<(String, String, Vec<String>)> {
+    let each = |hit: &crate::search::Hit<Page>| {
+        let snippet = hit.snippet.as_ref()?;
+        let marks = snippet.marks.iter().map(|mark| snippet.text[mark.clone()].to_owned()).collect();
+        Some((hit.id.clone(), snippet.text.clone(), marks))
+    };
+    found.hits.iter().filter_map(each).collect()
+}
+
+// contract: SRCH-22
+#[test]
+fn a_snippet_is_the_fields_own_text_around_its_first_match_marking_every_match_inside() {
+    let fixture = fixture();
+    let pages = fixture.store.index::<Page>("pages").field("title", 2.0).field("plain", 1.0).open().unwrap();
+    let plain = "In the first term we read sets and maps. Then linear algebra took three weeks of the term, \
+                 and the algebra of matrices two more; algebra again in the spring.";
+    pages.set(1, &page("Notes", Some(plain))).unwrap();
+    pages.set(2, &page("Algebra", Some("Nothing of the kind is said in this page's body at all."))).unwrap();
+    pages.set(3, &page("Algebra two", None)).unwrap();
+    let found = checked(|| pages.search("algebra").snippet("plain", 20).run()).unwrap();
+    let first = "…maps. Then linear algebra took three weeks of…";
+    let start = "Nothing of the kind is said in this…";
+    assert_eq!(
+        snipped(&found),
+        [("1".to_owned(), first.to_owned(), vec!["algebra".to_owned()]), ("2".to_owned(), start.to_owned(), vec![])],
+        "a hit that matched in its title gets the body's start, unmarked; one without a body, nothing"
+    );
+    assert!(found.hits.iter().all(|hit| hit.matches.is_empty()), "no matches listed unless asked");
+    let wider = checked(|| pages.search("algebra").snippet("plain", 60).matches().run()).unwrap();
+    let notes = wider.hits.iter().find(|hit| hit.id == "1").unwrap();
+    assert_eq!(notes.snippet.as_ref().unwrap().marks.len(), 2, "every match inside the piece, and no other");
+    assert_eq!(notes.matches.len(), 3, "the matches listed, when asked, are the whole field's");
+    let refused = pages.search("algebra").snippet("body", 20).run().unwrap_err();
+    assert_eq!((refused.kind(), refused.to_string().contains("\"body\"")), (crate::ErrorKind::Invalid, true));
+    let none = pages.search("algebra").snippet("plain", 0).run().unwrap_err();
+    assert_eq!(none.kind(), crate::ErrorKind::Invalid);
+    assert_eq!(pages.search("algebra").snippet("plain", 1001).run().unwrap_err().kind(), crate::ErrorKind::Invalid);
+}
+
+// contract: SRCH-22
+#[test]
+fn a_snippet_of_a_list_is_of_the_string_that_matched_and_of_a_vector_search_the_fields_start() {
+    let fixture = fixture();
+    let books = fixture.store.index::<Value>("books").fields(["tags"]).vectors(2).open().unwrap();
+    let tags = json!({ "tags": ["Геометрия", "Линейная алгебра и аналитическая геометрия"] });
+    books.id("b-1").vector(&[1.0, 0.0]).set(&tags).unwrap();
+    let found = checked(|| books.search("алгебре").snippet("tags", 80).run()).unwrap();
+    let snippet = found.hits[0].snippet.clone().unwrap();
+    assert_eq!((snippet.item, &snippet.text[snippet.marks[0].clone()]), (Some(1), "алгебра"), "found by its stem");
+    let by_vector = books.search_vector(&[1.0, 0.0]).snippet("tags", 5).run().unwrap();
+    let snippet = by_vector.hits[0].snippet.clone().unwrap();
+    assert_eq!((snippet.text.as_str(), snippet.marks.len(), snippet.item), ("Геометрия", 0, Some(0)));
+}

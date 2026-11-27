@@ -665,10 +665,16 @@ func NewMessage(name string) Message {
 		return &SearchGot{}
 	case "search.Query":
 		return &SearchQuery{}
+	case "search.Cut":
+		return &SearchCut{}
 	case "search.Statement":
 		return &SearchStatement{}
 	case "search.Hit":
 		return &SearchHit{}
+	case "search.Snippet":
+		return &SearchSnippet{}
+	case "search.Mark":
+		return &SearchMark{}
 	case "search.Match":
 		return &SearchMatch{}
 	case "search.Found":
@@ -13202,6 +13208,8 @@ type SearchQuery struct {
 	Statements []SearchStatement `wire:"13,statements"`
 	// counts what it finds as well, exactly up to 10,000; invalid beside a vector
 	Total bool `wire:"14,total"`
+	// each hit's snippet of a field, around its first match there
+	Snippet *SearchCut `wire:"15,snippet"`
 }
 
 func (m SearchQuery) Write(w *Writer) {
@@ -13280,6 +13288,11 @@ func (m SearchQuery) Write(w *Writer) {
 		w.Bool(m.Total)
 		n++
 	}
+	if m.Snippet != nil {
+		w.Uint(15)
+		m.Snippet.Write(w)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -13329,6 +13342,10 @@ func (m *SearchQuery) Read(r *Reader) {
 			m.Statements = v
 		case 14:
 			m.Total = r.Bool()
+		case 15:
+			var v SearchCut
+			v.Read(r)
+			m.Snippet = &v
 		default:
 			r.Skip()
 		}
@@ -13351,7 +13368,68 @@ func (m SearchQuery) IsZero() bool {
 		m.Matches == nil &&
 		m.MinSimilarity == nil &&
 		len(m.Statements) == 0 &&
-		!m.Total
+		!m.Total &&
+		m.Snippet == nil
+}
+
+// SearchCut is the schema's search.Cut.
+//
+// The snippet a search cuts of each hit: of which field, a path as the
+// index's fields name it, how many characters on each side of the field's
+// first match, and what its marks count, as a query's matches do.
+type SearchCut struct {
+	Field string `wire:"1,field"`
+	// 1 to 1000; 80 when absent
+	Around *uint64 `wire:"2,around"`
+	// utf8, utf16 or chars
+	Unit string `wire:"3,unit"`
+}
+
+func (m SearchCut) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Field != "" {
+		w.Uint(1)
+		w.Str(m.Field)
+		n++
+	}
+	if m.Around != nil {
+		w.Uint(2)
+		w.Uint(*m.Around)
+		n++
+	}
+	if m.Unit != "" {
+		w.Uint(3)
+		w.Str(m.Unit)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchCut) Read(r *Reader) {
+	*m = SearchCut{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Field = r.Str()
+		case 2:
+			v := r.Uint()
+			m.Around = &v
+		case 3:
+			m.Unit = r.Str()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchCut writes as no field at all.
+func (m SearchCut) IsZero() bool {
+	return m.Field == "" &&
+		m.Around == nil &&
+		m.Unit == ""
 }
 
 // SearchStatement is the schema's search.Statement.
@@ -13426,6 +13504,8 @@ type SearchHit struct {
 	TextScore *float64 `wire:"6,textScore"`
 	// its vector's cosine with the search's, where both have one
 	Similarity *float64 `wire:"7,similarity"`
+	// when the query asked for one and the hit holds the field
+	Snippet *SearchSnippet `wire:"8,snippet"`
 }
 
 func (m SearchHit) Write(w *Writer) {
@@ -13472,6 +13552,11 @@ func (m SearchHit) Write(w *Writer) {
 		w.Float(*m.Similarity)
 		n++
 	}
+	if m.Snippet != nil {
+		w.Uint(8)
+		m.Snippet.Write(w)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -13509,6 +13594,10 @@ func (m *SearchHit) Read(r *Reader) {
 		case 7:
 			v := r.Float()
 			m.Similarity = &v
+		case 8:
+			var v SearchSnippet
+			v.Read(r)
+			m.Snippet = &v
 		default:
 			r.Skip()
 		}
@@ -13524,7 +13613,122 @@ func (m SearchHit) IsZero() bool {
 		m.Row == nil &&
 		m.Matches == nil &&
 		m.TextScore == nil &&
-		m.Similarity == nil
+		m.Similarity == nil &&
+		m.Snippet == nil
+}
+
+// SearchSnippet is the schema's search.Snippet.
+//
+// The piece of a field around a hit's first match there, the field's own
+// text with … where it was cut; its start, without marks, where the hit
+// matched elsewhere or by its vector alone.
+type SearchSnippet struct {
+	Text string `wire:"1,text"`
+	// every match inside text, in its order, counted in the cut's unit
+	Marks []SearchMark `wire:"2,marks"`
+	// the string's place in a field that holds a list
+	Item *uint64 `wire:"3,item"`
+}
+
+func (m SearchSnippet) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Text != "" {
+		w.Uint(1)
+		w.Str(m.Text)
+		n++
+	}
+	if len(m.Marks) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Marks))
+		for _, item0 := range m.Marks {
+			item0.Write(w)
+		}
+		n++
+	}
+	if m.Item != nil {
+		w.Uint(3)
+		w.Uint(*m.Item)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchSnippet) Read(r *Reader) {
+	*m = SearchSnippet{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Text = r.Str()
+		case 2:
+			v := []SearchMark{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SearchMark
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Marks = v
+		case 3:
+			v := r.Uint()
+			m.Item = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchSnippet writes as no field at all.
+func (m SearchSnippet) IsZero() bool {
+	return m.Text == "" &&
+		len(m.Marks) == 0 &&
+		m.Item == nil
+}
+
+// SearchMark is the schema's search.Mark.
+type SearchMark struct {
+	Start uint64 `wire:"1,start"`
+	End   uint64 `wire:"2,end"`
+}
+
+func (m SearchMark) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Start != 0 {
+		w.Uint(1)
+		w.Uint(m.Start)
+		n++
+	}
+	if m.End != 0 {
+		w.Uint(2)
+		w.Uint(m.End)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchMark) Read(r *Reader) {
+	*m = SearchMark{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Start = r.Uint()
+		case 2:
+			m.End = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchMark writes as no field at all.
+func (m SearchMark) IsZero() bool {
+	return m.Start == 0 &&
+		m.End == 0
 }
 
 // SearchMatch is the schema's search.Match.

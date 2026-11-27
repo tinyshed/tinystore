@@ -6410,6 +6410,19 @@
         "rerank": {
           "bool": true
         },
+        "snippet": {
+          "fields": {
+            "around": {
+              "uint": "207"
+            },
+            "field": {
+              "str": "field"
+            },
+            "unit": {
+              "str": "unit"
+            }
+          }
+        },
         "statements": {
           "list": [
             {
@@ -6444,7 +6457,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8e016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d6174636865730ccb3ff80000000000000d918201a4746578740291a676616c7565730ec3",
+      "hex": "8f016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d6174636865730ccb3ff80000000000000d918201a4746578740291a676616c7565730ec30f8301a56669656c6402cccf03a4756e6974",
       "message": "search.Query",
       "name": "search.Query with every field"
     },
@@ -6453,6 +6466,28 @@
       "hex": "80",
       "message": "search.Query",
       "name": "search.Query with no field"
+    },
+    {
+      "fields": {
+        "around": {
+          "uint": "207"
+        },
+        "field": {
+          "str": "field"
+        },
+        "unit": {
+          "str": "unit"
+        }
+      },
+      "hex": "8301a56669656c6402cccf03a4756e6974",
+      "message": "search.Cut",
+      "name": "search.Cut with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Cut",
+      "name": "search.Cut with no field"
     },
     {
       "fields": {
@@ -6518,6 +6553,30 @@
         "similarity": {
           "float": "3ff8000000000000"
         },
+        "snippet": {
+          "fields": {
+            "item": {
+              "uint": "307"
+            },
+            "marks": {
+              "list": [
+                {
+                  "fields": {
+                    "end": {
+                      "uint": "207"
+                    },
+                    "start": {
+                      "uint": "107"
+                    }
+                  }
+                }
+              ]
+            },
+            "text": {
+              "str": "text"
+            }
+          }
+        },
         "textScore": {
           "float": "3ff8000000000000"
         },
@@ -6525,7 +6584,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8701a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726406cb3ff800000000000007cb3ff8000000000000",
+      "hex": "8801a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726406cb3ff800000000000007cb3ff8000000000000088301a474657874029182016b02cccf03cd0133",
       "message": "search.Hit",
       "name": "search.Hit with every field"
     },
@@ -6534,6 +6593,58 @@
       "hex": "80",
       "message": "search.Hit",
       "name": "search.Hit with no field"
+    },
+    {
+      "fields": {
+        "item": {
+          "uint": "307"
+        },
+        "marks": {
+          "list": [
+            {
+              "fields": {
+                "end": {
+                  "uint": "207"
+                },
+                "start": {
+                  "uint": "107"
+                }
+              }
+            }
+          ]
+        },
+        "text": {
+          "str": "text"
+        }
+      },
+      "hex": "8301a474657874029182016b02cccf03cd0133",
+      "message": "search.Snippet",
+      "name": "search.Snippet with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Snippet",
+      "name": "search.Snippet with no field"
+    },
+    {
+      "fields": {
+        "end": {
+          "uint": "207"
+        },
+        "start": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b02cccf",
+      "message": "search.Mark",
+      "name": "search.Mark with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Mark",
+      "name": "search.Mark with no field"
     },
     {
       "fields": {
@@ -6618,6 +6729,30 @@
                 "similarity": {
                   "float": "3ff8000000000000"
                 },
+                "snippet": {
+                  "fields": {
+                    "item": {
+                      "uint": "307"
+                    },
+                    "marks": {
+                      "list": [
+                        {
+                          "fields": {
+                            "end": {
+                              "uint": "207"
+                            },
+                            "start": {
+                              "uint": "107"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "text": {
+                      "str": "text"
+                    }
+                  }
+                },
                 "textScore": {
                   "float": "3ff8000000000000"
                 },
@@ -6639,7 +6774,7 @@
           }
         }
       },
-      "hex": "8401918701a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726406cb3ff800000000000007cb3ff800000000000002a9636f727265637465640391a7636f6c756d6e730482016b02c3",
+      "hex": "8401918801a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726406cb3ff800000000000007cb3ff8000000000000088301a474657874029182016b02cccf03cd013302a9636f727265637465640391a7636f6c756d6e730482016b02c3",
       "message": "search.Found",
       "name": "search.Found with every field"
     },

@@ -226,6 +226,32 @@ func TestAHitSaysWhereItMatchedInBytesThatSliceItsOwnStrings(t *testing.T) {
 	})
 }
 
+type page struct {
+	Title string `json:"title"`
+	Plain string `json:"plain"`
+}
+
+// contract: SRCH-22
+func TestAHitsSnippetIsCutAroundItsFirstMatchItsMarksInBytes(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		pages := ways.Must(search.OpenIndex[page](store, "pages", search.Fields{"title": 2, "plain": 1}))
+		plain := "🦀 In the first term we read sets. Then linear algebra took three weeks of the term."
+		ways.Must(0, pages.Set(ctx, "p-1", page{Title: "Notes", Plain: plain}))
+		hit := ways.Must(pages.Search(ctx, "algebra", search.Snippet("plain", 12))).Hits[0]
+		want := &search.HitSnippet{Text: "…Then linear algebra took three…", Marks: []search.Mark{{Start: 15, End: 22}}}
+		if !reflect.DeepEqual(hit.Snippet, want) || hit.Matches != nil {
+			t.Fatalf("snippet %+v, matches %v", hit.Snippet, hit.Matches)
+		}
+		whole := ways.Must(pages.Search(ctx, "algebra", search.Snippet("plain", 0))).Hits[0].Snippet
+		if whole.Text != plain || whole.Text[whole.Marks[0].Start:whole.Marks[0].End] != "algebra" {
+			t.Fatalf("snippet %+v", whole)
+		}
+		_, err := pages.Search(ctx, "algebra", search.Snippet("body", 0))
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestAHitKeepsEachHalfOfItsScoreAndAFloorKeepsAFarVectorOutOfTheSum(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

@@ -126,6 +126,14 @@ export interface Query {
 	 */
 	matches?: boolean | undefined
 	/**
+	 * each hit's `snippet` of `field`, a path the index reads: its own text
+	 * from `around` characters before the field's first match to `around`
+	 * after it, 1 to 1000 and 80 unless said, cut where a word starts and
+	 * ends and `…` where text was cut; a hit that matched elsewhere, or by
+	 * its vector alone, gets the field's first `2 × around` characters
+	 */
+	snippet?: { field: string; around?: number | undefined } | undefined
+	/**
 	 * counts the documents it finds as well, in `total`, under its `where`
 	 * and whatever its `limit` and `offset`: exactly up to 10,000, and past
 	 * it 10,000 with `atLeast`; it reads every posting of its words, which a
@@ -152,6 +160,18 @@ export interface Match {
 	word: string
 }
 
+/**
+ * The piece of a field around a hit's first match there: the field's own
+ * text, `…` where it was cut, and every match inside it as `start` to `end`
+ * in UTF-16 units of `text`. The store adds no markup and escapes nothing.
+ */
+export interface Snippet {
+	text: string
+	marks: { start: number; end: number }[]
+	/** the string's place in a field that holds a list */
+	item?: number
+}
+
 /** A document a search found, and the score that ordered it among this search's hits. */
 export interface Hit<T> {
 	id: string
@@ -159,6 +179,8 @@ export interface Hit<T> {
 	score: number
 	/** where the search's words matched it, when the search asked with `matches` */
 	matches?: Match[]
+	/** the piece of a field around its first match, when the search asked with `snippet` and it holds the field */
+	snippet?: Snippet
 	/** the score its words gave it, as a search by its words alone scores it, where they found it among their best */
 	textScore?: number
 	/** the cosine of its vector with the search's, from -1 to 1, where both have one */
@@ -280,6 +302,10 @@ abstract class Searchable<T> {
 				prefixEvery: asked.prefix === 'every' || undefined,
 				// JavaScript slices a string by its UTF-16 units
 				matches: asked.matches === true ? 'utf16' : undefined,
+				snippet:
+					asked.snippet === undefined
+						? undefined
+						: { field: asked.snippet.field, around: asked.snippet.around, unit: 'utf16' },
 				where,
 				statements,
 				total: asked.total,
@@ -297,6 +323,9 @@ abstract class Searchable<T> {
 			const read: Hit<T> = { id: hit.id ?? '', value, score: hit.score ?? 0 }
 			if (hit.matches !== undefined) {
 				read.matches = hit.matches.map(matchOf)
+			}
+			if (hit.snippet !== undefined) {
+				read.snippet = snippetOf(hit.snippet)
 			}
 			if (hit.textScore !== undefined) {
 				read.textScore = hit.textScore
@@ -543,6 +572,19 @@ function matchOf(found: {
 		match.item = found.item
 	}
 	return match
+}
+
+function snippetOf(cut: {
+	text?: string | undefined
+	marks?: { start?: number | undefined; end?: number | undefined }[] | undefined
+	item?: number | undefined
+}): Snippet {
+	const marks = (cut.marks ?? []).map(mark => ({ start: mark.start ?? 0, end: mark.end ?? 0 }))
+	const snippet: Snippet = { text: cut.text ?? '', marks }
+	if (cut.item !== undefined) {
+		snippet.item = cut.item
+	}
+	return snippet
 }
 
 function documentJson(name: string, value: unknown): string {

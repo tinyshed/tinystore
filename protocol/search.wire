@@ -87,6 +87,16 @@ message search.Query {
   12 minSimilarity: float?           # the least cosine a document's vector has for the vector to find it
   13 statements: [search.Statement]  # what where's {"statement": n} names, by its place
   14 total: bool                     # counts what it finds as well, exactly up to 10,000; invalid beside a vector
+  15 snippet: search.Cut?            # each hit's snippet of a field, around its first match there
+}
+
+# The snippet a search cuts of each hit: of which field, a path as the
+# index's fields name it, how many characters on each side of the field's
+# first match, and what its marks count, as a query's matches do.
+message search.Cut {
+  1 field: str
+  2 around: uint?                    # 1 to 1000; 80 when absent
+  3 unit: str                        # utf8, utf16 or chars
 }
 
 # A statement of a table's index's database whose rows give one column, as
@@ -107,6 +117,21 @@ message search.Hit {
   5 matches: [search.Match]?
   6 textScore: float?                # its words' score, where they found it among their best
   7 similarity: float?               # its vector's cosine with the search's, where both have one
+  8 snippet: search.Snippet?         # when the query asked for one and the hit holds the field
+}
+
+# The piece of a field around a hit's first match there, the field's own
+# text with … where it was cut; its start, without marks, where the hit
+# matched elsewhere or by its vector alone.
+message search.Snippet {
+  1 text: str
+  2 marks: [search.Mark]             # every match inside text, in its order, counted in the cut's unit
+  3 item: uint?                      # the string's place in a field that holds a list
+}
+
+message search.Mark {
+  1 start: uint
+  2 end: uint
 }
 
 # Where a search's word matched a hit: a range of a field's text, or of a

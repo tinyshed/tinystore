@@ -145,6 +145,9 @@ async fn an_awaited_index_answers_as_the_blocking_one_on_the_same_store() {
     let words: Vec<&str> = matched.hits[0].matches.iter().map(|found| &bread.title[found.at.clone()]).collect();
     assert_eq!(words, ["Sourd", "bread"]);
     assert_eq!(matched, blocking.search("bread sourd").prefix().matches().run().unwrap());
+    let cut = articles.search("bread").snippet("title", 80).run().await.unwrap();
+    assert!(cut.hits[0].snippet.is_some(), "a snippet of the title");
+    assert_eq!(cut, blocking.search("bread").snippet("title", 80).run().unwrap());
     assert_eq!(articles.status().await.unwrap(), blocking.status().unwrap());
 
     assert!(articles.delete("a-17").await.unwrap());

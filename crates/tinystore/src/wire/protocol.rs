@@ -11664,6 +11664,8 @@ pub(crate) struct SearchQuery {
     pub(crate) statements: Vec<SearchStatement>,
     /// Counts what it finds as well, exactly up to 10,000; invalid beside a vector.
     pub(crate) total: bool,
+    /// Each hit's snippet of a field, around its first match there.
+    pub(crate) snippet: Option<SearchCut>,
 }
 
 #[cfg(feature = "search")]
@@ -11689,6 +11691,7 @@ impl Message for SearchQuery {
                 12 => message.min_similarity = Some(codec::float(r, "minSimilarity")?),
                 13 => message.statements = codec::list(r, "statements", codec::message::<SearchStatement>)?,
                 14 => message.total = codec::bool(r, "total")?,
+                15 => message.snippet = Some(SearchCut::read(r)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11753,6 +11756,10 @@ impl Message for SearchQuery {
             map.field(out, 14);
             codec::write_bool(out, &self.total);
         }
+        if let Some(snippet) = &self.snippet {
+            map.field(out, 15);
+            codec::write_message(out, snippet);
+        }
         map.close(out);
     }
 
@@ -11772,6 +11779,7 @@ impl Message for SearchQuery {
             + self.min_similarity.map_or(0, |_| 10)
             + 1 + codec::list_size(&self.statements, codec::message_size)
             + 2
+            + self.snippet.as_ref().map_or(0, |snippet| 1 + snippet.size())
     }
 
     fn is_zero(&self) -> bool {
@@ -11789,6 +11797,69 @@ impl Message for SearchQuery {
             && self.min_similarity.is_none()
             && self.statements.is_empty()
             && !self.total
+            && self.snippet.is_none()
+    }
+}
+
+/// The snippet a search cuts of each hit: of which field, a path as the
+/// index's fields name it, how many characters on each side of the field's
+/// first match, and what its marks count, as a query's matches do.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchCut {
+    pub(crate) field: String,
+    /// 1 to 1000; 80 when absent.
+    pub(crate) around: Option<u64>,
+    /// Utf8, utf16 or chars.
+    pub(crate) unit: String,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchCut {
+    const NAME: &'static str = "search.Cut";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.field = codec::str(r, "field")?,
+                2 => message.around = Some(codec::uint(r, "around")?),
+                3 => message.unit = codec::str(r, "unit")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.field.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.field);
+        }
+        if let Some(around) = &self.around {
+            map.field(out, 2);
+            codec::write_uint(out, around);
+        }
+        if !self.unit.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.unit);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.field.len()
+            + self.around.map_or(0, |_| 10)
+            + 1 + 5 + self.unit.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.field.is_empty()
+            && self.around.is_none()
+            && self.unit.is_empty()
     }
 }
 
@@ -11859,6 +11930,8 @@ pub(crate) struct SearchHit {
     pub(crate) text_score: Option<f64>,
     /// Its vector's cosine with the search's, where both have one.
     pub(crate) similarity: Option<f64>,
+    /// When the query asked for one and the hit holds the field.
+    pub(crate) snippet: Option<SearchSnippet>,
 }
 
 #[cfg(feature = "search")]
@@ -11877,6 +11950,7 @@ impl Message for SearchHit {
                 5 => message.matches = Some(codec::list(r, "matches", codec::message::<SearchMatch>)?),
                 6 => message.text_score = Some(codec::float(r, "textScore")?),
                 7 => message.similarity = Some(codec::float(r, "similarity")?),
+                8 => message.snippet = Some(SearchSnippet::read(r)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11913,6 +11987,10 @@ impl Message for SearchHit {
             map.field(out, 7);
             codec::write_float(out, similarity);
         }
+        if let Some(snippet) = &self.snippet {
+            map.field(out, 8);
+            codec::write_message(out, snippet);
+        }
         map.close(out);
     }
 
@@ -11925,6 +12003,7 @@ impl Message for SearchHit {
             + self.matches.as_ref().map_or(0, |matches| 1 + codec::list_size(matches, codec::message_size))
             + self.text_score.map_or(0, |_| 10)
             + self.similarity.map_or(0, |_| 10)
+            + self.snippet.as_ref().map_or(0, |snippet| 1 + snippet.size())
     }
 
     fn is_zero(&self) -> bool {
@@ -11935,6 +12014,118 @@ impl Message for SearchHit {
             && self.matches.is_none()
             && self.text_score.is_none()
             && self.similarity.is_none()
+            && self.snippet.is_none()
+    }
+}
+
+/// The piece of a field around a hit's first match there, the field's own
+/// text with … where it was cut; its start, without marks, where the hit
+/// matched elsewhere or by its vector alone.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchSnippet {
+    pub(crate) text: String,
+    /// Every match inside text, in its order, counted in the cut's unit.
+    pub(crate) marks: Vec<SearchMark>,
+    /// The string's place in a field that holds a list.
+    pub(crate) item: Option<u64>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchSnippet {
+    const NAME: &'static str = "search.Snippet";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.text = codec::str(r, "text")?,
+                2 => message.marks = codec::list(r, "marks", codec::message::<SearchMark>)?,
+                3 => message.item = Some(codec::uint(r, "item")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.text.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.text);
+        }
+        if !self.marks.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.marks, codec::write_message);
+        }
+        if let Some(item) = &self.item {
+            map.field(out, 3);
+            codec::write_uint(out, item);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.text.len()
+            + 1 + codec::list_size(&self.marks, codec::message_size)
+            + self.item.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.text.is_empty()
+            && self.marks.is_empty()
+            && self.item.is_none()
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchMark {
+    pub(crate) start: u64,
+    pub(crate) end: u64,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchMark {
+    const NAME: &'static str = "search.Mark";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.start = codec::uint(r, "start")?,
+                2 => message.end = codec::uint(r, "end")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.start != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.start);
+        }
+        if self.end != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.end);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.start == 0
+            && self.end == 0
     }
 }
 
@@ -14896,9 +15087,15 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         #[cfg(feature = "search")]
         "search.Query" => SearchQuery::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
+        "search.Cut" => SearchCut::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
         "search.Statement" => SearchStatement::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Hit" => SearchHit::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Snippet" => SearchSnippet::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Mark" => SearchMark::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Match" => SearchMatch::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]

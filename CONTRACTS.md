@@ -290,6 +290,7 @@ These contracts are what does not.
 - **SRCH-19** A table's index keyed by several columns MUST hold each row once, by its key's values together, and follow every change of it as an index keyed by one column does; an index keyed by one column MUST keep its ids, triggers and settings as before.
 - **SRCH-20** A table's index opened with another table or key MUST read the new table beside it while its old rows answer every search and take the old table's writes, and switch in only once the new table is read whole, with the writes to it made meanwhile, as SRCH-06 holds a rebuild to; from the switch on, a write to the old table MUST NOT reach it.
 - **SRCH-21** A table's index whose table a migration dropped MUST be dropped, its rows and its name, when search next starts in that database's file, said once in the log; a table a migration rebuilt under its name MUST keep its index, read again.
+- **SRCH-22** A search with `snippet` MUST give each hit that holds the field a piece of the field's own text, from the first word that starts within `around` characters before the field's first match to the last that ends within `around` after it, `…` where text was cut and no markup added, and MUST never cut inside a character; its marks MUST name every match inside the piece and no other. A hit that matched elsewhere, or by its vector alone, MUST get the field's start, `2 × around` characters, unmarked.
 
 ## 5. Replication
 

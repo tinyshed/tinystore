@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 
 use super::engine::{FILE, InFiles, Search};
 use super::index::{Found, Hit, Index, Rebuild, SearchCall};
+use super::matches::Marked;
 use super::open::{OpenIndex, Status};
 use super::read::{Answer, Query, Ranked};
 use super::rebuild::read_current;
@@ -533,10 +534,10 @@ pub(crate) fn found<T, R>(
     columns.resize(rows.len(), None);
     let Answer { hits, corrected, sought, total, .. } = answer;
     let hits = hits.into_iter().zip(rows).zip(columns).filter_map(|((ranked, row), columns)| {
-        let matches =
-            sought.as_ref().zip(columns).map(|(sought, columns)| sought.matches(&columns)).unwrap_or_default();
+        let marked = sought.as_ref().zip(columns).map(|(sought, columns)| sought.marked(&columns));
+        let Marked { matches, snippet } = marked.unwrap_or_default();
         let Ranked { id, score, text_score, similarity, .. } = ranked;
-        row.map(|value| Hit { id, value, score, matches, text_score, similarity })
+        row.map(|value| Hit { id, value, score, matches, snippet, text_score, similarity })
     });
     Ok(Found { hits: hits.take(limit).collect(), corrected, total })
 }
