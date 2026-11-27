@@ -277,3 +277,23 @@ fn a_run_that_fails_for_good_after_a_gather_keeps_its_items_and_the_gathered_one
         assert_eq!(failed.iter().map(|job| numbers(&job.value)).collect::<Vec<_>>(), [vec![3]], "the id's one failure");
     }
 }
+
+// contract: JOB-22
+#[test]
+fn a_claimed_list_read_after_a_gather_committed_is_the_items_the_claim_took() {
+    for spilled in [false, true] {
+        let f = fixture();
+        let batch = f.store.queue::<Vec<String>>("notify-batch").open().unwrap();
+        gathered_two(&f, &batch, spilled);
+        let gather = || {
+            batch.gather("grades:7", &vec![item(3, spilled)], five_minutes()).unwrap();
+        };
+        let claimed = batch.claim_with(gather).unwrap().expect("1 and 2 are due");
+        assert_eq!(numbers(&claimed.value), [1, 2], "spilled {spilled}");
+        claimed.settle(()).unwrap();
+        let next = batch.get("grades:7").unwrap().unwrap();
+        assert_eq!(numbers(&next.value), [3], "spilled {spilled}");
+        f.advance(5 * MINUTE);
+        assert_eq!(batch.claim().unwrap().map(|claimed| numbers(&claimed.value)), Some(vec![3]), "spilled {spilled}");
+    }
+}

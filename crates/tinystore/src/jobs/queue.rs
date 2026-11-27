@@ -479,6 +479,20 @@ where
         }
     }
 
+    /// One claim as [`Queue::claim`] makes it, with `between` run after its
+    /// lease commits and before its value is read, as a worker reads it apart:
+    /// where a test commits what may land between the two.
+    #[cfg(test)]
+    pub(super) fn claim_with(&self, between: impl FnOnce()) -> Result<Option<Claimed<V>>> {
+        let (now, write) = self.claim_one();
+        let claimed = self.jobs.file().write(0, write)?;
+        let Took::Job(lease) = took(&self.jobs, &self.state, claimed, now) else { return Ok(None) };
+        between();
+        let value = work::read_value::<V>(&self.jobs, &lease)?;
+        assert!(lease.begin(now), "no cancel took the job");
+        Ok(Some(Claimed { value, run: Run::new(lease, Arc::clone(&self.state), Arc::clone(&self.jobs)) }))
+    }
+
     /// The write of one claim of a job, and the time it claims at.
     fn claim_one(&self) -> (i64, impl FnOnce(&SqlTx<'_>) -> Result<claim::Claimed> + Send + 'static + use<V>) {
         let now = self.jobs.now();

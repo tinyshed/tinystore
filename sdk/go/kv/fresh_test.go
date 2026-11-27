@@ -3,6 +3,7 @@ package kv_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -114,5 +115,50 @@ func TestAClearForgetsABranchAndTheBranchesUnderIt(t *testing.T) {
 		}
 		refused := ways.Must(kv.OpenOnce[int](store, "refused", kv.Fresh(time.Hour), kv.Keep(time.Hour)))
 		is(t, func() error { _, err := refused.Run(ctx, "7", answer(1)); return err }(), tinystore.ErrInvalid)
+	})
+}
+
+// pastFresh is longer than the fresh of 200 ms the real clock's test opens
+// with, so that what was kept is stale after it.
+const pastFresh = 300 * time.Millisecond
+
+// contract: KV-16, KV-17
+func TestOnTheRealClockAStaleAnswerIsAnsweredAtOnceTheRebuiltOneAfterAndTheLastGoodWhileDown(t *testing.T) {
+	ways.EachWay(t, func(t *testing.T, way ways.Way) {
+		if way.Name != "a sidecar" && !strings.HasPrefix(way.Name, "a remote server") {
+			t.Skip("on a test's clock above")
+		}
+		store := ways.Open(t, way)
+		ctx := context.Background()
+		books := ways.Must(kv.OpenOnce[GradeBook](store, "cabinet-books", kv.Fresh(200*time.Millisecond), kv.Keep(time.Hour)))
+		var built, asked atomic.Int32
+		var down atomic.Bool
+		cabinet := func(context.Context) (GradeBook, error) {
+			asked.Add(1)
+			if down.Load() {
+				return GradeBook{}, errors.New("the cabinet is down")
+			}
+			return GradeBook{7, built.Add(1)}, nil
+		}
+		kept := func() int32 { book, _ := ways.Must2(books.Get(ctx, "7")); return book.Built }
+
+		if first := ways.Must(books.Fetch(ctx, "7", cabinet)); first.Value != (GradeBook{7, 1}) || first.Stale {
+			t.Fatalf("first: %+v", first)
+		}
+		time.Sleep(pastFresh)
+		if stale := ways.Must(books.Fetch(ctx, "7", cabinet)); stale.Value != (GradeBook{7, 1}) || !stale.Stale {
+			t.Fatalf("stale: %+v", stale)
+		}
+		ways.Until(t, func() bool { return kept() == 2 })
+
+		down.Store(true)
+		time.Sleep(pastFresh)
+		if last := ways.Must(books.Fetch(ctx, "7", cabinet)); last.Value != (GradeBook{7, 2}) || !last.Stale {
+			t.Fatalf("the last good answer, stale: %+v", last)
+		}
+		ways.Until(t, func() bool { return asked.Load() >= 3 })
+		if kept() != 2 || ways.Must(books.Fetch(ctx, "7", cabinet)).Value != (GradeBook{7, 2}) || built.Load() != 2 {
+			t.Fatalf("a failed build keeps the kept answer: %d, built %d", kept(), built.Load())
+		}
 	})
 }

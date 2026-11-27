@@ -141,6 +141,46 @@ fn kv_counts_the_keys_it_deleted_once_they_expired() {
     store.close().unwrap();
 }
 
+#[cfg(feature = "kv")]
+#[test]
+fn a_once_counts_its_builds_what_failed_and_its_stale_answers_by_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = std::sync::Arc::new(crate::TestClock::new(std::time::SystemTime::now()));
+    let options = Options {
+        self_metrics: Some(SelfMetrics { system: false }),
+        background: false,
+        clock: Some(clock.clone()),
+        ..Options::default()
+    };
+    let store = Store::open(dir.path(), options).unwrap();
+    let metrics = store.metrics().unwrap();
+    let counts = || {
+        metrics.flush().unwrap();
+        let of = |name| labelled(&metrics, name, "name", "books").unwrap_or(0.0);
+        let counts = [of("tinystore_once_builds_total"), of("tinystore_once_build_failures_total")];
+        (counts, of("tinystore_once_stale_total"))
+    };
+    let books = store.once::<String>("books").fresh(Duration::from_secs(600)).keep(HOUR).open().unwrap();
+    books.fetch("user-7", || Ok::<_, crate::Error>("book 1".to_owned())).unwrap();
+    assert_eq!(counts(), ([1.0, 0.0], 0.0), "a build in the foreground");
+    books.fetch("user-7", || -> crate::Result<String> { panic!("built beside a fresh answer") }).unwrap();
+    assert_eq!(counts(), ([1.0, 0.0], 0.0), "a fresh answer counts nothing");
+
+    clock.advance(Duration::from_secs(600));
+    let failing = || Err::<String, _>(crate::Error::new(crate::ErrorKind::Unavailable, "the source is down"));
+    let stale = books.fetch("user-7", failing).unwrap();
+    assert!(stale.stale);
+    crate::kv::fixture::eventually("the failed build in the background", || counts().0[1] == 1.0);
+    assert_eq!(counts(), ([2.0, 1.0], 1.0), "a stale answer, its build in the background failed");
+
+    let other = store.once::<String>("pages").open().unwrap();
+    other.run("home", || Ok::<_, crate::Error>("page".to_owned())).unwrap();
+    assert_eq!(counts(), ([2.0, 1.0], 1.0), "another once's build is its own name's");
+    metrics.flush().unwrap();
+    assert_eq!(labelled(&metrics, "tinystore_once_builds_total", "name", "pages"), Some(1.0));
+    store.close().unwrap();
+}
+
 #[cfg(feature = "records")]
 #[test]
 fn records_counts_the_events_each_stream_took() {

@@ -1,7 +1,8 @@
 """once opened with fresh, as docs/guides/kv/once.md has it.
 
 A kept answer answered at once while one new one is made, and kept while the
-source is down, through the ways a store runs on a test's clock.
+source is down, through the ways a store runs on a test's clock, and on the
+real clock through a sidecar and a remote server, which take none.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import pytest
 import tinystore
 from tinystore.once import Fetched
 from tinystore.testing import open_temp
-from ways import CORE, SERVED
+from ways import CORE, SERVED, WAYS, until
 
 if TYPE_CHECKING:
     from typing import Any
@@ -108,3 +109,49 @@ async def test_an_answer_without_fresh_says_its_age_and_a_fresh_as_long_as_keep_
         assert await charges.fetch("req-1", lambda: "never") == Fetched("receipt", timedelta(minutes=59), False)
         with pytest.raises(tinystore.InvalidError, match="kv once books"):
             await store.once("books", str, fresh="1h", keep="1h").run("7", lambda: "x")
+
+
+PAST_FRESH = 0.3
+"""Longer than the fresh of 200 ms the real clock's test opens with, so that what was kept is stale after it."""
+UNCLOCKED = [way for way in WAYS if way.name == "a sidecar" or way.name.startswith("a remote server")]
+
+
+# contract: KV-16, KV-17
+@pytest.mark.parametrize("way", UNCLOCKED, indirect=True, ids=lambda way: way.name)
+async def test_on_the_real_clock_a_stale_answer_at_once_the_rebuilt_one_after_and_the_last_good_while_down(
+    store: tinystore.Store,
+) -> None:
+    books = store.once("cabinet-books", GradeBook, fresh="200ms", keep="1h")
+    built = 0
+    asked = 0
+    down = False
+
+    async def cabinet(user: int) -> GradeBook:
+        nonlocal built, asked
+        asked += 1
+        if down:
+            raise ConnectionError("the cabinet is down")
+        built += 1
+        return GradeBook(user=user, built=built)
+
+    first = await books.fetch("7", lambda: cabinet(7))
+    assert (first.value, first.stale) == (GradeBook(user=7, built=1), False)
+
+    await asyncio.sleep(PAST_FRESH)
+    stale = await books.fetch("7", lambda: cabinet(7))
+    assert (stale.value, stale.stale) == (GradeBook(user=7, built=1), True)
+    for _ in range(500):
+        if await books.get("7") == GradeBook(user=7, built=2):
+            break
+        await asyncio.sleep(0.02)
+    assert await books.get("7") == GradeBook(user=7, built=2)
+
+    down = True
+    await asyncio.sleep(PAST_FRESH)
+    kept = await books.fetch("7", lambda: cabinet(7))
+    assert (kept.value, kept.stale) == (GradeBook(user=7, built=2), True)
+    await until(lambda: asked >= 3)
+    assert asked >= 3
+    assert await books.get("7") == GradeBook(user=7, built=2)
+    assert (await books.fetch("7", lambda: cabinet(7))).value == GradeBook(user=7, built=2)
+    assert built == 2

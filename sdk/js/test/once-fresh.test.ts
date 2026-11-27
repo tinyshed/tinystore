@@ -1,14 +1,16 @@
 // once opened with fresh, as docs/guides/kv/once.md has it: a kept answer
 // answered at once while one new one is made, and kept when the source is
-// down, through the ways a store runs on a test's clock.
+// down, through the ways a store runs on a test's clock, and on the real
+// clock through a sidecar and a remote server, which take none.
 
-import { describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { InvalidError, open, type Store } from '../src/index.ts'
-import { caught, until } from './ways.ts'
+import { caught, removed, until, ways } from './ways.ts'
 
 const library = process.env.TINYSTORE_LIBRARY
 const binary = process.env.TINYSTORE_BIN
@@ -112,6 +114,65 @@ for (const way of clocked) {
 				store.once<string>('books', { fresh: '1h', keep: '1h' }).run('7', () => 'x'),
 			)
 			expect(refused).toBeInstanceOf(InvalidError)
+		})
+	})
+}
+
+/** Longer than the fresh of 200 ms the real clock's suites open with, so that what was kept is stale after it. */
+const pastFresh = 300
+const unclocked = ways.filter(
+	way => way.name === 'a sidecar' || way.name.startsWith('a remote server'),
+)
+
+for (const way of unclocked) {
+	describe.skipIf(!way.ready)(`once with fresh on the real clock through ${way.name}`, () => {
+		let dir: string
+		let store: Store
+
+		beforeAll(async () => {
+			dir = mkdtempSync(join(tmpdir(), 'tinystore-fresh-'))
+			store = await way.open(dir)
+		})
+
+		afterAll(async () => {
+			await store.close()
+			await way.leave(dir)
+			await removed(dir)
+		})
+
+		// contract: KV-16, KV-17
+		test('a stale answer at once, the rebuilt one after, and the last good one while the source is down', async () => {
+			const books = store.once<GradeBook>('cabinet-books', { fresh: '200ms', keep: '1h' })
+			let built = 0
+			let asked = 0
+			let down = false
+			const cabinet = async (user: number): Promise<GradeBook> => {
+				asked++
+				if (down) {
+					throw new Error('the cabinet is down')
+				}
+				built++
+				return { user, built }
+			}
+
+			const first = await books.fetch('7', () => cabinet(7))
+			expect([first.value, first.stale]).toEqual([{ user: 7, built: 1 }, false])
+
+			await sleep(pastFresh)
+			const stale = await books.fetch('7', () => cabinet(7))
+			expect([stale.value, stale.stale]).toEqual([{ user: 7, built: 1 }, true])
+			await until(async () => (await books.get('7'))?.built === 2)
+			expect(await books.get('7')).toEqual({ user: 7, built: 2 })
+
+			down = true
+			await sleep(pastFresh)
+			const kept = await books.fetch('7', () => cabinet(7))
+			expect([kept.value, kept.stale]).toEqual([{ user: 7, built: 2 }, true])
+			await until(() => asked >= 3)
+			expect(asked).toBeGreaterThanOrEqual(3)
+			expect(await books.get('7')).toEqual({ user: 7, built: 2 })
+			expect((await books.fetch('7', () => cabinet(7))).value).toEqual({ user: 7, built: 2 })
+			expect(built).toBe(2)
 		})
 	})
 }
