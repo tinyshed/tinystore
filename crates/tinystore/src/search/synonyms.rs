@@ -31,6 +31,11 @@ use crate::{Error, Result};
 
 /// The synonyms an index holds at most, the bytes of a short form, and the
 /// words of a phrase.
+///
+/// Not raised as a filter's values were: an index's settings hold its
+/// synonyms, and a search inside a transaction and every commit a table's
+/// index settles parse those settings whole, so ten times the synonyms is ten
+/// times that parse on each of them.
 const MOST_SYNONYMS: usize = 1000;
 const MOST_SHORT: usize = 64;
 const MOST_PHRASE: usize = 8;

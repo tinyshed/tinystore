@@ -180,6 +180,13 @@ with an invalid error if an alias is two words, names a field the index
 doesn't read, appears twice, or if there are more than 64. The error
 identifies the index, the document and the alias.
 
+1,000 synonyms is a hard bound, not a default. An index's settings hold its
+synonyms, and every search inside a transaction and every commit of a
+table's index read those settings whole, so a bigger list makes each of them
+slower. If you have a thesaurus of thousands of entries, put the common ones
+in `synonyms` and give the rest to the documents they belong to as
+`aliases`.
+
 Once this release opens a store's search.db, the release before it can't
 open that store. Otherwise the older release would set documents without
 their synonyms' words. The release that adds aliases does the same to
