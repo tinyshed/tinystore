@@ -475,6 +475,18 @@ Forgets every answer of this branch and of the branches under it, in one commit.
 
 A run under way meanwhile keeps its answer once it ends.
 
+### Once.reseal
+
+```python
+async def reseal() -> int: ...
+```
+
+Seals again with the store's sealing key what an older key sealed, and says how many.
+
+Every answer of this branch, and of the branches under it, as an
+encrypted bucket's ``reseal`` does; answers opened without
+``encrypted`` are an InvalidError.
+
 ## Tx
 
 ```python

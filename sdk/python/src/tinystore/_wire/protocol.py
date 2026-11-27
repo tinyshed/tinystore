@@ -4753,8 +4753,8 @@ def _read_kv_branch(r: Reader) -> dict[str, Any]:
     return read
 
 
-# A branch of a handle, for a clear, a reseal or a count; a clear takes once's
-# answers too.
+# A branch of a handle, for a clear, a reseal or a count; a clear and a reseal
+# take once's answers too.
 KvBranch = Message(
     "kv.Branch",
     {
@@ -5251,6 +5251,10 @@ def _write_kv_once_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(4)
         w.bool(x)
         n += 1
+    if (x := v.get("encrypted")) is not None:
+        w.uint(5)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5267,6 +5271,8 @@ def _read_kv_once_open(r: Reader) -> dict[str, Any]:
                 read["fresh"] = r.uint()
             case 4:
                 read["aged"] = r.bool()
+            case 5:
+                read["encrypted"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -5286,6 +5292,8 @@ KvOnceOpen = Message(
         "fresh": (3, uint),
         # the client reads age and stale; an older one sends none and is sent neither
         "aged": (4, bool_),
+        # its answers are sealed with the server's encryption key; a read connection opens none
+        "encrypted": (5, bool_),
     },
     _write_kv_once_open,
     _read_kv_once_open,

@@ -608,6 +608,15 @@ Removes every answer of this branch and of the branches under it, in
 one commit. A build in the background under way meanwhile keeps
 nothing; a run of a key that had none keeps its answer once it ends.
 
+### Fresh.reseal
+
+```rust
+pub fn reseal(&self) -> Result<u64>
+```
+
+Seals again with the store's sealing key every answer an older key
+sealed, as `Once::reseal` does.
+
 ### Fresh.under
 
 ```rust
@@ -632,6 +641,15 @@ pub fn keep(self, keep: Duration) -> Self
 ```
 
 How long an answer is kept from when it was made; a day unless said.
+
+### FreshBuilder.encrypted
+
+```rust
+pub fn encrypted(self) -> Self
+```
+
+Keeps every answer sealed with the store's encryption key, as
+`OnceBuilder::encrypted` says.
 
 ### FreshBuilder.open
 
@@ -799,6 +817,17 @@ pub fn get(&self, key: impl Key) -> Result<Option<V>>
 
 The answer kept under `key`.
 
+### Once.reseal
+
+```rust
+pub fn reseal(&self) -> Result<u64>
+```
+
+Seals again with the store's sealing key every answer of this branch,
+and of the branches under it, that an older key sealed, and says how
+many, as `Bucket::reseal` does an encrypted bucket's values; answers
+opened without `encrypted` are `Invalid`.
+
 ### Once.delete
 
 ```rust
@@ -814,7 +843,8 @@ says whether there was one.
 pub struct OnceBuilder<V> { /* private fields */ }
 ```
 
-Answers being opened: their name and type, and how long one is kept.
+Answers being opened: their name and type, how long one is kept, and
+whether they are encrypted.
 
 ### OnceBuilder.keep
 
@@ -824,6 +854,22 @@ pub fn keep(self, keep: Duration) -> Self
 
 How long an answer is kept from when it was made; a day unless said.
 After that, a run of its key runs again.
+
+### OnceBuilder.encrypted
+
+```rust
+pub fn encrypted(self) -> Self
+```
+
+Keeps every answer sealed with the store's encryption key, as an
+encrypted bucket keeps its values, for answers nobody should read in
+the file: a statement, a grade book. A name keeps whether it is
+encrypted: it opens the same way every time.
+
+```rust
+let books = store.once::<String>("grade-books").encrypted().open()?;
+let book = books.run("student-1", || Ok::<_, tinystore::Error>("grades of student 1".to_owned()))?;
+```
 
 ### OnceBuilder.fresh
 
@@ -1714,6 +1760,15 @@ pub fn clear(&self) -> impl Future<Output = Result<()>> + Send + 'static
 Removes every answer of this branch and of the branches under it, in
 one commit, as `crate::kv::Fresh::clear` does.
 
+### aio::kv::Fresh.reseal
+
+```rust
+pub fn reseal(&self) -> impl Future<Output = Result<u64>> + Send + 'static
+```
+
+Seals again every answer an older key sealed, as
+`crate::kv::Once::reseal` does.
+
 ### aio::kv::Fresh.under
 
 ```rust
@@ -1746,6 +1801,15 @@ pub fn keep(self, keep: Duration) -> Self
 ```
 
 How long an answer is kept from when it was made; a day unless said.
+
+### aio::kv::FreshBuilder.encrypted
+
+```rust
+pub fn encrypted(self) -> Self
+```
+
+Keeps every answer sealed with the store's encryption key, as
+`crate::kv::OnceBuilder::encrypted` says.
 
 ### aio::kv::FreshBuilder.spawn
 
@@ -1859,6 +1923,15 @@ pub fn clear(&self) -> impl Future<Output = Result<()>> + Send + 'static
 Removes every answer of this branch and of the branches under it, in
 one commit, as `crate::kv::Once::clear` does.
 
+### aio::kv::Once.reseal
+
+```rust
+pub fn reseal(&self) -> impl Future<Output = Result<u64>> + Send + 'static
+```
+
+Seals again every answer an older key sealed, as
+`crate::kv::Once::reseal` does.
+
 ### aio::kv::Once.under
 
 ```rust
@@ -1891,6 +1964,15 @@ pub fn keep(self, keep: Duration) -> Self
 ```
 
 How long an answer is kept from when it was made; a day unless said.
+
+### aio::kv::OnceBuilder.encrypted
+
+```rust
+pub fn encrypted(self) -> Self
+```
+
+Keeps every answer sealed with the store's encryption key, as
+`crate::kv::OnceBuilder::encrypted` says.
 
 ### aio::kv::OnceBuilder.fresh
 

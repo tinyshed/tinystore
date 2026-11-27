@@ -535,6 +535,33 @@ func TestARunKeepsItsAnswerAndAnErrorKeepsNothing(t *testing.T) {
 	})
 }
 
+// contract: SEC-03, KV-21
+func TestOnceOpenedEncryptedKeepsItsAnswersAndItsNameKeepsWhetherItIs(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		books := ways.Must(kv.OpenOnce[string](store, "grade-books", kv.Encrypted(), kv.Fresh(10*time.Minute), kv.Keep(time.Hour)))
+		book := func(context.Context) (string, error) { return "grades of student 1", nil }
+		if got := ways.Must(books.Fetch(ctx, "1", book)); got.Value != "grades of student 1" || got.Stale {
+			t.Fatalf("got %+v", got)
+		}
+		again := func(context.Context) (string, error) { return "ran again", nil }
+		if ways.Must(books.Run(ctx, "1", again)) != "grades of student 1" {
+			t.Fatal("the kept answer")
+		}
+		if moved := ways.Must(books.Reseal(ctx)); moved != 0 {
+			t.Fatalf("resealed %d, sealed with the store's own key already", moved)
+		}
+		plain := ways.Must(kv.OpenOnce[string](store, "grade-books"))
+		_, _, err := plain.Get(ctx, "1")
+		is(t, err, tinystore.ErrInvalid)
+		if !strings.Contains(err.Error(), "the name holds encrypted once's answers, not once's answers") {
+			t.Fatalf("got %v", err)
+		}
+		_, err = ways.Must(kv.OpenOnce[string](store, "plain-books")).Reseal(ctx)
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestReadsDecideTheWritesWhichCommitTogether(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

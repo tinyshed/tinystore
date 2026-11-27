@@ -39,6 +39,12 @@ impl<V: Value> FreshBuilder<V> {
         FreshBuilder { builder: self.builder.keep(keep), ..self }
     }
 
+    /// Keeps every answer sealed with the store's encryption key, as
+    /// [`crate::kv::OnceBuilder::encrypted`] says.
+    pub fn encrypted(self) -> Self {
+        FreshBuilder { builder: self.builder.encrypted(), ..self }
+    }
+
     /// Where a build in the background runs: `.spawn(|build| { tokio::spawn(build); })`.
     /// A build dropped before its end keeps nothing and lets its key go.
     pub fn spawn(self, spawn: impl Fn(Build) + Send + Sync + 'static) -> Self {
@@ -146,6 +152,14 @@ impl<V: Value> Fresh<V> {
         let answers = self.once.once().answers().clone();
         let what = named(answers.scope.shown_branch(), "a clear");
         run::write(&self.pool, what, move |answer| answers.clear_then(move |cleared| answer.send(cleared)))
+    }
+
+    /// Seals again every answer an older key sealed, as
+    /// [`crate::kv::Once::reseal`] does.
+    pub fn reseal(&self) -> impl Future<Output = Result<u64>> + Send + 'static {
+        let answers = self.once.once().answers().clone();
+        let what = named(answers.scope.shown_branch(), "a reseal");
+        run::blocking(&self.pool, None, what, move || answers.reseal())
     }
 
     /// The same answers seen from the branch `owner` names under these.

@@ -105,6 +105,34 @@ for (const way of opens) {
 			)
 		})
 
+		// contract: SEC-03, KV-21
+		test('once opened encrypted keeps answers no file shows, and its name keeps whether it is', async () => {
+			const dir = directory()
+			const store = await opened(dir)
+			const books = store.once<string>('grade-books', { fresh: '10m', keep: '1h', encrypted: true })
+			const book = await books.fetch('1', () => 'grades of student 1')
+			expect([book.value, book.stale]).toEqual(['grades of student 1', false])
+			expect(await books.run('1', () => 'ran again')).toBe('grades of student 1')
+			expect(await store.once<string>('grade-books', { encrypted: true }).get('1')).toBe(
+				'grades of student 1',
+			)
+			expect(await books.reseal()).toBe(0)
+			const plain = await caught(store.once<string>('grade-books').get('1'))
+			expect(plain).toBeInstanceOf(InvalidError)
+			expect((plain as Error).message).toContain(
+				"the name holds encrypted once's answers, not once's answers",
+			)
+			const unsealed = await caught(store.once<string>('plain-books').reseal())
+			expect(unsealed).toBeInstanceOf(InvalidError)
+
+			await closed()
+			expect(shown(dir, 'grades of student 1')).toBe(false)
+			const again = await opened(dir)
+			expect(await again.once<string>('grade-books', { encrypted: true }).get('1')).toBe(
+				'grades of student 1',
+			)
+		})
+
 		test('its key is the file the options name, which the store only reads', async () => {
 			const dir = directory()
 			const key = join(directory(), 'tinystore.key')

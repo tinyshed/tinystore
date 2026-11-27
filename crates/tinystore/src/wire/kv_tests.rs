@@ -6,7 +6,7 @@ use crate::pipe::fixture::Client;
 use crate::wire::codec::{Message, Row};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, KvAnswer, KvBranch, KvBucketOpen, KvCall, KvCount, KvOnceOpen, KvWritten, method,
+    Empty, Handle, KvAnswer, KvBranch, KvBucketOpen, KvCall, KvCount, KvOnceOpen, KvResealed, KvWritten, method,
 };
 
 // contract: KV-15
@@ -30,7 +30,8 @@ fn a_count_over_the_wire_is_the_branchs_own_keys() {
 /// opened as a client that reads age and refresh does, kept twelve hours.
 fn books(f: &Fixture, fresh: Option<u64>) -> (Client, u64) {
     let mut client = Client::admitted(&f.store, Capability::Data);
-    let open = KvOnceOpen { name: "books".to_owned(), keep: Some(12 * 3_600_000), fresh, aged: true };
+    let open =
+        KvOnceOpen { name: "books".to_owned(), keep: Some(12 * 3_600_000), fresh, aged: true, ..KvOnceOpen::default() };
     let handle = client.call::<Handle>(method::KV_ONCE_OPEN, &open).unwrap().handle;
     (client, handle)
 }
@@ -103,7 +104,13 @@ fn a_handle_opened_as_an_older_client_does_is_never_handed_a_build_in_the_backgr
 fn a_fresh_as_long_as_keep_is_refused_over_the_wire() {
     let f = fixture();
     let mut client = Client::admitted(&f.store, Capability::Data);
-    let open = KvOnceOpen { name: "books".to_owned(), keep: Some(60_000), fresh: Some(60_000), aged: true };
+    let open = KvOnceOpen {
+        name: "books".to_owned(),
+        keep: Some(60_000),
+        fresh: Some(60_000),
+        aged: true,
+        ..KvOnceOpen::default()
+    };
     let refused = client.call::<Handle>(method::KV_ONCE_OPEN, &open).unwrap_err();
     assert_eq!(refused.code, "invalid", "{refused:?}");
     assert!(refused.message.contains("kv once books"), "{refused:?}");
@@ -119,4 +126,25 @@ fn a_clear_over_the_wire_takes_once_answers() {
     built(&mut client, &call, &book(1));
     client.call::<Empty>(method::KV_CLEAR, &KvBranch { handle, under }).unwrap();
     assert!(!client.call::<KvAnswer>(method::KV_ONCE_GET, &call).unwrap().found, "cleared");
+}
+
+// contract: KV-21, SEC-03
+#[test]
+fn once_opened_encrypted_over_the_wire_keeps_its_answers_sealed_and_a_read_connection_opens_none() {
+    let f = fixture();
+    let mut client = Client::admitted(&f.store, Capability::Data);
+    let open = KvOnceOpen { name: "books".to_owned(), encrypted: true, ..KvOnceOpen::default() };
+    let handle = client.call::<Handle>(method::KV_ONCE_OPEN, &open).unwrap().handle;
+    built(&mut client, &KvCall { handle, key: "user-7".to_owned(), ..KvCall::default() }, &book(7));
+    let sealed = f.store.once::<i64>("books").encrypted().open().unwrap();
+    assert_eq!(sealed.get("user-7").unwrap(), Some(7), "the core's own handle opens what the client kept");
+    let resealed: KvResealed = client.call(method::KV_RESEAL, &KvBranch { handle, under: vec![] }).unwrap();
+    assert_eq!(resealed.count, 0, "sealed with the store's own key already");
+
+    let plain = KvOnceOpen { name: "books".to_owned(), ..KvOnceOpen::default() };
+    let refused = client.call::<Handle>(method::KV_ONCE_OPEN, &plain).unwrap_err();
+    assert_eq!(refused.code, "invalid", "a name keeps whether it is encrypted: {refused:?}");
+    let mut reader = Client::admitted(&f.store, Capability::Read);
+    let refused = reader.call::<Handle>(method::KV_ONCE_OPEN, &open).unwrap_err();
+    assert_eq!(refused.code, "permission", "{refused:?}");
 }

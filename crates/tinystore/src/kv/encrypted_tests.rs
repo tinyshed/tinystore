@@ -348,3 +348,99 @@ fn a_store_that_seals_nothing_makes_no_key() {
     passwords(&f.store);
     assert!(f.dir.path().join("encryption.key").exists(), "the first encrypted bucket made it");
 }
+
+/// Every value of `name`'s rows as kv.db keeps it, read past every handle.
+fn raw_values(store: &Store, name: &str) -> Vec<Vec<u8>> {
+    const SQL: &str = "select c.value from _tinystore_kv_cells c join _tinystore_kv_buckets b on b.id = c.bucket \
+                       where b.name = ?1";
+    let failed = |error| crate::sqlite::sql_error(SQL, error);
+    let read = |connection: &rusqlite::Connection| {
+        let mut statement = connection.prepare(SQL).map_err(failed)?;
+        let rows = statement.query_map([name], |row| {
+            Ok(match row.get_ref(0)? {
+                rusqlite::types::ValueRef::Blob(bytes) | rusqlite::types::ValueRef::Text(bytes) => bytes.to_vec(),
+                other => format!("{other:?}").into_bytes(),
+            })
+        });
+        rows.map_err(failed)?.collect::<rusqlite::Result<Vec<_>>>().map_err(failed)
+    };
+    Kv::of(store).unwrap().file().read(read).unwrap()
+}
+
+fn holds(bytes: &[u8], text: &str) -> bool {
+    bytes.windows(text.len()).any(|window| window == text.as_bytes())
+}
+
+fn books(store: &Store) -> crate::kv::Once<String> {
+    store.once::<String>("grade-books").encrypted().open().unwrap()
+}
+
+const BOOK: &str = "grades of student 1: an A in physics";
+
+fn answer(text: &str) -> impl FnOnce() -> Result<String> + use<> {
+    let text = text.to_owned();
+    move || Ok(text)
+}
+
+// contract: SEC-03, KV-21
+#[test]
+fn an_encrypted_once_keeps_no_answer_a_file_or_a_row_shows() {
+    let f = fixture();
+    let plain = f.store.once::<String>("plain-books").open().unwrap();
+    plain.run("1", answer("a-plain-answer")).unwrap();
+    assert_eq!(books(&f.store).run("1", answer(BOOK)).unwrap(), BOOK);
+    assert_eq!(books(&f.store).run("1", answer("ran again")).unwrap(), BOOK, "kept");
+    assert_eq!(books(&f.store).get("1").unwrap().as_deref(), Some(BOOK));
+
+    let rows = raw_values(&f.store, "grade-books");
+    assert_eq!(rows.len(), 1);
+    assert!(!holds(&rows[0], BOOK), "the row is sealed");
+    assert!(holds(&raw_values(&f.store, "plain-books")[0], "a-plain-answer"), "the look finds a plain row");
+    assert!(on_disk(f.dir.path(), "a-plain-answer"), "the look finds a plain answer on disk");
+    assert!(!on_disk(f.dir.path(), BOOK));
+
+    let fresh = f.store.once::<String>("grade-books").encrypted().fresh(HOUR).keep(2 * HOUR).open().unwrap();
+    assert_eq!(fresh.get("1").unwrap().as_deref(), Some(BOOK), "opened with fresh, the same sealed answers");
+    let f = f.reopen();
+    assert_eq!(books(&f.store).get("1").unwrap().as_deref(), Some(BOOK), "the key is read again");
+}
+
+// contract: KV-21
+#[test]
+fn a_once_name_keeps_whether_it_is_encrypted() {
+    let f = fixture();
+    f.store.once::<String>("plain-books").open().unwrap();
+    let sealed_later = f.store.once::<String>("plain-books").encrypted().open().unwrap_err();
+    assert_eq!(sealed_later.kind(), ErrorKind::Invalid);
+    let said = "kv once plain-books: the name holds once's answers, not encrypted once's answers";
+    assert!(sealed_later.to_string().contains(said), "{sealed_later}");
+
+    books(&f.store);
+    let plain_later = f.store.once::<String>("grade-books").open().unwrap_err();
+    assert!(plain_later.to_string().contains("the name holds encrypted once's answers, not once's"), "{plain_later}");
+    let as_bucket = f.store.bucket::<String>("grade-books").encrypted().open().unwrap_err();
+    assert_eq!(as_bucket.kind(), ErrorKind::Invalid, "an encrypted once is no encrypted bucket: {as_bucket}");
+    let plain = f.store.once::<String>("plain-books").open().unwrap();
+    assert_eq!(plain.reseal().unwrap_err().kind(), ErrorKind::Invalid, "answers that seal nothing");
+}
+
+// contract: SEC-04
+#[test]
+fn a_reseal_of_once_seals_with_the_new_key_what_the_old_one_did() {
+    let dir = tempfile::tempdir().unwrap();
+    let (old, new) = (key_file(dir.path(), "old.key", "0a"), key_file(dir.path(), "new.key", "0b"));
+    let data = dir.path().join("data");
+    let store = with_keys(&data, &old, &[]);
+    books(&store).run("1", answer(BOOK)).unwrap();
+    books(&store).under("class-9").run("2", answer("book 2")).unwrap();
+    store.close().unwrap();
+
+    let store = with_keys(&data, &new, &[&old]);
+    assert_eq!(books(&store).reseal().unwrap(), 2, "every answer the old key sealed, a branch's too");
+    assert_eq!(books(&store).reseal().unwrap(), 0);
+    store.close().unwrap();
+
+    let store = with_keys(&data, &new, &[]);
+    assert_eq!(books(&store).get("1").unwrap().as_deref(), Some(BOOK), "opened without the old key");
+    assert_eq!(books(&store).under("class-9").get("2").unwrap().as_deref(), Some("book 2"));
+}

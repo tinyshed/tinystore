@@ -52,10 +52,12 @@ pub(crate) enum Handle {
         name: String,
         ttl: Option<Duration>,
     },
-    /// Once's answers, each kept for `keep` milliseconds.
+    /// Once's answers, each kept for `keep` milliseconds, sealed when they
+    /// are encrypted.
     Once {
         name: String,
         keep: u64,
+        encrypted: bool,
     },
     /// A rate limit, its rate as the nanoseconds one request takes.
     RateLimit {
@@ -109,6 +111,18 @@ pub(crate) enum Call {
     OnceKeep {
         token: u64,
         answer: Option<Raw>,
+    },
+    /// A claim of an encrypted once's key for a copy that shares the key
+    /// `key_id`, whose kept answer comes back sealed with it.
+    OnceClaimSealed {
+        key_id: String,
+    },
+    /// A keep of an encrypted once's answer, sealed where it was made with
+    /// the key `key_id`: no answer crosses the link unsealed.
+    OnceKeepSealed {
+        token: u64,
+        raw: Raw,
+        key_id: String,
     },
     /// Asks a rate limit or a quota for `n` of a key.
     Allow(u64),
@@ -177,7 +191,8 @@ fn handle_out(out: &mut Out, handle: &Handle) {
         Handle::Quota { name, windows } => out.byte(4).text(name).list(windows, |out, (window, limit, span)| {
             out.text(window).long(*limit).long(*span as u64);
         }),
-        Handle::Once { name, keep } => out.byte(5).text(name).long(*keep),
+        // encrypted answers take a byte of their own, so that a home of a release before refuses them
+        Handle::Once { name, keep, encrypted } => out.byte(if *encrypted { 6 } else { 5 }).text(name).long(*keep),
     };
 }
 
@@ -215,6 +230,8 @@ fn call_out(out: &mut Out, call: &Call) {
         Call::Renew(renewal) => {
             out.byte(17).long(renewal.version as u64).long(renewal.seen as u64).long(renewal.until as u64)
         }
+        Call::OnceClaimSealed { key_id } => out.byte(18).text(key_id),
+        Call::OnceKeepSealed { token, raw, key_id } => raw_out(out.byte(19).long(*token), raw).text(key_id),
     };
 }
 
@@ -269,7 +286,8 @@ fn handle_in(at: &mut In<'_>) -> Result<Handle> {
             name: at.text()?,
             windows: at.list(1 << 10, |at| Ok((at.text()?, at.long()?, at.long()? as i64)))?,
         },
-        5 => Handle::Once { name: at.text()?, keep: at.long()? },
+        5 => Handle::Once { name: at.text()?, keep: at.long()?, encrypted: false },
+        6 => Handle::Once { name: at.text()?, keep: at.long()?, encrypted: true },
         _ => return Err(corrupt("a handle")),
     })
 }
@@ -294,6 +312,8 @@ fn call_in(at: &mut In<'_>) -> Result<Call> {
         15 => Call::AddQueued { n: at.long()? as i64, from: Some((at.text()?, at.long()?)) },
         16 => Call::TakeSealed { options: options_in(at)?, key_id: at.text()? },
         17 => Call::Renew(Renewal { version: at.long()? as i64, seen: at.long()? as i64, until: at.long()? as i64 }),
+        18 => Call::OnceClaimSealed { key_id: at.text()? },
+        19 => Call::OnceKeepSealed { token: at.long()?, raw: raw_in(at)?, key_id: at.text()? },
         _ => return Err(corrupt("a call")),
     })
 }
@@ -332,8 +352,8 @@ fn call_here(
             let builder = if encrypted { builder.encrypted() } else { builder };
             on_bucket(&owners.iter().fold(builder.open()?, |bucket, owner| bucket.under(owner)), key, call)
         }
-        Handle::Once { name, keep } => {
-            let answers = super::once::rows(store, &name, Some(Duration::from_millis(keep)), None)?;
+        Handle::Once { name, keep, encrypted } => {
+            let answers = super::once::rows(store, &name, (Some(Duration::from_millis(keep)), None), encrypted)?;
             on_once(&owners.iter().fold(answers, |answers, owner| answers.under(owner)), key, call)
         }
         Handle::RateLimit { name, interval, burst } => {
@@ -380,16 +400,30 @@ fn on_bucket(bucket: &Bucket<()>, key: &str, call: Call) -> Result<Answer> {
 fn on_once(answers: &Bucket<()>, key: &str, call: Call) -> Result<Answer> {
     match call {
         Call::OnceClaim => Ok(Answer::Claimed(claim_here(answers, key)?)),
-        Call::OnceKeep { token, answer } => {
-            let handed = answers.scope.kv.take_passed(token).ok_or_else(|| {
-                Error::new(ErrorKind::Lost, "the run's claim went before it answered: another run may have run")
-            })?;
-            handed.keep(answer);
-            Ok(Answer::Done)
+        Call::OnceClaimSealed { key_id } => {
+            let sealing = answers.shared_seal(key, &key_id)?;
+            Ok(Answer::Claimed(match claim_here(answers, key)? {
+                Claimed::Kept(raw) => Claimed::Kept(sealing.seal(&raw)?),
+                yours => yours,
+            }))
+        }
+        Call::OnceKeep { token, answer } => keep_passed(answers, token, answer),
+        Call::OnceKeepSealed { token, raw, key_id } => {
+            let opened = answers.shared_seal(key, &key_id)?.open(&raw)?;
+            keep_passed(answers, token, Some(opened))
         }
         // a fresh answer a copy built, a delete or a clear: a write on the rows
         call => on_bucket(answers, key, call),
     }
+}
+
+/// Keeps what the run handed over by `token` answered, none when it failed.
+fn keep_passed(answers: &Bucket<()>, token: u64, answer: Option<Raw>) -> Result<Answer> {
+    let handed = answers.scope.kv.take_passed(token).ok_or_else(|| {
+        Error::new(ErrorKind::Lost, "the run's claim went before it answered: another run may have run")
+    })?;
+    handed.keep(answer);
+    Ok(Answer::Done)
 }
 
 fn on_rate_limit(limit: &RateLimit, key: &str, call: Call) -> Result<Answer> {

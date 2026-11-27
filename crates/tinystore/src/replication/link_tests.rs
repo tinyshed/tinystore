@@ -904,6 +904,40 @@ fn an_encrypted_bucket_s_value_written_on_a_copy_crosses_the_link_sealed() {
     home.close().unwrap();
 }
 
+// contract: KV-21
+#[test]
+fn an_encrypted_once_run_on_a_copy_keeps_its_answer_at_home_and_reads_it_back() {
+    let (home_dir, copy_dir, keys) =
+        (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let key = keys.path().join("one.key");
+    std::fs::write(&key, "3fa9".repeat(16)).unwrap();
+    let keyed = |dir: &Path, node: Node| {
+        let options = Options {
+            node: Some(node),
+            background: false,
+            encryption_key_file: Some(key.clone()),
+            ..Options::default()
+        };
+        Store::open(dir, options).unwrap()
+    };
+    let home = keyed(home_dir.path(), Node { serve: Some("127.0.0.1:0".into()), ..Node::default() });
+    let address = bound(home.node().unwrap()).unwrap().to_string();
+    let home_books = home.once::<String>("grade-books").encrypted().open().unwrap();
+    home_books.run("planted", || Ok::<_, crate::Error>("made at home".to_owned())).unwrap();
+    let copy = keyed(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let books = copy.once::<String>("grade-books").encrypted().open().unwrap();
+
+    let made = books.run("1", || Ok::<_, crate::Error>("grades of student 1".to_owned())).unwrap();
+    assert_eq!(made, "grades of student 1");
+    assert_eq!(home_books.get("1").unwrap().as_deref(), Some(made.as_str()), "kept at home, sealed with the key");
+    let again = books.run("1", || Ok::<_, crate::Error>("ran again".to_owned())).unwrap();
+    assert_eq!(again, made, "the copy reads the kept answer");
+    let planted = books.run("planted", || Ok::<_, crate::Error>("ran on the copy".to_owned())).unwrap();
+    assert_eq!(planted, "made at home", "a claim's kept answer opens on the copy");
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
 #[test]
 fn a_copy_s_rate_limits_and_quotas_are_decided_at_their_home() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());

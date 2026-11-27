@@ -24,7 +24,7 @@ Burst is how many requests a rate limit lets through at once.
 func Encrypted() encrypted
 ```
 
-Encrypted keeps every value of the bucket sealed with the store's encryption key.
+Encrypted keeps every value of the bucket, or every answer of a once, sealed with the store's encryption key; a name keeps whether it is.
 
 ## ExpiresAt
 
@@ -468,6 +468,7 @@ OpenOnce opens answers of type T kept once a key, a day unless Keep says.
 
 	charges, err := kv.OpenOnce[Receipt](store, "charges", kv.Keep(24*time.Hour))
 	books, err := kv.OpenOnce[GradeBook](store, "cabinet-books", kv.Fresh(10*time.Minute), kv.Keep(12*time.Hour))
+	grades, err := kv.OpenOnce[GradeBook](store, "grade-books", kv.Encrypted())
 
 ### Once.Clear
 
@@ -502,6 +503,14 @@ func (o *Once[T]) Get(ctx context.Context, key string) (T, bool, error)
 ```
 
 Get is the answer kept for key, and whether one is.
+
+### Once.Reseal
+
+```go
+func (o *Once[T]) Reseal(ctx context.Context) (uint64, error)
+```
+
+Reseal seals again with the store's sealing key every answer of this branch, and of the branches under it, that an older key sealed, and says how many, as an encrypted bucket's Reseal does; answers opened without Encrypted are an Invalid error.
 
 ### Once.Run
 

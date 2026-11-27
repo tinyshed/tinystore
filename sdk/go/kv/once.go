@@ -37,6 +37,7 @@ type Fetched[T any] struct {
 //
 //	charges, err := kv.OpenOnce[Receipt](store, "charges", kv.Keep(24*time.Hour))
 //	books, err := kv.OpenOnce[GradeBook](store, "cabinet-books", kv.Fresh(10*time.Minute), kv.Keep(12*time.Hour))
+//	grades, err := kv.OpenOnce[GradeBook](store, "grade-books", kv.Encrypted())
 func OpenOnce[T any](home tinystore.Home, name string, opts ...OnceOption) (*Once[T], error) {
 	var o onceOptions
 	for _, opt := range opts {
@@ -57,10 +58,10 @@ func OpenOnce[T any](home tinystore.Home, name string, opts ...OnceOption) (*Onc
 	// Only this client, which reads Refresh, sends Fresh: the core hands a
 	// build in the background only to a handle opened with it, so an older
 	// client never reads one as a run of its own.
-	aged := &core.Opener{Method: wire.MethodKvOnceOpen, Body: wire.Encode(&wire.KvOnceOpen{Name: name, Keep: keepMs, Fresh: freshMs, Aged: true})}
+	aged := &core.Opener{Method: wire.MethodKvOnceOpen, Body: wire.Encode(&wire.KvOnceOpen{Name: name, Keep: keepMs, Fresh: freshMs, Aged: true, Encrypted: o.encrypted})}
 	plain := aged
 	if freshMs == nil {
-		plain = &core.Opener{Method: wire.MethodKvOnceOpen, Body: wire.Encode(&wire.KvOnceOpen{Name: name, Keep: keepMs})}
+		plain = &core.Opener{Method: wire.MethodKvOnceOpen, Body: wire.Encode(&wire.KvOnceOpen{Name: name, Keep: keepMs, Encrypted: o.encrypted})}
 	}
 	opened := parts{store: of.Store, name: name, opener: plain, via: core.ViaLink{Link: of.Store.Link}}
 	return &Once[T]{opened, aged, core.JSONValues[T]()}, nil
@@ -242,4 +243,22 @@ func (o *Once[T]) Clear(ctx context.Context) error {
 		return wire.Encode(&wire.KvBranch{Handle: handle, Under: o.under})
 	}, core.Writing)
 	return err
+}
+
+// Reseal seals again with the store's sealing key every answer of this
+// branch, and of the branches under it, that an older key sealed, and says how
+// many, as an encrypted bucket's Reseal does; answers opened without
+// Encrypted are an Invalid error.
+func (o *Once[T]) Reseal(ctx context.Context) (uint64, error) {
+	answer, err := o.via.Call(ctx, o.opener, wire.MethodKvReseal, func(handle uint64) []byte {
+		return wire.Encode(&wire.KvBranch{Handle: handle, Under: o.under})
+	}, core.Writing)
+	if err != nil {
+		return 0, err
+	}
+	var resealed wire.KvResealed
+	if err := decode(answer, &resealed); err != nil {
+		return 0, err
+	}
+	return resealed.Count, nil
 }

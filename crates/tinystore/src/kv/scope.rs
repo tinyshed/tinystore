@@ -22,6 +22,8 @@ pub(crate) enum Kind {
     RateLimit,
     Quota,
     Once,
+    /// Once's answers sealed with the store's encryption key.
+    EncryptedOnce,
 }
 
 impl Kind {
@@ -34,13 +36,14 @@ impl Kind {
             Kind::RateLimit => "rate limit",
             Kind::Quota => "quota",
             Kind::Once => "once",
+            Kind::EncryptedOnce => "encrypted once",
         }
     }
 
     /// The kind a name's row keeps as `role`.
     #[cfg(feature = "replication")]
     pub(crate) fn of_role(role: &str) -> Option<Kind> {
-        [Kind::Values, Kind::Encrypted, Kind::Counters, Kind::RateLimit, Kind::Quota, Kind::Once]
+        [Kind::Values, Kind::Encrypted, Kind::Counters, Kind::RateLimit, Kind::Quota, Kind::Once, Kind::EncryptedOnce]
             .into_iter()
             .find(|kind| kind.role() == role)
     }
@@ -52,8 +55,13 @@ impl Kind {
             Kind::Counters => "counters",
             Kind::RateLimit => "rate limit",
             Kind::Quota => "quota",
-            Kind::Once => "once",
+            Kind::Once | Kind::EncryptedOnce => "once",
         }
+    }
+
+    /// Whether the name's values are sealed with the store's encryption key.
+    pub(crate) fn sealed(self) -> bool {
+        matches!(self, Kind::Encrypted | Kind::EncryptedOnce)
     }
 }
 
@@ -138,7 +146,6 @@ impl Scope {
         &self.name
     }
 
-    #[cfg(feature = "replication")]
     pub(crate) fn kind(&self) -> Kind {
         self.kind
     }

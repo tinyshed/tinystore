@@ -120,6 +120,7 @@ def once[T](
     *,
     keep: Duration | None = None,
     fresh: Duration | None = None,
+    encrypted: bool = False,
 ) -> Once[T]: ...
 @overload
 def once(
@@ -128,6 +129,7 @@ def once(
     *,
     keep: Duration | None = None,
     fresh: Duration | None = None,
+    encrypted: bool = False,
 ) -> Once[Any]: ...
 def once(
     name: str,
@@ -135,6 +137,7 @@ def once(
     *,
     keep: Duration | None = None,
     fresh: Duration | None = None,
+    encrypted: bool = False,
 ) -> Once[Any]: ...
 ```
 
@@ -142,6 +145,8 @@ A function run once a key, its JSON answer kept a day unless keep says.
 
 ``store.once("charges", Receipt)``; with fresh, shorter than keep, an answer
 older than it is answered at once while one new one is made in the background.
+With encrypted, every answer is sealed with the store's encryption key, as an
+encrypted bucket's values are, and a name keeps whether it is encrypted.
 
 ### Store.queue
 

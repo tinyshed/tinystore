@@ -52,8 +52,8 @@ message kv.Resealed {
   1 count: uint
 }
 
-# A branch of a handle, for a clear, a reseal or a count; a clear takes once's
-# answers too.
+# A branch of a handle, for a clear, a reseal or a count; a clear and a reseal
+# take once's answers too.
 message kv.Branch {
   1 handle: uint
   2 under: [key]
@@ -131,6 +131,7 @@ message kv.OnceOpen {
   2 keep: duration?          # a day when absent
   3 fresh: duration?         # how long an answer is answered without making a new one, shorter than keep
   4 aged: bool               # the client reads age and stale; an older one sends none and is sent neither
+  5 encrypted: bool          # its answers are sealed with the server's encryption key; a read connection opens none
 }
 
 # An answer of once: in the server's RESPONSE, found when one was kept, and

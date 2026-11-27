@@ -83,9 +83,15 @@ pub(crate) fn call(
         method::KV_QUOTA_OPEN => handles.open(open_quota(store, KvQuotaOpen::decode(body)?, read_only)?),
         method::KV_ONCE_OPEN => {
             let open = KvOnceOpen::decode(body)?;
-            held(&Home::Store(store.clone()), &open.name, Kind::Once, read_only)?;
+            // what a read connection may read is what the file shows without the key, as of a bucket
+            if open.encrypted && read_only {
+                return Err(Failure::permission("a read connection opens no encrypted once"));
+            }
+            let kind = if open.encrypted { Kind::EncryptedOnce } else { Kind::Once };
+            held(&Home::Store(store.clone()), &open.name, kind, read_only)?;
             let (keep, fresh) = (open.keep.map(Duration::from_millis), open.fresh.map(Duration::from_millis));
-            handles.open(Opened::Once(once_rows(store, &open.name, keep, fresh)?, Terms { fresh, aged: open.aged }))
+            let answers = once_rows(store, &open.name, (keep, fresh), open.encrypted)?;
+            handles.open(Opened::Once(answers, Terms { fresh, aged: open.aged }))
         }
         method::KV_GET => get(handles, KvCall::decode(body)?),
         method::KV_HAS => has(handles, KvCall::decode(body)?),
@@ -101,7 +107,7 @@ pub(crate) fn call(
         }
         method::KV_RESEAL => {
             let branch = KvBranch::decode(body)?;
-            Ok(KvResealed { count: handles.bucket(branch.handle, &branch.under)?.reseal()? }.encode())
+            Ok(KvResealed { count: handles.cleared(branch.handle, &branch.under)?.reseal()? }.encode())
         }
         method::KV_COUNT => {
             let branch = KvBranch::decode(body)?;
@@ -316,7 +322,8 @@ impl Handles {
         }
     }
 
-    /// The branch a clear removes: a bucket's, or once's answers'.
+    /// The branch a clear removes or a reseal seals again: a bucket's, or
+    /// once's answers'.
     fn cleared(&self, handle: u64, under: &[String]) -> Result<Bucket<()>, Failure> {
         match self.opened(handle)? {
             Opened::Once(..) => self.once(handle, under),

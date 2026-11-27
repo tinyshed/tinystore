@@ -452,6 +452,12 @@ interface OnceOptions {
      * made in the background
      */
     fresh?: Duration | undefined
+    /**
+     * Keeps every answer sealed with the store's encryption key, as an
+     * encrypted bucket keeps its values: the file holds what nobody reads
+     * without the key. A name keeps whether it is encrypted.
+     */
+    encrypted?: boolean | undefined
 }
 ```
 
@@ -536,6 +542,17 @@ clear(): Promise<void>
 
 Forgets every answer of this branch and of the branches under it, in one
 commit. A run under way meanwhile keeps its answer once it ends.
+
+### Once.reseal
+
+```ts
+reseal(): Promise<number>
+```
+
+Seals again with the store's sealing key every answer of this branch,
+and of the branches under it, that an older key sealed, and says how
+many, as an encrypted bucket's `reseal` does; answers opened without
+`encrypted` are an `InvalidError`.
 
 ## Tx
 

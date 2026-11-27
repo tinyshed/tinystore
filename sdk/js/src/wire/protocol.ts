@@ -5870,8 +5870,8 @@ export const KvResealed = message(
 )
 
 /**
- * A branch of a handle, for a clear, a reseal or a count; a clear takes once's
- * answers too.
+ * A branch of a handle, for a clear, a reseal or a count; a clear and a reseal
+ * take once's answers too.
  */
 export const KvBranch = message(
 	'kv.Branch',
@@ -6499,6 +6499,8 @@ export const KvOnceOpen = message(
 		fresh: [3, uint],
 		/** the client reads age and stale; an older one sends none and is sent neither */
 		aged: [4, bool],
+		/** its answers are sealed with the server's encryption key; a read connection opens none */
+		encrypted: [5, bool],
 	},
 	{
 		write(w, v) {
@@ -6524,6 +6526,11 @@ export const KvOnceOpen = message(
 				w.bool(v.aged)
 				n++
 			}
+			if (v.encrypted !== undefined) {
+				w.field(5)
+				w.bool(v.encrypted)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -6531,6 +6538,7 @@ export const KvOnceOpen = message(
 			let $keep: number | undefined
 			let $fresh: number | undefined
 			let $aged: boolean | undefined
+			let $encrypted: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -6545,12 +6553,15 @@ export const KvOnceOpen = message(
 					case 4:
 						$aged = r.bool()
 						break
+					case 5:
+						$encrypted = r.bool()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name, keep: $keep, fresh: $fresh, aged: $aged }
+			return { name: $name, keep: $keep, fresh: $fresh, aged: $aged, encrypted: $encrypted }
 		},
 	},
 )

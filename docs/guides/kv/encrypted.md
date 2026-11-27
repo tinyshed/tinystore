@@ -124,8 +124,8 @@ let moved = passwords.reseal()?; // 120
 
 - **To rotate a key**, make a new one with `openssl rand -hex 32`, give it as
   the encryption key, and move the old one to the older keys. Call `reseal`
-  on each encrypted bucket. Once every bucket is resealed, remove the old key
-  from the options.
+  on each encrypted bucket, and on each [encrypted once](once.md#encrypted-answers).
+  Once every one is resealed, remove the old key from the options.
 - **`reseal` writes a batch of values per commit.** Each value keeps its
   version and its expiry, so a conditional write after it still matches.
 - **After a restore without the key**, put a new key where the store reads

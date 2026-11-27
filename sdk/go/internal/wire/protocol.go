@@ -6655,8 +6655,8 @@ func (m KvResealed) IsZero() bool {
 
 // KvBranch is the schema's kv.Branch.
 //
-// A branch of a handle, for a clear, a reseal or a count; a clear takes once's
-// answers too.
+// A branch of a handle, for a clear, a reseal or a count; a clear and a reseal
+// take once's answers too.
 type KvBranch struct {
 	Handle uint64   `wire:"1,handle"`
 	Under  []string `wire:"2,under"`
@@ -7283,6 +7283,8 @@ type KvOnceOpen struct {
 	Fresh *uint64 `wire:"3,fresh"`
 	// the client reads age and stale; an older one sends none and is sent neither
 	Aged bool `wire:"4,aged"`
+	// its answers are sealed with the server's encryption key; a read connection opens none
+	Encrypted bool `wire:"5,encrypted"`
 }
 
 func (m KvOnceOpen) Write(w *Writer) {
@@ -7308,6 +7310,11 @@ func (m KvOnceOpen) Write(w *Writer) {
 		w.Bool(m.Aged)
 		n++
 	}
+	if m.Encrypted {
+		w.Uint(5)
+		w.Bool(m.Encrypted)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -7326,6 +7333,8 @@ func (m *KvOnceOpen) Read(r *Reader) {
 			m.Fresh = &v
 		case 4:
 			m.Aged = r.Bool()
+		case 5:
+			m.Encrypted = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -7338,7 +7347,8 @@ func (m KvOnceOpen) IsZero() bool {
 	return m.Name == "" &&
 		m.Keep == nil &&
 		m.Fresh == nil &&
-		!m.Aged
+		!m.Aged &&
+		!m.Encrypted
 }
 
 // KvAnswer is the schema's kv.Answer.

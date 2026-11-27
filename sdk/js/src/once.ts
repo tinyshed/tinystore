@@ -15,7 +15,15 @@ import { withoutHolding } from './locks.ts'
 import { ConnectionLostError, type Stream, watch } from './session.ts'
 import { type Duration, type DurationText, ms, spelled } from './time.ts'
 import type { Key } from './wire/codec.ts'
-import { KvAnswer, KvBranch, KvCall, KvFound, KvOnceOpen, methods } from './wire/protocol.ts'
+import {
+	KvAnswer,
+	KvBranch,
+	KvCall,
+	KvFound,
+	KvOnceOpen,
+	KvResealed,
+	methods,
+} from './wire/protocol.ts'
 
 export interface OnceOptions {
 	/** how long an answer is kept: a day when absent */
@@ -26,10 +34,16 @@ export interface OnceOptions {
 	 * made in the background
 	 */
 	fresh?: Duration | undefined
+	/**
+	 * Keeps every answer sealed with the store's encryption key, as an
+	 * encrypted bucket keeps its values: the file holds what nobody reads
+	 * without the key. A name keeps whether it is encrypted.
+	 */
+	encrypted?: boolean | undefined
 }
 
 /** The options a once takes: any other is refused by name, since it would go nowhere. */
-const onceFields: readonly (keyof OnceOptions)[] = ['keep', 'fresh']
+const onceFields: readonly (keyof OnceOptions)[] = ['keep', 'fresh', 'encrypted']
 
 /** An answer with how old it is: stale once older than the `fresh` its answers opened with. */
 export interface Fetched<T> {
@@ -138,6 +152,22 @@ export class Once<T> {
 			const handle = await handleOn(connection, methods['kv.once.open'], this.#opens.plain)
 			const branch = KvBranch.encode({ handle, under: underField(this.#under) })
 			await connection.session.call(methods['kv.clear'], branch)
+		})
+	}
+
+	/**
+	 * Seals again with the store's sealing key every answer of this branch,
+	 * and of the branches under it, that an older key sealed, and says how
+	 * many, as an encrypted bucket's `reseal` does; answers opened without
+	 * `encrypted` are an `InvalidError`.
+	 */
+	async reseal(): Promise<number> {
+		return await this.#link.run('write', async connection => {
+			const handle = await handleOn(connection, methods['kv.once.open'], this.#opens.plain)
+			const branch = KvBranch.encode({ handle, under: underField(this.#under) })
+			return (
+				KvResealed.decode(await connection.session.call(methods['kv.reseal'], branch)).count ?? 0
+			)
 		})
 	}
 
@@ -265,6 +295,7 @@ export function onceOpen(name: string, options: OnceOptions = {}): OnceOpens {
 	refuseUnknown(`kv once ${name}`, options, onceFields)
 	const keep = options.keep === undefined ? undefined : ms(options.keep)
 	const fresh = options.fresh === undefined ? undefined : ms(options.fresh)
-	const aged = KvOnceOpen.encode({ name, keep, fresh, aged: true })
-	return { plain: fresh === undefined ? KvOnceOpen.encode({ name, keep }) : aged, aged }
+	const encrypted = options.encrypted === true
+	const aged = KvOnceOpen.encode({ name, keep, fresh, aged: true, encrypted })
+	return { plain: fresh === undefined ? KvOnceOpen.encode({ name, keep, encrypted }) : aged, aged }
 }

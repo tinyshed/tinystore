@@ -30,7 +30,7 @@ from ._connection import check_name
 from ._handles import handle_on, via_link
 from ._session import ConnectionLostError, Stream
 from ._time import Duration, ms
-from ._wire.protocol import KvAnswer, KvBranch, KvCall, KvFound, KvOnceOpen, methods
+from ._wire.protocol import KvAnswer, KvBranch, KvCall, KvFound, KvOnceOpen, KvResealed, methods
 from .errors import OutcomeUnknownError, ProtocolError
 from .kv import Parts, below, call_on, under_field
 from .locks import outside_holds
@@ -57,15 +57,15 @@ class OnceOpens:
     aged: bytes
 
 
-def once_open(name: str, keep: Duration | None, fresh: Duration | None = None) -> OnceOpens:
+def once_open(name: str, keep: Duration | None, fresh: Duration | None = None, *, encrypted: bool = False) -> OnceOpens:
     """Only this client, which reads ``refresh``, sends ``fresh``: the core hands
     a build in the background only to a handle opened with it, so an older client
     never reads one as a run of its own. A handle with ``fresh`` opens aged."""
     check_name(name, "once")
     kept = None if keep is None else ms(keep, f"kv once {name}: keep")
     fresh_ms = None if fresh is None else ms(fresh, f"kv once {name}: fresh")
-    aged = KvOnceOpen.encode(name=name, keep=kept, fresh=fresh_ms, aged=True)
-    plain = KvOnceOpen.encode(name=name, keep=kept) if fresh_ms is None else aged
+    aged = KvOnceOpen.encode(name=name, keep=kept, fresh=fresh_ms, aged=True, encrypted=encrypted)
+    plain = KvOnceOpen.encode(name=name, keep=kept, encrypted=encrypted) if fresh_ms is None else aged
     return OnceOpens(plain, aged)
 
 
@@ -185,6 +185,23 @@ class Once[T]:
             lambda handle: KvBranch.encode(handle=handle, under=under),
             "write",
         )
+
+    async def reseal(self) -> int:
+        """Seals again with the store's sealing key what an older key sealed, and says how many.
+
+        Every answer of this branch, and of the branches under it, as an
+        encrypted bucket's ``reseal`` does; answers opened without
+        ``encrypted`` are an InvalidError.
+        """
+        under = under_field(self._parts.under)
+        answer = await via_link(self._parts.link).call(
+            methods["kv.once.open"],
+            self._parts.opener,
+            methods["kv.reseal"],
+            lambda handle: KvBranch.encode(handle=handle, under=under),
+            "write",
+        )
+        return KvResealed.decode(answer).get("count", 0)
 
     async def _claim(self, key: Key, opener: bytes) -> tuple[Stream, Fetched[T] | None] | Fetched[T]:
         # asks for key's run: the answer kept for it, or the run the core handed

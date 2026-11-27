@@ -3156,6 +3156,9 @@
         "aged": {
           "bool": true
         },
+        "encrypted": {
+          "bool": true
+        },
         "fresh": {
           "uint": "1500"
         },
@@ -3166,7 +3169,7 @@
           "str": "name"
         }
       },
-      "hex": "8401a46e616d6502cd05dc03cd05dc04c3",
+      "hex": "8501a46e616d6502cd05dc03cd05dc04c305c3",
       "message": "kv.OnceOpen",
       "name": "kv.OnceOpen with every field"
     },

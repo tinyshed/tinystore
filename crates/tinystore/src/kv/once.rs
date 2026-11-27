@@ -20,12 +20,14 @@ use crate::{Error, Result, Store};
 /// How long an answer is kept unless `keep` says.
 const KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Answers being opened: their name and type, and how long one is kept.
+/// Answers being opened: their name and type, how long one is kept, and
+/// whether they are encrypted.
 #[must_use = "once's answers open with open()"]
 pub struct OnceBuilder<V> {
     store: Store,
     name: String,
     keep: Duration,
+    encrypted: bool,
     _value: std::marker::PhantomData<fn() -> V>,
 }
 
@@ -34,7 +36,8 @@ impl Store {
     /// request sent twice gets the first one's answer instead of doing its work
     /// again, as an idempotency key promises.
     pub fn once<V: Value>(&self, name: &str) -> OnceBuilder<V> {
-        OnceBuilder { store: self.clone(), name: name.to_owned(), keep: KEEP, _value: std::marker::PhantomData }
+        let name = name.to_owned();
+        OnceBuilder { store: self.clone(), name, keep: KEEP, encrypted: false, _value: std::marker::PhantomData }
     }
 }
 
@@ -43,6 +46,24 @@ impl<V: Value> OnceBuilder<V> {
     /// After that, a run of its key runs again.
     pub fn keep(mut self, keep: Duration) -> Self {
         self.keep = keep;
+        self
+    }
+
+    /// Keeps every answer sealed with the store's encryption key, as an
+    /// encrypted bucket keeps its values, for answers nobody should read in
+    /// the file: a statement, a grade book. A name keeps whether it is
+    /// encrypted: it opens the same way every time.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let books = store.once::<String>("grade-books").encrypted().open()?;
+    /// let book = books.run("student-1", || Ok::<_, tinystore::Error>("grades of student 1".to_owned()))?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn encrypted(mut self) -> Self {
+        self.encrypted = true;
         self
     }
 
@@ -59,21 +80,29 @@ impl<V: Value> OnceBuilder<V> {
 
     /// Opens the answers, stale past `fresh` when it is given.
     pub(super) fn open_with(self, fresh: Option<Duration>) -> Result<Once<V>> {
-        Ok(Once { answers: answers(&self.store, &self.name, (self.keep, fresh))?, fresh })
+        let kind = if self.encrypted { Kind::EncryptedOnce } else { Kind::Once };
+        Ok(Once { answers: answers(&self.store, &self.name, (self.keep, fresh), kind)?, fresh })
     }
 }
 
 /// Once's answers as rows, for the wire: a client runs the function, and the
-/// store keeps what it answered under the key for `keep`, stale past `fresh`.
+/// store keeps what it answered under the key for `keep`, stale past `fresh`,
+/// sealed when they are encrypted.
 #[cfg(any(feature = "wire", feature = "replication"))]
-pub(crate) fn rows(store: &Store, name: &str, keep: Option<Duration>, fresh: Option<Duration>) -> Result<Bucket<()>> {
-    answers(store, name, (keep.unwrap_or(KEEP), fresh))
+pub(crate) fn rows(
+    store: &Store,
+    name: &str,
+    (keep, fresh): (Option<Duration>, Option<Duration>),
+    encrypted: bool,
+) -> Result<Bucket<()>> {
+    let kind = if encrypted { Kind::EncryptedOnce } else { Kind::Once };
+    answers(store, name, (keep.unwrap_or(KEEP), fresh), kind)
 }
 
-/// The bucket that keeps once's answers of a name, each for `keep`. A `fresh`
-/// of zero would answer every kept answer stale, and one as long as `keep`
-/// never would.
-fn answers<T>(store: &Store, name: &str, (keep, fresh): (Duration, Option<Duration>)) -> Result<Bucket<T>> {
+/// The bucket that keeps once's answers of a name, each for `keep`, sealed
+/// when `kind` is encrypted. A `fresh` of zero would answer every kept answer
+/// stale, and one as long as `keep` never would.
+fn answers<T>(store: &Store, name: &str, (keep, fresh): (Duration, Option<Duration>), kind: Kind) -> Result<Bucket<T>> {
     let refused = |why: &str| Err(Error::invalid(why.to_owned()).within(format!("kv once {name}")));
     if keep.is_zero() {
         return refused("a keep of zero");
@@ -83,8 +112,7 @@ fn answers<T>(store: &Store, name: &str, (keep, fresh): (Duration, Option<Durati
         Some(fresh) if fresh >= keep => return refused("a fresh as long as its keep or longer"),
         _ => {}
     }
-    let scope = Scope::open(&Home::Store(store.clone()), name, Kind::Once)?;
-    Ok(Bucket::new(scope, Expiry::Ttl(keep)))
+    Bucket::of(Scope::open(&Home::Store(store.clone()), name, kind)?, Expiry::Ttl(keep))
 }
 
 /// An answer with how old it is: `stale` once it is older than the `fresh`
@@ -569,6 +597,14 @@ impl<V: Value> Once<V> {
     /// The answer kept under `key`.
     pub fn get(&self, key: impl Key) -> Result<Option<V>> {
         self.answers.get(key)
+    }
+
+    /// Seals again with the store's sealing key every answer of this branch,
+    /// and of the branches under it, that an older key sealed, and says how
+    /// many, as [`Bucket::reseal`] does an encrypted bucket's values; answers
+    /// opened without `encrypted` are `Invalid`.
+    pub fn reseal(&self) -> Result<u64> {
+        self.answers.reseal()
     }
 
     /// Forgets the answer kept under `key`, so that the next run runs again;

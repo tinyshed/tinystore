@@ -452,6 +452,7 @@ fn described(role: &str) -> &str {
         "rate limit" => "a rate limit",
         "quota" => "a quota",
         "once" => "once's answers",
+        "encrypted once" => "encrypted once's answers",
         other => other,
     }
 }

@@ -7,6 +7,8 @@ use rusqlite::Connection;
 
 use super::cells::{self, Cell, MAX_VALUE};
 use super::encrypted::Encrypted;
+#[cfg(feature = "replication")]
+use super::encrypted::SealAt;
 use super::engine::{Revision, next_version};
 #[cfg(feature = "replication")]
 use super::forward;
@@ -126,9 +128,7 @@ impl<V: Value> BucketBuilder<V> {
     pub fn open(self) -> Result<Bucket<V>> {
         check_expiry(self.expiry).map_err(|error| error.within(format!("kv bucket {}", self.name)))?;
         let kind = if self.encrypted { Kind::Encrypted } else { Kind::Values };
-        let scope = Scope::open(&self.home, &self.name, kind)?;
-        let encrypted = self.encrypted.then(|| Encrypted::of(&scope)).transpose()?;
-        Ok(Bucket { encrypted, ..Bucket::new(scope, self.expiry) })
+        Bucket::of(Scope::open(&self.home, &self.name, kind)?, self.expiry)
     }
 }
 
@@ -474,6 +474,13 @@ impl<V: Value> Bucket<V> {
 /// What a bucket does whatever its type: the calls that make no value, and
 /// the row-level ones the wire's handles use.
 impl<V> Bucket<V> {
+    /// The bucket of `scope`'s rows, sealed with the store's keys when the
+    /// name's kind is: an encrypted bucket's, or encrypted once's answers.
+    pub(crate) fn of(scope: Scope, expiry: Expiry) -> Result<Bucket<V>> {
+        let encrypted = scope.kind().sealed().then(|| Encrypted::of(&scope)).transpose()?;
+        Ok(Bucket { encrypted, ..Bucket::new(scope, expiry) })
+    }
+
     pub(crate) fn new(scope: Scope, expiry: Expiry) -> Bucket<V> {
         Bucket { scope, expiry, encrypted: None, _value: PhantomData }
     }
@@ -567,7 +574,7 @@ impl<V> Bucket<V> {
     pub fn reseal(&self) -> Result<u64> {
         let shown = self.scope.shown_branch();
         let Some(encrypted) = self.encrypted.clone() else {
-            return Err(Error::invalid("a bucket that is not encrypted holds nothing sealed").within(shown));
+            return Err(Error::invalid("nothing is sealed where values are not encrypted").within(shown));
         };
         #[cfg(feature = "replication")]
         if self.is_copy() {
@@ -945,8 +952,8 @@ impl<V> Bucket<V> {
     /// answers open there as once's, since their name refuses a bucket.
     fn handle(&self) -> forward::Handle {
         let name = self.scope.name().to_owned();
-        if let (Kind::Once, Expiry::Ttl(keep)) = (self.scope.kind(), self.expiry) {
-            return forward::Handle::Once { name, keep: millis(keep) as u64 };
+        if let (Kind::Once | Kind::EncryptedOnce, Expiry::Ttl(keep)) = (self.scope.kind(), self.expiry) {
+            return forward::Handle::Once { name, keep: millis(keep) as u64, encrypted: self.encrypted.is_some() };
         }
         let database = self.scope.kv.lent_by().and_then(crate::replication::database_of).map(str::to_owned);
         forward::Handle::Bucket { name, expiry: self.expiry, encrypted: self.encrypted.is_some(), database }
@@ -1075,13 +1082,38 @@ impl<V> Bucket<V> {
     }
 
     /// Claims a once's key at the home of the copy these answers are kept in.
+    /// An encrypted once's answer crosses the link sealed, both ways.
     pub(crate) fn once_claim(&self, key: &str) -> Result<forward::Claimed> {
-        forward::claimed(&self.pass_on_once(key, &forward::Call::OnceClaim)?)
+        let Some(encrypted) = &self.encrypted else {
+            return forward::claimed(&self.pass_on_once(key, &forward::Call::OnceClaim)?);
+        };
+        let call = forward::Call::OnceClaimSealed { key_id: encrypted.key_id() };
+        match forward::claimed(&self.pass_on_once(key, &call)?)? {
+            forward::Claimed::Kept(sealed) => {
+                let opened = encrypted.open(&self.scope.path(key)?, &sealed);
+                Ok(forward::Claimed::Kept(opened.map_err(|error| error.within(self.scope.shown_key(key)))?))
+            }
+            yours => Ok(yours),
+        }
     }
 
     /// Keeps at the home what a run it handed over answered.
     pub(crate) fn once_keep(&self, key: &str, token: u64, answer: Option<Raw>) -> Result<()> {
-        self.pass_on_once(key, &forward::Call::OnceKeep { token, answer }).map(drop)
+        let call = match (answer, &self.encrypted) {
+            (Some(raw), Some(encrypted)) => {
+                let raw = encrypted.seal(&self.scope.path(key)?, &raw)?;
+                forward::Call::OnceKeepSealed { token, raw, key_id: encrypted.key_id() }
+            }
+            (answer, _) => forward::Call::OnceKeep { token, answer },
+        };
+        self.pass_on_once(key, &call).map(drop)
+    }
+
+    /// This bucket's seal of `key`'s place, for a copy that sealed with
+    /// `key_id`: what crosses the link to and from it.
+    pub(crate) fn shared_seal(&self, key: &str, key_id: &str) -> Result<SealAt> {
+        let encrypted = self.shared_key(key, key_id)?.clone();
+        Ok(SealAt { encrypted, path: self.scope.path(key)?, shown: self.scope.shown_key(key) })
     }
 
     fn pass_on_once(&self, key: &str, call: &forward::Call) -> Result<Vec<u8>> {

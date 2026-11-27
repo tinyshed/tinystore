@@ -170,6 +170,61 @@ books.under(course_id).clear()?;
 - Not built yet: waiting a limited time for the new answer before returning
   the stale one.
 
+## Encrypted answers
+
+A cache is where people put what they'd never put in a table: a student's
+grades, a bank statement, a lab result. By default `once` writes its answers
+to `kv.db` as they are. Open it with `encrypted` and every answer is sealed
+with the store's encryption key, exactly as an
+[encrypted bucket](encrypted.md) seals its values: the same key file, the
+same older keys, the same `reseal`.
+
+```ts
+const books = store.once<GradeBook>('grade-books', { fresh: '10m', keep: '1h', encrypted: true })
+
+const book = await books.run(String(userId), () => cabinet.book(userId))
+const moved = await books.reseal() // after a key rotation: answers sealed again with the new key
+```
+
+```python
+books = store.once("grade-books", GradeBook, fresh="10m", keep="1h", encrypted=True)
+
+book = await books.run(str(user_id), lambda: cabinet.book(user_id))
+moved = await books.reseal()
+```
+
+```go
+books, err := kv.OpenOnce[GradeBook](store, "grade-books", kv.Encrypted(), kv.Fresh(10*time.Minute), kv.Keep(time.Hour))
+
+book, err := books.Run(ctx, strconv.Itoa(userID), func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
+moved, err := books.Reseal(ctx)
+```
+
+```rust
+let books = store.once::<GradeBook>("grade-books").encrypted().fresh(Duration::from_mins(10)).keep(Duration::from_hours(1)).open()?;
+
+let book = books.run(user_id, move || cabinet.book(user_id))?;
+let moved = books.reseal()?;
+```
+
+- The file holds nothing readable without the key, and the key isn't
+  sealed: put the secret in the answer, never in the key (contracts SEC-03,
+  KV-21).
+- A name remembers whether it is encrypted. Opening `grade-books` without
+  `encrypted` after it was opened with it, or the other way round, fails
+  with `invalid`: `the name holds encrypted once's answers, not once's
+  answers`. To move a plain once to an encrypted one, use a new name. The
+  old answers expire with their `keep`.
+- `reseal` seals again, with the store's current key, every answer an older
+  key sealed, and returns how many. On answers opened without `encrypted` it
+  fails with `invalid`. Key rotation works as for buckets: see
+  [encrypted buckets](encrypted.md).
+- A read-only connection can't open an encrypted once: it may read only
+  what the file shows without the key.
+- On a node that copies `kv.db`, a run's answer crosses the link to the home
+  sealed, and a kept answer comes back sealed. A copy and its home need the
+  same key.
+
 ## What it does not promise
 
 `once` runs a key at most once while its answer is kept. It cannot make an
@@ -237,6 +292,7 @@ If you drop the future of a run:
 |---------------------------|----------------------------------------------|
 | `keep`                    | 1 day unless set                             |
 | `fresh`                   | none unless set, and shorter than `keep`     |
+| `encrypted`               | off unless set                               |
 | the pause after a failure | a tenth of `fresh`, between 1 s and 1 minute |
 | a kept answer             | 1 MiB at most                                |
 

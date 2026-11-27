@@ -134,6 +134,27 @@ impl Encrypted {
     }
 }
 
+/// One row's seal, for what crosses a node's link sealed: an encrypted
+/// once's answer, to a copy and back.
+#[cfg(feature = "replication")]
+pub(crate) struct SealAt {
+    pub(crate) encrypted: Encrypted,
+    pub(crate) path: Vec<u8>,
+    /// The row as an error names it.
+    pub(crate) shown: String,
+}
+
+#[cfg(feature = "replication")]
+impl SealAt {
+    pub(crate) fn seal(&self, raw: &Raw) -> Result<Raw> {
+        self.encrypted.seal(&self.path, raw).map_err(|error| error.within(&self.shown))
+    }
+
+    pub(crate) fn open(&self, sealed: &Raw) -> Result<Raw> {
+        self.encrypted.open(&self.path, sealed).map_err(|error| error.within(&self.shown))
+    }
+}
+
 /// The keys a bucket keeps the ids of, `3fa9… 81c2…`, as an error names them.
 pub(crate) fn named(kept: &str) -> String {
     match kept.split(' ').collect::<Vec<_>>().as_slice() {

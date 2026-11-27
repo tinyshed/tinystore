@@ -32,6 +32,12 @@ impl<V: Value> FreshBuilder<V> {
         FreshBuilder { once: self.once.keep(keep), ..self }
     }
 
+    /// Keeps every answer sealed with the store's encryption key, as
+    /// [`OnceBuilder::encrypted`] says.
+    pub fn encrypted(self) -> Self {
+        FreshBuilder { once: self.once.encrypted(), ..self }
+    }
+
     /// Opens the answers; a `fresh` of zero, or as long as `keep` or longer,
     /// is `Invalid`.
     pub fn open(self) -> Result<Fresh<V>> {
@@ -123,6 +129,12 @@ impl<V: Value> Fresh<V> {
     /// nothing; a run of a key that had none keeps its answer once it ends.
     pub fn clear(&self) -> Result<()> {
         self.once.clear()
+    }
+
+    /// Seals again with the store's sealing key every answer an older key
+    /// sealed, as [`Once::reseal`] does.
+    pub fn reseal(&self) -> Result<u64> {
+        self.once.reseal()
     }
 
     /// The same answers seen from the branch `owner` names under these.

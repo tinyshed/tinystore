@@ -35,6 +35,12 @@ impl<V: Value> OnceBuilder<V> {
         OnceBuilder { builder: self.builder.keep(keep), ..self }
     }
 
+    /// Keeps every answer sealed with the store's encryption key, as
+    /// [`crate::kv::OnceBuilder::encrypted`] says.
+    pub fn encrypted(self) -> Self {
+        OnceBuilder { builder: self.builder.encrypted(), ..self }
+    }
+
     /// How long an answer is answered without making a new one, shorter than
     /// `keep`, as [`crate::kv::OnceBuilder::fresh`] says; awaited answers
     /// opened so also take where their builds in the background run.
@@ -139,6 +145,14 @@ impl<V: Value> Once<V> {
         let answers = self.once.answers().clone();
         let what = named(answers.scope.shown_branch(), "a clear");
         run::write(&self.pool, what, move |answer| answers.clear_then(move |cleared| answer.send(cleared)))
+    }
+
+    /// Seals again every answer an older key sealed, as
+    /// [`crate::kv::Once::reseal`] does.
+    pub fn reseal(&self) -> impl Future<Output = Result<u64>> + Send + 'static {
+        let answers = self.once.answers().clone();
+        let what = named(answers.scope.shown_branch(), "a reseal");
+        run::blocking(&self.pool, None, what, move || answers.reseal())
     }
 
     /// The same answers seen from the branch `owner` names under these.

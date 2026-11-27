@@ -5564,8 +5564,8 @@ impl Message for KvResealed {
     }
 }
 
-/// A branch of a handle, for a clear, a reseal or a count; a clear takes once's
-/// answers too.
+/// A branch of a handle, for a clear, a reseal or a count; a clear and a reseal
+/// take once's answers too.
 #[cfg(feature = "kv")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct KvBranch {
@@ -6171,6 +6171,8 @@ pub(crate) struct KvOnceOpen {
     pub(crate) fresh: Option<u64>,
     /// The client reads age and stale; an older one sends none and is sent neither.
     pub(crate) aged: bool,
+    /// Its answers are sealed with the server's encryption key; a read connection opens none.
+    pub(crate) encrypted: bool,
 }
 
 #[cfg(feature = "kv")]
@@ -6186,6 +6188,7 @@ impl Message for KvOnceOpen {
                 2 => message.keep = Some(codec::uint(r, "keep")?),
                 3 => message.fresh = Some(codec::uint(r, "fresh")?),
                 4 => message.aged = codec::bool(r, "aged")?,
+                5 => message.encrypted = codec::bool(r, "encrypted")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -6210,6 +6213,10 @@ impl Message for KvOnceOpen {
             map.field(out, 4);
             codec::write_bool(out, &self.aged);
         }
+        if self.encrypted {
+            map.field(out, 5);
+            codec::write_bool(out, &self.encrypted);
+        }
         map.close(out);
     }
 
@@ -6219,6 +6226,7 @@ impl Message for KvOnceOpen {
             + self.keep.map_or(0, |_| 10)
             + self.fresh.map_or(0, |_| 10)
             + 2
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -6226,6 +6234,7 @@ impl Message for KvOnceOpen {
             && self.keep.is_none()
             && self.fresh.is_none()
             && !self.aged
+            && !self.encrypted
     }
 }
 

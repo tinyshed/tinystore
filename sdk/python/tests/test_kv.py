@@ -363,6 +363,26 @@ async def test_an_option_once_does_not_know_is_refused_by_name(store: tinystore.
         opened("grade-books", str, keep="1h", secret=True)
 
 
+# contract: SEC-03, KV-21
+async def test_once_opened_encrypted_keeps_answers_no_file_shows_and_its_name_keeps_whether_it_is(
+    store: tinystore.Store, way: Way, directory: Path
+) -> None:
+    books = store.once("grade-books", str, fresh="10m", keep="1h", encrypted=True)
+    assert (await books.fetch("1", lambda: "grades of student 1")).value == "grades of student 1"
+    assert await books.run("1", lambda: "ran again") == "grades of student 1"
+    assert await store.once("grade-books", str, encrypted=True).get("1") == "grades of student 1"
+    assert await books.reseal() == 0
+    with pytest.raises(tinystore.InvalidError, match="the name holds encrypted once's answers, not once's answers"):
+        await store.once("grade-books", str).get("1")
+    with pytest.raises(tinystore.InvalidError):
+        await store.once("plain-books", str).reseal()
+    # LOCK is the store's alone while it is open, and -shm the log's index, locked in parts
+    every = [path for path in way.home(directory).rglob("*") if path.is_file()]
+    files = [path for path in every if path.name != "LOCK" and not path.name.endswith("-shm")]
+    assert any(path.name == "kv.db" for path in files)
+    assert not any(b"grades of student 1" in path.read_bytes() for path in files)
+
+
 async def test_an_error_keeps_nothing_so_the_next_run_runs_again(store: tinystore.Store) -> None:
     charges = store.once("declines", str, keep="1h")
 

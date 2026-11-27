@@ -56,7 +56,10 @@ type listOptions struct {
 	after *string
 }
 
-type onceOptions struct{ keep, fresh *time.Duration }
+type onceOptions struct {
+	keep, fresh *time.Duration
+	encrypted   bool
+}
 
 type rateLimitOptions struct {
 	rate  uint64
@@ -93,10 +96,12 @@ func (i idle) bucket(o *bucketOptions) { d := time.Duration(i); o.idle = &d }
 
 type encrypted struct{}
 
-// Encrypted keeps every value of the bucket sealed with the store's encryption key.
+// Encrypted keeps every value of the bucket, or every answer of a once,
+// sealed with the store's encryption key; a name keeps whether it is.
 func Encrypted() encrypted { return encrypted{} }
 
 func (encrypted) bucket(o *bucketOptions) { o.encrypted = true }
+func (encrypted) once(o *onceOptions)     { o.encrypted = true }
 
 type flushEvery time.Duration
 
