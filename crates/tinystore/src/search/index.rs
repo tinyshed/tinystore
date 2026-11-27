@@ -13,10 +13,11 @@ use super::engine::Search;
 use super::filter::{self, Condition};
 #[cfg(feature = "replication")]
 use super::forward::Passed;
-use super::matches::{Ask, Match, Unit};
+use super::matches::{Ask, Marked, Match, Unit};
 use super::open::{Data, OpenIndex, Status};
 use super::read::{Answer, Prefix, Query, Ranked};
 use super::settings::{Settings, Wanted, check_hybrid};
+use super::snippet::{Cut, MOST_AROUND, Snippet};
 #[cfg(feature = "sql")]
 use super::table_index::ReadRows;
 use super::vectors::Question;
@@ -278,7 +279,9 @@ impl<T: DeserializeOwned> Index<T> {
             rerank: false,
             min_similarity: None,
             prefix: Prefix::Whole,
-            matches: None,
+            matches: false,
+            unit: Unit::Bytes,
+            snippet: None,
             filter: Vec::new(),
             total: false,
             offset: 0,
@@ -298,9 +301,10 @@ impl<T: DeserializeOwned> Index<T> {
     pub(super) fn found(&self, query: Query) -> Result<Found<T>> {
         let Answer { hits, corrected, sought, total, .. } = self.search.search(&self.open, query)?;
         let hits = hits.into_iter().map(|Ranked { id, value, score, text_score, similarity }| {
-            let matches = sought.as_ref().map(|sought| sought.matches_in(&value)).unwrap_or_default();
+            let Marked { matches, snippet } =
+                sought.as_ref().map(|sought| sought.marked_in(&value)).unwrap_or_default();
             let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
-            Ok(Hit { id, value, score, matches, text_score, similarity })
+            Ok(Hit { id, value, score, matches, snippet, text_score, similarity })
         });
         Ok(Found { hits: hits.collect::<Result<_>>()?, corrected, total })
     }
@@ -501,8 +505,11 @@ pub struct SearchCall<'i, T> {
     rerank: bool,
     min_similarity: Option<f64>,
     prefix: Prefix,
-    /// What a hit's matches count, when the search asks where it matched.
-    matches: Option<Unit>,
+    /// Whether each hit lists where it matched, and what a match's range and
+    /// a snippet's marks count.
+    matches: bool,
+    unit: Unit,
+    snippet: Option<Cut>,
     filter: Vec<Condition>,
     total: bool,
     offset: usize,
@@ -550,6 +557,9 @@ pub struct Hit<T> {
     /// Where the search's words matched it, when the search asked with
     /// [`matches`](SearchCall::matches); empty otherwise.
     pub matches: Vec<Match>,
+    /// The piece of a field around its first match, when the search asked
+    /// with [`snippet`](SearchCall::snippet) and the document holds the field.
+    pub snippet: Option<Snippet>,
     /// The score its words gave it, as a search by its words alone scores
     /// it; none where they did not find it among their best hundred, or
     /// `offset + limit` if more, or the search had no words.
@@ -627,7 +637,7 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     /// the query's word that found it. `алгебре` matches `алгебра` of
     /// `Линейная алгебра`, bytes 17..31.
     pub fn matches(mut self) -> Self {
-        self.matches = Some(Unit::Bytes);
+        self.matches = true;
         self
     }
 
@@ -635,8 +645,31 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     /// ranges counted in `unit`, as a client of the wire slices its strings.
     #[cfg(feature = "wire")]
     pub(crate) fn matches_in(mut self, unit: Unit) -> Self {
-        self.matches = Some(unit);
+        self.unit = unit;
+        self.matches()
+    }
+
+    /// Cuts each hit's [`snippet`](Hit::snippet) of `field`, a path the index
+    /// reads as [`IndexBuilder::field`] names it: its own text from `around`
+    /// characters before the field's first match to `around` after it, 1 to
+    /// 1,000 and 80 a fair choice, cut where a word starts and where one
+    /// ends and never inside a character, `…` where text was cut; its marks
+    /// are every match inside it, as bytes of its text. A hit that matched
+    /// elsewhere, or by its vector alone, gets the field's first `2 ×
+    /// around` characters and no mark; one whose document lacks the field,
+    /// none. Only the page's hits are cut, and the store adds no markup.
+    pub fn snippet(mut self, field: &str, around: usize) -> Self {
+        self.snippet = Some(Cut { field: field.to_owned(), around });
         self
+    }
+
+    /// Cuts each hit's snippet as [`snippet`](Self::snippet) does, `around`
+    /// 80 unless given and its marks counted in `unit`, as a client of the
+    /// wire slices its strings.
+    #[cfg(feature = "wire")]
+    pub(crate) fn snippet_in(mut self, field: &str, around: Option<usize>, unit: Unit) -> Self {
+        self.unit = unit;
+        self.snippet(field, around.unwrap_or(super::snippet::AROUND))
     }
 
     /// Keeps its hits to the documents `condition` passes, and to those
@@ -715,10 +748,15 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
         if self.total && self.vector.is_some() {
             return Err(Error::invalid("a total of a search by a vector, which finds every document that has one"));
         }
+        if let Some(cut) = &self.snippet
+            && !(1..=MOST_AROUND).contains(&cut.around)
+        {
+            return Err(Error::invalid(format!("a snippet {} characters around its match: 1 to 1000", cut.around)));
+        }
         let normal = analyzer::normalize(&self.text);
         let words = words_read(&normal);
         Ok(Query {
-            matches: self.matches.map(|unit| Ask::new(&self.text, &words, unit)),
+            matches: self.asked_marks(&words),
             words,
             normal,
             vector: self.question()?,
@@ -731,6 +769,16 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
             offset: self.offset,
             limit: self.limit,
         })
+    }
+
+    /// What the search asks of where its hits matched, when it lists their
+    /// matches or cuts their snippets.
+    fn asked_marks(&self, words: &[analyzer::Word]) -> Option<Ask> {
+        if !self.matches && self.snippet.is_none() {
+            return None;
+        }
+        let ask = Ask::new(&self.text, words, self.unit);
+        Some(Ask { listed: self.matches, snippet: self.snippet.clone(), ..ask })
     }
 
     /// The search's vector, refusing a weight, a rerank or a floor without

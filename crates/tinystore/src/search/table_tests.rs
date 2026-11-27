@@ -166,6 +166,19 @@ fn a_hit_says_where_its_columns_matched_as_its_row_holds_them_inside_a_transacti
     assert_eq!(shown(inside.unwrap()), [pair("title", "ёлка")], "the row as the transaction wrote it");
 }
 
+// contract: SRCH-22
+#[test]
+fn a_hit_s_snippet_is_cut_of_its_column_as_its_row_holds_it() {
+    let f = fixture();
+    let articles = f.articles();
+    f.insert(1, "Firs", "Under the snow a forest of firs stands still until the spring");
+    let found = articles.search("forest").snippet("body", 10).run().unwrap();
+    let snippet = found.hits[0].snippet.clone().unwrap();
+    assert_eq!(snippet.text, "…snow a forest of firs…");
+    assert_eq!(&snippet.text[snippet.marks[0].clone()], "forest");
+    assert!(found.hits[0].matches.is_empty(), "no matches listed unless asked");
+}
+
 // contract: SRCH-07
 #[test]
 fn a_search_in_a_transaction_goes_on_while_a_switch_of_its_index_waits_for_that_transaction() {

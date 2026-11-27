@@ -11998,6 +11998,66 @@ export const SearchGot = message(
 )
 
 /**
+ * The snippet a search cuts of each hit: of which field, a path as the
+ * index's fields name it, how many characters on each side of the field's
+ * first match, and what its marks count, as a query's matches do.
+ */
+export const SearchCut = message(
+	'search.Cut',
+	{
+		field: [1, str],
+		/** 1 to 1000; 80 when absent */
+		around: [2, uint],
+		/** utf8, utf16 or chars */
+		unit: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.field !== undefined) {
+				w.field(1)
+				w.str(v.field)
+				n++
+			}
+			if (v.around !== undefined) {
+				w.field(2)
+				w.uint(v.around)
+				n++
+			}
+			if (v.unit !== undefined) {
+				w.field(3)
+				w.str(v.unit)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $field: string | undefined
+			let $around: number | undefined
+			let $unit: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$field = r.str()
+						break
+					case 2:
+						$around = r.uint()
+						break
+					case 3:
+						$unit = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { field: $field, around: $around, unit: $unit }
+		},
+	},
+)
+
+/**
  * A statement of a table's index's database whose rows give one column, as
  * sql.Statement's text and values: a where keeps to the values it gives.
  */
@@ -12049,6 +12109,49 @@ export const SearchStatement = message(
 			}
 			r.leave()
 			return { text: $text, values: $values }
+		},
+	},
+)
+
+export const SearchMark = message(
+	'search.Mark',
+	{
+		start: [1, uint],
+		end: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.start !== undefined) {
+				w.field(1)
+				w.uint(v.start)
+				n++
+			}
+			if (v.end !== undefined) {
+				w.field(2)
+				w.uint(v.end)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $start: number | undefined
+			let $end: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$start = r.uint()
+						break
+					case 2:
+						$end = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { start: $start, end: $end }
 		},
 	},
 )
@@ -14592,6 +14695,8 @@ export const SearchQuery = message(
 		statements: [13, list(SearchStatement)],
 		/** counts what it finds as well, exactly up to 10,000; invalid beside a vector */
 		total: [14, bool],
+		/** each hit's snippet of a field, around its first match there */
+		snippet: [15, SearchCut],
 	},
 	{
 		write(w, v) {
@@ -14670,6 +14775,11 @@ export const SearchQuery = message(
 				w.bool(v.total)
 				n++
 			}
+			if (v.snippet !== undefined) {
+				w.field(15)
+				SearchCut.write(w, v.snippet)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -14687,6 +14797,7 @@ export const SearchQuery = message(
 			let $minSimilarity: number | undefined
 			let $statements: Read<typeof SearchStatement.fields>[] | undefined
 			let $total: boolean | undefined
+			let $snippet: Read<typeof SearchCut.fields> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -14737,6 +14848,9 @@ export const SearchQuery = message(
 					case 14:
 						$total = r.bool()
 						break
+					case 15:
+						$snippet = SearchCut.read(r)
+						break
 					default:
 						r.skip()
 				}
@@ -14757,218 +14871,77 @@ export const SearchQuery = message(
 				minSimilarity: $minSimilarity,
 				statements: $statements,
 				total: $total,
+				snippet: $snippet,
 			}
 		},
 	},
 )
 
 /**
- * A hit: a document and its value, or a table's row, a value a column of
- * the answer's columns, as sql.Rows holds one, where the search's words
- * matched it when the query asked, and what each half of the search gave it.
+ * The piece of a field around a hit's first match there, the field's own
+ * text with … where it was cut; its start, without marks, where the hit
+ * matched elsewhere or by its vector alone.
  */
-export const SearchHit = message(
-	'search.Hit',
+export const SearchSnippet = message(
+	'search.Snippet',
 	{
-		id: [1, str],
-		/** null for a table's row */
-		value: [2, str],
-		score: [3, float],
-		row: [4, list(sqlValue)],
-		matches: [5, list(SearchMatch)],
-		/** its words' score, where they found it among their best */
-		textScore: [6, float],
-		/** its vector's cosine with the search's, where both have one */
-		similarity: [7, float],
+		text: [1, str],
+		/** every match inside text, in its order, counted in the cut's unit */
+		marks: [2, list(SearchMark)],
+		/** the string's place in a field that holds a list */
+		item: [3, uint],
 	},
 	{
 		write(w, v) {
 			const head = w.openMap()
 			let n = 0
-			if (v.id !== undefined) {
+			if (v.text !== undefined) {
 				w.field(1)
-				w.str(v.id)
+				w.str(v.text)
 				n++
 			}
-			if (v.value !== undefined) {
+			if (v.marks !== undefined) {
 				w.field(2)
-				w.str(v.value)
+				w.array(v.marks.length)
+				for (const item0 of v.marks) {
+					SearchMark.write(w, item0)
+				}
 				n++
 			}
-			if (v.score !== undefined) {
+			if (v.item !== undefined) {
 				w.field(3)
-				w.float(v.score)
-				n++
-			}
-			if (v.row !== undefined) {
-				w.field(4)
-				w.array(v.row.length)
-				for (const item0 of v.row) {
-					sqlValue.write(w, item0)
-				}
-				n++
-			}
-			if (v.matches !== undefined) {
-				w.field(5)
-				w.array(v.matches.length)
-				for (const item0 of v.matches) {
-					SearchMatch.write(w, item0)
-				}
-				n++
-			}
-			if (v.textScore !== undefined) {
-				w.field(6)
-				w.float(v.textScore)
-				n++
-			}
-			if (v.similarity !== undefined) {
-				w.field(7)
-				w.float(v.similarity)
+				w.uint(v.item)
 				n++
 			}
 			w.closeMap(head, n)
 		},
 		read(r) {
-			let $id: string | undefined
-			let $value: string | undefined
-			let $score: number | undefined
-			let $row: (SqlValue | boolean)[] | undefined
-			let $matches: Read<typeof SearchMatch.fields>[] | undefined
-			let $textScore: number | undefined
-			let $similarity: number | undefined
+			let $text: string | undefined
+			let $marks: Read<typeof SearchMark.fields>[] | undefined
+			let $item: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
-						$id = r.str()
+						$text = r.str()
 						break
-					case 2:
-						$value = r.str()
+					case 2: {
+						const items0: Read<typeof SearchMark.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchMark.read(r))
+						}
+						r.leave()
+						$marks = items0
 						break
+					}
 					case 3:
-						$score = r.float()
-						break
-					case 4: {
-						const items0: (SqlValue | boolean)[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(sqlValue.read(r))
-						}
-						r.leave()
-						$row = items0
-						break
-					}
-					case 5: {
-						const items0: Read<typeof SearchMatch.fields>[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(SearchMatch.read(r))
-						}
-						r.leave()
-						$matches = items0
-						break
-					}
-					case 6:
-						$textScore = r.float()
-						break
-					case 7:
-						$similarity = r.float()
+						$item = r.uint()
 						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return {
-				id: $id,
-				value: $value,
-				score: $score,
-				row: $row,
-				matches: $matches,
-				textScore: $textScore,
-				similarity: $similarity,
-			}
-		},
-	},
-)
-
-export const SearchFound = message(
-	'search.Found',
-	{
-		hits: [1, list(SearchHit)],
-		/** the text the search read in fact, when a word was read as another */
-		corrected: [2, str],
-		/** the columns of a table's index's rows */
-		columns: [3, list(str)],
-		/** how many it finds, when the query asked */
-		total: [4, SearchTotal],
-	},
-	{
-		write(w, v) {
-			const head = w.openMap()
-			let n = 0
-			if (v.hits !== undefined) {
-				w.field(1)
-				w.array(v.hits.length)
-				for (const item0 of v.hits) {
-					SearchHit.write(w, item0)
-				}
-				n++
-			}
-			if (v.corrected !== undefined) {
-				w.field(2)
-				w.str(v.corrected)
-				n++
-			}
-			if (v.columns !== undefined) {
-				w.field(3)
-				w.array(v.columns.length)
-				for (const item0 of v.columns) {
-					w.str(item0)
-				}
-				n++
-			}
-			if (v.total !== undefined) {
-				w.field(4)
-				SearchTotal.write(w, v.total)
-				n++
-			}
-			w.closeMap(head, n)
-		},
-		read(r) {
-			let $hits: Read<typeof SearchHit.fields>[] | undefined
-			let $corrected: string | undefined
-			let $columns: string[] | undefined
-			let $total: Read<typeof SearchTotal.fields> | undefined
-			for (let n = r.message(); n > 0; n--) {
-				switch (r.field()) {
-					case 1: {
-						const items0: Read<typeof SearchHit.fields>[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(SearchHit.read(r))
-						}
-						r.leave()
-						$hits = items0
-						break
-					}
-					case 2:
-						$corrected = r.str()
-						break
-					case 3: {
-						const items0: string[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(r.str())
-						}
-						r.leave()
-						$columns = items0
-						break
-					}
-					case 4:
-						$total = SearchTotal.read(r)
-						break
-					default:
-						r.skip()
-				}
-			}
-			r.leave()
-			return { hits: $hits, corrected: $corrected, columns: $columns, total: $total }
+			return { text: $text, marks: $marks, item: $item }
 		},
 	},
 )
@@ -15066,6 +15039,229 @@ export const ConfigLine = message(
 			}
 			r.leave()
 			return { path: $path, value: $value, from: $from, over: $over, given: $given }
+		},
+	},
+)
+
+/**
+ * A hit: a document and its value, or a table's row, a value a column of
+ * the answer's columns, as sql.Rows holds one, where the search's words
+ * matched it when the query asked, and what each half of the search gave it.
+ */
+export const SearchHit = message(
+	'search.Hit',
+	{
+		id: [1, str],
+		/** null for a table's row */
+		value: [2, str],
+		score: [3, float],
+		row: [4, list(sqlValue)],
+		matches: [5, list(SearchMatch)],
+		/** its words' score, where they found it among their best */
+		textScore: [6, float],
+		/** its vector's cosine with the search's, where both have one */
+		similarity: [7, float],
+		/** when the query asked for one and the hit holds the field */
+		snippet: [8, SearchSnippet],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.id !== undefined) {
+				w.field(1)
+				w.str(v.id)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.str(v.value)
+				n++
+			}
+			if (v.score !== undefined) {
+				w.field(3)
+				w.float(v.score)
+				n++
+			}
+			if (v.row !== undefined) {
+				w.field(4)
+				w.array(v.row.length)
+				for (const item0 of v.row) {
+					sqlValue.write(w, item0)
+				}
+				n++
+			}
+			if (v.matches !== undefined) {
+				w.field(5)
+				w.array(v.matches.length)
+				for (const item0 of v.matches) {
+					SearchMatch.write(w, item0)
+				}
+				n++
+			}
+			if (v.textScore !== undefined) {
+				w.field(6)
+				w.float(v.textScore)
+				n++
+			}
+			if (v.similarity !== undefined) {
+				w.field(7)
+				w.float(v.similarity)
+				n++
+			}
+			if (v.snippet !== undefined) {
+				w.field(8)
+				SearchSnippet.write(w, v.snippet)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $id: string | undefined
+			let $value: string | undefined
+			let $score: number | undefined
+			let $row: (SqlValue | boolean)[] | undefined
+			let $matches: Read<typeof SearchMatch.fields>[] | undefined
+			let $textScore: number | undefined
+			let $similarity: number | undefined
+			let $snippet: Read<typeof SearchSnippet.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$id = r.str()
+						break
+					case 2:
+						$value = r.str()
+						break
+					case 3:
+						$score = r.float()
+						break
+					case 4: {
+						const items0: (SqlValue | boolean)[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(sqlValue.read(r))
+						}
+						r.leave()
+						$row = items0
+						break
+					}
+					case 5: {
+						const items0: Read<typeof SearchMatch.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchMatch.read(r))
+						}
+						r.leave()
+						$matches = items0
+						break
+					}
+					case 6:
+						$textScore = r.float()
+						break
+					case 7:
+						$similarity = r.float()
+						break
+					case 8:
+						$snippet = SearchSnippet.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				id: $id,
+				value: $value,
+				score: $score,
+				row: $row,
+				matches: $matches,
+				textScore: $textScore,
+				similarity: $similarity,
+				snippet: $snippet,
+			}
+		},
+	},
+)
+
+export const SearchFound = message(
+	'search.Found',
+	{
+		hits: [1, list(SearchHit)],
+		/** the text the search read in fact, when a word was read as another */
+		corrected: [2, str],
+		/** the columns of a table's index's rows */
+		columns: [3, list(str)],
+		/** how many it finds, when the query asked */
+		total: [4, SearchTotal],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.hits !== undefined) {
+				w.field(1)
+				w.array(v.hits.length)
+				for (const item0 of v.hits) {
+					SearchHit.write(w, item0)
+				}
+				n++
+			}
+			if (v.corrected !== undefined) {
+				w.field(2)
+				w.str(v.corrected)
+				n++
+			}
+			if (v.columns !== undefined) {
+				w.field(3)
+				w.array(v.columns.length)
+				for (const item0 of v.columns) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.total !== undefined) {
+				w.field(4)
+				SearchTotal.write(w, v.total)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $hits: Read<typeof SearchHit.fields>[] | undefined
+			let $corrected: string | undefined
+			let $columns: string[] | undefined
+			let $total: Read<typeof SearchTotal.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof SearchHit.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchHit.read(r))
+						}
+						r.leave()
+						$hits = items0
+						break
+					}
+					case 2:
+						$corrected = r.str()
+						break
+					case 3: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$columns = items0
+						break
+					}
+					case 4:
+						$total = SearchTotal.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { hits: $hits, corrected: $corrected, columns: $columns, total: $total }
 		},
 	},
 )

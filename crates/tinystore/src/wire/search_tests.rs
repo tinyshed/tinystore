@@ -3,8 +3,8 @@ use crate::pipe::fixture::Client;
 #[cfg(feature = "sql")]
 use crate::wire::codec::Cell;
 use crate::wire::protocol::{
-    Empty, Handle, SearchDeleted, SearchDocument, SearchDropped, SearchField, SearchFound, SearchGot, SearchKey,
-    SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, method,
+    Empty, Handle, SearchCut, SearchDeleted, SearchDocument, SearchDropped, SearchField, SearchFound, SearchGot,
+    SearchKey, SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, method,
 };
 #[cfg(feature = "sql")]
 use crate::wire::protocol::{SearchStatement, SearchTotal, SqlDone, SqlMigration, SqlOpen, SqlStatement};
@@ -129,6 +129,46 @@ fn a_hit_s_matches_count_in_the_unit_its_client_slices_strings_in() {
     let refused = client.call::<SearchFound>(method::SEARCH_SEARCH, &furlongs).unwrap_err();
     assert_eq!(refused.code, "invalid");
     assert!(refused.message.contains("utf8, utf16 or chars"), "{}", refused.message);
+}
+
+// contract: SRCH-22
+#[test]
+fn a_hit_s_snippet_is_cut_around_its_first_match_its_marks_counted_as_its_client_slices() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client, "notes");
+    set(&mut client, handle, ("a", r#"{"title":"🦀 one two Ёлка three four five"}"#), &[1.0, 0.0, 0.0]);
+    let mut cut = |unit: &str, around: Option<u64>| {
+        let snippet = Some(SearchCut { field: "title".to_owned(), around, unit: unit.to_owned() });
+        let found =
+            client.call::<SearchFound>(method::SEARCH_SEARCH, &SearchQuery { snippet, ..query(handle, "елка") });
+        let hit = found.unwrap().hits.remove(0);
+        assert_eq!(hit.matches, None, "a snippet lists no matches unless the query asks");
+        let snippet = hit.snippet.unwrap();
+        (snippet.text, snippet.marks.iter().map(|mark| (mark.start, mark.end)).collect::<Vec<_>>())
+    };
+    let piece = "…two Ёлка three…".to_owned();
+    assert_eq!(cut("utf16", Some(6)), (piece.clone(), vec![(5, 9)]));
+    assert_eq!(cut("utf8", Some(6)), (piece.clone(), vec![(7, 15)]));
+    assert_eq!(cut("chars", Some(6)).1, [(5, 9)]);
+    assert_eq!(cut("utf16", None).0, "🦀 one two Ёлка three four five", "80 characters unless asked");
+    let unknown = SearchCut { field: "body".to_owned(), around: None, unit: "utf16".to_owned() };
+    let asked = SearchQuery { snippet: Some(unknown), ..query(handle, "елка") };
+    let refused = client.call::<SearchFound>(method::SEARCH_SEARCH, &asked).unwrap_err();
+    assert_eq!(refused.code, "invalid");
+    assert!(refused.message.contains("\"body\""), "{}", refused.message);
+    let wide = SearchCut { field: "title".to_owned(), around: Some(1001), unit: "utf16".to_owned() };
+    let asked = SearchQuery { snippet: Some(wide), ..query(handle, "елка") };
+    assert_eq!(client.call::<SearchFound>(method::SEARCH_SEARCH, &asked).unwrap_err().code, "invalid");
+    let counted = |unit: &str| Some(SearchCut { field: "title".to_owned(), around: None, unit: unit.to_owned() });
+    let both =
+        |unit: &str| SearchQuery {
+            matches: Some("utf8".to_owned()), snippet: counted(unit), ..query(handle, "елка")
+        };
+    let refused = client.call::<SearchFound>(method::SEARCH_SEARCH, &both("utf16")).unwrap_err();
+    assert_eq!(refused.code, "invalid");
+    assert!(refused.message.contains("\"utf8\"") && refused.message.contains("\"utf16\""), "{}", refused.message);
+    assert!(client.call::<SearchFound>(method::SEARCH_SEARCH, &both("utf8")).is_ok(), "one unit for both");
 }
 
 #[test]

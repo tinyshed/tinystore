@@ -41,6 +41,31 @@ class Match:
 
 Where a search's word matched a hit: ``text[start:end]`` of a field's text, in code points.
 
+## Mark
+
+```python
+@dataclass(frozen=True, slots=True)
+class Mark:
+    start: int
+    end: int
+```
+
+Where a search's word matched inside a snippet: ``snippet.text[start:end]``, in code points.
+
+## Snippet
+
+```python
+@dataclass(frozen=True, slots=True)
+class Snippet:
+    text: str
+    marks: list[Mark]
+    item: int | None = None  # the string's place in a field that holds a list
+```
+
+The piece of a field around a hit's first match there, the field's own text, … where it was cut.
+
+Its marks are every match inside it. The store adds no markup and escapes nothing.
+
 ## Hit
 
 ```python
@@ -50,6 +75,7 @@ class Hit[T]:
     value: T
     score: float
     matches: list[Match] | None = None  # where the search's words matched it, when the search asked with matches
+    snippet: Snippet | None = None  # the piece of a field around its first match, when the search asked with snippet and it holds the field
     text_score: float | None = None  # the score its words gave it, as a search by its words alone scores it, where they found it among their best
     similarity: float | None = None  # the cosine of its vector with the search's, from -1 to 1, where both have one
 ```

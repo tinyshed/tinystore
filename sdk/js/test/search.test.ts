@@ -198,6 +198,28 @@ for (const way of ways) {
 			expect((await catalog.search('елка')).hits[0]?.matches).toBeUndefined()
 		})
 
+		// contract: SRCH-22
+		test("a hit's snippet is cut around its first match, its marks in UTF-16 units", async () => {
+			const pages = store.index<{ title: string; plain: string }>('pages', {
+				fields: { title: 2, plain: 1 },
+			})
+			const plain =
+				'🦀 In the first term we read sets. Then linear algebra took three weeks of the term.'
+			await pages.set('p-1', { title: 'Notes', plain })
+			const found = await pages.search({ text: 'algebra', snippet: { field: 'plain', around: 12 } })
+			const snippet = found.hits[0]?.snippet
+			expect(snippet).toEqual({
+				text: '…Then linear algebra took three…',
+				marks: [{ start: 13, end: 20 }],
+			})
+			expect(found.hits[0]?.matches).toBeUndefined()
+			const whole = await pages.search({ text: 'algebra', snippet: { field: 'plain' } })
+			expect(whole.hits[0]?.snippet?.text).toBe(plain)
+			expect(whole.hits[0]?.snippet?.marks).toEqual([{ start: 47, end: 54 }])
+			const refused = await caught(pages.search({ text: 'algebra', snippet: { field: 'body' } }))
+			expect(refused).toBeInstanceOf(InvalidError)
+		})
+
 		test('a hit keeps each half of its score, and a floor keeps a far vector out of the sum', async () => {
 			const opinions = store.index<Product>('opinions', {
 				fields: ['title'],

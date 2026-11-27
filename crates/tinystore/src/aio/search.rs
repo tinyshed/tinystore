@@ -69,7 +69,7 @@ use crate::{Key, Result};
 #[cfg(feature = "sql")]
 pub use crate::search::TxTableIndex;
 pub use crate::search::{
-    Condition, Document, Found, Hit, Listed, Match, Rebuild, Status, and, eq, is_in, missing, or, range,
+    Condition, Document, Found, Hit, Listed, Match, Rebuild, Snippet, Status, and, eq, is_in, missing, or, range,
 };
 
 impl Store {
@@ -398,6 +398,11 @@ impl<'i, T: DeserializeOwned + Send + 'static> SearchCall<'i, T> {
     /// As [`crate::search::SearchCall::matches`].
     pub fn matches(self) -> Self {
         self.changed(crate::search::SearchCall::matches)
+    }
+
+    /// As [`crate::search::SearchCall::snippet`].
+    pub fn snippet(self, field: &str, around: usize) -> Self {
+        self.changed(|call| call.snippet(field, around))
     }
 
     /// As [`crate::search::SearchCall::total`].

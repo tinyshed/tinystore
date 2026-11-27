@@ -141,6 +141,109 @@ for hit in &found.hits {
 If the text goes into HTML, escape each piece rather than the whole text
 first, because escaping changes the offsets.
 
+## Cut a snippet
+
+A page's body is too long to show whole under its title. With `snippet`,
+each hit carries the piece of one field around its first match there, and
+the matches inside that piece, so a result list can show the sentence that
+matched:
+
+```ts
+const found = await pages.search({ text: 'algebra', snippet: { field: 'plain', around: 60 } })
+found.hits[0].snippet // { text: '…Then linear algebra took three weeks of…', marks: [{ start: 13, end: 20 }] }
+```
+
+```python
+result = await pages.search("algebra", snippet={"field": "plain", "around": 60})
+result.hits[0].snippet  # Snippet(text='…Then linear algebra took three weeks of…', marks=[Mark(start=13, end=20)])
+```
+
+```go
+result, err := pages.Search(ctx, "algebra", search.Snippet("plain", 60))
+result.Hits[0].Snippet // &{Text: "…Then linear algebra took three weeks of…", Marks: [{Start: 15, End: 22}]}
+```
+
+```rust
+let found = pages.search("algebra").snippet("plain", 60).run()?;
+let snippet = found.hits[0].snippet.as_ref().unwrap();
+&snippet.text[snippet.marks[0].clone()] // "algebra"
+```
+
+- `field` is a path the index reads, as its `fields` name it; any other is
+  refused as invalid.
+- `around` is how many characters to keep on each side of the field's first
+  match, 1 to 1000, and 80 unless said. Rust takes it always. A character is
+  what a reader counts as one: an emoji of several code points, or a letter
+  with its accent, is one, and is never cut in two.
+- The piece starts at the first word that starts within the allowance and
+  ends at the last word that ends within it, the words the index itself
+  reads. Where text was cut, the piece has `…` at that end.
+- `marks` are every match inside the piece, not only the first, counted in
+  the piece's text as `matches` count in each language: UTF-16 units in Bun
+  and Node, code points in Python, bytes in Go and Rust.
+- A hit that matched in another field, or by its vector alone, gets the
+  field's start, `2 × around` characters, with no marks. A hit whose
+  document lacks the field gets no snippet.
+- In a field that holds a list, the piece is of the string that matched
+  first, and `item` is its place in the list.
+- A snippet does not list the hit's `matches`; ask for both if you want
+  both. Only the hits of the page are cut, after the search.
+
+The store inserts no markup and escapes nothing, because a field's text is
+your users' text: only your program knows whether it goes into HTML, a
+terminal or a push notification. To show it in HTML, escape each piece
+between the marks and wrap the marks yourself:
+
+```ts
+const escape = (s: string) => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
+function marked({ text, marks }: SearchSnippet): string {
+	let out = ''
+	let at = 0
+	for (const { start, end } of marks) {
+		out += `${escape(text.slice(at, start))}<mark>${escape(text.slice(start, end))}</mark>`
+		at = end
+	}
+	return out + escape(text.slice(at))
+}
+```
+
+```python
+from html import escape
+
+def marked(snippet: tinystore.Snippet) -> str:
+    out, at = "", 0
+    for mark in snippet.marks:
+        out += f"{escape(snippet.text[at:mark.start])}<mark>{escape(snippet.text[mark.start:mark.end])}</mark>"
+        at = mark.end
+    return out + escape(snippet.text[at:])
+```
+
+```go
+func marked(s *search.HitSnippet) string {
+	var out strings.Builder
+	at := 0
+	for _, m := range s.Marks {
+		out.WriteString(html.EscapeString(s.Text[at:m.Start]) + "<mark>" + html.EscapeString(s.Text[m.Start:m.End]) + "</mark>")
+		at = m.End
+	}
+	return out.String() + html.EscapeString(s.Text[at:])
+}
+```
+
+```rust
+fn marked(snippet: &Snippet, escape: impl Fn(&str) -> String) -> String {
+    let (mut out, mut at) = (String::new(), 0);
+    for mark in &snippet.marks {
+        out += &format!("{}<mark>{}</mark>", escape(&snippet.text[at..mark.start]), escape(&snippet.text[mark.clone()]));
+        at = mark.end;
+    }
+    out + &escape(&snippet.text[at..])
+}
+```
+
+Escape after cutting, never before: escaping changes lengths, and the marks
+count the text as the store gave it.
+
 ## What a range covers
 
 | The search                 | The text stored            | The range marks                                      |
@@ -243,6 +346,9 @@ the row that the hit carries.
 | ranges in one text | in text order; ranges that overlap are joined  |
 | a prefix's range   | the letters typed, not the whole word          |
 | the work it adds   | each hit's text is read again after the search |
+| `snippet`          | off unless the search asks                     |
+| `around`           | 1 to 1000 characters; 80 unless said           |
+| a snippet's marks  | every match inside it, in its text's order     |
 
 ## See also
 

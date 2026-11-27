@@ -63,6 +63,7 @@ mod rebuild;
 mod score;
 mod segments;
 mod settings;
+mod snippet;
 mod table;
 #[cfg(feature = "sql")]
 mod table_index;
@@ -82,6 +83,7 @@ pub use matches::Match;
 pub(crate) use matches::Unit;
 pub use open::Status;
 pub use rebuild::Listed;
+pub use snippet::Snippet;
 #[cfg(feature = "sql")]
 pub use table_index::{Columns, TableIndex, TableIndexBuilder, TxTableIndex};
 #[cfg(feature = "sql")]

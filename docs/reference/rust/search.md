@@ -221,6 +221,7 @@ pub struct Hit<T> {
     pub value: T,
     pub score: f64,
     pub matches: Vec<Match>,
+    pub snippet: Option<Snippet>,
     pub text_score: Option<f64>,
     pub similarity: Option<f64>,
 }
@@ -583,6 +584,22 @@ corrected, and the letters typed of a word a prefix began, each with
 the query's word that found it. `алгебре` matches `алгебра` of
 `Линейная алгебра`, bytes 17..31.
 
+### SearchCall.snippet
+
+```rust
+pub fn snippet(self, field: &str, around: usize) -> Self
+```
+
+Cuts each hit's [`snippet`](Hit::snippet) of `field`, a path the index
+reads as `IndexBuilder::field` names it: its own text from `around`
+characters before the field's first match to `around` after it, 1 to
+1,000 and 80 a fair choice, cut where a word starts and where one
+ends and never inside a character, `…` where text was cut; its marks
+are every match inside it, as bytes of its text. A hit that matched
+elsewhere, or by its vector alone, gets the field's first `2 ×
+around` characters and no mark; one whose document lacks the field,
+none. Only the page's hits are cut, and the store adds no markup.
+
 ### SearchCall.filter
 
 ```rust
@@ -688,6 +705,24 @@ pub struct Listed {
 ```
 
 An index as `search::list` says it.
+
+## Snippet
+
+```rust
+pub struct Snippet {
+    pub text: String,
+    pub marks: Vec<Range<usize>>,
+    pub item: Option<usize>,
+}
+```
+
+The piece of a field around the first place a search's words matched a
+hit, with every match inside it.
+
+```text
+text  "…Then linear algebra took three weeks of…"
+marks [13..20], counted as the search's matches are: bytes in Rust
+```
 
 ## Columns
 
@@ -1257,6 +1292,14 @@ pub fn matches(self) -> Self
 ```
 
 As `crate::search::SearchCall::matches`.
+
+### aio::search::SearchCall.snippet
+
+```rust
+pub fn snippet(self, field: &str, around: usize) -> Self
+```
+
+As `crate::search::SearchCall::snippet`.
 
 ### aio::search::SearchCall.total
 

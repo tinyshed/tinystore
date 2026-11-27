@@ -155,6 +155,36 @@ async def test_a_hit_says_where_it_matched_in_code_points_that_slice_its_own_str
     assert (await catalog.search("елка")).hits[0].matches is None
 
 
+@dataclass
+class Page:
+    title: str
+    plain: str
+
+
+# contract: SRCH-22
+async def test_a_hits_snippet_is_cut_around_its_first_match_its_marks_in_code_points(store: tinystore.Store) -> None:
+    pages = store.index("pages", Page, fields={"title": 2, "plain": 1})
+    plain = "🦀 In the first term we read sets. Then linear algebra took three weeks of the term."
+    await pages.set("p-1", Page("Notes", plain))
+    result = await pages.search("algebra", snippet={"field": "plain", "around": 12})
+    hit = result.hits[0]
+    assert hit.snippet == tinystore.Snippet("…Then linear algebra took three…", [tinystore.Mark(13, 20)])
+    assert hit.matches is None
+    whole = (await pages.search("algebra", snippet={"field": "plain"})).hits[0].snippet
+    assert whole is not None
+    assert (whole.text, whole.marks) == (plain, [tinystore.Mark(46, 53)])
+    with pytest.raises(tinystore.InvalidError):
+        await pages.search("algebra", snippet={"field": "body"})
+    for around in ("12", 1.5, True):
+        with pytest.raises(tinystore.InvalidError, match="around"):
+            await pages.search("algebra", snippet={"field": "plain", "around": around})
+
+
+def test_a_hit_is_built_by_place_as_before_snippets_its_snippet_last() -> None:
+    hit = tinystore.Hit("a", None, 1.0, None, 0.5, 0.25)
+    assert (hit.text_score, hit.similarity, hit.snippet) == (0.5, 0.25, None)
+
+
 async def test_a_hit_keeps_each_half_of_its_score_and_a_floor_keeps_a_far_vector_out_of_the_sum(
     store: tinystore.Store,
 ) -> None:

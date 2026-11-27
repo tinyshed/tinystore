@@ -221,7 +221,7 @@ type vectorSaid struct {
 	err      error
 }
 
-// QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Matches, Limit, Offset, Hybrid.
+// QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Matches, Snippet, Limit, Offset, Hybrid.
 type QueryOption interface{ search(*wire.SearchQuery) }
 
 type vector []float32
@@ -356,12 +356,15 @@ func (x *Index[T]) Get(ctx context.Context, id any) (T, bool, error) {
 // when the search asked with Matches. TextScore is the score its words gave
 // it, as a search by its words alone scores it, nil where they did not find
 // it among their best; Similarity the cosine of its vector with the
-// search's, from -1 to 1, nil where either has none.
+// search's, from -1 to 1, nil where either has none. Snippet is the piece of
+// a field around its first match, when the search asked with Snippet and
+// the hit holds the field.
 type Hit[T any] struct {
 	ID         string
 	Value      T
 	Score      float64
 	Matches    []Match
+	Snippet    *HitSnippet
 	TextScore  *float64
 	Similarity *float64
 }
@@ -377,6 +380,23 @@ type Match struct {
 	Start int
 	End   int
 	Word  string
+}
+
+// HitSnippet is the piece of a field around a hit's first match there: the
+// field's own text, "…" where it was cut, and every match inside it as bytes
+// Start to End of Text. Item is the string's place in a field that holds a
+// list, 0 in one that holds a string. The store adds no markup and escapes
+// nothing.
+type HitSnippet struct {
+	Text  string
+	Marks []Mark
+	Item  int
+}
+
+// Mark is where a search's word matched inside a snippet: Text[Start:End].
+type Mark struct {
+	Start int
+	End   int
 }
 
 // Result is what a search found, the best first, and the text it read in
@@ -436,6 +456,28 @@ func Matches() QueryOption { return matches{} }
 
 // Go slices a string by its bytes.
 func (matches) search(q *wire.SearchQuery) { unit := "utf8"; q.Matches = &unit }
+
+type snippet struct {
+	field  string
+	around int
+}
+
+// Snippet has each hit carry the piece of field, a path the index reads,
+// around the field's first match, in Hit.Snippet: its own text from around
+// characters before it to around after it, 1 to 1000 and 80 when 0, cut
+// where a word starts and ends, "…" where text was cut. A hit that matched
+// elsewhere, or by its vector alone, gets the field's first 2 × around
+// characters and no mark.
+func Snippet(field string, around int) QueryOption { return snippet{field, around} }
+
+// Go slices a string by its bytes.
+func (c snippet) search(q *wire.SearchQuery) {
+	q.Snippet = &wire.SearchCut{Field: c.field, Unit: "utf8"}
+	if c.around != 0 {
+		around := uint64(max(c.around, 0))
+		q.Snippet.Around = &around
+	}
+}
 
 type minSimilarity float64
 
@@ -509,6 +551,7 @@ func (x *Index[T]) result(found wire.SearchFound) (Result[T], error) {
 			ID:         hit.Id,
 			Score:      hit.Score,
 			Matches:    matchesOf(hit.Matches),
+			Snippet:    snippetOf(hit.Snippet),
 			TextScore:  hit.TextScore,
 			Similarity: hit.Similarity,
 		}
@@ -524,6 +567,20 @@ func (x *Index[T]) result(found wire.SearchFound) (Result[T], error) {
 		}
 	}
 	return out, nil
+}
+
+func snippetOf(found *wire.SearchSnippet) *HitSnippet {
+	if found == nil {
+		return nil
+	}
+	out := &HitSnippet{Text: found.Text, Marks: make([]Mark, len(found.Marks))}
+	for i, m := range found.Marks {
+		out.Marks[i] = Mark{Start: int(m.Start), End: int(m.End)}
+	}
+	if found.Item != nil {
+		out.Item = int(*found.Item)
+	}
+	return out
 }
 
 // matchesOf is where a hit matched, an empty list when the search asked and

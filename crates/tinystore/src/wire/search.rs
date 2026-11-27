@@ -13,11 +13,11 @@ use super::Lent;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, SearchDeleted, SearchDocument, SearchDropped, SearchFound, SearchGot, SearchHit,
-    SearchIndex, SearchKey, SearchListed, SearchMatch, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany,
-    SearchStatement, SearchStatus, SearchTotal, method,
+    SearchIndex, SearchKey, SearchListed, SearchMark, SearchMatch, SearchName, SearchOpen, SearchQuery, SearchSet,
+    SearchSetMany, SearchSnippet, SearchStatement, SearchStatus, SearchTotal, method,
 };
 use crate::engine::SharedFile;
-use crate::search::{self, Document, Index, Match, Rebuild, SearchCall, Status, Unit};
+use crate::search::{self, Document, Index, Match, Rebuild, SearchCall, Snippet, Status, Unit};
 use crate::{Store, unix_millis};
 
 use super::Answered;
@@ -234,6 +234,7 @@ fn searched(handles: &Handles, asked: SearchQuery) -> Answered {
         score: hit.score,
         row: None,
         matches: asked_matches.then(|| matches(hit.matches)),
+        snippet: hit.snippet.map(snippet),
         text_score: hit.text_score,
         similarity: hit.similarity,
     });
@@ -255,8 +256,29 @@ fn unit(named: &str) -> Result<Unit, Failure> {
     }
 }
 
+/// Refuses a query whose matches and snippet count in two units: a search
+/// counts every range of a hit in one.
+fn one_unit(asked: &SearchQuery) -> Result<(), Failure> {
+    let (Some(matches), Some(cut)) = (&asked.matches, &asked.snippet) else { return Ok(()) };
+    if unit(matches)? != unit(&cut.unit)? {
+        let (matched, marked) = (matches, &cut.unit);
+        return Err(Failure::invalid(format!(
+            "matches counted in {matched:?} and a snippet's marks in {marked:?}: a search counts in one unit"
+        )));
+    }
+    Ok(())
+}
+
+fn wide(at: usize) -> u64 {
+    u64::try_from(at).unwrap_or(u64::MAX)
+}
+
+fn snippet(cut: Snippet) -> SearchSnippet {
+    let marks = cut.marks.into_iter().map(|mark| SearchMark { start: wide(mark.start), end: wide(mark.end) });
+    SearchSnippet { text: cut.text, marks: marks.collect(), item: cut.item.map(wide) }
+}
+
 fn matches(found: Vec<Match>) -> Vec<SearchMatch> {
-    let wide = |at: usize| u64::try_from(at).unwrap_or(u64::MAX);
     let each = |found: Match| SearchMatch {
         field: found.field,
         item: found.item.map(wide),
@@ -297,8 +319,13 @@ fn query<'i>(
     if asked.total {
         call = call.total();
     }
+    one_unit(asked)?;
     if let Some(named) = &asked.matches {
         call = call.matches_in(unit(named)?);
+    }
+    if let Some(cut) = &asked.snippet {
+        let around = cut.around.map(|around| usize::try_from(around).unwrap_or(usize::MAX));
+        call = call.snippet_in(&cut.field, around, unit(&cut.unit)?);
     }
     if let Some(conditions) = &asked.r#where {
         let statements = asked.statements.iter().map(statement).collect::<Result<Vec<_>, _>>()?;
@@ -333,6 +360,7 @@ fn rows_found(call: SearchCall<'_, Value>, asked_matches: bool) -> Answered {
         score: hit.score,
         row: Some(hit.value.1.into_iter().map(super::sql::cell_of).collect()),
         matches: asked_matches.then(|| matches(hit.matches)),
+        snippet: hit.snippet.map(snippet),
         text_score: hit.text_score,
         similarity: hit.similarity,
     });

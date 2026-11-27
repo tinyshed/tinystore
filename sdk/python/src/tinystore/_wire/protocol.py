@@ -9843,6 +9843,58 @@ SearchGot = Message(
 )
 
 
+def _write_search_cut(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("field")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("around")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    if (x := v.get("unit")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_cut(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["field"] = r.str()
+            case 2:
+                read["around"] = r.uint()
+            case 3:
+                read["unit"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# The snippet a search cuts of each hit: of which field, a path as the
+# index's fields name it, how many characters on each side of the field's
+# first match, and what its marks count, as a query's matches do.
+SearchCut = Message(
+    "search.Cut",
+    {
+        "field": (1, str_),
+        # 1 to 1000; 80 when absent
+        "around": (2, uint),
+        # utf8, utf16 or chars
+        "unit": (3, str_),
+    },
+    _write_search_cut,
+    _read_search_cut,
+)
+
+
 def _write_search_statement(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -9886,6 +9938,46 @@ SearchStatement = Message(
     },
     _write_search_statement,
     _read_search_statement,
+)
+
+
+def _write_search_mark(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("start")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("end")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_mark(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["start"] = r.uint()
+            case 2:
+                read["end"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+SearchMark = Message(
+    "search.Mark",
+    {
+        "start": (1, uint),
+        "end": (2, uint),
+    },
+    _write_search_mark,
+    _read_search_mark,
 )
 
 
@@ -11932,6 +12024,10 @@ def _write_search_query(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(14)
         w.bool(x)
         n += 1
+    if (x := v.get("snippet")) is not None:
+        w.uint(15)
+        SearchCut.write(w, x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -11970,6 +12066,8 @@ def _read_search_query(r: Reader) -> dict[str, Any]:
                 read["statements"] = items0
             case 14:
                 read["total"] = r.bool()
+            case 15:
+                read["snippet"] = SearchCut.read(r)
             case _:
                 r.skip()
     r.leave()
@@ -12003,163 +12101,67 @@ SearchQuery = Message(
         "statements": (13, list_(SearchStatement)),
         # counts what it finds as well, exactly up to 10,000; invalid beside a vector
         "total": (14, bool_),
+        # each hit's snippet of a field, around its first match there
+        "snippet": (15, SearchCut),
     },
     _write_search_query,
     _read_search_query,
 )
 
 
-def _write_search_hit(w: Writer, v: Mapping[str, Any]) -> None:
+def _write_search_snippet(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
-    if (x := v.get("id")) is not None:
+    if (x := v.get("text")) is not None:
         w.uint(1)
         w.str(x)
         n += 1
-    if (x := v.get("value")) is not None:
+    if (x := v.get("marks")) is not None:
         w.uint(2)
-        w.str(x)
+        w.array(len(x))
+        for item0 in x:
+            SearchMark.write(w, item0)
         n += 1
-    if (x := v.get("score")) is not None:
+    if (x := v.get("item")) is not None:
         w.uint(3)
-        w.float(x)
-        n += 1
-    if (x := v.get("row")) is not None:
-        w.uint(4)
-        w.array(len(x))
-        for item0 in x:
-            sql_value.write(w, item0)
-        n += 1
-    if (x := v.get("matches")) is not None:
-        w.uint(5)
-        w.array(len(x))
-        for item0 in x:
-            SearchMatch.write(w, item0)
-        n += 1
-    if (x := v.get("text_score")) is not None:
-        w.uint(6)
-        w.float(x)
-        n += 1
-    if (x := v.get("similarity")) is not None:
-        w.uint(7)
-        w.float(x)
+        w.uint(x)
         n += 1
     w.close_map(head, n)
 
 
-def _read_search_hit(r: Reader) -> dict[str, Any]:
+def _read_search_snippet(r: Reader) -> dict[str, Any]:
     read: dict[str, Any] = {}
     seen: set[int] = set()
     for _ in range(r.map()):
         match r.field(seen):
             case 1:
-                read["id"] = r.str()
+                read["text"] = r.str()
             case 2:
-                read["value"] = r.str()
+                items0 = [SearchMark.read(r) for _ in range(r.array())]
+                r.leave()
+                read["marks"] = items0
             case 3:
-                read["score"] = r.float()
-            case 4:
-                items0 = [sql_value.read(r) for _ in range(r.array())]
-                r.leave()
-                read["row"] = items0
-            case 5:
-                items0 = [SearchMatch.read(r) for _ in range(r.array())]
-                r.leave()
-                read["matches"] = items0
-            case 6:
-                read["text_score"] = r.float()
-            case 7:
-                read["similarity"] = r.float()
+                read["item"] = r.uint()
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# A hit: a document and its value, or a table's row, a value a column of
-# the answer's columns, as sql.Rows holds one, where the search's words
-# matched it when the query asked, and what each half of the search gave it.
-SearchHit = Message(
-    "search.Hit",
+# The piece of a field around a hit's first match there, the field's own
+# text with … where it was cut; its start, without marks, where the hit
+# matched elsewhere or by its vector alone.
+SearchSnippet = Message(
+    "search.Snippet",
     {
-        "id": (1, str_),
-        # null for a table's row
-        "value": (2, str_),
-        "score": (3, float_),
-        "row": (4, list_(sql_value)),
-        "matches": (5, list_(SearchMatch)),
-        # its words' score, where they found it among their best
-        "text_score": (6, float_),
-        # its vector's cosine with the search's, where both have one
-        "similarity": (7, float_),
+        "text": (1, str_),
+        # every match inside text, in its order, counted in the cut's unit
+        "marks": (2, list_(SearchMark)),
+        # the string's place in a field that holds a list
+        "item": (3, uint),
     },
-    _write_search_hit,
-    _read_search_hit,
-)
-
-
-def _write_search_found(w: Writer, v: Mapping[str, Any]) -> None:
-    head = w.open_map()
-    n = 0
-    if (x := v.get("hits")) is not None:
-        w.uint(1)
-        w.array(len(x))
-        for item0 in x:
-            SearchHit.write(w, item0)
-        n += 1
-    if (x := v.get("corrected")) is not None:
-        w.uint(2)
-        w.str(x)
-        n += 1
-    if (x := v.get("columns")) is not None:
-        w.uint(3)
-        w.array(len(x))
-        for item0 in x:
-            w.str(item0)
-        n += 1
-    if (x := v.get("total")) is not None:
-        w.uint(4)
-        SearchTotal.write(w, x)
-        n += 1
-    w.close_map(head, n)
-
-
-def _read_search_found(r: Reader) -> dict[str, Any]:
-    read: dict[str, Any] = {}
-    seen: set[int] = set()
-    for _ in range(r.map()):
-        match r.field(seen):
-            case 1:
-                items0 = [SearchHit.read(r) for _ in range(r.array())]
-                r.leave()
-                read["hits"] = items0
-            case 2:
-                read["corrected"] = r.str()
-            case 3:
-                items0 = [r.str() for _ in range(r.array())]
-                r.leave()
-                read["columns"] = items0
-            case 4:
-                read["total"] = SearchTotal.read(r)
-            case _:
-                r.skip()
-    r.leave()
-    return read
-
-
-SearchFound = Message(
-    "search.Found",
-    {
-        "hits": (1, list_(SearchHit)),
-        # the text the search read in fact, when a word was read as another
-        "corrected": (2, str_),
-        # the columns of a table's index's rows
-        "columns": (3, list_(str_)),
-        # how many it finds, when the query asked
-        "total": (4, SearchTotal),
-    },
-    _write_search_found,
-    _read_search_found,
+    _write_search_snippet,
+    _read_search_snippet,
 )
 
 
@@ -12233,6 +12235,168 @@ ConfigLine = Message(
     },
     _write_config_line,
     _read_config_line,
+)
+
+
+def _write_search_hit(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("id")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("value")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("score")) is not None:
+        w.uint(3)
+        w.float(x)
+        n += 1
+    if (x := v.get("row")) is not None:
+        w.uint(4)
+        w.array(len(x))
+        for item0 in x:
+            sql_value.write(w, item0)
+        n += 1
+    if (x := v.get("matches")) is not None:
+        w.uint(5)
+        w.array(len(x))
+        for item0 in x:
+            SearchMatch.write(w, item0)
+        n += 1
+    if (x := v.get("text_score")) is not None:
+        w.uint(6)
+        w.float(x)
+        n += 1
+    if (x := v.get("similarity")) is not None:
+        w.uint(7)
+        w.float(x)
+        n += 1
+    if (x := v.get("snippet")) is not None:
+        w.uint(8)
+        SearchSnippet.write(w, x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_hit(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["id"] = r.str()
+            case 2:
+                read["value"] = r.str()
+            case 3:
+                read["score"] = r.float()
+            case 4:
+                items0 = [sql_value.read(r) for _ in range(r.array())]
+                r.leave()
+                read["row"] = items0
+            case 5:
+                items0 = [SearchMatch.read(r) for _ in range(r.array())]
+                r.leave()
+                read["matches"] = items0
+            case 6:
+                read["text_score"] = r.float()
+            case 7:
+                read["similarity"] = r.float()
+            case 8:
+                read["snippet"] = SearchSnippet.read(r)
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A hit: a document and its value, or a table's row, a value a column of
+# the answer's columns, as sql.Rows holds one, where the search's words
+# matched it when the query asked, and what each half of the search gave it.
+SearchHit = Message(
+    "search.Hit",
+    {
+        "id": (1, str_),
+        # null for a table's row
+        "value": (2, str_),
+        "score": (3, float_),
+        "row": (4, list_(sql_value)),
+        "matches": (5, list_(SearchMatch)),
+        # its words' score, where they found it among their best
+        "text_score": (6, float_),
+        # its vector's cosine with the search's, where both have one
+        "similarity": (7, float_),
+        # when the query asked for one and the hit holds the field
+        "snippet": (8, SearchSnippet),
+    },
+    _write_search_hit,
+    _read_search_hit,
+)
+
+
+def _write_search_found(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("hits")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            SearchHit.write(w, item0)
+        n += 1
+    if (x := v.get("corrected")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("columns")) is not None:
+        w.uint(3)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("total")) is not None:
+        w.uint(4)
+        SearchTotal.write(w, x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_found(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [SearchHit.read(r) for _ in range(r.array())]
+                r.leave()
+                read["hits"] = items0
+            case 2:
+                read["corrected"] = r.str()
+            case 3:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["columns"] = items0
+            case 4:
+                read["total"] = SearchTotal.read(r)
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+SearchFound = Message(
+    "search.Found",
+    {
+        "hits": (1, list_(SearchHit)),
+        # the text the search read in fact, when a word was read as another
+        "corrected": (2, str_),
+        # the columns of a table's index's rows
+        "columns": (3, list_(str_)),
+        # how many it finds, when the query asked
+        "total": (4, SearchTotal),
+    },
+    _write_search_found,
+    _read_search_found,
 )
 
 
@@ -12477,7 +12641,9 @@ messages: dict[str, Message] = {
     "search.Key": SearchKey,
     "search.Deleted": SearchDeleted,
     "search.Got": SearchGot,
+    "search.Cut": SearchCut,
     "search.Statement": SearchStatement,
+    "search.Mark": SearchMark,
     "search.Match": SearchMatch,
     "search.Total": SearchTotal,
     "search.Status": SearchStatus,
@@ -12512,9 +12678,10 @@ messages: dict[str, Message] = {
     "search.Open": SearchOpen,
     "search.SetMany": SearchSetMany,
     "search.Query": SearchQuery,
+    "search.Snippet": SearchSnippet,
+    "config.Line": ConfigLine,
     "search.Hit": SearchHit,
     "search.Found": SearchFound,
-    "config.Line": ConfigLine,
     "config.Value": ConfigValue,
 }
 """Every message by its name in the schema."""

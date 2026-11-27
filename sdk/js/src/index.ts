@@ -213,6 +213,7 @@ export {
 	type Match as SearchMatch,
 	type Query as SearchQuery,
 	SearchIndex,
+	type Snippet as SearchSnippet,
 	search,
 	TableIndex,
 	type TableIndexOptions,

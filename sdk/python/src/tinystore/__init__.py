@@ -114,7 +114,20 @@ from .records import (
     Top,
     TxEvents,
 )
-from .search import Hit, Hybrid, IndexInfo, IndexStatus, Match, Result, SearchIndex, TableIndex, Total, Vectors
+from .search import (
+    Hit,
+    Hybrid,
+    IndexInfo,
+    IndexStatus,
+    Mark,
+    Match,
+    Result,
+    SearchIndex,
+    Snippet,
+    TableIndex,
+    Total,
+    Vectors,
+)
 from .sql import Column, Database, Done, Sql, SqlTx, TxQueue, sql
 from .store import SelfMetrics, Status, Store, connect, open
 from .trace import trace
@@ -189,6 +202,7 @@ __all__ = [
     "Lock",
     "Logger",
     "LostError",
+    "Mark",
     "Match",
     "Message",
     "Metrics",
@@ -226,6 +240,7 @@ __all__ = [
     "SelfMetrics",
     "Semaphore",
     "Series",
+    "Snippet",
     "Sql",
     "SqlTx",
     "Stats",

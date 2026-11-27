@@ -26,6 +26,7 @@ use super::analyzer::{self, Word};
 use super::document;
 use super::score::Part;
 use super::settings::Field;
+use super::snippet::{Cut, Snippet};
 
 /// Where a search's word matched a hit: a range of a field's text, and the
 /// query's word that found it. `&text[at.clone()]` is the whole word for a
@@ -58,12 +59,15 @@ pub(crate) enum Unit {
     Chars,
 }
 
-/// What a search asks of its hits' matches: its words as its text wrote
-/// them, which each match names, and what a range counts.
+/// What a search asks of where its hits matched: its words as its text
+/// wrote them, which each match names, what a range counts, whether each
+/// hit lists its matches, and the snippet it cuts of each.
 #[derive(Clone, Debug)]
 pub(crate) struct Ask {
     pub(crate) words: Vec<String>,
     pub(crate) unit: Unit,
+    pub(crate) listed: bool,
+    pub(crate) snippet: Option<Cut>,
 }
 
 impl Ask {
@@ -75,8 +79,16 @@ impl Ask {
             Some(mapped) => text[mapped.original(word.at.clone())].to_owned(),
             None => word.text.clone(),
         });
-        Ask { words: written.collect(), unit }
+        Ask { words: written.collect(), unit, listed: true, snippet: None }
     }
+}
+
+/// Where a search's words matched a hit, as it asked: its matches, when it
+/// lists them, and its snippet.
+#[derive(Debug, Default)]
+pub(crate) struct Marked {
+    pub(crate) matches: Vec<Match>,
+    pub(crate) snippet: Option<Snippet>,
 }
 
 /// The keys a search found documents by, field by field, each with the
@@ -131,27 +143,48 @@ impl Sought {
 
     /// Where the search's words matched a document kept as `json`; nothing
     /// for bytes that are not JSON, which no index keeps.
-    pub(crate) fn matches_in(&self, json: &[u8]) -> Vec<Match> {
-        serde_json::from_slice(json).map_or_else(|_| Vec::new(), |document| self.matches(&document))
+    pub(crate) fn marked_in(&self, json: &[u8]) -> Marked {
+        serde_json::from_slice(json).map_or_else(|_| Marked::default(), |document| self.marked(&document))
     }
 
     /// Where the search's words matched `document`, a document or a table's
     /// row as its index reads one: field by field in the index's order, a
-    /// list's strings in theirs, and each string's ranges in its text's.
-    pub(crate) fn matches(&self, document: &Value) -> Vec<Match> {
-        let mut matches = Vec::new();
+    /// list's strings in theirs, and each string's ranges in its text's;
+    /// and the snippet of the field it asks one of, cut of the first string
+    /// that matched, or of the first string where none did.
+    pub(crate) fn marked(&self, document: &Value) -> Marked {
+        let mut marked = Marked::default();
+        let cut = self.ask.snippet.as_ref();
         for keys in &self.fields {
+            let snipped = cut.filter(|cut| cut.field == keys.path);
+            if !self.ask.listed && snipped.is_none() {
+                continue;
+            }
             // A field of something else than text is a document its index refused.
             let Ok(texts) = document::texts(document, &keys.path) else { continue };
+            let mut first = None;
             for (item, text) in texts {
                 let (ranges, words): (Vec<_>, Vec<_>) = keys.ranges(text).into_iter().unzip();
-                for (at, word) in counted(text, ranges, self.ask.unit).into_iter().zip(words) {
-                    let word = self.ask.words.get(word).cloned().unwrap_or_default();
-                    matches.push(Match { field: keys.path.clone(), item, at, word });
+                if let Some(cut) = snipped
+                    && marked.snippet.is_none()
+                    && (!ranges.is_empty() || first.is_none())
+                {
+                    let snippet = cut.of(text, &ranges, self.ask.unit, item);
+                    match ranges.is_empty() {
+                        true => first = Some(snippet),
+                        false => marked.snippet = Some(snippet),
+                    }
+                }
+                if self.ask.listed {
+                    for (at, word) in counted(text, ranges, self.ask.unit).into_iter().zip(words) {
+                        let word = self.ask.words.get(word).cloned().unwrap_or_default();
+                        marked.matches.push(Match { field: keys.path.clone(), item, at, word });
+                    }
                 }
             }
+            marked.snippet = marked.snippet.take().or(first);
         }
-        matches
+        marked
     }
 }
 
@@ -205,7 +238,7 @@ fn merged(mut found: Vec<(Range<usize>, usize)>) -> Vec<(Range<usize>, usize)> {
 
 /// Byte ranges of `text`, in its order and apart, counted in `unit`, the
 /// text read once.
-fn counted(text: &str, ranges: Vec<Range<usize>>, unit: Unit) -> Vec<Range<usize>> {
+pub(crate) fn counted(text: &str, ranges: Vec<Range<usize>>, unit: Unit) -> Vec<Range<usize>> {
     let count: fn(&str) -> usize = match unit {
         Unit::Bytes => return ranges,
         Unit::Utf16 => |piece| piece.encode_utf16().count(),
