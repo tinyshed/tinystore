@@ -97,6 +97,28 @@ message metrics.Aggregates {
   2 next: str?          # on the last part of a page that has more, to a request that gave limit
 }
 
+# The newest window's aggregate against the median of the windows before it:
+# the same hours of each earlier day with sameHour, every window before
+# otherwise. The query gives its name and where, and no range or page.
+message metrics.CompareAsked {
+  1 query: metrics.Query
+  2 op: str             # as an aggregate's
+  3 window: duration
+  4 against: duration   # how far back the windows compared with reach
+  5 sameHour: bool
+  6 estimate: bool      # a timer's percentile compares its estimate
+  7 skipNan: bool
+}
+
+# What compare found; a value it could not give is none, never zero.
+message metrics.Compared {
+  1 value: float?       # none when the newest window holds no sample
+  2 usual: float?       # the median of the windows before that hold samples
+  3 ratio: float?       # value / usual; none when either is none or usual is 0
+  4 samples: uint       # the newest window's
+  5 windows: uint       # the windows the usual stands on
+}
+
 # What a call would spend of each bound, and the bound it would stop at.
 message metrics.Plan {
   1 series: uint
@@ -321,3 +343,4 @@ write 0x0611 metrics.replace(metrics.Replace)             -> Empty
 # An ingest's message in pieces, as uploadPrometheus takes a text: written
 # once the last piece came, every series or none.
 write 0x0612 metrics.upload(metrics.IngestUpload)         -> exchange Empty for metrics.Piece
+read  0x0613 metrics.compare(metrics.CompareAsked)        -> metrics.Compared

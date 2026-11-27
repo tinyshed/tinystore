@@ -165,6 +165,7 @@ export const methods = {
 	 * once the last piece came, every series or none.
 	 */
 	'metrics.upload': 0x0612,
+	'metrics.compare': 0x0613,
 	'records.open': 0x0501,
 	'records.append': 0x0502,
 	'records.list': 0x0503,
@@ -8092,6 +8093,196 @@ export const MetricsAggregates = message(
 			}
 			r.leave()
 			return { groups: $groups, next: $next }
+		},
+	},
+)
+
+/**
+ * The newest window's aggregate against the median of the windows before it:
+ * the same hours of each earlier day with sameHour, every window before
+ * otherwise. The query gives its name and where, and no range or page.
+ */
+export const MetricsCompareAsked = message(
+	'metrics.CompareAsked',
+	{
+		query: [1, MetricsQuery],
+		/** as an aggregate's */
+		op: [2, str],
+		window: [3, uint],
+		/** how far back the windows compared with reach */
+		against: [4, uint],
+		sameHour: [5, bool],
+		/** a timer's percentile compares its estimate */
+		estimate: [6, bool],
+		skipNan: [7, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.query !== undefined) {
+				w.field(1)
+				MetricsQuery.write(w, v.query)
+				n++
+			}
+			if (v.op !== undefined) {
+				w.field(2)
+				w.str(v.op)
+				n++
+			}
+			if (v.window !== undefined) {
+				w.field(3)
+				w.uint(v.window)
+				n++
+			}
+			if (v.against !== undefined) {
+				w.field(4)
+				w.uint(v.against)
+				n++
+			}
+			if (v.sameHour !== undefined) {
+				w.field(5)
+				w.bool(v.sameHour)
+				n++
+			}
+			if (v.estimate !== undefined) {
+				w.field(6)
+				w.bool(v.estimate)
+				n++
+			}
+			if (v.skipNan !== undefined) {
+				w.field(7)
+				w.bool(v.skipNan)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $query: Read<typeof MetricsQuery.fields> | undefined
+			let $op: string | undefined
+			let $window: number | undefined
+			let $against: number | undefined
+			let $sameHour: boolean | undefined
+			let $estimate: boolean | undefined
+			let $skipNan: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$query = MetricsQuery.read(r)
+						break
+					case 2:
+						$op = r.str()
+						break
+					case 3:
+						$window = r.uint()
+						break
+					case 4:
+						$against = r.uint()
+						break
+					case 5:
+						$sameHour = r.bool()
+						break
+					case 6:
+						$estimate = r.bool()
+						break
+					case 7:
+						$skipNan = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				query: $query,
+				op: $op,
+				window: $window,
+				against: $against,
+				sameHour: $sameHour,
+				estimate: $estimate,
+				skipNan: $skipNan,
+			}
+		},
+	},
+)
+
+/**
+ * What compare found; a value it could not give is none, never zero.
+ */
+export const MetricsCompared = message(
+	'metrics.Compared',
+	{
+		/** none when the newest window holds no sample */
+		value: [1, float],
+		/** the median of the windows before that hold samples */
+		usual: [2, float],
+		/** value / usual; none when either is none or usual is 0 */
+		ratio: [3, float],
+		/** the newest window's */
+		samples: [4, uint],
+		/** the windows the usual stands on */
+		windows: [5, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.value !== undefined) {
+				w.field(1)
+				w.float(v.value)
+				n++
+			}
+			if (v.usual !== undefined) {
+				w.field(2)
+				w.float(v.usual)
+				n++
+			}
+			if (v.ratio !== undefined) {
+				w.field(3)
+				w.float(v.ratio)
+				n++
+			}
+			if (v.samples !== undefined) {
+				w.field(4)
+				w.uint(v.samples)
+				n++
+			}
+			if (v.windows !== undefined) {
+				w.field(5)
+				w.uint(v.windows)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $value: number | undefined
+			let $usual: number | undefined
+			let $ratio: number | undefined
+			let $samples: number | undefined
+			let $windows: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$value = r.float()
+						break
+					case 2:
+						$usual = r.float()
+						break
+					case 3:
+						$ratio = r.float()
+						break
+					case 4:
+						$samples = r.uint()
+						break
+					case 5:
+						$windows = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { value: $value, usual: $usual, ratio: $ratio, samples: $samples, windows: $windows }
 		},
 	},
 )

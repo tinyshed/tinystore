@@ -741,6 +741,68 @@ func Explain(ctx context.Context, store *tinystore.Store, q Query) (Plan, error)
 	return out, nil
 }
 
+// Comparison is an Op over the newest Window, [now − Window, now), against
+// the median of the same Op over the windows before it within Against: the
+// same hours of each earlier day with SameHour, a day 24 hours in no time
+// zone, or every window before otherwise, 1000 at most.
+type Comparison struct {
+	// Name is the series compared, merged into one answer as an aggregate without By merges them.
+	Name    string
+	Where   Where
+	Op      Op
+	Window  time.Duration
+	Against time.Duration
+	// SameHour compares with the same hours of each earlier day alone.
+	SameHour bool
+	// Estimate makes a timer's percentile compare its estimate; without it such a percentile is refused.
+	Estimate bool
+	SkipNaN  bool
+}
+
+// Compared is what Compare found; a value it could not give is nil, never zero.
+type Compared struct {
+	// Value is the Op over the newest window; nil when it holds no sample.
+	Value *float64
+	// Usual is the median over the windows before that hold samples; nil when none does.
+	Usual *float64
+	// Ratio is Value / Usual; nil when either is nil or Usual is 0.
+	Ratio *float64
+	// Samples are the newest window's.
+	Samples int
+	// Windows are those the usual stands on.
+	Windows int
+}
+
+// Compare sets the newest window's Op against the median of the windows
+// before it. A window without a sample counts in no median.
+func Compare(ctx context.Context, store *tinystore.Store, c Comparison) (Compared, error) {
+	query, err := Query{Name: c.Name, Where: c.Where}.asked()
+	if err != nil {
+		return Compared{}, err
+	}
+	window, err := core.Millis(c.Window, "compare's window")
+	if err != nil {
+		return Compared{}, err
+	}
+	against, err := core.Millis(c.Against, "compare's against")
+	if err != nil {
+		return Compared{}, err
+	}
+	asked := wire.MetricsCompareAsked{
+		Query: query, Op: string(c.Op), Window: window, Against: against,
+		SameHour: c.SameHour, Estimate: c.Estimate, SkipNan: c.SkipNaN,
+	}
+	answer, err := linkOf(store).Call(ctx, core.Reading, wire.MethodMetricsCompare, wire.Encode(&asked))
+	if err != nil {
+		return Compared{}, err
+	}
+	var got wire.MetricsCompared
+	if err := decode(answer, &got); err != nil {
+		return Compared{}, err
+	}
+	return Compared{Value: got.Value, Usual: got.Usual, Ratio: got.Ratio, Samples: int(got.Samples), Windows: int(got.Windows)}, nil
+}
+
 func decode(answer []byte, m wire.Message) error {
 	if err := wire.Decode(answer, m); err != nil {
 		return core.Wrap(core.Protocol, err, "an answer that does not read")

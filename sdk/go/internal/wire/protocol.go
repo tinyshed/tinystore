@@ -126,6 +126,7 @@ const (
 	// An ingest's message in pieces, as uploadPrometheus takes a text: written
 	// once the last piece came, every series or none.
 	MethodMetricsUpload     = 0x0612
+	MethodMetricsCompare    = 0x0613
 	MethodRecordsOpen       = 0x0501
 	MethodRecordsAppend     = 0x0502
 	MethodRecordsList       = 0x0503
@@ -266,6 +267,7 @@ var methodNames = []struct {
 	{"metrics.uploadPrometheus", MethodMetricsUploadPrometheus},
 	{"metrics.replace", MethodMetricsReplace},
 	{"metrics.upload", MethodMetricsUpload},
+	{"metrics.compare", MethodMetricsCompare},
 	{"records.open", MethodRecordsOpen},
 	{"records.append", MethodRecordsAppend},
 	{"records.list", MethodRecordsList},
@@ -536,6 +538,10 @@ func NewMessage(name string) Message {
 		return &MetricsGroup{}
 	case "metrics.Aggregates":
 		return &MetricsAggregates{}
+	case "metrics.CompareAsked":
+		return &MetricsCompareAsked{}
+	case "metrics.Compared":
+		return &MetricsCompared{}
 	case "metrics.Plan":
 		return &MetricsPlan{}
 	case "metrics.Exceeds":
@@ -8828,6 +8834,183 @@ func (m *MetricsAggregates) Read(r *Reader) {
 func (m MetricsAggregates) IsZero() bool {
 	return len(m.Groups) == 0 &&
 		m.Next == nil
+}
+
+// MetricsCompareAsked is the schema's metrics.CompareAsked.
+//
+// The newest window's aggregate against the median of the windows before it:
+// the same hours of each earlier day with sameHour, every window before
+// otherwise. The query gives its name and where, and no range or page.
+type MetricsCompareAsked struct {
+	Query MetricsQuery `wire:"1,query"`
+	// as an aggregate's
+	Op     string `wire:"2,op"`
+	Window uint64 `wire:"3,window"`
+	// how far back the windows compared with reach
+	Against  uint64 `wire:"4,against"`
+	SameHour bool   `wire:"5,sameHour"`
+	// a timer's percentile compares its estimate
+	Estimate bool `wire:"6,estimate"`
+	SkipNan  bool `wire:"7,skipNan"`
+}
+
+func (m MetricsCompareAsked) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if !m.Query.IsZero() {
+		w.Uint(1)
+		m.Query.Write(w)
+		n++
+	}
+	if m.Op != "" {
+		w.Uint(2)
+		w.Str(m.Op)
+		n++
+	}
+	if m.Window != 0 {
+		w.Uint(3)
+		w.Uint(m.Window)
+		n++
+	}
+	if m.Against != 0 {
+		w.Uint(4)
+		w.Uint(m.Against)
+		n++
+	}
+	if m.SameHour {
+		w.Uint(5)
+		w.Bool(m.SameHour)
+		n++
+	}
+	if m.Estimate {
+		w.Uint(6)
+		w.Bool(m.Estimate)
+		n++
+	}
+	if m.SkipNan {
+		w.Uint(7)
+		w.Bool(m.SkipNan)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsCompareAsked) Read(r *Reader) {
+	*m = MetricsCompareAsked{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Query.Read(r)
+		case 2:
+			m.Op = r.Str()
+		case 3:
+			m.Window = r.Uint()
+		case 4:
+			m.Against = r.Uint()
+		case 5:
+			m.SameHour = r.Bool()
+		case 6:
+			m.Estimate = r.Bool()
+		case 7:
+			m.SkipNan = r.Bool()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsCompareAsked writes as no field at all.
+func (m MetricsCompareAsked) IsZero() bool {
+	return m.Query.IsZero() &&
+		m.Op == "" &&
+		m.Window == 0 &&
+		m.Against == 0 &&
+		!m.SameHour &&
+		!m.Estimate &&
+		!m.SkipNan
+}
+
+// MetricsCompared is the schema's metrics.Compared.
+//
+// What compare found; a value it could not give is none, never zero.
+type MetricsCompared struct {
+	// none when the newest window holds no sample
+	Value *float64 `wire:"1,value"`
+	// the median of the windows before that hold samples
+	Usual *float64 `wire:"2,usual"`
+	// value / usual; none when either is none or usual is 0
+	Ratio *float64 `wire:"3,ratio"`
+	// the newest window's
+	Samples uint64 `wire:"4,samples"`
+	// the windows the usual stands on
+	Windows uint64 `wire:"5,windows"`
+}
+
+func (m MetricsCompared) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Value != nil {
+		w.Uint(1)
+		w.Float(*m.Value)
+		n++
+	}
+	if m.Usual != nil {
+		w.Uint(2)
+		w.Float(*m.Usual)
+		n++
+	}
+	if m.Ratio != nil {
+		w.Uint(3)
+		w.Float(*m.Ratio)
+		n++
+	}
+	if m.Samples != 0 {
+		w.Uint(4)
+		w.Uint(m.Samples)
+		n++
+	}
+	if m.Windows != 0 {
+		w.Uint(5)
+		w.Uint(m.Windows)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsCompared) Read(r *Reader) {
+	*m = MetricsCompared{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := r.Float()
+			m.Value = &v
+		case 2:
+			v := r.Float()
+			m.Usual = &v
+		case 3:
+			v := r.Float()
+			m.Ratio = &v
+		case 4:
+			m.Samples = r.Uint()
+		case 5:
+			m.Windows = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsCompared writes as no field at all.
+func (m MetricsCompared) IsZero() bool {
+	return m.Value == nil &&
+		m.Usual == nil &&
+		m.Ratio == nil &&
+		m.Samples == 0 &&
+		m.Windows == 0
 }
 
 // MetricsPlan is the schema's metrics.Plan.

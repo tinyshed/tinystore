@@ -799,6 +799,7 @@ handle.
 | `0x0610` | metrics.uploadPrometheus | write | `metrics.Upload`         | exchange `Empty` for `metrics.Piece`                     |
 | `0x0611` | metrics.replace          | write | `metrics.Replace`        | `Empty`                                                  |
 | `0x0612` | metrics.upload           | write | `metrics.IngestUpload`   | exchange `Empty` for `metrics.Piece`                     |
+| `0x0613` | metrics.compare          | read  | `metrics.CompareAsked`   | `metrics.Compared`                                       |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/metrics.wire`. A read, the newest samples and an

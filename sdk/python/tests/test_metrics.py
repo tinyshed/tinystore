@@ -477,6 +477,24 @@ async def test_what_a_store_holds_a_page_at_a_time_and_its_removal(store: tinyst
     assert (plan.series, plan.exceeds) == (2, None)
 
 
+# contract: MET-33
+async def test_compare_sets_the_newest_window_against_the_median_of_the_windows_before(store: tinystore.Store) -> None:
+    now = datetime.now(UTC)
+    samples = [
+        (now - timedelta(seconds=150), 2.0),
+        (now - timedelta(seconds=90), 4.0),
+        (now - timedelta(seconds=30), 12.0),
+    ]
+    await store.metrics.ingest([Series(name="compared_ms", kind="gauge", labels={"source": "server"}, samples=samples)])
+    where = {"source": "server"}
+    compared = await store.metrics.compare("compared_ms", op="max", window="1m", against="10m", where=where)
+    assert compared == tinystore.Compared(12.0, 3.0, 4.0, 1, 2)
+    none = await store.metrics.compare("compared_nothing", op="max", window="1m", against="10m")
+    assert none == tinystore.Compared(None, None, None, 0, 0)
+    with pytest.raises(tinystore.InvalidError, match="1000 at most"):
+        await store.metrics.compare("compared_ms", op="max", window="1m", against="1002m")
+
+
 async def test_a_query_is_refused_before_it_leaves(store: tinystore.Store) -> None:
     with pytest.raises(tinystore.InvalidError, match="not both"):
         await store.metrics.read(name="cpu", since="1h", from_=datetime.now(UTC))

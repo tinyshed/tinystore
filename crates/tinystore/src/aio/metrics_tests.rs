@@ -81,6 +81,11 @@ async fn every_awaited_call_answers_as_its_blocking_twin_on_the_same_store() {
     assert_eq!(query().latest().await.unwrap(), twin().latest().unwrap());
     assert_eq!(every().explain(Op::Avg).await.unwrap(), twin().every(5 * MINUTE).explain(Op::Avg).unwrap());
     assert_eq!(query().explain(None).await.unwrap(), twin().explain(None).unwrap());
+    let compare = || stats.query().name("cpu").compare(Op::Max, MINUTE).against(HOUR);
+    let compared = compare().run().await.unwrap();
+    assert_eq!((compared.value, compared.usual, compared.windows), (Some(1.5), Some(0.5), 1), "{compared:?}");
+    assert_eq!(compared, blocking.query().name("cpu").compare(Op::Max, MINUTE).against(HOUR).run().unwrap());
+    assert!(compare().same_hour().run().await.is_err(), "an hour is no day");
 
     assert_eq!(stats.names().page().await.unwrap(), blocking.names().page().unwrap());
     assert_eq!(stats.label_names("cpu").page().await.unwrap(), blocking.label_names("cpu").page().unwrap());

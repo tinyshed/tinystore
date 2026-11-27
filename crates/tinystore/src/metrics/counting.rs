@@ -67,6 +67,46 @@ impl Engine {
     }
 }
 
+impl Engine {
+    /// The groups of an aggregate without buckets over each of `ranges`, all
+    /// from one snapshot, as many lists as ranges: each range is the one
+    /// bucket of its groups, as a query of that range alone answers it.
+    pub(super) fn aggregate_ranges(
+        &self,
+        asked: &Asked,
+        shape: &Shape,
+        ranges: &[(i64, i64)],
+    ) -> Result<Vec<Vec<Aggregate>>> {
+        let mut budget = Budget::default();
+        let taken = self.take_ranges(asked, shape, ranges, &mut budget)?;
+        let mut held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: a comparison", PATIENCE)?;
+        let mut zstd = self.codecs.take();
+        let mut answers = Vec::with_capacity(ranges.len());
+        let mut counted = Ok(());
+        for (range_taken, &(from, to)) in taken.into_iter().zip(ranges) {
+            let range = Asked { from, to, ..asked.clone() };
+            let mut counting = Counting {
+                engine: self,
+                shape,
+                asked: &range,
+                zstd: &mut zstd,
+                budget: &mut budget,
+                held: &mut held,
+                points: Vec::new(),
+            };
+            match grouped(range_taken, shape).and_then(|groups| counting.groups(groups)) {
+                Ok(groups) => answers.push(groups),
+                Err(error) => {
+                    counted = Err(error);
+                    break;
+                }
+            }
+        }
+        self.codecs.give_back(zstd);
+        counted.map(|()| answers)
+    }
+}
+
 /// A group of more series than a page holds, counted in parts: its buckets
 /// before `end`, none when no sample was in them, and the first group after
 /// it.

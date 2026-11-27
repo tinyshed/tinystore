@@ -105,6 +105,20 @@ class Point:
 
 A series' newest sample in the range.
 
+## Compared
+
+```python
+@dataclass(frozen=True, slots=True)
+class Compared:
+    value: float | None  # op over the newest window; None when it holds no sample
+    usual: float | None  # the median over the windows before that hold samples; None when none does
+    ratio: float | None  # value / usual; None when either is None or usual is 0
+    samples: int  # the samples of the newest window
+    windows: int  # the windows the usual stands on
+```
+
+What compare found; a value it could not give is None, never zero.
+
 ## Plan
 
 ```python
@@ -250,6 +264,28 @@ async def explain(**query: Unpack[AggregateQuery]) -> Plan: ...
 ```
 
 What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample.
+
+### Metrics.compare
+
+```python
+async def compare(
+    name: str,
+    *,
+    op: Op | str,
+    window: Duration,
+    against: Duration,
+    where: Mapping[str, Condition] | None = None,
+    same_hour: bool = False,
+    estimate: bool = False,
+    skip_nan: bool = False,
+) -> Compared: ...
+```
+
+op over the newest window, [now - window, now), against the median of the windows before it.
+
+The windows before reach back over against: the same hours of each earlier day with same_hour, a day
+24 hours in no time zone, or every window before otherwise, 1000 at most. A window without a sample
+counts in no median, and a timer's percentile compares only with estimate.
 
 ### Metrics.names
 

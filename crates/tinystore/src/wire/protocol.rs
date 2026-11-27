@@ -7614,6 +7614,181 @@ impl Message for MetricsAggregates {
     }
 }
 
+/// The newest window's aggregate against the median of the windows before it:
+/// the same hours of each earlier day with sameHour, every window before
+/// otherwise. The query gives its name and where, and no range or page.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsCompareAsked {
+    pub(crate) query: MetricsQuery,
+    /// As an aggregate's.
+    pub(crate) op: String,
+    /// Milliseconds.
+    pub(crate) window: u64,
+    /// How far back the windows compared with reach. Milliseconds.
+    pub(crate) against: u64,
+    pub(crate) same_hour: bool,
+    /// A timer's percentile compares its estimate.
+    pub(crate) estimate: bool,
+    pub(crate) skip_nan: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsCompareAsked {
+    const NAME: &'static str = "metrics.CompareAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.query = MetricsQuery::read(r)?,
+                2 => message.op = codec::str(r, "op")?,
+                3 => message.window = codec::uint(r, "window")?,
+                4 => message.against = codec::uint(r, "against")?,
+                5 => message.same_hour = codec::bool(r, "sameHour")?,
+                6 => message.estimate = codec::bool(r, "estimate")?,
+                7 => message.skip_nan = codec::bool(r, "skipNan")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.query.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.query);
+        }
+        if !self.op.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.op);
+        }
+        if self.window != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.window);
+        }
+        if self.against != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.against);
+        }
+        if self.same_hour {
+            map.field(out, 5);
+            codec::write_bool(out, &self.same_hour);
+        }
+        if self.estimate {
+            map.field(out, 6);
+            codec::write_bool(out, &self.estimate);
+        }
+        if self.skip_nan {
+            map.field(out, 7);
+            codec::write_bool(out, &self.skip_nan);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.query.size()
+            + 1 + 5 + self.op.len()
+            + 10
+            + 10
+            + 2
+            + 2
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.query.is_zero()
+            && self.op.is_empty()
+            && self.window == 0
+            && self.against == 0
+            && !self.same_hour
+            && !self.estimate
+            && !self.skip_nan
+    }
+}
+
+/// What compare found; a value it could not give is none, never zero.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsCompared {
+    /// None when the newest window holds no sample.
+    pub(crate) value: Option<f64>,
+    /// The median of the windows before that hold samples.
+    pub(crate) usual: Option<f64>,
+    /// Value / usual; none when either is none or usual is 0.
+    pub(crate) ratio: Option<f64>,
+    /// The newest window's.
+    pub(crate) samples: u64,
+    /// The windows the usual stands on.
+    pub(crate) windows: u64,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsCompared {
+    const NAME: &'static str = "metrics.Compared";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.value = Some(codec::float(r, "value")?),
+                2 => message.usual = Some(codec::float(r, "usual")?),
+                3 => message.ratio = Some(codec::float(r, "ratio")?),
+                4 => message.samples = codec::uint(r, "samples")?,
+                5 => message.windows = codec::uint(r, "windows")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(value) = &self.value {
+            map.field(out, 1);
+            codec::write_float(out, value);
+        }
+        if let Some(usual) = &self.usual {
+            map.field(out, 2);
+            codec::write_float(out, usual);
+        }
+        if let Some(ratio) = &self.ratio {
+            map.field(out, 3);
+            codec::write_float(out, ratio);
+        }
+        if self.samples != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.samples);
+        }
+        if self.windows != 0 {
+            map.field(out, 5);
+            codec::write_uint(out, &self.windows);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.value.map_or(0, |_| 10)
+            + self.usual.map_or(0, |_| 10)
+            + self.ratio.map_or(0, |_| 10)
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.value.is_none()
+            && self.usual.is_none()
+            && self.ratio.is_none()
+            && self.samples == 0
+            && self.windows == 0
+    }
+}
+
 /// What a call would spend of each bound, and the bound it would stop at.
 #[cfg(feature = "metrics")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -14324,6 +14499,8 @@ pub(crate) mod method {
     /// once the last piece came, every series or none.
     #[cfg(feature = "metrics")]
     pub(crate) const METRICS_UPLOAD: u16 = 0x0612;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_COMPARE: u16 = 0x0613;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_OPEN: u16 = 0x0501;
     #[cfg(feature = "records")]
@@ -14596,6 +14773,8 @@ pub(crate) mod method {
             METRICS_REPLACE => Some(Access::Write),
             #[cfg(feature = "metrics")]
             METRICS_UPLOAD => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_COMPARE => Some(Access::Read),
             #[cfg(feature = "records")]
             RECORDS_OPEN => Some(Access::Read),
             #[cfg(feature = "records")]
@@ -14861,6 +15040,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("metrics.replace", 0x0611, "call"),
     #[cfg(feature = "metrics")]
     ("metrics.upload", 0x0612, "exchange"),
+    #[cfg(feature = "metrics")]
+    ("metrics.compare", 0x0613, "call"),
     #[cfg(feature = "records")]
     ("records.open", 0x0501, "call"),
     #[cfg(feature = "records")]
@@ -15150,6 +15331,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "metrics.Group" => MetricsGroup::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Aggregates" => MetricsAggregates::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.CompareAsked" => MetricsCompareAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Compared" => MetricsCompared::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Plan" => MetricsPlan::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]

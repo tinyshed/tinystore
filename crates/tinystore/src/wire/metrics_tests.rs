@@ -6,11 +6,11 @@ use crate::pipe::{Capability, Connect, Pipe};
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Hello, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsChange, MetricsCondition,
-    MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExposition, MetricsIngest, MetricsIngestUpload,
-    MetricsInstrument, MetricsLatest, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked,
-    MetricsPiece, MetricsQuery, MetricsRead, MetricsReplace, MetricsSeriesNamed, MetricsSession, MetricsSet,
-    MetricsTextPage, MetricsUpload, method,
+    Empty, Hello, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsChange,
+    MetricsCompareAsked, MetricsCompared, MetricsCondition, MetricsDamages, MetricsDeleted, MetricsDescription,
+    MetricsExposition, MetricsIngest, MetricsIngestUpload, MetricsInstrument, MetricsLatest, MetricsNameAsked,
+    MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsPiece, MetricsQuery, MetricsRead, MetricsReplace,
+    MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, MetricsUpload, method,
 };
 use crate::{Options, Store, unix_millis};
 
@@ -106,6 +106,37 @@ fn a_read_comes_back_in_parts_each_value_bit_for_bit() {
     assert_eq!(times, samples.iter().map(|(at, _)| *at).collect::<Vec<_>>());
     assert_eq!(bits, samples.iter().map(|(_, value)| value.to_bits()).collect::<Vec<_>>());
     assert_eq!((pieces[0].kind.as_str(), &pieces[0].labels), ("gauge", &labels(&[("host", "a")])));
+}
+
+// contract: MET-33
+#[test]
+fn a_comparison_answers_over_the_wire_and_refuses_what_it_cannot_compare() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let mut client = client(&store, 1 << 20);
+    let at = now();
+    let samples = [(at - 150_000, 2.0), (at - 90_000, 4.0), (at - 30_000, 12.0)];
+    ingest(&mut client, vec![series("call_ms", "gauge", &[("source", "server")], &samples)]);
+    let mut query = MetricsQuery { name: Some("call_ms".to_owned()), ..MetricsQuery::default() };
+    query.r#where.insert(
+        "source".to_owned(),
+        MetricsCondition { values: vec!["server".to_owned()], ..MetricsCondition::default() },
+    );
+    let asked = MetricsCompareAsked {
+        query,
+        op: "max".to_owned(),
+        window: 60_000,
+        against: 600_000,
+        ..MetricsCompareAsked::default()
+    };
+    let compared = client.call::<MetricsCompared>(method::METRICS_COMPARE, &asked).unwrap();
+    let expected = MetricsCompared { value: Some(12.0), usual: Some(3.0), ratio: Some(4.0), samples: 1, windows: 2 };
+    assert_eq!(compared, expected);
+    let many = MetricsCompareAsked { against: 60_000 * 1002, ..asked.clone() };
+    let refused = client.call::<MetricsCompared>(method::METRICS_COMPARE, &many).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{refused:?}");
+    let ranged = MetricsCompareAsked { query: named("call_ms"), ..asked };
+    assert_eq!(client.call::<MetricsCompared>(method::METRICS_COMPARE, &ranged).unwrap_err().code, "invalid");
 }
 
 // contract: MET-04

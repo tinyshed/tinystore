@@ -80,6 +80,7 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 | [Instruments](instruments.md)              | counters, gauges, gauge functions, timers, histograms      |
 | [Reading](reading.md)                      | `read`, pages of a long range, `latest`, names, labels     |
 | [Aggregates](aggregates.md)                | `op`, `every`, `by`, percentiles, gaps and partial buckets |
+| [Compare now with usual](compare.md)       | `compare`: a window against the median of those before it  |
 | [Ingesting](ingesting.md)                  | samples from elsewhere, `replace`, `keep`, exporters' text |
 | [To Prometheus](exposition.md)             | the newest samples as the text a Prometheus scrapes        |
 | [The store's own metrics](self-metrics.md) | `selfMetrics` and the `tinystore_` series                  |
