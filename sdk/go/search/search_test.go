@@ -277,6 +277,60 @@ func TestAHitsSnippetIsCutAroundItsFirstMatchItsMarksInBytes(t *testing.T) {
 	})
 }
 
+type offered struct {
+	Title string `json:"title"`
+}
+
+type spacePage struct {
+	Title   string `json:"title"`
+	Plain   string `json:"plain"`
+	SpaceID int    `json:"space_id"`
+}
+
+// contract: SRCH-25, SRCH-26, SRCH-27
+func TestOneQuestionOfSeveralIndexesAnswersAGroupAnIndexAndEveryHitMergedByRank(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		courses := ways.Must(search.OpenIndex[offered](store, "box_courses", search.Fields{"title": 1}))
+		pages := ways.Must(search.OpenIndex[spacePage](store, "box_pages", search.Fields{"title": 2, "plain": 1}, search.Filters("space_id")))
+		people := ways.Must(search.OpenIndex[map[string]string](store, "box_people", search.Fields{"name": 1}))
+		ways.Must(0, courses.SetMany(ctx, []search.Doc[offered]{{ID: "c-1", Value: offered{"Linear algebra"}}, {ID: "c-2", Value: offered{"Algebra of logic"}}}))
+		ways.Must(0, pages.SetMany(ctx, []search.Doc[spacePage]{
+			{ID: "p-1", Value: spacePage{"Notes", "In the term we read linear algebra.", 7}},
+			{ID: "p-2", Value: spacePage{"Algebra", "Another space.", 8}},
+		}))
+		ways.Must(0, people.Set(ctx, "u-1", map[string]string{"name": "Ada"}))
+		found := ways.Must(search.Many(ctx, store, "algebra",
+			search.Among(courses, search.Boost(2), search.Limit(1)),
+			search.Among(pages, search.Where{"space_id": 7}, search.Limit(5), search.Snippet("plain", 12)),
+			search.Among(people, search.Limit(5))))
+		first, second, third := found.Groups[0], found.Groups[1], found.Groups[2]
+		if first.Index != "box_courses" || len(first.Hits) != 1 || !first.More || first.Err != nil {
+			t.Fatalf("courses %+v", first)
+		}
+		if _, typed := first.Hits[0].Value.(offered); !typed {
+			t.Fatalf("a hit of its index's type: %T", first.Hits[0].Value)
+		}
+		if len(second.Hits) != 1 || second.Hits[0].ID != "p-1" || second.Hits[0].Snippet.Text != "…read linear algebra." {
+			t.Fatalf("pages %+v", second)
+		}
+		if len(third.Hits) != 0 || third.More || third.Err != nil {
+			t.Fatalf("people %+v", third)
+		}
+		if len(found.Best) != 2 || found.Best[0].Hit != &first.Hits[0] || found.Best[1].Index != "box_pages" {
+			t.Fatalf("best %+v", found.Best)
+		}
+		ways.Must(search.Drop(ctx, store, "box_people"))
+		failed := ways.Must(search.Many(ctx, store, "algebra", search.Among(courses), search.Among(people)))
+		is(t, failed.Groups[1].Err, tinystore.ErrInvalid)
+		if len(failed.Best) != 2 || failed.Groups[0].Err != nil {
+			t.Fatalf("the others answer: %+v", failed)
+		}
+		_, err := search.Many(ctx, store, "algebra")
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestAHitKeepsEachHalfOfItsScoreAndAFloorKeepsAFarVectorOutOfTheSum(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

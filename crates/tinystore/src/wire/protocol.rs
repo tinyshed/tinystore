@@ -13189,6 +13189,304 @@ impl Message for SearchListed {
     }
 }
 
+/// One question asked of several indexes in one call, as a "find anything"
+/// box asks it: the store's indexes of documents searched in one snapshot of
+/// search.db, a table's index in a snapshot of its database's file.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchManyQuery {
+    /// Every index's, as a query's text.
+    pub(crate) text: String,
+    /// 1 to 32, in order; the same index twice with another where.
+    pub(crate) among: Vec<SearchAmong>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchManyQuery {
+    const NAME: &'static str = "search.ManyQuery";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.text = codec::str(r, "text")?,
+                2 => message.among = codec::list(r, "among", codec::message::<SearchAmong>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.text.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.text);
+        }
+        if !self.among.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.among, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.text.len()
+            + 1 + codec::list_size(&self.among, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.text.is_empty()
+            && self.among.is_empty()
+    }
+}
+
+/// One index a ManyQuery asks, and its search as a query of it alone says it:
+/// its where, limit, prefix, matches and snippet; its own text, vector,
+/// offset or total are invalid.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchAmong {
+    /// Limit 1 to 100, 10 when absent.
+    pub(crate) query: SearchQuery,
+    /// What its hits weigh in best, above 0; 1 when absent.
+    pub(crate) boost: Option<f64>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchAmong {
+    const NAME: &'static str = "search.Among";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.query = SearchQuery::read(r)?,
+                2 => message.boost = Some(codec::float(r, "boost")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.query.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.query);
+        }
+        if let Some(boost) = &self.boost {
+            map.field(out, 2);
+            codec::write_float(out, boost);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.query.size()
+            + self.boost.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.query.is_zero()
+            && self.boost.is_none()
+    }
+}
+
+/// Each index's group in the order asked, and every group's hits in one
+/// order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
+/// weighs boost / (60 + r); equal weights by the group asked first, then rank.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchManyFound {
+    pub(crate) groups: Vec<SearchGroup>,
+    pub(crate) best: Vec<SearchBest>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchManyFound {
+    const NAME: &'static str = "search.ManyFound";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.groups = codec::list(r, "groups", codec::message::<SearchGroup>)?,
+                2 => message.best = codec::list(r, "best", codec::message::<SearchBest>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.groups.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.groups, codec::write_message);
+        }
+        if !self.best.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.best, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.groups, codec::message_size)
+            + 1 + codec::list_size(&self.best, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.groups.is_empty()
+            && self.best.is_empty()
+    }
+}
+
+/// An index's hits, the best by its own scores first, or why its search failed.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchGroup {
+    /// The index's name.
+    pub(crate) index: String,
+    /// None where it failed.
+    pub(crate) hits: Vec<SearchHit>,
+    /// As search.Found's.
+    pub(crate) corrected: Option<String>,
+    /// The columns of a table's index's rows.
+    pub(crate) columns: Option<Vec<String>>,
+    /// The index has hits past the group's limit.
+    pub(crate) more: bool,
+    /// Why its search failed.
+    pub(crate) failure: Option<Failure>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchGroup {
+    const NAME: &'static str = "search.Group";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.index = codec::str(r, "index")?,
+                2 => message.hits = codec::list(r, "hits", codec::message::<SearchHit>)?,
+                3 => message.corrected = Some(codec::str(r, "corrected")?),
+                4 => message.columns = Some(codec::list(r, "columns", codec::str)?),
+                5 => message.more = codec::bool(r, "more")?,
+                6 => message.failure = Some(Failure::read(r)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.index.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.index);
+        }
+        if !self.hits.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.hits, codec::write_message);
+        }
+        if let Some(corrected) = &self.corrected {
+            map.field(out, 3);
+            codec::write_str(out, corrected);
+        }
+        if let Some(columns) = &self.columns {
+            map.field(out, 4);
+            codec::write_list(out, columns, codec::write_str);
+        }
+        if self.more {
+            map.field(out, 5);
+            codec::write_bool(out, &self.more);
+        }
+        if let Some(failure) = &self.failure {
+            map.field(out, 6);
+            codec::write_message(out, failure);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.index.len()
+            + 1 + codec::list_size(&self.hits, codec::message_size)
+            + self.corrected.as_ref().map_or(0, |corrected| 1 + 5 + corrected.len())
+            + self.columns.as_ref().map_or(0, |columns| 1 + codec::list_size(columns, |item| 5 + item.len()))
+            + 2
+            + self.failure.as_ref().map_or(0, |failure| 1 + failure.size())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.index.is_empty()
+            && self.hits.is_empty()
+            && self.corrected.is_none()
+            && self.columns.is_none()
+            && !self.more
+            && self.failure.is_none()
+    }
+}
+
+/// A hit of best, by its group's place and its own place in that group's hits.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchBest {
+    pub(crate) group: u64,
+    pub(crate) hit: u64,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchBest {
+    const NAME: &'static str = "search.Best";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.group = codec::uint(r, "group")?,
+                2 => message.hit = codec::uint(r, "hit")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.group != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.group);
+        }
+        if self.hit != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.hit);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.group == 0
+            && self.hit == 0
+    }
+}
+
 /// A private server's clock: a time to set it to, a span to move it forward by,
 /// or neither to read it. The answer is the time it reads once moved.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -14768,6 +15066,9 @@ pub(crate) mod method {
     pub(crate) const SEARCH_DROP_INDEX: u16 = 0x0b08;
     #[cfg(feature = "search")]
     pub(crate) const SEARCH_LIST: u16 = 0x0b09;
+    /// Fails only where every index failed, with the first failure.
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_SEARCH_MANY: u16 = 0x0b0a;
     /// Stops the server as its closing does: the streams running finish, every
     /// connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
     pub(crate) const SERVER_STOP: u16 = 0x0001;
@@ -15042,6 +15343,8 @@ pub(crate) mod method {
             SEARCH_DROP_INDEX => Some(Access::Write),
             #[cfg(feature = "search")]
             SEARCH_LIST => Some(Access::Read),
+            #[cfg(feature = "search")]
+            SEARCH_SEARCH_MANY => Some(Access::Read),
             SERVER_STOP => Some(Access::Admin),
             SERVER_CLOCK => Some(Access::Admin),
             #[cfg(feature = "sql")]
@@ -15311,6 +15614,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("search.dropIndex", 0x0b08, "call"),
     #[cfg(feature = "search")]
     ("search.list", 0x0b09, "call"),
+    #[cfg(feature = "search")]
+    ("search.searchMany", 0x0b0a, "call"),
     ("server.stop", 0x0001, "call"),
     ("server.clock", 0x0002, "call"),
     #[cfg(feature = "sql")]
@@ -15722,6 +16027,16 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "search.Index" => SearchIndex::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Listed" => SearchListed::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.ManyQuery" => SearchManyQuery::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Among" => SearchAmong::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.ManyFound" => SearchManyFound::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Group" => SearchGroup::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Best" => SearchBest::decode(body).map(|message| (message.encode(), message.size())),
         "server.Clock" => ServerClock::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Migration" => SqlMigration::decode(body).map(|message| (message.encode(), message.size())),

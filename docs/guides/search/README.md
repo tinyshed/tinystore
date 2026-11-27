@@ -194,6 +194,7 @@ the blocking API: `Found`, `Hit`, `Status` and `Listed`, and the filters
 | `articles.search("хлеба").run()?`          | `articles.search("хлеба").run().await?`                    |
 | `articles.status()?`, `articles.ready()?`  | `articles.status().await?`, `articles.ready().await?`      |
 | `store.drop_index("articles")?`            | `store.drop_index("articles").await?`                      |
+| `store.search("algebra").among(…).run()?`  | `store.search("algebra").among(…).run().await?`            |
 | `tinystore::search::list(&store)?`         | `tinystore::aio::search::list(&store).await?`              |
 | `tinystore::search::maintain(&store)?`     | blocking: `tinystore::search::maintain(store.blocking())?` |
 
@@ -227,6 +228,7 @@ search, `status` and `ready`: see [A table's index](table-index.md#async-rust).
 | [Vectors](vectors.md)                     | dimensions, exact search, `recall` and clusters     |
 | [Words and vectors together](hybrid.md)   | `vectorWeight`, `minSimilarity`, `rerank`           |
 | [A table's index](table-index.md)         | `db.searchIndex`, triggers, `ready`                 |
+| [Ask several indexes at once](many.md)    | `store.search`: groups, `more`, `best` by rank      |
 | [Rebuilds](rebuilds.md)                   | changing fields and filters while the index answers |
 
 New to Search? [Finding old messages](../../handbook/chat/finding-old-messages.md)

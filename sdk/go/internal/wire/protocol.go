@@ -156,6 +156,8 @@ const (
 	// Drops an index and every document it holds, in the background.
 	MethodSearchDropIndex = 0x0b08
 	MethodSearchList      = 0x0b09
+	// Fails only where every index failed, with the first failure.
+	MethodSearchSearchMany = 0x0b0a
 	// Stops the server as its closing does: the streams running finish, every
 	// connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
 	MethodServerStop  = 0x0001
@@ -296,6 +298,7 @@ var methodNames = []struct {
 	{"search.status", MethodSearchStatus},
 	{"search.dropIndex", MethodSearchDropIndex},
 	{"search.list", MethodSearchList},
+	{"search.searchMany", MethodSearchSearchMany},
 	{"server.stop", MethodServerStop},
 	{"server.clock", MethodServerClock},
 	{"sql.open", MethodSqlOpen},
@@ -713,6 +716,16 @@ func NewMessage(name string) Message {
 		return &SearchIndex{}
 	case "search.Listed":
 		return &SearchListed{}
+	case "search.ManyQuery":
+		return &SearchManyQuery{}
+	case "search.Among":
+		return &SearchAmong{}
+	case "search.ManyFound":
+		return &SearchManyFound{}
+	case "search.Group":
+		return &SearchGroup{}
+	case "search.Best":
+		return &SearchBest{}
 	case "server.Clock":
 		return &ServerClock{}
 	case "sql.Migration":
@@ -14836,6 +14849,341 @@ func (m *SearchListed) Read(r *Reader) {
 // IsZero says whether SearchListed writes as no field at all.
 func (m SearchListed) IsZero() bool {
 	return len(m.Indexes) == 0
+}
+
+// SearchManyQuery is the schema's search.ManyQuery.
+//
+// One question asked of several indexes in one call, as a "find anything"
+// box asks it: the store's indexes of documents searched in one snapshot of
+// search.db, a table's index in a snapshot of its database's file.
+type SearchManyQuery struct {
+	// every index's, as a query's text
+	Text string `wire:"1,text"`
+	// 1 to 32, in order; the same index twice with another where
+	Among []SearchAmong `wire:"2,among"`
+}
+
+func (m SearchManyQuery) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Text != "" {
+		w.Uint(1)
+		w.Str(m.Text)
+		n++
+	}
+	if len(m.Among) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Among))
+		for _, item0 := range m.Among {
+			item0.Write(w)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchManyQuery) Read(r *Reader) {
+	*m = SearchManyQuery{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Text = r.Str()
+		case 2:
+			v := []SearchAmong{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SearchAmong
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Among = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchManyQuery writes as no field at all.
+func (m SearchManyQuery) IsZero() bool {
+	return m.Text == "" &&
+		len(m.Among) == 0
+}
+
+// SearchAmong is the schema's search.Among.
+//
+// One index a ManyQuery asks, and its search as a query of it alone says it:
+// its where, limit, prefix, matches and snippet; its own text, vector,
+// offset or total are invalid.
+type SearchAmong struct {
+	// limit 1 to 100, 10 when absent
+	Query SearchQuery `wire:"1,query"`
+	// what its hits weigh in best, above 0; 1 when absent
+	Boost *float64 `wire:"2,boost"`
+}
+
+func (m SearchAmong) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if !m.Query.IsZero() {
+		w.Uint(1)
+		m.Query.Write(w)
+		n++
+	}
+	if m.Boost != nil {
+		w.Uint(2)
+		w.Float(*m.Boost)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchAmong) Read(r *Reader) {
+	*m = SearchAmong{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Query.Read(r)
+		case 2:
+			v := r.Float()
+			m.Boost = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchAmong writes as no field at all.
+func (m SearchAmong) IsZero() bool {
+	return m.Query.IsZero() &&
+		m.Boost == nil
+}
+
+// SearchManyFound is the schema's search.ManyFound.
+//
+// Each index's group in the order asked, and every group's hits in one
+// order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
+// weighs boost / (60 + r); equal weights by the group asked first, then rank.
+type SearchManyFound struct {
+	Groups []SearchGroup `wire:"1,groups"`
+	Best   []SearchBest  `wire:"2,best"`
+}
+
+func (m SearchManyFound) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Groups) > 0 {
+		w.Uint(1)
+		w.Array(len(m.Groups))
+		for _, item0 := range m.Groups {
+			item0.Write(w)
+		}
+		n++
+	}
+	if len(m.Best) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Best))
+		for _, item0 := range m.Best {
+			item0.Write(w)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchManyFound) Read(r *Reader) {
+	*m = SearchManyFound{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []SearchGroup{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SearchGroup
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Groups = v
+		case 2:
+			v := []SearchBest{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SearchBest
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Best = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchManyFound writes as no field at all.
+func (m SearchManyFound) IsZero() bool {
+	return len(m.Groups) == 0 &&
+		len(m.Best) == 0
+}
+
+// SearchGroup is the schema's search.Group.
+//
+// An index's hits, the best by its own scores first, or why its search failed.
+type SearchGroup struct {
+	// the index's name
+	Index string `wire:"1,index"`
+	// none where it failed
+	Hits []SearchHit `wire:"2,hits"`
+	// as search.Found's
+	Corrected *string `wire:"3,corrected"`
+	// the columns of a table's index's rows
+	Columns *[]string `wire:"4,columns"`
+	// the index has hits past the group's limit
+	More bool `wire:"5,more"`
+	// why its search failed
+	Failure *Failure `wire:"6,failure"`
+}
+
+func (m SearchGroup) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Index != "" {
+		w.Uint(1)
+		w.Str(m.Index)
+		n++
+	}
+	if len(m.Hits) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Hits))
+		for _, item0 := range m.Hits {
+			item0.Write(w)
+		}
+		n++
+	}
+	if m.Corrected != nil {
+		w.Uint(3)
+		w.Str(*m.Corrected)
+		n++
+	}
+	if m.Columns != nil {
+		w.Uint(4)
+		w.Array(len(*m.Columns))
+		for _, item0 := range *m.Columns {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.More {
+		w.Uint(5)
+		w.Bool(m.More)
+		n++
+	}
+	if m.Failure != nil {
+		w.Uint(6)
+		m.Failure.Write(w)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchGroup) Read(r *Reader) {
+	*m = SearchGroup{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Index = r.Str()
+		case 2:
+			v := []SearchHit{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SearchHit
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Hits = v
+		case 3:
+			v := r.Str()
+			m.Corrected = &v
+		case 4:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Columns = &v
+		case 5:
+			m.More = r.Bool()
+		case 6:
+			var v Failure
+			v.Read(r)
+			m.Failure = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchGroup writes as no field at all.
+func (m SearchGroup) IsZero() bool {
+	return m.Index == "" &&
+		len(m.Hits) == 0 &&
+		m.Corrected == nil &&
+		m.Columns == nil &&
+		!m.More &&
+		m.Failure == nil
+}
+
+// SearchBest is the schema's search.Best.
+//
+// A hit of best, by its group's place and its own place in that group's hits.
+type SearchBest struct {
+	Group uint64 `wire:"1,group"`
+	Hit   uint64 `wire:"2,hit"`
+}
+
+func (m SearchBest) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Group != 0 {
+		w.Uint(1)
+		w.Uint(m.Group)
+		n++
+	}
+	if m.Hit != 0 {
+		w.Uint(2)
+		w.Uint(m.Hit)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchBest) Read(r *Reader) {
+	*m = SearchBest{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Group = r.Uint()
+		case 2:
+			m.Hit = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchBest writes as no field at all.
+func (m SearchBest) IsZero() bool {
+	return m.Group == 0 &&
+		m.Hit == 0
 }
 
 // ServerClock is the schema's server.Clock.

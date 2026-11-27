@@ -891,17 +891,18 @@ An index opens a handle, as a bucket does; its documents are JSON as str, and
 a vector is bin, its floats little-endian, four bytes a dimension.
 
 <!-- written from protocol/*.wire by `just protocol`: methods of search -->
-| method   | name             | may   | request          | answer           |
-|----------|------------------|-------|------------------|------------------|
-| `0x0b01` | search.open      | read  | `search.Open`    | `Handle`         |
-| `0x0b02` | search.set       | write | `search.Set`     | `Empty`          |
-| `0x0b03` | search.setMany   | write | `search.SetMany` | `Empty`          |
-| `0x0b04` | search.delete    | write | `search.Key`     | `search.Deleted` |
-| `0x0b05` | search.get       | read  | `search.Key`     | `search.Got`     |
-| `0x0b06` | search.search    | read  | `search.Query`   | `search.Found`   |
-| `0x0b07` | search.status    | read  | `Handle`         | `search.Status`  |
-| `0x0b08` | search.dropIndex | write | `search.Name`    | `search.Dropped` |
-| `0x0b09` | search.list      | read  | `Empty`          | `search.Listed`  |
+| method   | name              | may   | request            | answer             |
+|----------|-------------------|-------|--------------------|--------------------|
+| `0x0b01` | search.open       | read  | `search.Open`      | `Handle`           |
+| `0x0b02` | search.set        | write | `search.Set`       | `Empty`            |
+| `0x0b03` | search.setMany    | write | `search.SetMany`   | `Empty`            |
+| `0x0b04` | search.delete     | write | `search.Key`       | `search.Deleted`   |
+| `0x0b05` | search.get        | read  | `search.Key`       | `search.Got`       |
+| `0x0b06` | search.search     | read  | `search.Query`     | `search.Found`     |
+| `0x0b07` | search.status     | read  | `Handle`           | `search.Status`    |
+| `0x0b08` | search.dropIndex  | write | `search.Name`      | `search.Dropped`   |
+| `0x0b09` | search.list       | read  | `Empty`            | `search.Listed`    |
+| `0x0b0a` | search.searchMany | read  | `search.ManyQuery` | `search.ManyFound` |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/search.wire`. A set on an index with vectors

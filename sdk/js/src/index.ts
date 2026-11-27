@@ -213,6 +213,8 @@ export type {
 } from './records.ts'
 export type { StandardSchemaV1 } from './schema.ts'
 export {
+	type Among as SearchAmong,
+	type Best as SearchBest,
 	type Found as SearchFound,
 	type Hit as SearchHit,
 	type IndexDocument,
@@ -220,6 +222,9 @@ export {
 	type IndexOptions,
 	type IndexStatus,
 	type KeyboardLayout,
+	type ManyFound as SearchManyFound,
+	type ManyGroup as SearchGroup,
+	type ManyQuery as SearchManyQuery,
 	type Match as SearchMatch,
 	type Query as SearchQuery,
 	SearchIndex,

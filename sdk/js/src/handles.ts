@@ -60,6 +60,12 @@ export interface Via {
 		read: (r: Reader) => T,
 		idempotence: Idempotence,
 	): Promise<T>
+	/**
+	 * Throws where a call through this via would be refused before it is made:
+	 * a database's, from inside its own transaction. A search of several indexes
+	 * asks it of each before it calls them all on one connection.
+	 */
+	refuse?(): void
 }
 
 /** Asks through `call`, the body and the answer each in bytes of their own. */

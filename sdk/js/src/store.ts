@@ -74,7 +74,10 @@ import {
 	type IndexOptions,
 	indexOpen,
 	listIndexes,
+	type ManyFound,
+	type ManyQuery,
 	SearchIndex,
+	searchMany,
 } from './search.ts'
 import { type Database, type DatabaseOptions, openDatabase } from './sql.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
@@ -337,6 +340,23 @@ export class Store implements AsyncDisposable {
 		const index = new SearchIndex<T>(this.#link, name, indexOpen(name, options, true))
 		await index.status()
 		return index
+	}
+
+	/**
+	 * One question asked of several indexes in one call, each with its own
+	 * options, as a "find anything" box asks it:
+	 *
+	 *     const found = await store.search({ text, in: [{ index: courses, boost: 2, limit: 5 }, { index: people }] })
+	 *
+	 * `groups` holds each index's hits in the order asked, with `more`, or the
+	 * error it failed with while the others answer; `best` merges every
+	 * group's hits by reciprocal rank fusion, the hit at rank `r` of its group
+	 * weighing `boost / (60 + r)`, since scores of two indexes cannot be
+	 * compared. The store's indexes are searched in one snapshot; a table's
+	 * index in its database's, and groups of different files are not one moment.
+	 */
+	search(query: ManyQuery): Promise<ManyFound> {
+		return searchMany(this.#link, query)
 	}
 
 	/** Drops an index and every document it holds, in the background; says whether there was one. */

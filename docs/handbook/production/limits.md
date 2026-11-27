@@ -89,6 +89,7 @@ of repeating them.
 | a filter           | 8 conditions, 100 values; a statement's rows, 100,000                         |
 | `vectorWeight`     | 0.5                                                                           |
 | a table's index    | the rows of one search's hits, 64 MiB together, as one `all`                  |
+| `store.search`     | 1 to 32 indexes; a group's `limit` 1 to 100, 10; `boost` above 0, 1           |
 
 ## Channels and locks
 

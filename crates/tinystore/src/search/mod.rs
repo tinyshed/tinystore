@@ -51,6 +51,7 @@ mod index;
 mod kept;
 mod layouts;
 mod legacy;
+mod many;
 mod matches;
 mod merge;
 mod open;
@@ -79,18 +80,27 @@ pub use filter::{Condition, Listing, Values, and, eq, is_in, missing, or, range}
 #[cfg(feature = "client")]
 pub(crate) use held::held;
 pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall, Total};
+pub use many::{Among, Best, Group, ManyFound, ManySearch, Searched};
+#[cfg(feature = "wire")]
+pub(crate) use many::{Many, Reading, searched};
+#[cfg(feature = "async")]
+pub(crate) use many::{check_among, sealed::Sealed as SearchedSealed, search_among};
 pub use matches::Match;
 #[cfg(feature = "wire")]
 pub(crate) use matches::Unit;
 pub use open::Status;
+#[cfg(all(feature = "sql", feature = "wire"))]
+pub(crate) use read::Query;
 pub use rebuild::Listed;
+#[cfg(feature = "wire")]
+pub(crate) use snippet::AROUND;
 pub use snippet::Snippet;
 #[cfg(feature = "sql")]
 pub use table_index::{Columns, TableIndex, TableIndexBuilder, TxTableIndex};
 #[cfg(feature = "sql")]
 pub(crate) use table_index::{ReadRows, drop_in_file};
 #[cfg(all(feature = "sql", feature = "wire"))]
-pub(crate) use table_index::{by_cells, found_by, table_as_it_is};
+pub(crate) use table_index::{by_cells, found as table_found, found_by, table_as_it_is};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;

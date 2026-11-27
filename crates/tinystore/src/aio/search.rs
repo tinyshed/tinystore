@@ -36,6 +36,7 @@
 //! | a set past 4 KiB      | its words and its commit on the store's pool        | commits; its answer is let go   |
 //! | `get`                 | in the first poll when a reader is idle, else pool  | answered in that poll, or stops |
 //! | a search, `status`    | on the store's pool                                 | stops; its reader goes back     |
+//! | `store.search`        | on the store's pool                                 | stops; its reader goes back     |
 //! | `list`                | on the store's pool                                 | stops; its reader goes back     |
 //! | `ready`               | a waiter the index wakes, each look on the pool     | stops waiting, not the rebuild  |
 //! | `store.drop_index`    | on the store's pool                                 | runs to its end                 |
@@ -69,7 +70,8 @@ use crate::{Key, Result};
 #[cfg(feature = "sql")]
 pub use crate::search::TxTableIndex;
 pub use crate::search::{
-    Condition, Document, Found, Hit, Listed, Match, Rebuild, Snippet, Status, and, eq, is_in, missing, or, range,
+    Among, Best, Condition, Document, Found, Group, Hit, Listed, ManyFound, Match, Rebuild, Searched, Snippet, Status,
+    and, eq, is_in, missing, or, range,
 };
 
 impl Store {
@@ -699,6 +701,10 @@ fn ready<T: DeserializeOwned + Send + 'static>(
         }
     }
 }
+
+#[path = "search_many.rs"]
+mod many;
+pub use many::ManySearch;
 
 #[cfg(test)]
 #[path = "search_tests.rs"]

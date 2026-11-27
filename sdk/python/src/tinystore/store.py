@@ -62,15 +62,18 @@ from .metrics import Metrics
 from .once import Once, once_open
 from .records import AllEvents, Events, open_events
 from .search import (
+    Among,
     Fields,
     Hybrid,
     IndexInfo,
     KeyboardLayout,
+    ManyResult,
     SearchIndex,
     Vectors,
     drop_index,
     index_open,
     list_indexes,
+    search_many,
 )
 from .sql import Database, Migrations, open_database
 from .tx import Tx, run_tx
@@ -613,6 +616,20 @@ class Store:
         index: SearchIndex[Any] = SearchIndex(self._link, name, opener, of)
         await index.status()
         return index
+
+    async def search(self, text: str, *, among: Sequence[Among]) -> ManyResult:
+        """One question asked of several indexes in one call, each with its own options::
+
+            found = await store.search("algebra", among=[search.Among(courses, boost=2, limit=5), search.Among(people)])
+
+        ``groups`` holds each index's hits in the order asked, with ``more``,
+        or the error it failed with while the others answer; ``best`` merges
+        every group's hits by reciprocal rank fusion, the hit at rank r of its
+        group weighing boost / (60 + r), since scores of two indexes cannot be
+        compared. The store's indexes are searched in one snapshot; a table's
+        index in its database's, and groups of different files are not one moment.
+        """
+        return await search_many(self._link, text, among)
 
     async def drop_index(self, name: str) -> bool:
         """Drops an index and every document it holds, in the background; says whether there was one."""

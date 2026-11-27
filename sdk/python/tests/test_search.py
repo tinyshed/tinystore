@@ -200,6 +200,63 @@ def test_a_hit_is_built_by_place_as_before_snippets_its_snippet_last() -> None:
     assert (hit.text_score, hit.similarity, hit.snippet) == (0.5, 0.25, None)
 
 
+@dataclass
+class Offered:
+    title: str
+
+
+@dataclass
+class SpacePage:
+    title: str
+    plain: str
+    space_id: int
+
+
+# contract: SRCH-25, SRCH-26, SRCH-27
+async def test_one_question_of_several_indexes_answers_a_group_an_index_and_every_hit_merged_by_rank(
+    store: tinystore.Store,
+) -> None:
+    courses = store.index("box_courses", Offered, fields={"title": 1})
+    pages = store.index("box_pages", SpacePage, fields={"title": 2, "plain": 1}, filters=["space_id"])
+    people = store.index("box_people", fields={"name": 1})
+    await courses.set_many([("c-1", Offered("Linear algebra")), ("c-2", Offered("Algebra of logic"))])
+    await pages.set_many(
+        [
+            ("p-1", SpacePage("Notes", "In the term we read linear algebra.", 7)),
+            ("p-2", SpacePage("Algebra", "Another space.", 8)),
+        ]
+    )
+    await people.set("u-1", {"name": "Ada"})
+    found = await store.search(
+        "algebra",
+        among=[
+            search.Among(courses, boost=2, limit=1),
+            search.Among(pages, where={"space_id": 7}, limit=5, snippet={"field": "plain", "around": 12}),
+            search.Among(people, limit=5),
+        ],
+    )
+    assert [group.index for group in found.groups] == ["box_courses", "box_pages", "box_people"]
+    first, second, third = found.groups
+    assert (len(first.hits), first.more) == (1, True)
+    assert isinstance(first.hits[0].value, Offered), "each group's hits of its index's type"
+    assert [hit.id for hit in second.hits] == ["p-1"]
+    assert second.hits[0].snippet is not None
+    assert second.hits[0].snippet.text == "…read linear algebra."
+    assert third.hits == [] and third.error is None
+    assert [(best.index, best.hit.id) for best in found.best] == [
+        ("box_courses", first.hits[0].id),
+        ("box_pages", "p-1"),
+    ]
+    assert found.best[0].hit is first.hits[0], "the hit its group holds, not a copy"
+    await store.drop_index("box_people")
+    failed = await store.search("algebra", among=[search.Among(courses), search.Among(people)])
+    assert isinstance(failed.groups[1].error, tinystore.InvalidError)
+    assert "index box_people" in str(failed.groups[1].error)
+    assert sorted(best.hit.id for best in failed.best) == ["c-1", "c-2"]
+    with pytest.raises(tinystore.InvalidError):
+        await store.search("algebra", among=[])
+
+
 async def test_a_hit_keeps_each_half_of_its_score_and_a_floor_keeps_a_far_vector_out_of_the_sum(
     store: tinystore.Store,
 ) -> None:
@@ -407,3 +464,49 @@ def test_a_where_is_written_as_the_wire_takes_it() -> None:
     statements: list[dict[str, Any]] = []
     assert search.where_json({"id": tinystore.sql("select ?", 1)}, statements) == '[{"in":["id",{"statement":0}]}]'
     assert statements == [{"text": "select ?", "values": [1]}]
+
+
+async def test_a_search_among_indexes_of_a_table_is_refused_from_inside_its_databases_transaction(
+    store: tinystore.Store,
+) -> None:
+    db = await store.database(
+        "among_tx", migrations={"0001_notes.sql": "create table notes (id integer primary key, title text)"}
+    )
+    await db.exec("insert into notes (id, title) values (1, 'algebra notes')")
+    notes = db.search_index("notes_search", table="notes", fields=["title"])
+    await notes.ready()
+
+    async def inside(tx: tinystore.SqlTx) -> None:
+        with pytest.raises(tinystore.InvalidError, match="make it through the transaction"):
+            await notes.search("algebra")
+        with pytest.raises(tinystore.InvalidError, match="make it through the transaction"):
+            await store.search("algebra", among=[search.Among(notes)])
+
+    await db.tx(inside)
+    found = await store.search("algebra", among=[search.Among(notes)])
+    assert [hit.id for hit in found.groups[0].hits] == ["1"]
+
+
+def test_the_types_of_a_search_among_indexes_are_exported() -> None:
+    for name in ("Among", "ManyGroup", "ManyResult", "Merged"):
+        assert getattr(tinystore, name) is getattr(search, name)
+        assert name in tinystore.__all__
+
+
+async def test_a_search_among_indexes_refuses_a_snippets_around_that_is_no_int(store: tinystore.Store) -> None:
+    pages = store.index("around_pages", Page, fields={"plain": 1})
+    for around in ("12", 1.5, True):
+        snippet = {"field": "plain", "around": around}
+        with pytest.raises(tinystore.InvalidError, match="around"):
+            await store.search("algebra", among=[search.Among(pages, snippet=snippet)])
+
+
+def test_a_merged_hit_the_groups_do_not_hold_is_the_servers_fault() -> None:
+    hit = tinystore.Hit("c-1", None, 1.0)
+    gone = search.ManyGroup("pages", [], error=tinystore.InvalidError("index pages: dropped"))
+    groups = [search.ManyGroup("courses", [hit]), gone]
+    merged = search._merged_of(groups, [{"group": 0, "hit": 0}])  # pyright: ignore[reportPrivateUsage]
+    assert merged == [search.Merged("courses", 0, hit)]
+    for named in ({"group": 0, "hit": 1}, {"group": 1, "hit": 0}, {"group": 2, "hit": 0}):
+        with pytest.raises(tinystore.ProtocolError):
+            search._merged_of(groups, [named])  # pyright: ignore[reportPrivateUsage]

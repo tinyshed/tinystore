@@ -87,7 +87,7 @@ pub(crate) use {
 
 // What a table's search index reads of its hits' rows.
 #[cfg(all(feature = "search", feature = "wire"))]
-pub(crate) use run::cells_on;
+pub(crate) use run::{Cells, cells_on};
 #[cfg(feature = "search")]
 pub(crate) use run::{column_on, rows_on};
 

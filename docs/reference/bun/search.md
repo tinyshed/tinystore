@@ -371,6 +371,82 @@ value its row as `db.all` reads it: `db.searchIndex(name, options)`. The
 table owns the rows, and every change of one reaches the index in the
 commit that makes it.
 
+## Among
+
+```ts
+interface Among {
+    index: SearchIndex<unknown> | TableIndex<unknown>
+    /** what its hits weigh in `best`, a positive number, 1 unless said */
+    boost?: number | undefined
+    where?: Where | undefined
+    /** 1 to 100, 10 unless said; `more` says whether the index has more */
+    limit?: number | undefined
+    prefix?: boolean | 'every' | undefined
+    matches?: boolean | undefined
+    snippet?: {
+        field: string
+        around?: number | undefined
+    } | undefined
+}
+```
+
+An index a search among several asks, and its search as a search of it alone says it.
+
+## ManyQuery
+
+```ts
+interface ManyQuery {
+    text: string
+    in: readonly Among[]
+}
+```
+
+One question of several indexes: the text every one reads, and 1 to 32 indexes in order.
+
+## ManyGroup
+
+```ts
+type ManyGroup = {
+    index: string
+    hits: Hit<unknown>[]
+    more: boolean
+    corrected?: string | undefined
+} | {
+    index: string
+    error: TinystoreError
+}
+```
+
+An index's hits, the best by its own scores first and whether it has more, or why its search failed.
+
+## Best
+
+```ts
+interface Best {
+    index: string
+    group: number
+    hit: Hit<unknown>
+}
+```
+
+A hit of `best`: its group's index, the group's place among the groups, and the hit its group holds.
+
+## ManyFound
+
+```ts
+interface ManyFound {
+    groups: ManyGroup[]
+    /**
+     * every group's hits by reciprocal rank fusion, never by score: the hit
+     * at rank `r` of its group, from 1, weighs `boost / (60 + r)`; of equal
+     * weights the group asked first comes first, then the higher rank
+     */
+    best: Best[]
+}
+```
+
+What a search among several indexes found: a group an index, in the order asked, and every hit in one order.
+
 ## search
 
 ```ts

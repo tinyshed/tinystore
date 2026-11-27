@@ -833,6 +833,7 @@ export class Database implements Runner, Home {
 				this.#refuseAround(what)
 				return link.ask(openMethod, open, method, write, read, idempotence)
 			},
+			refuse: () => this.#refuseAround(what),
 		}
 	}
 
@@ -932,7 +933,7 @@ export class Database implements Runner, Home {
 		const open = this.keep(methods['search.open'], bytes, async connection =>
 			tableIndexOpen(name, options, await this.handle(connection)),
 		)
-		return new TableIndex<T>(this.via(`index ${name}`), name, open)
+		return new TableIndex<T>(this.#link, this.via(`index ${name}`), name, open)
 	}
 
 	/**

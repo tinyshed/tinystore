@@ -175,6 +175,8 @@ type Index[T any] struct {
 	name   string
 	opener *core.Opener
 	via    core.Via
+	// the store whose connection a search among several opens it on
+	store *core.Store
 }
 
 // OpenIndex opens an index on the store, or a table's index on a database
@@ -187,7 +189,7 @@ func OpenIndex[T any](home tinystore.Home, name string, opts ...Option) (*Index[
 		return nil, err
 	}
 	of := home.CoreHome()
-	index := &Index[T]{name: name}
+	index := &Index[T]{name: name, store: of.Store}
 	switch {
 	case of.Database == nil && message.Table != nil:
 		return nil, core.Errorf(core.Invalid, "index %s: a table's index opens from its database", name)
@@ -449,7 +451,7 @@ type prefix struct{}
 // Prefix reads the last word as the start of a word too, as a search box
 // types: "crypt" finds "cryptography" as well, at half its field's weight.
 // A word a space follows is whole, and so is one of a single letter.
-func Prefix() QueryOption { return prefix{} }
+func Prefix() SearchOption { return prefix{} }
 
 func (prefix) search(q *wire.SearchQuery) { q.Prefix = true }
 
@@ -460,7 +462,7 @@ type prefixEvery struct{}
 // word of two letters or more is read so, the first eight, whatever follows
 // it; a document that holds a word for each word of the text comes first,
 // its score raised above the rest. In place of Prefix.
-func PrefixEvery() QueryOption { return prefixEvery{} }
+func PrefixEvery() SearchOption { return prefixEvery{} }
 
 func (prefixEvery) search(q *wire.SearchQuery) { q.PrefixEvery = true }
 
@@ -470,7 +472,7 @@ type matches struct{}
 // Hit.Matches, as a search box shows them in bold: a word found as written,
 // by its stem or once corrected whole, and a word a prefix began by the
 // letters typed.
-func Matches() QueryOption { return matches{} }
+func Matches() SearchOption { return matches{} }
 
 // Go slices a string by its bytes.
 func (matches) search(q *wire.SearchQuery) { unit := "utf8"; q.Matches = &unit }
@@ -486,7 +488,7 @@ type snippet struct {
 // where a word starts and ends, "…" where text was cut. A hit that matched
 // elsewhere, or by its vector alone, gets the field's first 2 × around
 // characters and no mark.
-func Snippet(field string, around int) QueryOption { return snippet{field, around} }
+func Snippet(field string, around int) SearchOption { return snippet{field, around} }
 
 // Go slices a string by its bytes.
 func (c snippet) search(q *wire.SearchQuery) {
@@ -510,7 +512,7 @@ func (c minSimilarity) search(q *wire.SearchQuery) { cosine := float64(c); q.Min
 type limit int
 
 // Limit is how many hits a search gives, 10 unless given; Offset and Limit together 1000 at most.
-func Limit(n int) QueryOption { return limit(n) }
+func Limit(n int) SearchOption { return limit(n) }
 
 func (n limit) search(q *wire.SearchQuery) { l := uint64(max(int(n), 0)); q.Limit = &l }
 
@@ -553,19 +555,28 @@ func (x *Index[T]) SearchVector(ctx context.Context, v []float32, opts ...QueryO
 }
 
 func (x *Index[T]) result(found wire.SearchFound) (Result[T], error) {
-	out := Result[T]{Hits: make([]Hit[T], len(found.Hits))}
+	out := Result[T]{}
 	if found.Corrected != nil {
 		out.Corrected = *found.Corrected
 	}
 	if found.Total != nil {
 		out.Total = &Counted{Count: int(found.Total.Count), AtLeast: found.Total.AtLeast}
 	}
+	var err error
+	out.Hits, err = x.hits(found.Hits, found.Columns)
+	return out, err
+}
+
+// hits is a search's hits, each value a document's JSON or a table's row by
+// the answer's columns, read as T.
+func (x *Index[T]) hits(found []wire.SearchHit, of *[]string) ([]Hit[T], error) {
+	out := make([]Hit[T], len(found))
 	var columns []string
-	if found.Columns != nil {
-		columns = *found.Columns
+	if of != nil {
+		columns = *of
 	}
-	for i, hit := range found.Hits {
-		out.Hits[i] = Hit[T]{
+	for i, hit := range found {
+		out[i] = Hit[T]{
 			ID:         hit.Id,
 			Score:      hit.Score,
 			Matches:    matchesOf(hit.Matches),
@@ -576,12 +587,12 @@ func (x *Index[T]) result(found wire.SearchFound) (Result[T], error) {
 		var err error
 		switch {
 		case hit.Row != nil:
-			out.Hits[i].Value, err = sqldb.ReadRow[T](columns, *hit.Row)
+			out[i].Value, err = sqldb.ReadRow[T](columns, *hit.Row)
 		case hit.Value != "":
-			err = json.Unmarshal([]byte(hit.Value), &out.Hits[i].Value)
+			err = json.Unmarshal([]byte(hit.Value), &out[i].Value)
 		}
 		if err != nil {
-			return out, core.Wrap(core.Invalid, err, "index %s: a hit that does not read as %T", x.name, out.Hits[i].Value)
+			return out, core.Wrap(core.Invalid, err, "index %s: a hit that does not read as %T", x.name, out[i].Value)
 		}
 	}
 	return out, nil

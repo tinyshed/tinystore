@@ -892,7 +892,7 @@ class Database:
             return index_open(name, **settings, database=await self.handle(connection))
 
         opener = self.keep(methods["search.open"], body, make)
-        return TableIndex(self.via(f"index {name}"), name, opener, of)
+        return TableIndex(self._link, self.via(f"index {name}"), name, opener, of)
 
     async def drop_search_index(self, name: str) -> bool:
         """Drops a table's index this database keeps, its triggers off the table; says whether there was one."""

@@ -26,6 +26,54 @@ func Vector(v []float32) vector
 
 Vector is a document's vector on a set, or a search's on a search, of the index's dimensions, as the program's own model gave it.
 
+## AmongOption
+
+```go
+type AmongOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+AmongOption is how one index of a search among several is searched: Boost, Limit, a Where, Prefix, PrefixEvery, Matches and Snippet. A vector, an Offset or a Total belong to a search of one index alone.
+
+### Boost
+
+```go
+func Boost(b float64) AmongOption
+```
+
+Boost is what an index's hits weigh in ManyResult.Best, a positive number, 1 unless given.
+
+## Asked
+
+```go
+type Asked struct {
+	// contains filtered or unexported fields
+}
+```
+
+Asked is an index a search among several asks, from Among.
+
+### Among
+
+```go
+func Among[T any](x *Index[T], opts ...AmongOption) Asked
+```
+
+Among is the index x in a search among several, searched as opts say: each of its hits' Value is a T, as a search of x alone reads it. Limit is 1 to 100, 10 unless given, and the group's More says whether x has more.
+
+## Best
+
+```go
+type Best struct {
+	Index string
+	Group int
+	Hit   *Hit[any]
+}
+```
+
+Best is a hit of ManyResult.Best: its group's index, the group's place among the groups, and the hit its group holds.
+
 ## Counted
 
 ```go
@@ -236,6 +284,46 @@ func List(ctx context.Context, store *tinystore.Store) ([]Listed, error)
 
 List is every index the store holds, by name.
 
+## ManyGroup
+
+```go
+type ManyGroup struct {
+	Index     string
+	Hits      []Hit[any]
+	More      bool
+	Corrected string
+	Err       error
+}
+```
+
+ManyGroup is an index's hits in a search among several, the best by its own scores first, and More, whether it has hits past its Limit; or Err, why its search failed, and no hit.
+
+## ManyResult
+
+```go
+type ManyResult struct {
+	Groups []ManyGroup
+	Best   []Best
+}
+```
+
+ManyResult is what a search among several indexes found: a group an index, in the order asked, and every group's hits in one order, Best, by reciprocal rank fusion and never by score: the hit at rank r of its group, from 1, weighs boost / (60 + r); of equal weights the group asked first comes first, then the higher rank.
+
+### Many
+
+```go
+func Many(ctx context.Context, home tinystore.Home, text string, among ...Asked) (ManyResult, error)
+```
+
+Many asks text of every index named, 1 to 32, in one call over one connection, each with its own options:
+
+	found, err := search.Many(ctx, store, "algebra",
+		search.Among(courses, search.Boost(2), search.Limit(5)),
+		search.Among(pages, search.Where{"space_id": mine}, search.Limit(5), search.Snippet("plain", 60)),
+		search.Among(people, search.Limit(5)))
+
+An index that fails is its group's Err while the others answer; the call fails only when every one does. The store's indexes are searched in one snapshot, a table's index in its database's, and groups of different files are not one moment. An index of another store is refused.
+
 ## Mark
 
 ```go
@@ -337,22 +425,6 @@ type QueryOption interface {
 
 QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Matches, Snippet, Limit, Offset, Hybrid.
 
-### Limit
-
-```go
-func Limit(n int) QueryOption
-```
-
-Limit is how many hits a search gives, 10 unless given; Offset and Limit together 1000 at most.
-
-### Matches
-
-```go
-func Matches() QueryOption
-```
-
-Matches has each hit say where the search's words matched it, in Hit.Matches, as a search box shows them in bold: a word found as written, by its stem or once corrected whole, and a word a prefix began by the letters typed.
-
 ### MinSimilarity
 
 ```go
@@ -368,30 +440,6 @@ func Offset(n int) QueryOption
 ```
 
 Offset skips the best hits a page before gave.
-
-### Prefix
-
-```go
-func Prefix() QueryOption
-```
-
-Prefix reads the last word as the start of a word too, as a search box types: "crypt" finds "cryptography" as well, at half its field's weight. A word a space follows is whole, and so is one of a single letter.
-
-### PrefixEvery
-
-```go
-func PrefixEvery() QueryOption
-```
-
-PrefixEvery reads every word as the start of a word too, as people shorten each word of a name: "лин алг" finds "Линейная алгебра". Each word of two letters or more is read so, the first eight, whatever follows it; a document that holds a word for each word of the text comes first, its score raised above the rest. In place of Prefix.
-
-### Snippet
-
-```go
-func Snippet(field string, around int) QueryOption
-```
-
-Snippet has each hit carry the piece of field, a path the index reads, around the field's first match, in Hit.Snippet: its own text from around characters before it to around after it, 1 to 1000 and 80 when 0, cut where a word starts and ends, "…" where text was cut. A hit that matched elsewhere, or by its vector alone, gets the field's first 2 × around characters and no mark.
 
 ### Total
 
@@ -441,6 +489,57 @@ type Result[T any] struct {
 ```
 
 Result is what a search found, the best first, and the text it read in fact when a word was misspelt: "" when none was. Total is how many it finds, when the search asked with Total, and nil otherwise.
+
+## SearchOption
+
+```go
+type SearchOption interface {
+	QueryOption
+	AmongOption
+}
+```
+
+SearchOption is a QueryOption a search among several takes too.
+
+### Limit
+
+```go
+func Limit(n int) SearchOption
+```
+
+Limit is how many hits a search gives, 10 unless given; Offset and Limit together 1000 at most.
+
+### Matches
+
+```go
+func Matches() SearchOption
+```
+
+Matches has each hit say where the search's words matched it, in Hit.Matches, as a search box shows them in bold: a word found as written, by its stem or once corrected whole, and a word a prefix began by the letters typed.
+
+### Prefix
+
+```go
+func Prefix() SearchOption
+```
+
+Prefix reads the last word as the start of a word too, as a search box types: "crypt" finds "cryptography" as well, at half its field's weight. A word a space follows is whole, and so is one of a single letter.
+
+### PrefixEvery
+
+```go
+func PrefixEvery() SearchOption
+```
+
+PrefixEvery reads every word as the start of a word too, as people shorten each word of a name: "лин алг" finds "Линейная алгебра". Each word of two letters or more is read so, the first eight, whatever follows it; a document that holds a word for each word of the text comes first, its score raised above the rest. In place of Prefix.
+
+### Snippet
+
+```go
+func Snippet(field string, around int) SearchOption
+```
+
+Snippet has each hit carry the piece of field, a path the index reads, around the field's first match, in Hit.Snippet: its own text from around characters before it to around after it, 1 to 1000 and 80 when 0, cut where a word starts and ends, "…" where text was cut. A hit that matched elsewhere, or by its vector alone, gets the field's first 2 × around characters and no mark.
 
 ## SetOption
 

@@ -30,7 +30,7 @@ use crate::clock::Clock;
 use crate::engine::{Claim, Engine, Host, Wake};
 use crate::sqlite::{Config, File, Migration, Tx, sql_error};
 use crate::sync::lock;
-use crate::{Error, Memory, Result, Store};
+use crate::{Error, ErrorKind, Memory, Result, Store};
 
 const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
@@ -520,6 +520,28 @@ impl Search {
         self.file.read(|connection| {
             let serving = open.current().serving.clone();
             self.search_on(connection, open, &serving, query, then)
+        })
+    }
+
+    /// Searches each index by its query in one snapshot of the file, so that
+    /// no write lands between two of them; one that fails is its own answer
+    /// alone, and the snapshot goes on to the next. A cancel or a timeout of
+    /// the call is no index's failure: it is looked for before each index, as
+    /// a small search may run too few steps to see it, and fails the call.
+    pub(crate) fn search_each(&self, asked: Vec<(&OpenIndex, Query)>) -> Result<Vec<Result<Answer>>> {
+        self.file.read(|connection| {
+            let mut answers = Vec::with_capacity(asked.len());
+            for (at, (open, query)) in asked.into_iter().enumerate() {
+                super::many::before_group(at);
+                crate::cancel::check(|| format!("search index {}", open.name))?;
+                let serving = open.current().serving.clone();
+                let searched = self.search_on(connection, open, &serving, query, |_, _, _| Ok(()));
+                match searched {
+                    Err(stopped) if stopped.kind() == ErrorKind::Cancelled => return Err(stopped),
+                    searched => answers.push(searched.map(|(answer, ())| answer)),
+                }
+            }
+            Ok(answers)
         })
     }
 

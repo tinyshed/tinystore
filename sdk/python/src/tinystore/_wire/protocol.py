@@ -165,6 +165,8 @@ methods: dict[str, int] = {
     # Drops an index and every document it holds, in the background.
     "search.dropIndex": 0x0B08,
     "search.list": 0x0B09,
+    # Fails only where every index failed, with the first failure.
+    "search.searchMany": 0x0B0A,
     # Stops the server as its closing does: the streams running finish, every
     # connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
     "server.stop": 0x0001,
@@ -10813,6 +10815,47 @@ SearchListed = Message(
 )
 
 
+def _write_search_best(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("group")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("hit")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_best(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["group"] = r.uint()
+            case 2:
+                read["hit"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A hit of best, by its group's place and its own place in that group's hits.
+SearchBest = Message(
+    "search.Best",
+    {
+        "group": (1, uint),
+        "hit": (2, uint),
+    },
+    _write_search_best,
+    _read_search_best,
+)
+
+
 def _write_server_clock(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -12664,6 +12707,51 @@ SearchSnippet = Message(
 )
 
 
+def _write_search_among(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("query")) is not None:
+        w.uint(1)
+        SearchQuery.write(w, x)
+        n += 1
+    if (x := v.get("boost")) is not None:
+        w.uint(2)
+        w.float(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_among(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["query"] = SearchQuery.read(r)
+            case 2:
+                read["boost"] = r.float()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# One index a ManyQuery asks, and its search as a query of it alone says it:
+# its where, limit, prefix, matches and snippet; its own text, vector,
+# offset or total are invalid.
+SearchAmong = Message(
+    "search.Among",
+    {
+        # limit 1 to 100, 10 when absent
+        "query": (1, SearchQuery),
+        # what its hits weigh in best, above 0; 1 when absent
+        "boost": (2, float_),
+    },
+    _write_search_among,
+    _read_search_among,
+)
+
+
 def _write_config_line(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -12899,6 +12987,138 @@ SearchFound = Message(
 )
 
 
+def _write_search_many_query(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("text")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("among")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            SearchAmong.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_many_query(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["text"] = r.str()
+            case 2:
+                items0 = [SearchAmong.read(r) for _ in range(r.array())]
+                r.leave()
+                read["among"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# One question asked of several indexes in one call, as a "find anything"
+# box asks it: the store's indexes of documents searched in one snapshot of
+# search.db, a table's index in a snapshot of its database's file.
+SearchManyQuery = Message(
+    "search.ManyQuery",
+    {
+        # every index's, as a query's text
+        "text": (1, str_),
+        # 1 to 32, in order; the same index twice with another where
+        "among": (2, list_(SearchAmong)),
+    },
+    _write_search_many_query,
+    _read_search_many_query,
+)
+
+
+def _write_search_group(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("index")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("hits")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            SearchHit.write(w, item0)
+        n += 1
+    if (x := v.get("corrected")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    if (x := v.get("columns")) is not None:
+        w.uint(4)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("more")) is not None:
+        w.uint(5)
+        w.bool(x)
+        n += 1
+    if (x := v.get("failure")) is not None:
+        w.uint(6)
+        Failure.write(w, x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_group(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["index"] = r.str()
+            case 2:
+                items0 = [SearchHit.read(r) for _ in range(r.array())]
+                r.leave()
+                read["hits"] = items0
+            case 3:
+                read["corrected"] = r.str()
+            case 4:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["columns"] = items0
+            case 5:
+                read["more"] = r.bool()
+            case 6:
+                read["failure"] = Failure.read(r)
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# An index's hits, the best by its own scores first, or why its search failed.
+SearchGroup = Message(
+    "search.Group",
+    {
+        # the index's name
+        "index": (1, str_),
+        # none where it failed
+        "hits": (2, list_(SearchHit)),
+        # as search.Found's
+        "corrected": (3, str_),
+        # the columns of a table's index's rows
+        "columns": (4, list_(str_)),
+        # the index has hits past the group's limit
+        "more": (5, bool_),
+        # why its search failed
+        "failure": (6, Failure),
+    },
+    _write_search_group,
+    _read_search_group,
+)
+
+
 def _write_config_value(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -12969,6 +13189,57 @@ ConfigValue = Message(
     },
     _write_config_value,
     _read_config_value,
+)
+
+
+def _write_search_many_found(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("groups")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            SearchGroup.write(w, item0)
+        n += 1
+    if (x := v.get("best")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            SearchBest.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_many_found(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [SearchGroup.read(r) for _ in range(r.array())]
+                r.leave()
+                read["groups"] = items0
+            case 2:
+                items0 = [SearchBest.read(r) for _ in range(r.array())]
+                r.leave()
+                read["best"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# Each index's group in the order asked, and every group's hits in one
+# order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
+# weighs boost / (60 + r); equal weights by the group asked first, then rank.
+SearchManyFound = Message(
+    "search.ManyFound",
+    {
+        "groups": (1, list_(SearchGroup)),
+        "best": (2, list_(SearchBest)),
+    },
+    _write_search_many_found,
+    _read_search_many_found,
 )
 
 
@@ -13157,6 +13428,7 @@ messages: dict[str, Message] = {
     "search.Dropped": SearchDropped,
     "search.Index": SearchIndex,
     "search.Listed": SearchListed,
+    "search.Best": SearchBest,
     "server.Clock": ServerClock,
     "sql.Migration": SqlMigration,
     "sql.Open": SqlOpen,
@@ -13185,9 +13457,13 @@ messages: dict[str, Message] = {
     "search.SetMany": SearchSetMany,
     "search.Query": SearchQuery,
     "search.Snippet": SearchSnippet,
+    "search.Among": SearchAmong,
     "config.Line": ConfigLine,
     "search.Hit": SearchHit,
     "search.Found": SearchFound,
+    "search.ManyQuery": SearchManyQuery,
+    "search.Group": SearchGroup,
     "config.Value": ConfigValue,
+    "search.ManyFound": SearchManyFound,
 }
 """Every message by its name in the schema."""
