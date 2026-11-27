@@ -51,7 +51,7 @@ Stops the reads of a call from another thread, at once or after a
 timeout: a read under way stops, gives its reader back and fails
 `Cancelled`, and one that has not started fails before it takes one.
 
-The token stops what [`run`](CancellationToken::run) runs, on its thread:
+The token stops what `run` runs, on its thread:
 
 ```rust
 use tinystore::CancellationToken;
@@ -72,7 +72,7 @@ transaction, which its own bound stops. Clones share the token.
 
 A program built with `mcp` and no store has no reads to stop: there the
 token is what an MCP tool's handler asks
-[`is_cancelled`](CancellationToken::is_cancelled).
+`is_cancelled`.
 
 ### CancellationToken.new
 
@@ -515,7 +515,7 @@ pub enum Durability {
 ```
 
 How far a commit goes before it returns: a setting of a store's files,
-`kv.db`, `jobs.db` and each database's, which [`Options`](crate::Options)
+`kv.db`, `jobs.db` and each database's, which `Options`
 gives for them all and a database may say for itself.
 
 ## Options

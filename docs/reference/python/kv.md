@@ -394,6 +394,18 @@ async def refund(key: Key, n: int = 1) -> None: ...
 
 Gives n uses back to every window of key, one unless given.
 
+## Fetched
+
+```python
+@dataclass(frozen=True, slots=True)
+class Fetched[T]:
+    value: T
+    age: timedelta
+    stale: bool
+```
+
+An answer with how old it is: stale once older than the ``fresh`` its answers opened with.
+
 ## Once
 
 ```python

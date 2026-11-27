@@ -186,9 +186,21 @@ The newest window's `op` against the median of the earlier windows'.
 Each window is one aggregate of the query's series, merged as an
 aggregate without `by` merges them, all from one snapshot of the
 file, every bound of a query on them together. A window without a
-sample is left out of the median, and so is one retention cut short.
+sample is left out of the median, and so is a partial one, as an
+aggregate marks its bucket: one retention cut short, or a `rate`'s or
+an `increase`'s whose step into its first sample began at a sample
+retention took or after a NaN. A NaN sample in any window is
+`invalid`, as in an aggregate, unless the query
+`skip_nan`s, so no NaN reaches the median.
+
+Each window reads the blocks it reaches on its own: a block that
+spans several windows is decoded, and counted against the query's
+bounds, once for each, so minute windows over blocks of hours cost
+dozens of times one aggregate of the span. `same_hour`'s windows,
+a day apart, read a block about once.
+
 A timer's percentile is a number only with the query's
-[`estimate`](Query::estimate), as `aggregate` gives one; without it
+`estimate`, as `aggregate` gives one; without it
 that `op` is `invalid`, since the bounds it lies between are no
 number to compare.
 
@@ -334,6 +346,17 @@ pub fn since(self, span: Duration) -> Self
 Only the series whose newest sample is at most this old; without it
 every series the store still keeps, however long it has been silent.
 
+### Exposition.timestamps
+
+```rust
+pub fn timestamps(self, on: bool) -> Self
+```
+
+Whether each line carries its sample's time, as it does unless this
+turns them off: node_exporter's textfile collector and the
+Pushgateway refuse a sample with a time of its own, and a Prometheus
+drops a silent series' old one as out of bounds.
+
 ### Exposition.write
 
 ```rust
@@ -350,11 +373,13 @@ call fails, `out` then holding the lines before the failure.
 pub struct Written {
     pub names: u64,
     pub series: u64,
+    pub skipped: u64,
 }
 ```
 
 What an exposition wrote: the store's names with a series in the text,
-and their series.
+and their series; and the series it could not spell apart from another's,
+which it left out.
 
 ## SeriesQuery
 
@@ -363,7 +388,7 @@ pub struct SeriesQuery<'a> { /* private fields */ }
 ```
 
 An aggregate of series a program holds, its range and its buckets as a
-store's [`Query`](super::Query) says them. Without `from` and `to` the
+store's `Query` says them. Without `from` and `to` the
 range is the samples', from the first to the last.
 
 ### SeriesQuery.from
@@ -417,7 +442,7 @@ pub fn skip_nan(self) -> Self
 ```
 
 A NaN sample is passed over, as a store's query passes it with
-[`Query::skip_nan`](super::Query::skip_nan): each bucket's `skipped`
+`Query::skip_nan`: each bucket's `skipped`
 counts them.
 
 ### SeriesQuery.aggregate
@@ -1177,7 +1202,7 @@ pub fn fill(self) -> Self
 ```
 
 An aggregate gives every bucket of the range that retention keeps, a
-bucket without samples [`Value::Empty`](super::Value::Empty), with
+bucket without samples `Value::Empty`, with
 no samples and `partial` as its span gives it: a chart draws every
 hour of a day, an empty one as it chooses. A group without a sample
 is still left out, since nothing names it. It takes `since` or
@@ -2279,6 +2304,15 @@ pub fn since(self, span: Duration) -> Exposition
 
 Only the series whose newest sample is at most this old, from the
 store's clock where the write begins on the pool.
+
+### aio::metrics::Exposition.timestamps
+
+```rust
+pub fn timestamps(self, on: bool) -> Exposition
+```
+
+Whether each line carries its sample's time, as
+`crate::metrics::Exposition::timestamps` says.
 
 ### aio::metrics::Exposition.write
 

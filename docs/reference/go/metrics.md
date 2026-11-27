@@ -147,7 +147,7 @@ type Compared struct {
 	// Ratio is Value / Usual; nil when either is nil or Usual is 0.
 	Ratio *float64
 	// Samples are the newest window's.
-	Samples int64
+	Samples int
 	// Windows are those the usual stands on.
 	Windows int
 }

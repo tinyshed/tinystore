@@ -77,7 +77,7 @@ pub fn bucket<V: Value>(&self, name: &str) -> BucketBuilder<V>
 ```
 
 A bucket of values by key kept in this database's file, as
-[`Store::bucket`](crate::Store::bucket) keeps one in kv.db: the same
+`Store::bucket` keeps one in kv.db: the same
 handle with the same calls, whose writes commit with the rows in
 `Database::tx` through `tx.with(&bucket)`.
 
@@ -90,7 +90,7 @@ where
 ```
 
 A queue of jobs kept in this database's file, as
-[`Store::queue`](crate::Store::queue) keeps one in jobs.db: the same
+`Store::queue` keeps one in jobs.db: the same
 handle with the same calls and workers, whose jobs commit with the rows
 in `Database::tx` through `tx.with(&queue)`. It shares the database's
 writer, which is the point and its cost.
@@ -102,7 +102,7 @@ pub fn files(&self, name: &str) -> FilesBuilder<'static>
 ```
 
 A set of files kept in this database's file, as
-[`Store::files`](crate::Store::files) keeps one in blobs.db: the same
+`Store::files` keeps one in blobs.db: the same
 handle with the same calls, whose writes commit with the rows in
 `Database::tx` through `tx.with(&files)`. The bytes too large to keep
 inline lie in the folder beside the file, `sql/app.blobs/`.
@@ -125,7 +125,7 @@ pub fn search_index<T: DeserializeOwned + 'static>(&self, name: &str) -> TableIn
 
 An index of a table of this database, kept in its file: the table's
 rows found again by their words, their vectors or both, as
-[`Store::index`](crate::Store::index) finds documents, each hit's value
+`Store::index` finds documents, each hit's value
 its row as `Database::all` reads one. The table owns the rows and the
 index follows them: every change of a row, by any statement, trigger
 or migration, reaches the index in the commit that makes it or not at
@@ -156,11 +156,11 @@ pub fn events(&self, stream: &str) -> EventsBuilder<'static>
 ```
 
 The store's stream of events `stream`, opened through this database:
-the same handle as [`Store::events`](crate::Store::events) opens, with
+the same handle as `Store::events` opens, with
 the same calls and reads, the stream in records.db where every stream
 lives. Its appends inside `Database::tx`, through `tx.with(&audit)`,
 and in `Database::batch`, through
-[`appending`](crate::records::Events::appending), are kept in this
+`appending`, are kept in this
 database's file with the rows and written to the stream once they
 commit, before the call returns: an event exists exactly when the
 change it records does. An append outside them goes to the stream at
@@ -428,7 +428,7 @@ pub struct Each<T> { /* private fields */ }
 ```
 
 The rows of a statement, each as a `T`, as `Database::each` and
-[`Query::each`](super::Query::each) give them. Dropped, it stops its read
+`Query::each` give them. Dropped, it stops its read
 and gives its reader back.
 
 ## Migrations
@@ -519,9 +519,12 @@ Makes the scope, the rows whose columns hold the scope's values, `&[]`
 for the whole table, what `rows` lists, in one write, all of it or
 none: adds what the table lacks, writes the compared columns' changes,
 and deletes, or marks gone, what the list leaves out. A row the list
-names outside the scope is `Invalid`. Values compare as SQLite's `is`
-does, with no column's affinity between: an integer and a real by
-their numbers, and `"4"` is not `4`.
+names outside the scope is `Invalid`, and so is one whose key holds a
+null. Values compare as the table keeps them: a column converts what
+it is given as SQLite stores it, `4` given to a text column is `"4"`,
+an integer and a real compare by their numbers, and a key's text by
+the collation of the index that makes it unique. On a copy of a node
+it is `Unavailable`: run it at the file's home.
 
 A scope of mixed types takes `serde_json::Value`s, `json!(1)` beside
 `json!("fall")`.
@@ -1069,8 +1072,10 @@ integer, holds when, in unix milliseconds of the store's clock. Every
 query and write of the handle passes the marked rows by, unless
 `Query::with_deleted` or `Query::deleted_only` asks for them;
 `delete` marks, `Query::restore` clears the mark, and
-`Query::purge` deletes for good. An upsert whose key a marked row
-holds updates that row and clears its mark: the row came back.
+`Query::purge` deletes for good. A marked row is still in the file
+and holds its key, so an insert of that key fails `Conflict`; an
+upsert whose key a marked row holds updates that row and clears its
+mark: the row came back.
 
 ### Table.version
 
@@ -1081,8 +1086,9 @@ pub fn version(self, column: &str) -> Self
 Counts a row's versions in `column`, an integer, not null, default 0:
 every update, delete, restore and upsert of the handle raises it by
 one, and an edit after `Query::if_version` writes only rows at the
-version it names. The handle sets the column itself, and a value
-given for it is `Invalid`.
+version it names. The handle sets the column itself: an update or an
+upsert's update that names it is `Invalid`, and an insert starts a row
+at version 0 whatever the row gives for it.
 
 ### Table.insert
 
@@ -1091,7 +1097,9 @@ pub fn insert(&self, row: &T) -> Result<T>
 ```
 
 Inserts a row, every field it has, and gives it back as the file keeps
-it: the defaults and the generated columns the database filled.
+it: the defaults and the generated columns the database filled. On a
+versioned table the row starts at version 0, whatever it gives for
+the column, since the version is the handle's to count.
 
 ### Table.insert_all
 
@@ -1165,7 +1173,7 @@ pub struct BoundStatement { /* private fields */ }
 ```
 
 A statement bound to the database that runs it, made by
-[`Database::statement`](super::Database::statement): what a stream's
+`Database::statement`: what a stream's
 `where` keeps a key to, as SQL's `in (select …)` does. A stream lives in
 records.db and belongs to no database, so the statement says whose it is.
 Nothing runs until a query reads it.
@@ -1177,7 +1185,7 @@ pub struct Sql { /* private fields */ }
 ```
 
 A statement's text and the values of its `?`s, which are always values and
-never SQL, so a value cannot inject any. [`sql!`](crate::sql!) makes one:
+never SQL, so a value cannot inject any. `sql!` makes one:
 
 ```rust
 let title: Option<String> = db.one(tinystore::sql!("select title from notes where id = ?", id))?;
@@ -1212,7 +1220,7 @@ pub fn text(&self) -> &str
 pub struct Tx<'t> { /* private fields */ }
 ```
 
-A database's transaction, from [`Database::tx`](super::Database::tx): its
+A database's transaction, from `Database::tx`: its
 reads see its writes, and a call that fails leaves it as it was before the
 call.
 
@@ -1285,8 +1293,8 @@ pub struct Each<T> { /* private fields */ }
 ```
 
 The rows of a statement, each as a `T`, as
-[`Database::each`](super::Database::each) and
-[`Query::each`](super::Query::each) give them: a `Stream` that begins its
+`Database::each` and
+`Query::each` give them: a `Stream` that begins its
 walk at its first poll. Dropped, it stops its read at the next row and
 gives its reader back. A failure is its last item.
 
@@ -1296,7 +1304,7 @@ gives its reader back. A failure is its last item.
 pub struct DatabaseBuilder { /* private fields */ }
 ```
 
-How a database opens; [`Store::database`](super::Store::database) makes
+How a database opens; `Store::database` makes
 one, with the blocking builder's options.
 
 ### aio::sql::DatabaseBuilder.migrations
@@ -1519,7 +1527,7 @@ pub fn bucket<V: Value>(&self, name: &str) -> BucketBuilder<V>
 
 A bucket kept in this database's file, as `Database::bucket` opens
 one, its calls awaited: its writes commit with the rows in
-[`tx`](crate::aio::sql::Database::tx) through `tx.with(&bucket)`.
+`tx` through `tx.with(&bucket)`.
 
 ### aio::sql::Database.events
 
@@ -1529,9 +1537,9 @@ pub fn events(&self, stream: &str) -> EventsBuilder<'_>
 
 The store's stream `stream` opened through this database, as
 `Database::events` opens it, its calls awaited: its appends commit
-with the rows in [`tx`](crate::aio::sql::Database::tx) through
-`tx.with(&audit)`, and in [`batch`](crate::aio::sql::Database::batch)
-through [`appending`](crate::aio::records::Events::appending).
+with the rows in `tx` through
+`tx.with(&audit)`, and in `batch`
+through `appending`.
 
 ### aio::sql::Database.files
 
@@ -1541,7 +1549,7 @@ pub fn files(&self, name: &str) -> FilesBuilder<'_>
 
 A set of files kept in this database's file, as `Database::files`
 opens one, its calls awaited: its writes commit with the rows in
-[`tx`](crate::aio::sql::Database::tx) through `tx.with(&files)`.
+`tx` through `tx.with(&files)`.
 
 ### aio::sql::Database.queue
 
@@ -1553,9 +1561,9 @@ where
 
 A queue kept in this database's file, as `Database::queue` opens
 one, its calls awaited: its jobs commit with the rows in
-[`tx`](crate::aio::sql::Database::tx) through `tx.with(&queue)`, and
-in [`batch`](crate::aio::sql::Database::batch) through
-[`adding`](crate::aio::jobs::Queue::adding).
+`tx` through `tx.with(&queue)`, and
+in `batch` through
+`adding`.
 
 ### aio::sql::Database.search_index
 
@@ -1565,7 +1573,7 @@ pub fn search_index<T: DeserializeOwned + Send + 'static>(&self, name: &str) -> 
 
 An index of a table of this database, as `Database::search_index`
 opens one, its calls awaited. Its rows change with the table's, in
-their commit; a search inside [`tx`](crate::aio::sql::Database::tx)
+their commit; a search inside `tx`
 goes through `tx.with(&index)` and sees what the transaction wrote.
 
 ### aio::sql::Database.drop_search_index

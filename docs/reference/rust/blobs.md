@@ -426,7 +426,7 @@ assert_eq!(page.info().content_type, "application/pdf");
 While one call runs `work`, every other `get_or_create` of the path,
 in this process or through its server, waits for it and gets the file
 it wrote (BLOB-21). The call claims the path for 30 s and the store
-renews the claim while `work` runs, up to its [`timeout`](Self::timeout);
+renews the claim while `work` runs, up to its `timeout`;
 what `work` gives lands only while the claim still holds the path and
 no file is there (BLOB-22). A put of the path meanwhile wins, and the
 calls get the put's file; a delete ends the claim, what `work` gave is
@@ -910,10 +910,10 @@ first byte to its last in order, is checked against the SHA-256 taken when
 it was written, and its last bytes are held back until it matches; a range
 is not checked.
 
-A directory's file, as [`Directory::get`](super::Directory::get) opened
+A directory's file, as `Directory::get` opened
 it, has no hash: each piece read holds to the size and the time it was
 opened with, and fails `conflict` once the file moved. In a growing
-directory a read holds to no version, and its [`info`](Self::info) takes
+directory a read holds to no version, and its `info` takes
 the file's size and time from each piece read in order.
 
 ### StoredFile.info

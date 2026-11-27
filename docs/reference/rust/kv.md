@@ -546,7 +546,8 @@ println!("{} made {:?} ago, stale: {}", answer.value, answer.age, answer.stale);
 | between `fresh` and `keep` | it at once, stale    | one new answer in the background             |
 | past `keep`, or none       | the new answer       | one, which every caller of the key waits for |
 
-A build in the background runs on the store's threads, so its function
+A build in the background runs on a thread the store keeps for them, four
+at most at once and none of those its other calls run on, so its function
 is `Send + 'static`; its answer replaces the kept one and starts both
 terms again, and its error keeps the kept one until `keep` ends, while no
 other build of its key starts for a tenth of `fresh`, a second at least
@@ -594,7 +595,8 @@ pub fn delete(&self, key: impl Key) -> Result<bool>
 ```
 
 Forgets the answer kept under `key`, so that the next run runs again;
-says whether there was one.
+says whether there was one. A build of it in the background under way
+meanwhile keeps nothing.
 
 ### Fresh.clear
 
@@ -603,7 +605,8 @@ pub fn clear(&self) -> Result<()>
 ```
 
 Removes every answer of this branch and of the branches under it, in
-one commit. A build under way meanwhile keeps its answer once it ends.
+one commit. A build in the background under way meanwhile keeps
+nothing; a run of a key that had none keeps its answer once it ends.
 
 ### Fresh.under
 

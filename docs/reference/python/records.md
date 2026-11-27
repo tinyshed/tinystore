@@ -69,7 +69,7 @@ class Session:
     from_: datetime  # its first event's time
     to: datetime  # its last event's time
     count: int  # every event of it, however few it keeps
-    events: list[Event]  # its first events, as many as events asked
+    events: list[Event]  # its first events, as many as max_events asked
     partial: bool  # whether it may go on outside what was read: its first event within gap of the range's start, or its last within gap of its end
 ```
 

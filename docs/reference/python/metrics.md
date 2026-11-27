@@ -281,7 +281,7 @@ async def compare(
 ) -> Compared: ...
 ```
 
-op over the newest window, [now - window, now), against the median of the windows before it.
+op over the newest window, [now - window, now], against the median of the windows before it.
 
 The windows before reach back over against: the same hours of each earlier day with same_hour, a day
 24 hours in no time zone, or every window before otherwise, 1000 at most. A window without a sample

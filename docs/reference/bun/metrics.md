@@ -170,22 +170,20 @@ interface CompareQuery {
     where?: Record<string, Condition> | undefined
     op: Op
     window: Duration
-    against: {
-        /** how far back the windows compared with reach */
-        last: Duration
-        /** the same hours of each earlier day alone: last '7d' compares with 7 windows */
-        sameHour?: boolean | undefined
-    }
+    /** how far back the windows compared with reach */
+    against: Duration
+    /** the same hours of each earlier day alone: against '7d' compares with 7 windows */
+    sameHour?: boolean | undefined
     /** a timer's percentile compares its estimate; without it such a percentile is refused */
     estimate?: boolean | undefined
     skipNaN?: boolean | undefined
 }
 ```
 
-A comparison: op over the newest window, `[now − window, now)`, against
-the usual, the median of op over the windows before it within
-against.last: the same hours of each earlier day with sameHour, a day 24
-hours in no time zone, or every window before otherwise, 1000 at most.
+A comparison: op over the newest window, `[now − window, now]`, against
+the usual, the median of op over the windows before it within against:
+the same hours of each earlier day with sameHour, a day 24 hours in no
+time zone, or every window before otherwise, 1000 at most.
 
 ## Compared
 
@@ -486,7 +484,7 @@ compare(query: CompareQuery): Promise<Compared>
 ```
 
 op over the newest window against the median of the windows before it:
-`{ name: 'moodle_call', op: 'p50', window: '15m', against: { last: '7d', sameHour: true } }`.
+`{ name: 'moodle_call', op: 'p50', window: '15m', against: '7d', sameHour: true }`.
 
 ### Metrics.names
 

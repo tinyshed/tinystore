@@ -15,8 +15,8 @@ pub fn search(&self, text: &str) -> ManySearch<'_>
 ```
 
 One question asked of several indexes in one call, each named with
-[`among`](ManySearch::among) and its own options, run by
-[`run`](ManySearch::run):
+`among` and its own options, run by
+`run`:
 
 ```rust
 use tinystore::search::eq;
@@ -33,10 +33,11 @@ for merged in &found.merged {
 ```
 
 Each group holds its index's best by its own scores, and says whether
-it has more; [`merged`](ManyFound::merged) holds them merged by
+it has more; `merged` holds them merged by
 reciprocal rank fusion, since scores of two indexes cannot be compared. An index that
 fails is its group's error, and the others answer; the call fails
-only when every group does. The store's indexes of documents are
+only when every group does, or when its cancel or its timeout stops
+it, `Cancelled` whichever group it reached. The store's indexes of documents are
 searched in one snapshot of search.db, so that no write lands between
 two of their groups; a table's index is searched in a snapshot of its
 database's file, and groups from different files are not one moment.
@@ -105,7 +106,7 @@ What one pass of maintenance did.
 pub struct Condition(_)
 ```
 
-A condition of a search, given to [`SearchCall::filter`](super::SearchCall::filter).
+A condition of a search, given to `SearchCall::filter`.
 
 ## Values
 
@@ -244,7 +245,7 @@ pub struct Found<T> {
 
 What a search found, the best first, the text it read in fact when it
 read a misspelt word as the index's nearest, and how many it finds in all
-when it asked with [`total`](SearchCall::total).
+when it asked with `total`.
 
 ## Hit
 
@@ -300,7 +301,7 @@ pub fn ready(&self) -> Result<()>
 
 Waits until the index serves the settings it was opened with: at once
 when no rebuild is under way, and an error naming why when one failed.
-A store opened without background work runs [`maintain`](super::maintain)
+A store opened without background work runs `maintain`
 itself meanwhile.
 
 ### Index.search
@@ -312,7 +313,7 @@ pub fn search(&self, text: &str) -> SearchCall<'_, T>
 A search by `text`'s words: a document needs any of them, not all,
 and the best ten come first unless the search says otherwise. Of
 equal scores the document set first comes first, so pages of one
-search join without a hit twice. With a [`vector`](SearchCall::vector)
+search join without a hit twice. With a `vector`
 it searches by both.
 
 ### Index.search_vector
@@ -333,7 +334,7 @@ pub fn set(&self, id: impl Key, value: &T) -> Result<()>
 
 Sets the document `id` to `value`, replacing it whole; the next
 search sees it. On an index with vectors a set gives its vector, or
-says it has none, through [`id`](Index::id).
+says it has none, through `id`.
 
 ### Index.id
 
@@ -500,7 +501,7 @@ pub fn rebuild(self, rebuild: Rebuild) -> Self
 ```
 
 Whether a change of settings that needs the index read again begins
-by itself, as it does unless said, or waits for [`reindex`](Self::reindex),
+by itself, as it does unless said, or waits for `reindex`,
 for a program that schedules its own load.
 
 ### IndexBuilder.open
@@ -526,7 +527,7 @@ version its name.
 pub fn reindex(self) -> Result<Index<T>>
 ```
 
-Opens the index as [`open`](Self::open) does, and reads it again
+Opens the index as `open` does, and reads it again
 beside itself in the background: a change `Rebuild::Manual` left
 waiting, or the documents numbered again.
 
@@ -620,7 +621,7 @@ half its field's weight. Each word of two letters or more is read so,
 the first eight, whatever follows it. A document that holds a word
 for each word of the text comes before any that does not, its score
 raised by the most any other could score, so that scores descend
-down the page. In place of [`prefix`](Self::prefix).
+down the page. In place of `prefix`.
 
 ### SearchCall.matches
 
@@ -628,7 +629,7 @@ down the page. In place of [`prefix`](Self::prefix).
 pub fn matches(self) -> Self
 ```
 
-Says in each hit's [`matches`](Hit::matches) where the search's words
+Says in each hit's `matches` where the search's words
 matched it, as a search box shows them in bold: in each field, the
 bytes of its text that a word matched as written, by its stem or once
 corrected, and the letters typed of a word a prefix began, each with
@@ -641,7 +642,7 @@ the query's word that found it. `алгебре` matches `алгебра` of
 pub fn snippet(self, field: &str, around: usize) -> Self
 ```
 
-Cuts each hit's [`snippet`](Hit::snippet) of `field`, a path the index
+Cuts each hit's `snippet` of `field`, a path the index
 reads as `IndexBuilder::field` names it: its own text from `around`
 characters before the field's first match to `around` after it, 1 to
 1,000 and 80 a fair choice, cut where a word starts and where one
@@ -736,7 +737,7 @@ pub fn limit(self, limit: usize) -> Self
 ```
 
 The hits the group answers, 1 to 100 and 10 unless said; its
-[`more`](Group::more) says whether the index has more.
+`more` says whether the index has more.
 
 ### Among.filter
 
@@ -744,7 +745,7 @@ The hits the group answers, 1 to 100 and 10 unless said; its
 pub fn filter(self, condition: Condition) -> Self
 ```
 
-As [`SearchCall::filter`](super::SearchCall::filter).
+As `SearchCall::filter`.
 
 ### Among.prefix
 
@@ -752,7 +753,7 @@ As [`SearchCall::filter`](super::SearchCall::filter).
 pub fn prefix(self) -> Self
 ```
 
-As [`SearchCall::prefix`](super::SearchCall::prefix).
+As `SearchCall::prefix`.
 
 ### Among.prefix_every
 
@@ -760,7 +761,7 @@ As [`SearchCall::prefix`](super::SearchCall::prefix).
 pub fn prefix_every(self) -> Self
 ```
 
-As [`SearchCall::prefix_every`](super::SearchCall::prefix_every).
+As `SearchCall::prefix_every`.
 
 ### Among.matches
 
@@ -768,7 +769,7 @@ As [`SearchCall::prefix_every`](super::SearchCall::prefix_every).
 pub fn matches(self) -> Self
 ```
 
-As [`SearchCall::matches`](super::SearchCall::matches).
+As `SearchCall::matches`.
 
 ### Among.snippet
 
@@ -776,7 +777,7 @@ As [`SearchCall::matches`](super::SearchCall::matches).
 pub fn snippet(self, field: &str, around: usize) -> Self
 ```
 
-As [`SearchCall::snippet`](super::SearchCall::snippet).
+As `SearchCall::snippet`.
 
 ## Group
 
@@ -868,7 +869,7 @@ pub struct Match {
 Where a search's word matched a hit: a range of a field's text, and the
 query's word that found it. `&text[at.clone()]` is the whole word for a
 word found as written, by its stem or once corrected, and the letters
-typed for a word a [`prefix`](super::SearchCall::prefix) began.
+typed for a word a `prefix` began.
 
 ## Status
 
@@ -1047,7 +1048,7 @@ turned off.
 pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self
 ```
 
-As [`IndexBuilder::layouts`](super::IndexBuilder::layouts).
+As `IndexBuilder::layouts`.
 
 ### TableIndexBuilder.synonyms
 
@@ -1055,7 +1056,7 @@ As [`IndexBuilder::layouts`](super::IndexBuilder::layouts).
 pub fn synonyms<S: AsRef<str>, P: AsRef<str>>(self, pairs: impl IntoIterator<Item = (S, P)>) -> Self
 ```
 
-As [`IndexBuilder::synonyms`](super::IndexBuilder::synonyms), each
+As `IndexBuilder::synonyms`, each
 phrase found in the columns the index reads.
 
 ### TableIndexBuilder.vectors
@@ -1075,7 +1076,7 @@ its row's vector until the program writes another.
 pub fn recall(self, recall: f64) -> Self
 ```
 
-As [`IndexBuilder::recall`](super::IndexBuilder::recall).
+As `IndexBuilder::recall`.
 
 ### TableIndexBuilder.vector_weight
 
@@ -1083,7 +1084,7 @@ As [`IndexBuilder::recall`](super::IndexBuilder::recall).
 pub fn vector_weight(self, weight: f64) -> Self
 ```
 
-As [`IndexBuilder::vector_weight`](super::IndexBuilder::vector_weight).
+As `IndexBuilder::vector_weight`.
 
 ### TableIndexBuilder.rerank
 
@@ -1091,7 +1092,7 @@ As [`IndexBuilder::vector_weight`](super::IndexBuilder::vector_weight).
 pub fn rerank(self) -> Self
 ```
 
-As [`IndexBuilder::rerank`](super::IndexBuilder::rerank).
+As `IndexBuilder::rerank`.
 
 ### TableIndexBuilder.rebuild
 
@@ -1099,7 +1100,7 @@ As [`IndexBuilder::rerank`](super::IndexBuilder::rerank).
 pub fn rebuild(self, rebuild: Rebuild) -> Self
 ```
 
-As [`IndexBuilder::rebuild`](super::IndexBuilder::rebuild).
+As `IndexBuilder::rebuild`.
 
 ### TableIndexBuilder.open
 
@@ -1109,7 +1110,7 @@ pub fn open(self) -> Result<TableIndex<T>>
 
 Opens the index, made the first time: its triggers put on the table,
 and its rows read in the background, which `TableIndex::ready`
-waits for. Other settings change it as [`IndexBuilder::open`](super::IndexBuilder::open)
+waits for. Other settings change it as `IndexBuilder::open`
 says; another table or key is read beside it, the old table's rows
 answering and taking its writes until the new table is read whole and
 switches in.
@@ -1120,7 +1121,7 @@ switches in.
 pub fn reindex(self) -> Result<TableIndex<T>>
 ```
 
-Opens the index as [`open`](Self::open) does, and reads it again
+Opens the index as `open` does, and reads it again
 beside itself in the background.
 
 ## TxTableIndex
@@ -1286,7 +1287,7 @@ its settings needs.
 pub fn reindex(self) -> Result<Index<T>>
 ```
 
-Opens the index as [`open`](Self::open) does, and reads it again
+Opens the index as `open` does, and reads it again
 beside itself in the background, as
 `crate::search::IndexBuilder::reindex` does.
 
@@ -1299,7 +1300,7 @@ pub struct Index<T> { /* private fields */ }
 Documents of type `T` by id in a named index, found again by their words,
 their vectors or both, its calls awaited: the same index as
 `crate::search::Index`, and the same again through `From` and
-[`blocking`](Self::blocking).
+`blocking`.
 
 ### aio::search::Index.blocking
 
@@ -1345,7 +1346,7 @@ pub fn search(&self, text: &str) -> SearchCall<'_, T>
 ```
 
 A search by `text`'s words, as `crate::search::Index::search` makes
-one, run by its awaited [`run`](SearchCall::run).
+one, run by its awaited `run`.
 
 ### aio::search::Index.search_vector
 
@@ -1374,7 +1375,7 @@ pub fn set(&self, id: impl Key, value: &T) -> impl Future<Output = Result<()>> +
 Sets the document `id` to `value`, replacing it whole, as
 `crate::search::Index::set` does; the next search sees it once the
 future is ready. On an index with vectors a set gives its vector, or
-says it has none, through [`id`](Self::id).
+says it has none, through `id`.
 
 ### aio::search::Index.id
 
@@ -1687,7 +1688,7 @@ background, which `TableIndex::ready` waits for.
 pub fn reindex(self) -> Result<TableIndex<T>>
 ```
 
-Opens the index as [`open`](Self::open) does, and reads it again
+Opens the index as `open` does, and reads it again
 beside itself in the background.
 
 ## aio::search::TableIndex
@@ -1698,7 +1699,7 @@ pub struct TableIndex<T> { /* private fields */ }
 
 The rows of a table found again by their words, their vectors or both, its
 calls awaited: the same index as `crate::search::TableIndex`, and the
-same again through `From` and [`blocking`](Self::blocking). It has no
+same again through `From` and `blocking`. It has no
 set or delete: its rows are the table's, and the index changes in their
 commit.
 

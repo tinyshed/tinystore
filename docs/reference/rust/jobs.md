@@ -43,7 +43,7 @@ where
 ```
 
 A queue of jobs whose values are `V`, as JSON, in the store's jobs.db,
-as the blocking [`Store::queue`](crate::Store::queue) opens one: the
+as the blocking `Store::queue` opens one: the
 same builder, its calls awaited.
 
 ### aio::Store.schedule
@@ -53,7 +53,7 @@ pub fn schedule(&self, name: &str) -> ScheduleBuilder
 ```
 
 A schedule: one repeating job under `name`, the code's own, as
-the blocking [`Store::schedule`](crate::Store::schedule) opens one.
+the blocking `Store::schedule` opens one.
 
 ## JobCall
 
@@ -72,7 +72,7 @@ pub fn adding(self, value: &V) -> Write
 
 The job's add for a batch of the database the queue was opened from,
 with what the call asks beside its value; see
-[`Queue::adding`](crate::jobs::Queue::adding).
+`Queue::adding`.
 
 ### JobCall.id
 
@@ -407,7 +407,7 @@ A job's add for a batch of the database the queue was opened from:
 in `Database::batch` it commits with the batch's rows or not at
 all, and shares the commit with every other write of the file, where
 `Database::tx` holds the writer and pays a sync of its own. It adds
-as [`add`](crate::jobs::Queue::add) does, unless its id is taken; a
+as `add` does, unless its id is taken; a
 queue kept in another file fails the batch, `Invalid`.
 
 ```rust
@@ -1494,7 +1494,7 @@ pub fn adding(self, value: &V) -> Write
 
 The job's add for a batch of the database the queue was opened from,
 with what the call asks beside its value; see
-[`Queue::adding`](crate::jobs::Queue::adding).
+`Queue::adding`.
 
 ## aio::jobs::Queue
 
@@ -1750,7 +1750,7 @@ pub fn adding(&self, value: &V) -> Write
 ```
 
 A job's add for a batch of the database the queue was opened from, as
-[`Queue::adding`](crate::jobs::Queue::adding) makes one: it checks the
+`Queue::adding` makes one: it checks the
 call and encodes its value, with no I/O, and the batch is awaited.
 
 ## aio::jobs::QueueBuilder

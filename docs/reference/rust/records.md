@@ -650,7 +650,7 @@ pub fn appending(self, fields: &impl Serialize) -> Write
 
 The event's append for a batch of the database its stream was opened
 from, with what the call carries beside its fields, its id, its time;
-see [`Events::appending`](crate::records::Events::appending). One made
+see `Events::appending`. One made
 through a transaction runs in it, and fails the batch.
 
 ### EventCall.id
@@ -1170,15 +1170,15 @@ pub fn filter(self, key: &str, condition: impl Into<Condition>) -> Self
 the condition takes: a value by the JSON it is written as, so that
 `&42` finds `42`, and neither `"42"` nor `42.0`; a list, one of its
 items, `&[7, 12, 31]`, and a list or an object as the value itself
-inside one, `&[["a", "b"]]`; [`Not`](crate::Not), none of them or no
-such key; [`Prefix`](crate::Prefix), a text that starts with it. A key
+inside one, `&[["a", "b"]]`; `Not`, none of them or no
+such key; `Prefix`, a text that starts with it. A key
 written twice is found by its last value, the one `Fields::get`
 reads. An empty list or another object is refused, `invalid`.
 
-A statement of a database, `Database::statement`, is a list of the
+A statement of a database, `db.statement(…)`, is a list of the
 values its one column gives, read once when the query starts, on a
-reader of its database, 100,000 rows at most: an integer `7` finds
-`7`, a text `'7'` finds `"7"` and not `7`, a real `7.0` finds `7.0`
+reader of its database, 100,000 rows of 4 KiB at most and held of
+the store's memory: an integer `7` finds `7`, a text `'7'` finds `"7"` and not `7`, a real `7.0` finds `7.0`
 and not `7`, a null finds nothing, and a blob is `invalid`. It is not
 read in one moment with the events, since they are two files; a page
 asked later, by `after`, reads it again. A tail refuses one.
@@ -1189,8 +1189,6 @@ let teachers = db.statement(tinystore::sql!("select id from teachers"));
 let day = std::time::Duration::from_secs(24 * 60 * 60);
 let used = store.events("activity").open()?.list().since(day).filter("userId", &teachers).count()?;
 ```
-
-`Database::statement`: crate::sql::Database::statement
 
 ### List.search
 
@@ -1407,8 +1405,8 @@ pub fn by<S: Into<String>>(keys: impl IntoIterator<Item = S>) -> Sessions
 ```
 
 Sessions of each value of these keys together: a field's, else a
-context's, or `stream`, `name` or `level`, the event's own before a
-field of that name.
+context's, or `stream`, `name`, `level` or `message`, the event's
+own before a field of that name.
 
 ### Sessions.gap
 
@@ -1851,7 +1849,7 @@ pub fn appending(&self, name: &str, fields: &impl Serialize) -> Write
 ```
 
 An event's append for a batch of the database the stream was opened
-from, as [`Events::appending`](crate::records::Events::appending)
+from, as `Events::appending`
 makes one: it checks the event, with no I/O, and the batch is awaited.
 
 ## aio::records::EventCall
@@ -1923,7 +1921,7 @@ pub fn appending(self, fields: &impl Serialize) -> Write
 
 The event's append for a batch of the database its stream was opened
 from, with what the call carries beside its fields; see
-[`Events::appending`](crate::records::Events::appending).
+`Events::appending`.
 
 ## aio::records::AllEvents
 
@@ -2082,7 +2080,7 @@ pub fn filter(self, key: &str, condition: impl Into<Condition>) -> Self
 
 `key` at the top of an event's fields or of its context with a value
 the condition takes, as `crate::records::List::filter` reads it: a
-value, a list of them, a [`Not`](crate::Not) or a [`Prefix`](crate::Prefix).
+value, a list of them, a `Not` or a `Prefix`.
 
 ### aio::records::List.search
 

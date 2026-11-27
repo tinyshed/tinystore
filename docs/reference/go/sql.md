@@ -333,7 +333,7 @@ OpenMirror is the table name of db mirroring another system, its rows Ts:
 func (m *Mirror[T]) Replace(ctx context.Context, scope map[string]any, rows []T, options ...ReplaceOption) (Diff[T], error)
 ```
 
-Replace makes the scope, the rows whose columns hold its values, nil for the whole table, what rows lists: it adds what the table lacks, writes what changed, and deletes, or marks gone, what the list leaves out. A row outside the scope is invalid. Values compare as SQLite's is does, so "4" is not 4.
+Replace makes the scope, the rows whose columns hold its values, nil for the whole table, what rows lists: it adds what the table lacks, writes what changed, and deletes, or marks gone, what the list leaves out. A row outside the scope is invalid, and so is one whose key holds a null. Values compare as the table keeps them: 4 given to a text column is "4", and a key's text compares by its unique index's collation.
 
 ### Mirror.Upsert
 
@@ -789,7 +789,7 @@ OpenTable is a table of a database, or of a transaction of it, "orders" or "orde
 func (t *Table[T]) Insert(ctx context.Context, row T) (T, error)
 ```
 
-Insert inserts a row and gives it back as the file keeps it: the defaults and the generated columns the database filled.
+Insert inserts a row and gives it back as the file keeps it: the defaults and the generated columns the database filled. On a versioned table the row starts at version 0, whatever it gives for the column.
 
 ### Table.InsertMany
 

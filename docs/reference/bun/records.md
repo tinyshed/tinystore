@@ -222,7 +222,7 @@ interface Aggregate extends Counted {
 
 ```ts
 interface SessionsQuery extends Counted {
-    /** the keys whose values a session shares: a field's, else a context's, or stream, name or level */
+    /** the keys whose values a session shares: a field's, else a context's, or stream, name, level or message */
     by: string | readonly string[]
     /** the pause that ends a session: an event later than this after the one before begins the next */
     gap: Duration
