@@ -114,7 +114,6 @@ impl Fixture {
 
 /// Runs each read of a timing `passes` times, in turns, and prints the
 /// median of what each took with what it found, the same every pass.
-#[cfg_attr(not(feature = "sql"), expect(dead_code, reason = "a statement's timing needs a database"))]
 pub(crate) fn timed_in_turns(passes: usize, reads: &[(&str, &dyn Fn() -> u64)]) {
     let mut taken: Vec<Vec<f64>> = vec![Vec::new(); reads.len()];
     let mut found = vec![None; reads.len()];

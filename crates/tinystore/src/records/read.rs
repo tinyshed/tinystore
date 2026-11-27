@@ -384,6 +384,13 @@ impl List {
         if self.query.since.is_none() && self.query.from.is_none() {
             return Err(self.within(Error::invalid("fill takes a range with a start: since or from")));
         }
+        self.read_span()
+    }
+
+    /// The range a read reads, both ends in it: from its start, cut to what
+    /// its streams keep, to its end or to now without one; none when they
+    /// keep nothing of it.
+    pub(super) fn read_span(&self) -> Result<Option<(i64, i64)>> {
         let asked = self.records.asked(self.stream.as_ref(), &self.query).map_err(|error| self.within(error))?;
         let now = self.records.now();
         let ended = |last: i64| if self.query.to.is_some() { last } else { last.min(now) };
@@ -401,7 +408,7 @@ impl List {
     }
 
     /// An error of this read, named by what it reads.
-    fn within(&self, error: Error) -> Error {
+    pub(super) fn within(&self, error: Error) -> Error {
         match &self.stream {
             Some(stream) => error.within(format!("events {}", stream.name)),
             None => error.within("events"),

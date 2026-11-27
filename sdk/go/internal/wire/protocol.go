@@ -145,6 +145,7 @@ const (
 	MethodRecordsFields     = 0x050e
 	MethodRecordsLargest    = 0x050f
 	MethodRecordsDelete     = 0x0510
+	MethodRecordsSessions   = 0x0511
 	MethodSearchOpen        = 0x0b01
 	MethodSearchSet         = 0x0b02
 	MethodSearchSetMany     = 0x0b03
@@ -289,6 +290,7 @@ var methodNames = []struct {
 	{"records.fields", MethodRecordsFields},
 	{"records.largest", MethodRecordsLargest},
 	{"records.delete", MethodRecordsDelete},
+	{"records.sessions", MethodRecordsSessions},
 	{"search.open", MethodSearchOpen},
 	{"search.set", MethodSearchSet},
 	{"search.setMany", MethodSearchSetMany},
@@ -644,6 +646,12 @@ func NewMessage(name string) Message {
 		return &RecordsRow{}
 	case "records.Rows":
 		return &RecordsRows{}
+	case "records.SessionsAsked":
+		return &RecordsSessionsAsked{}
+	case "records.Session":
+		return &RecordsSession{}
+	case "records.Sessions":
+		return &RecordsSessions{}
 	case "records.Stream":
 		return &RecordsStream{}
 	case "records.Streams":
@@ -12473,6 +12481,257 @@ func (m *RecordsRows) Read(r *Reader) {
 // IsZero says whether RecordsRows writes as no field at all.
 func (m RecordsRows) IsZero() bool {
 	return len(m.Rows) == 0
+}
+
+// RecordsSessionsAsked is the schema's records.SessionsAsked.
+//
+// The events a query finds cut into sessions: those of one value of each key
+// of by, each within gap of the one before. The query takes no newest, limit
+// or after; the answer is whole, 10,000 sessions at most.
+type RecordsSessionsAsked struct {
+	Query RecordsQuery `wire:"1,query"`
+	// fields', contexts', or stream, name or level
+	By []string `wire:"2,by"`
+	// a pause past it begins the next session
+	Gap uint64 `wire:"3,gap"`
+	// a session ends this long after its first event, pause or none
+	Max *uint64 `wire:"4,max"`
+	// each value's first sessions alone, its later events passed over
+	First *uint64 `wire:"5,first"`
+	// the first events each session keeps, 1000 at most
+	Events uint64 `wire:"6,events"`
+}
+
+func (m RecordsSessionsAsked) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if !m.Query.IsZero() {
+		w.Uint(1)
+		m.Query.Write(w)
+		n++
+	}
+	if len(m.By) > 0 {
+		w.Uint(2)
+		w.Array(len(m.By))
+		for _, item0 := range m.By {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Gap != 0 {
+		w.Uint(3)
+		w.Uint(m.Gap)
+		n++
+	}
+	if m.Max != nil {
+		w.Uint(4)
+		w.Uint(*m.Max)
+		n++
+	}
+	if m.First != nil {
+		w.Uint(5)
+		w.Uint(*m.First)
+		n++
+	}
+	if m.Events != 0 {
+		w.Uint(6)
+		w.Uint(m.Events)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsSessionsAsked) Read(r *Reader) {
+	*m = RecordsSessionsAsked{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Query.Read(r)
+		case 2:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.By = v
+		case 3:
+			m.Gap = r.Uint()
+		case 4:
+			v := r.Uint()
+			m.Max = &v
+		case 5:
+			v := r.Uint()
+			m.First = &v
+		case 6:
+			m.Events = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsSessionsAsked writes as no field at all.
+func (m RecordsSessionsAsked) IsZero() bool {
+	return m.Query.IsZero() &&
+		len(m.By) == 0 &&
+		m.Gap == 0 &&
+		m.Max == nil &&
+		m.First == nil &&
+		m.Events == 0
+}
+
+// RecordsSession is the schema's records.Session.
+type RecordsSession struct {
+	By map[string]string `wire:"1,by"`
+	// its first event's time
+	From int64 `wire:"2,from"`
+	// its last event's
+	To int64 `wire:"3,to"`
+	// every event of it, however few it keeps
+	Count  uint64         `wire:"4,count"`
+	Events []RecordsEvent `wire:"5,events"`
+	// its first event within gap of the range's start, or its last of its end
+	Partial bool `wire:"6,partial"`
+}
+
+func (m RecordsSession) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.By) > 0 {
+		w.Uint(1)
+		w.Map(len(m.By))
+		for _, name0 := range SortedNames(m.By) {
+			w.Str(name0)
+			w.Str(m.By[name0])
+		}
+		n++
+	}
+	if m.From != 0 {
+		w.Uint(2)
+		w.Int(m.From)
+		n++
+	}
+	if m.To != 0 {
+		w.Uint(3)
+		w.Int(m.To)
+		n++
+	}
+	if m.Count != 0 {
+		w.Uint(4)
+		w.Uint(m.Count)
+		n++
+	}
+	if len(m.Events) > 0 {
+		w.Uint(5)
+		w.Array(len(m.Events))
+		for _, item0 := range m.Events {
+			item0.Write(w)
+		}
+		n++
+	}
+	if m.Partial {
+		w.Uint(6)
+		w.Bool(m.Partial)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsSession) Read(r *Reader) {
+	*m = RecordsSession{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := map[string]string{}
+			seen0 := map[string]struct{}{}
+			for k0 := r.Map(); k0 > 0; k0-- {
+				name0 := r.Name(seen0)
+				item0 := r.Str()
+				v[name0] = item0
+			}
+			r.Leave()
+			m.By = v
+		case 2:
+			m.From = r.Int()
+		case 3:
+			m.To = r.Int()
+		case 4:
+			m.Count = r.Uint()
+		case 5:
+			v := []RecordsEvent{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 RecordsEvent
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Events = v
+		case 6:
+			m.Partial = r.Bool()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsSession writes as no field at all.
+func (m RecordsSession) IsZero() bool {
+	return len(m.By) == 0 &&
+		m.From == 0 &&
+		m.To == 0 &&
+		m.Count == 0 &&
+		len(m.Events) == 0 &&
+		!m.Partial
+}
+
+// RecordsSessions is the schema's records.Sessions.
+type RecordsSessions struct {
+	Sessions []RecordsSession `wire:"1,sessions"`
+}
+
+func (m RecordsSessions) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Sessions) > 0 {
+		w.Uint(1)
+		w.Array(len(m.Sessions))
+		for _, item0 := range m.Sessions {
+			item0.Write(w)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsSessions) Read(r *Reader) {
+	*m = RecordsSessions{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []RecordsSession{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 RecordsSession
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Sessions = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsSessions writes as no field at all.
+func (m RecordsSessions) IsZero() bool {
+	return len(m.Sessions) == 0
 }
 
 // RecordsStream is the schema's records.Stream.

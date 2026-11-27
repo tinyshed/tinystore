@@ -19,14 +19,14 @@ use super::protocol::{
     Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCondition,
     RecordsCount, RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsEvents, RecordsFieldInfo,
     RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsLargestAsked, RecordsNameCount, RecordsNames, RecordsNewEvent,
-    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStatement,
-    RecordsStats, RecordsStream, RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked,
-    RecordsTops, method,
+    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsSession,
+    RecordsSessions, RecordsSessionsAsked, RecordsStatement, RecordsStats, RecordsStream, RecordsStreamFields,
+    RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
 };
 use super::{Lent, Link, Route};
 use crate::records::{
     Aggregate, AllEvents, Condition, Damage, Event, Events, FieldInfo, Fields, Level, Lines, List, NewEvent, Number,
-    Part, SpanId, Stats, Tail, TailBatch, TraceId,
+    Part, Sessions, SpanId, Stats, Tail, TailBatch, TraceId,
 };
 use crate::sync::lock;
 use crate::{Calendar, ErrorKind, Store, unix_nanos};
@@ -154,6 +154,7 @@ pub(crate) fn call(
         method::RECORDS_DROP => drop_damage(store, RecordsDamage::decode(body)?),
         method::RECORDS_FIELDS => fields(&reading, &RecordsFieldsAsked::decode(body)?),
         method::RECORDS_DELETE => delete(&reading, &RecordsQuery::decode(body)?),
+        method::RECORDS_SESSIONS => sessions(&reading, RecordsSessionsAsked::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -302,6 +303,28 @@ fn top(reading: &Reading<'_>, asked: &RecordsTopAsked) -> Answered {
 fn largest(reading: &Reading<'_>, asked: &RecordsLargestAsked) -> Answered {
     let events = query(reading, &asked.query)?.largest(&asked.key)?;
     Ok(RecordsEvents { events: events.into_iter().map(event_of).collect() }.encode())
+}
+
+/// The events a query finds cut into sessions, each with the events it keeps.
+fn sessions(reading: &Reading<'_>, asked: RecordsSessionsAsked) -> Answered {
+    let count = |asked: u64| usize::try_from(asked).unwrap_or(usize::MAX);
+    let mut cut = Sessions::by(asked.by).gap(Duration::from_millis(asked.gap)).events(count(asked.events));
+    if let Some(max) = asked.max {
+        cut = cut.max(Duration::from_millis(max));
+    }
+    if let Some(first) = asked.first {
+        cut = cut.first(count(first));
+    }
+    let sessions = query(reading, &asked.query)?.sessions(&cut)?;
+    let sessions = sessions.into_iter().map(|session| RecordsSession {
+        by: session.by.into_iter().map(|(key, value)| (key, value.to_string())).collect(),
+        from: unix_nanos(session.from),
+        to: unix_nanos(session.to),
+        count: session.count,
+        events: session.events.into_iter().map(event_of).collect(),
+        partial: session.partial,
+    });
+    Ok(RecordsSessions { sessions: sessions.collect() }.encode())
 }
 
 fn aggregate(reading: &Reading<'_>, asked: RecordsAggregateAsked) -> Answered {

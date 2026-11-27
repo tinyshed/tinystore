@@ -60,6 +60,21 @@ class Stats:
 
 A field's numbers in a row: samples are the numbers, which avg divides sum by.
 
+## Session
+
+```python
+@dataclass(frozen=True, slots=True)
+class Session:
+    by: dict[str, Any]
+    from_: datetime  # its first event's time
+    to: datetime  # its last event's time
+    count: int  # every event of it, however few it keeps
+    events: list[Event]  # its first events, as many as events asked
+    partial: bool  # whether it may go on outside what was read: its first event within gap of the range's start, or its last within gap of its end
+```
+
+A session: the events of one value of each key of by, each within gap of the one before.
+
 ## Row
 
 ```python

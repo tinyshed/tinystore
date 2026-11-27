@@ -164,6 +164,10 @@ export const limits = Object.freeze({
 	aggregateRows: limit('aggregate rows', 10_000),
 	/** The different values one `top` or `distinct` holds, as JSON. */
 	countBytes: limit('count bytes', 64 << 20),
+	/** The sessions one `sessions` holds while it cuts them, those still open among them, and answers. */
+	sessions: limit('sessions', 10_000),
+	/** What one `sessions` holds: the events each session keeps, and its values of `by`. */
+	sessionBytes: limit('session bytes', 64 << 20),
 	/** The samples of one `ingest`, written in one write: what one exporter's text takes. */
 	ingestSamples: limit('ingest samples', 100_000),
 	/** The bytes of one `ingest`'s samples, each with its labels. */

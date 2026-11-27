@@ -450,3 +450,38 @@ fn a_condition_keeps_to_the_values_a_statement_of_a_database_of_this_connection_
     let tailed = client.call::<Empty>(method::RECORDS_TAIL, &query(database, false)).unwrap_err();
     assert!(tailed.message.contains("a tail's where takes no statement"), "{}", tailed.message);
 }
+
+// contract: REC-23
+#[test]
+fn sessions_answer_each_visit_with_its_count_and_first_events_and_refuse_no_gap() {
+    use crate::wire::protocol::{RecordsSessions, RecordsSessionsAsked};
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let activity = open(&mut client, "activity");
+    let at = |minutes: i64| crate::unix_nanos(std::time::SystemTime::now()) - (180 - minutes) * 60_000_000_000;
+    let visit = |user: u32, minutes: i64| RecordsNewEvent {
+        at: Some(at(minutes)),
+        ..event("open", &format!(r#"{{"userId":{user}}}"#))
+    };
+    append(&mut client, activity, vec![visit(1, 0), visit(1, 10), visit(1, 100), visit(2, 5)]);
+    let asked = RecordsSessionsAsked {
+        query: RecordsQuery { handle: Some(activity), since: Some(4 * 3_600_000), ..RecordsQuery::default() },
+        by: vec!["userId".to_owned()],
+        gap: 30 * 60_000,
+        events: 1,
+        ..RecordsSessionsAsked::default()
+    };
+    let answer: RecordsSessions = client.call(method::RECORDS_SESSIONS, &asked).unwrap();
+    let shown: Vec<(&str, u64, usize, bool)> = answer
+        .sessions
+        .iter()
+        .map(|session| (session.by["userId"].as_str(), session.count, session.events.len(), session.partial))
+        .collect();
+    assert_eq!(shown, [("1", 2, 1, false), ("2", 1, 1, false), ("1", 1, 1, false)]);
+    assert_eq!(answer.sessions[0].from, answer.sessions[0].events[0].at);
+    let first = client
+        .call::<RecordsSessions>(method::RECORDS_SESSIONS, &RecordsSessionsAsked { first: Some(1), ..asked.clone() });
+    assert_eq!(first.unwrap().sessions.len(), 2);
+    let refused = client.call::<RecordsSessions>(method::RECORDS_SESSIONS, &RecordsSessionsAsked { gap: 0, ..asked });
+    assert_eq!(refused.unwrap_err().code, "invalid");
+}

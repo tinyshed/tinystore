@@ -63,6 +63,19 @@ type Query struct {
 	Fill bool
 	// Prefix narrows the keys FieldNames gives.
 	Prefix string
+
+	// Gap is the pause that ends a session of Sessions: an event later than
+	// this after the one before begins the next. By is the keys whose values
+	// a session shares.
+	Gap time.Duration
+	// Max is the longest a session lasts: an event later than this after its
+	// first begins the next, pause or none.
+	Max time.Duration
+	// First is each value's first sessions of the range alone, its later
+	// events passed over; every session when zero.
+	First int
+	// Events is the first events each session keeps, 1000 at most.
+	Events int
 }
 
 // asked is the query as the wire carries it, of a stream's handle or every
@@ -407,6 +420,53 @@ func (r reads) aggregate(ctx context.Context, q Query) ([]Row, error) {
 	for i, row := range rows.Rows {
 		if out[i], err = rowOf(row); err != nil {
 			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (r reads) sessions(ctx context.Context, q Query) ([]Session, error) {
+	if q.First < 0 || q.Events < 0 {
+		return nil, core.Errorf(core.Invalid, "sessions of first %d and %d events", q.First, q.Events)
+	}
+	asked := wire.RecordsSessionsAsked{By: q.By, Events: uint64(q.Events)}
+	var err error
+	if asked.Gap, err = core.Millis(q.Gap, "a session's gap"); err != nil {
+		return nil, err
+	}
+	if q.Max != 0 {
+		longest, err := core.Millis(q.Max, "a session's max")
+		if err != nil {
+			return nil, err
+		}
+		asked.Max = &longest
+	}
+	if q.First > 0 {
+		first := uint64(q.First)
+		asked.First = &first
+	}
+	answer, err := r.ask(ctx, wire.MethodRecordsSessions, q, func(query wire.RecordsQuery) []byte {
+		message := asked
+		message.Query = query
+		return wire.Encode(&message)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var sessions wire.RecordsSessions
+	if err := decode(answer, &sessions); err != nil {
+		return nil, err
+	}
+	out := make([]Session, len(sessions.Sessions))
+	for i, session := range sessions.Sessions {
+		out[i] = Session{
+			By: map[string]any{}, From: time.Unix(0, session.From).UTC(), To: time.Unix(0, session.To).UTC(),
+			Count: int(session.Count), Events: eventsOf(session.Events), Partial: session.Partial,
+		}
+		for key, spelled := range session.By {
+			if out[i].By[key], err = valueOf(spelled); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return out, nil

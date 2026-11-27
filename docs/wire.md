@@ -767,6 +767,7 @@ carries.
 | `0x050e` | records.fields     | read  | `records.FieldsAsked`     | `records.StreamFields`                         |
 | `0x050f` | records.largest    | read  | `records.LargestAsked`    | `records.Events`                               |
 | `0x0510` | records.delete     | write | `records.Query`           | `records.Count`                                |
+| `0x0511` | records.sessions   | read  | `records.SessionsAsked`   | `records.Sessions`                             |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/records.wire`. `records.tail` sends a batch

@@ -47,6 +47,8 @@ import {
 	RecordsPollAsked,
 	RecordsQuery,
 	RecordsRows,
+	RecordsSessions,
+	RecordsSessionsAsked,
 	RecordsStreamFields,
 	RecordsStreams,
 	RecordsTailBatch,
@@ -197,6 +199,38 @@ export interface Aggregate extends Counted {
 	distinct?: readonly string[]
 	/** a row for every span of the range the stream keeps, an empty one counting 0; it needs since or from */
 	fill?: boolean
+}
+
+/**
+ * What `sessions` cuts a read into: the events of one value of each key of
+ * `by`, each within `gap` of the one before.
+ */
+export interface SessionsQuery extends Counted {
+	/** the keys whose values a session shares: a field's, else a context's, or stream, name or level */
+	by: string | readonly string[]
+	/** the pause that ends a session: an event later than this after the one before begins the next */
+	gap: Duration
+	/** the longest a session lasts: an event later than this after its first begins the next */
+	max?: Duration
+	/** each value's first sessions of the range alone, its later events passed over */
+	first?: number
+	/** the first events each session keeps, 1000 at most; none unless asked */
+	events?: number
+}
+
+/** A session: the events of one value of each key of `by`, each within `gap` of the one before. */
+export interface Session {
+	by: Record<string, unknown>
+	/** its first event's time */
+	from: Date
+	/** its last event's time */
+	to: Date
+	/** every event of it, however few it keeps */
+	count: number
+	/** its first events, as many as `events` asked */
+	events: Event[]
+	/** whether it may go on outside what was read: its first event within gap of the range's start, or its last of its end */
+	partial: boolean
 }
 
 export interface StreamInfo {
@@ -434,6 +468,39 @@ abstract class Reads {
 			})),
 			distinct: mapValues(row.distinct, count => count),
 			...(row.date === undefined ? {} : { date: row.date }),
+		}))
+	}
+
+	/**
+	 * The events the query finds cut into sessions by a pause, in the order of
+	 * their first events: the answer whole, not paged, and `LimitError` past
+	 * 10,000 sessions held, open ones among them, or 64 MiB of what they keep.
+	 *
+	 *     await events.sessions({ since: '30d', by: 'userId', gap: '30m', max: '4h', first: 1, events: 50 })
+	 */
+	async sessions(query: SessionsQuery): Promise<Session[]> {
+		const { by, gap, max, first, events, ...counted } = query
+		const asked = queryOf(counted)
+		const answer = await this.ask(
+			'records.sessions',
+			(handle, databases) =>
+				RecordsSessionsAsked.encode({
+					query: queryOn(asked, handle, databases),
+					by: typeof by === 'string' ? [by] : [...by],
+					gap: ms(gap),
+					max: max === undefined ? undefined : ms(max),
+					first,
+					events,
+				}),
+			databasesOf(asked),
+		)
+		return (RecordsSessions.decode(answer).sessions ?? []).map(session => ({
+			by: mapValues(session.by, json => parseJson(json)),
+			from: dateOf(session.from ?? 0n),
+			to: dateOf(session.to ?? 0n),
+			count: session.count ?? 0,
+			events: (session.events ?? []).map(eventOf),
+			partial: session.partial ?? false,
 		}))
 	}
 

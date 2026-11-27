@@ -150,6 +150,38 @@ for (const way of ways) {
 			}
 		})
 
+		test('sessions cut a read by a pause: two visits 90 minutes apart are two', async () => {
+			// contract: REC-23
+			const visits = store.events('visits')
+			const start = Date.now() - 4 * 3_600_000
+			const at = (minutes: number) => new Date(start + minutes * 60_000)
+			await visits.append([
+				{ name: 'open', fields: { userId: 1 }, at: at(0) },
+				{ name: 'click', fields: { userId: 1 }, at: at(10) },
+				{ name: 'open', fields: { userId: 2 }, at: at(5) },
+				{ name: 'open', fields: { userId: 1 }, at: at(100) },
+			])
+			const sessions = await visits.sessions({ since: '5h', by: 'userId', gap: '30m', events: 1 })
+			expect(
+				sessions.map(session => [session.by.userId, session.count, session.events.length]),
+			).toEqual([
+				[1, 2, 1],
+				[2, 1, 1],
+				[1, 1, 1],
+			])
+			expect(sessions[0]?.from).toEqual(at(0))
+			expect(sessions[0]?.to).toEqual(at(10))
+			expect(sessions[0]?.partial).toBe(false)
+			const first = await visits.sessions({ since: '5h', by: ['userId'], gap: '30m', first: 1 })
+			expect(first.map(session => [session.by.userId, session.events])).toEqual([
+				[1, []],
+				[2, []],
+			])
+			expect(
+				await caught(visits.sessions({ by: 'userId', gap: '30m', events: 1001 })),
+			).toBeInstanceOf(InvalidError)
+		})
+
 		test('a where keeps to the values a database’s statement gives, read as the query starts', async () => {
 			// contract: REC-22
 			const db = await store.database('school', {

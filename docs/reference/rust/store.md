@@ -926,6 +926,24 @@ pub const COUNT_BYTES: Limit
 
 The different values one `top` or `distinct` holds, as JSON.
 
+## SESSIONS
+
+```rust
+pub const SESSIONS: Limit
+```
+
+The sessions one `sessions` holds while it cuts them, those still open
+among them, and answers.
+
+## SESSION_BYTES
+
+```rust
+pub const SESSION_BYTES: Limit
+```
+
+What one `sessions` holds: the events each session keeps, and its values
+of `by`.
+
 ## INGEST_SAMPLES
 
 ```rust

@@ -166,6 +166,31 @@ message records.Rows {
   1 rows: [records.Row]
 }
 
+# The events a query finds cut into sessions: those of one value of each key
+# of by, each within gap of the one before. The query takes no newest, limit
+# or after; the answer is whole, 10,000 sessions at most.
+message records.SessionsAsked {
+  1 query: records.Query
+  2 by: [str]                         # fields', contexts', or stream, name or level
+  3 gap: duration                     # a pause past it begins the next session
+  4 max: duration?                    # a session ends this long after its first event, pause or none
+  5 first: uint?                      # each value's first sessions alone, its later events passed over
+  6 events: uint                      # the first events each session keeps, 1000 at most
+}
+
+message records.Session {
+  1 by: {json}
+  2 from: nanos                       # its first event's time
+  3 to: nanos                         # its last event's
+  4 count: uint                       # every event of it, however few it keeps
+  5 events: [records.Event]
+  6 partial: bool                     # its first event within gap of the range's start, or its last of its end
+}
+
+message records.Sessions {
+  1 sessions: [records.Session]
+}
+
 message records.Stream {
   1 name: str
   2 keep: duration
@@ -272,3 +297,4 @@ write 0x050d records.drop(records.Damage)                -> Empty
 read  0x050e records.fields(records.FieldsAsked)         -> records.StreamFields
 read  0x050f records.largest(records.LargestAsked)       -> records.Events
 write 0x0510 records.delete(records.Query)               -> records.Count
+read  0x0511 records.sessions(records.SessionsAsked)     -> records.Sessions

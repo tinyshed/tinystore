@@ -136,6 +136,31 @@ async def test_a_where_list_is_one_of_not_finds_an_absent_key_and_prefix_a_text(
             await calls.count(where=where)
 
 
+# contract: REC-23
+async def test_sessions_cut_a_read_by_a_pause_two_visits_ninety_minutes_apart_are_two(store: tinystore.Store) -> None:
+    visits = store.events("visits")
+    start = datetime.now(UTC) - timedelta(hours=4)
+
+    def at(minutes: int) -> datetime:
+        return start + timedelta(minutes=minutes)
+
+    await visits.append(
+        [
+            Event("open", {"userId": 1}, at=at(0)),
+            Event("click", {"userId": 1}, at=at(10)),
+            Event("open", {"userId": 2}, at=at(5)),
+            Event("open", {"userId": 1}, at=at(100)),
+        ]
+    )
+    sessions = await visits.sessions(since="5h", by="userId", gap="30m", events=1)
+    assert [(each.by["userId"], each.count, len(each.events)) for each in sessions] == [(1, 2, 1), (2, 1, 1), (1, 1, 1)]
+    assert (sessions[0].from_, sessions[0].to, sessions[0].partial) == (at(0), at(10), False)
+    first = await visits.sessions(since="5h", by=["userId"], gap="30m", first=1)
+    assert [(each.by["userId"], each.events) for each in first] == [(1, []), (2, [])]
+    with pytest.raises(tinystore.InvalidError):
+        await visits.sessions(by="userId", gap="30m", events=1001)
+
+
 # contract: REC-22
 async def test_a_where_keeps_to_the_values_a_databases_statement_gives(store: tinystore.Store) -> None:
     db = await store.database(

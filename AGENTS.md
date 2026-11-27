@@ -46,7 +46,7 @@ research's submodule is pinned to `v0.1.0-rc.5`.
 | channels       | messages to whoever listens now, a transaction's at its commit, how many listen                    | [channels](docs/guides/channels/README.md)           |
 | locks          | locks and semaphores with fences, leases over the wire                                             | [locks](docs/guides/locks/README.md)                 |
 | config         | typed settings in layers, secrets, live settings kept in kv.db                                     | [config](docs/guides/config/README.md)               |
-| records        | streams of events and logs packed into blocks, reads, aggregates, a tail, other programs' lines    | [records](docs/guides/records/README.md)             |
+| records        | streams of events and logs packed into blocks, reads, aggregates, sessions, a tail, others' lines  | [records](docs/guides/records/README.md)             |
 | console        | a logger's lines printed as every SDK prints them, a `tracing` layer without a store               | [console](docs/guides/records/console.md)            |
 | metrics        | series, instruments, aggregates, ingest and a gauge's replace, its own, the `metrics` recorder     | [metrics](docs/guides/metrics/README.md)             |
 | backup         | one checked zip of every engine while it runs, and its restore                                     | [backup](docs/guides/backup/README.md)               |

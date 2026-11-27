@@ -134,6 +134,14 @@ func (a *AllEvents) Poll(ctx context.Context, cursor string) (Batch, error)
 
 Poll is every event once, a batch a call, from a cursor the program keeps, the oldest event kept from "". With no event past the cursor, the batch is empty and its cursor the one given. It reads what the store has packed, which a stream's waiting events are once a segment's worth or an hour old.
 
+### AllEvents.Sessions
+
+```go
+func (a *AllEvents) Sessions(ctx context.Context, q Query) ([]Session, error)
+```
+
+Sessions is the events the query finds cut into sessions by a pause, as a stream's Sessions cuts them.
+
 ### AllEvents.Streams
 
 ```go
@@ -427,6 +435,17 @@ func (e *Events) Name() string
 
 Name is the stream's name.
 
+### Events.Sessions
+
+```go
+func (e *Events) Sessions(ctx context.Context, q Query) ([]Session, error)
+```
+
+Sessions is the events the query finds cut into sessions by a pause: the events of one value of each key of By, each within Gap of the one before, in the order of their first events. The answer is whole, not paged, and ErrLimit past 10,000 sessions held, open ones among them, or 64 MiB of what they keep.
+
+	visits, err := events.Sessions(ctx, records.Query{Since: 30 * 24 * time.Hour,
+		By: []string{"userId"}, Gap: 30 * time.Minute, Max: 4 * time.Hour, First: 1, Events: 50})
+
 ### Events.Tail
 
 ```go
@@ -698,6 +717,19 @@ type Query struct {
 	Fill bool
 	// Prefix narrows the keys FieldNames gives.
 	Prefix string
+
+	// Gap is the pause that ends a session of Sessions: an event later than
+	// this after the one before begins the next. By is the keys whose values
+	// a session shares.
+	Gap time.Duration
+	// Max is the longest a session lasts: an event later than this after its
+	// first begins the next, pause or none.
+	Max time.Duration
+	// First is each value's first sessions of the range alone, its later
+	// events passed over; every session when zero.
+	First int
+	// Events is the first events each session keeps, 1000 at most.
+	Events int
 }
 ```
 
@@ -724,6 +756,26 @@ type Row struct {
 ```
 
 Row is a row of an aggregate: a span of Every and a value of each key of By, with its count.
+
+## Session
+
+```go
+type Session struct {
+	// By is each key's value, its numbers a json.Number; nil for events without it.
+	By map[string]any
+	// From is its first event's time, and To its last's.
+	From, To time.Time
+	// Count is every event of it, however few it keeps.
+	Count int
+	// Events is its first events, as many as Query.Events asked.
+	Events []Event
+	// Partial says it may go on outside what was read: its first event
+	// within Gap of the range's start, or its last within Gap of its end.
+	Partial bool
+}
+```
+
+Session is the events of one value of each key of By, each within Gap of the one before.
 
 ## Stats
 
