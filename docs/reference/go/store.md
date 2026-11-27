@@ -463,8 +463,7 @@ var (
 	QueryAnswer = Limit{"answer", 100_000}
 	// SetManyDocuments is the documents of one SetMany.
 	SetManyDocuments = Limit{"set_many documents", 1000}
-	// SetManyBytes is the documents of one SetMany as JSON; one request body,
-	// RequestBytes, bounds it first.
+	// SetManyBytes is the documents of one SetMany as JSON.
 	SetManyBytes = Limit{"set_many bytes", 16 << 20}
 	// DocumentBytes is one document as JSON, or a table's row as its index
 	// reads it.
@@ -483,11 +482,12 @@ var (
 	FilterText = Limit{"filter text", 256}
 	// VectorDimensions is a vector's dimensions.
 	VectorDimensions = Limit{"vector dimensions", 4096}
-	// RequestBytes is one request, its message as the SDK sends it: a larger
-	// one fails before it is sent.
-	RequestBytes = Limit{"request bytes", 2 << 20}
+	// RequestBytes is one request, its message as the SDK sends it, in
+	// several frames past one: a larger one fails before it is sent. A server
+	// released before messages in several frames takes one frame's body, 2 MiB.
+	RequestBytes = Limit{"request bytes", 64 << 20}
 	// AnswerBytes is one answer, its message as the store sends it.
-	AnswerBytes = Limit{"answer bytes", 2 << 20}
+	AnswerBytes = Limit{"answer bytes", 64 << 20}
 )
 ```
 

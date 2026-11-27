@@ -44,6 +44,7 @@ mod credit;
 #[cfg(feature = "blobs")]
 mod fill;
 mod intake;
+mod joining;
 mod lending;
 mod routing;
 #[cfg(any(
@@ -64,6 +65,11 @@ const IN_FLIGHT: u64 = 1024;
 /// Bytes of REQUEST and DATA bodies a client may send before credit comes back.
 pub(super) const CONNECTION_CREDIT: u64 = 8 << 20;
 const STREAM_CREDIT: u64 = 2 << 20;
+/// The largest message joined from several frames, either way, that a
+/// connection agrees with a client that asks for one; and the most the
+/// messages it joins at once hold together, from a request's first piece to
+/// its stream's end.
+const MAX_MESSAGE: u64 = 64 << 20;
 /// The largest HELLO read before a body is agreed.
 const HELLO_MOST: usize = 1 << 16;
 /// What a connection may owe its client before it reads no frame more of
@@ -140,6 +146,17 @@ struct Shared {
     /// The largest body both sides agreed, once WELCOME went out: no frame of
     /// the server's passes it.
     agreed: AtomicUsize,
+    /// The largest message both sides agreed to send in several frames; 0
+    /// when the client's HELLO asked for none, every answer one frame.
+    max_message: AtomicUsize,
+    /// The bytes of the requests joined from pieces the connection holds:
+    /// those joining, and those whole until their stream ends.
+    joined: AtomicU64,
+    /// The answers past one frame's body whose pieces wait to go out, and
+    /// the reads that wait for them to before they run again.
+    answering: Mutex<joining::Answering>,
+    /// The bytes of the answers in pieces not yet queued for the host.
+    waiting_pieces: AtomicUsize,
     /// Point reads the workers have of this connection, not yet answered.
     reads_away: AtomicUsize,
     /// The connection's HELLO admitted it to read only.
@@ -167,6 +184,9 @@ struct Shared {
 struct OpenStream {
     left: u64,
     held: u64,
+    /// Of the connection's joined messages, the bytes this stream's request
+    /// holds until it ends.
+    joined: u64,
 }
 
 /// Where a client's run of once stands.
@@ -182,6 +202,10 @@ struct Input {
     reader: frame::Reader,
     /// The largest body both sides agreed, once WELCOME went out.
     max_body: Option<usize>,
+    /// The largest message joined from frames, when WELCOME agreed one.
+    max_message: Option<usize>,
+    /// The requests whose pieces are coming, by stream.
+    joining: HashMap<u32, joining::Joining>,
     /// The DATA bytes the client takes on a stream before it grants more.
     stream_credit: u64,
     /// GOAWAY went out: a REQUEST after it is answered `unavailable`, unrun.
@@ -230,6 +254,10 @@ impl Session {
             outstanding: AtomicU64::new(0),
             to_grant: AtomicU64::new(0),
             agreed: AtomicUsize::new(HELLO_MOST),
+            max_message: AtomicUsize::new(0),
+            joined: AtomicU64::new(0),
+            answering: Mutex::default(),
+            waiting_pieces: AtomicUsize::new(0),
             reads_away: AtomicUsize::new(0),
             read_only: AtomicBool::new(false),
             owing: AtomicUsize::new(0),
@@ -306,6 +334,7 @@ impl Session {
         self.shared.owing.store(output.owed(), Ordering::SeqCst);
         drop(output);
         self.shared.drained();
+        self.shared.send_pieces();
         self.shared.read_held();
     }
 
@@ -388,7 +417,12 @@ impl Session {
     /// workers to write that, so that a store closing with its last pipe finds
     /// them stopped rather than waits out their timeout.
     pub(crate) fn end(&self) {
-        self.shared.lock_input().ended = true;
+        {
+            let mut input = self.shared.lock_input();
+            input.ended = true;
+            input.joining.clear();
+        }
+        self.shared.drop_pieces();
         let mut output = self.shared.lock_output();
         output.ended = true;
         output.clear();

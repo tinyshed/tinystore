@@ -70,8 +70,10 @@ SDK that starts a server passes the same as `tinystore serve`'s flags
 - `str` is UTF-8 and anything else `bin`; a field of the wrong type is
   refused, and `nil` only where the schema says `?`.
 - A field at its zero value is left out.
-- An answer is checked against the agreed body before it leaves; one past it
-  comes in `DATA` pieces within the stream's credit.
+- An answer is checked against the agreed max message before it leaves, or
+  the agreed body where `WELCOME` agreed none; one past the body goes as
+  `RESPONSE`·MORE pieces, which `wire/session/joining.rs` sends and joins, so
+  a method needs no parts of its own to pass one frame.
 
 `v0.1.0` is released, so a message never changes meaning: a new field is
 added, its zero what an older client meant, and a new method takes a new

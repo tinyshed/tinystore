@@ -175,3 +175,49 @@ func TestAStreamFreedWakesTheOpenThatStillWaitsNotOneThatGaveUp(t *testing.T) {
 		t.Fatal("the stream freed did not wake the open that waited on")
 	}
 }
+
+// contract: WIRE-13
+func TestARequestPastTheBodyGoesInPiecesAndAnAnswerInPiecesIsJoined(t *testing.T) {
+	ctx := context.Background()
+	maxMessage := uint64(64)
+	p := newPeer(t, wire.Welcome{MaxBody: 8, InFlight: 4, ConnectionCredit: 1 << 20, StreamCredit: 1 << 16, MaxMessage: &maxMessage})
+	st, err := p.session.Open(ctx, 0x0104, make([]byte, 20), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flags []uint8
+	for _, piece := range requestsOf(p.pinged()) {
+		if piece.method != 0x0104 || piece.stream != st.ID {
+			t.Fatalf("a piece of method %#x on stream %d", piece.method, piece.stream)
+		}
+		flags = append(flags, piece.flags)
+	}
+	if !bytes.Equal(flags, []byte{flagMore, flagMore, flagEnd}) {
+		t.Fatalf("the pieces' flags: %v", flags)
+	}
+	p.session.Receive(frame(kindResponse, flagMore, 0, st.ID, []byte{1, 2, 3, 4, 5, 6, 7, 8}))
+	p.session.Receive(frame(kindResponse, flagEnd, 0, st.ID, []byte{9, 10}))
+	event, err := st.Next(ctx)
+	if err != nil || !event.End || !bytes.Equal(event.Body, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
+		t.Fatalf("the answer joined: %v %v", event, err)
+	}
+}
+
+// contract: WIRE-15
+func TestAServerThatAgreesNoMaxMessageIsSentOneFrameAndSendsNoneInPieces(t *testing.T) {
+	ctx := context.Background()
+	p := newPeer(t, wire.Welcome{MaxBody: 8, InFlight: 4, ConnectionCredit: 1 << 20, StreamCredit: 1 << 16})
+	_, err := p.session.Open(ctx, 0x0104, make([]byte, 20), true)
+	if said := "kv.set: a request of 20 bytes, past the 8 a body holds"; err == nil || KindOf(err) != Limit || !bytes.Contains([]byte(err.Error()), []byte(said)) {
+		t.Fatalf("got %v, want %s", err, said)
+	}
+	st, err := p.session.Open(ctx, 0x0102, make([]byte, 2), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.pinged()
+	p.session.Receive(frame(kindResponse, flagMore, 0, st.ID, []byte{1, 2}))
+	if p.session.Ended() == nil {
+		t.Fatal("a RESPONSE in pieces, where none was agreed, left the session running")
+	}
+}

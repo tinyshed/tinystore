@@ -28,7 +28,7 @@ from tinystore._wire.protocol import (
     methods,
 )
 from tinystore.channels import Channel
-from tinystore.errors import ClosedError, OutcomeUnknownError, UnavailableError
+from tinystore.errors import ClosedError, LimitError, OutcomeUnknownError, UnavailableError
 from tinystore.kv import Bucket, Parts, bucket_open
 from tinystore.sql import open_database
 
@@ -292,3 +292,37 @@ async def test_a_subscription_stopped_while_it_subscribes_again_cancels_the_stre
     await stopping
     cancels = [h.stream for h, _ in await then.frames() if h.kind == f.CANCEL]
     assert cancels == [again.stream]
+
+
+# contract: WIRE-13
+async def test_a_request_past_the_body_goes_in_pieces_and_an_answer_in_pieces_is_joined() -> None:
+    peer = Peer()
+    peer.welcome(max_body=8, max_message=64)
+    await peer.frames()
+    answered = asyncio.ensure_future(peer.session.call(0x0104, bytes(20)))
+    pieces = requests(await peer.frames())
+    assert [(h.flags, h.method, h.length) for h in pieces] == [
+        (f.MORE, 0x0104, 8),
+        (f.MORE, 0x0104, 8),
+        (f.END, 0x0104, 4),
+    ]
+    peer.session.receive(f.frame(f.RESPONSE, f.MORE, 0, pieces[0].stream, b"12345678"))
+    peer.answer(pieces[0].stream, b"9a")
+    assert await answered == b"123456789a"
+    assert peer.session.streams == 0
+
+
+# contract: WIRE-15
+async def test_a_server_that_agrees_no_max_message_is_sent_one_frame_and_sends_none_in_pieces() -> None:
+    peer = Peer()
+    peer.welcome(max_body=8)
+    await peer.frames()
+    with pytest.raises(LimitError) as refused:
+        await peer.session.call(0x0104, bytes(20))
+    assert str(refused.value) == "kv.set: a request of 20 bytes, past the 8 a body holds"
+    asked = asyncio.ensure_future(peer.session.call(0x0102, bytes(2)))
+    [request] = requests(await peer.frames())
+    peer.session.receive(f.frame(f.RESPONSE, f.MORE, 0, request.stream, b"12"))
+    with pytest.raises(ClosedError):
+        await asked
+    assert peer.session.ended is not None

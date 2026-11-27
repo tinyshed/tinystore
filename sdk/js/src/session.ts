@@ -49,6 +49,13 @@ function methodName(method: number): string {
 /** What this client lets the server send on a stream before it grants more: a body at least. */
 export const downloadWindow = 2 << 20
 
+/**
+ * The largest message this client sends and takes in several frames, each
+ * within the agreed body: a server that agrees none, released before them,
+ * takes and sends a message of one frame.
+ */
+export const maxMessage = 64 << 20
+
 /** The largest body a WELCOME may come in, before a body is agreed. */
 const welcomeMost = 1 << 20
 
@@ -295,6 +302,12 @@ export class Session {
 	#waitingToOpen: Waiter<void>[] = []
 	#queue: Queued[] = []
 	#credit = 0
+	// the bytes of the requests in pieces whose streams have not ended, which
+	// the server holds together within the max message, and who waits for room
+	#sendingInPieces = 0
+	#roomForPieces: (() => void)[] = []
+	// the pieces of each answer that came in several frames, until its last
+	#joining = new Map<number, { pieces: Uint8Array[]; length: number }>()
 
 	// what leaves in this turn's one write: every frame asked for is written
 	// here, a call's body straight from its fields
@@ -332,6 +345,7 @@ export class Session {
 					token: options.token,
 					streamCredit: downloadWindow,
 					challenge: options.challenge,
+					maxMessage,
 				}),
 			),
 		)
@@ -374,15 +388,17 @@ export class Session {
 		const signal = currentSignal()
 		checkSignal(signal)
 		const agreed = await unlessCancelled(this.welcomed, signal)
-		if (body.length > agreed.maxBody) {
+		const most = agreed.maxMessage > 0 ? agreed.maxMessage : agreed.maxBody
+		if (body.length > most) {
+			const holds = agreed.maxMessage > 0 ? 'a message holds' : 'a body holds'
 			throw new LimitError(
-				`${methodName(method)}: a request of ${body.length} bytes, past the ${agreed.maxBody} a body holds`,
-				{
-					limit: limits.requestBytes.name,
-					wanted: String(body.length),
-					bound: String(agreed.maxBody),
-				},
+				`${methodName(method)}: a request of ${body.length} bytes, past the ${most} ${holds}`,
+				{ limit: limits.requestBytes.name, wanted: String(body.length), bound: String(most) },
 			)
+		}
+		const inPieces = body.length > agreed.maxBody
+		while (inPieces && !this.#roomInPieces(body.length, agreed) && this.#usable() === undefined) {
+			await new Promise<void>(resolve => this.#roomForPieces.push(resolve))
 		}
 		while (this.#streams.size >= agreed.inFlight && this.#usable() === undefined) {
 			await this.#streamFreed(signal)
@@ -393,16 +409,52 @@ export class Session {
 		}
 		const stream = new Stream(this, this.#nextID(), method, agreed.streamCredit)
 		this.#streams.set(stream.id, stream)
-		this.#enqueue({
-			stream,
-			bytes: frame(Kind.request, end ? Flag.end : 0, method, stream.id, body),
-			counted: body.length,
-			request: true,
-		})
+		if (inPieces) {
+			this.#sendInPieces(stream, body, end ? Flag.end : 0, agreed.maxBody)
+		} else {
+			this.#enqueue({
+				stream,
+				bytes: frame(Kind.request, end ? Flag.end : 0, method, stream.id, body),
+				counted: body.length,
+				request: true,
+			})
+		}
 		if (signal !== undefined) {
 			stream.watchSignal(signal)
 		}
 		return stream
+	}
+
+	/**
+	 * Whether a request of `length` bytes may go in pieces now: the server
+	 * holds the messages a connection sends in pieces together within the max
+	 * message, from a first piece to its stream's end, and refuses one past
+	 * it, so a request waits for those before it to end. One alone always may.
+	 */
+	#roomInPieces(length: number, agreed: Agreed): boolean {
+		return this.#sendingInPieces === 0 || this.#sendingInPieces + length <= agreed.maxMessage
+	}
+
+	/**
+	 * Queues a request's pieces, each within the body, the last with `last`'s
+	 * flags and the rest with MORE: one after another in the queue, so that no
+	 * other frame that waits for credit goes between them.
+	 */
+	#sendInPieces(stream: Stream, body: Uint8Array, last: number, maxBody: number): void {
+		this.#sendingInPieces += body.length
+		void stream.finishing().then(() => {
+			this.#sendingInPieces -= body.length
+			for (const resolve of this.#roomForPieces.splice(0)) {
+				resolve()
+			}
+		})
+		for (let at = 0; at < body.length; at += maxBody) {
+			const piece = body.subarray(at, Math.min(at + maxBody, body.length))
+			const flags = at + maxBody >= body.length ? last : Flag.more
+			const bytes = frame(Kind.request, flags, stream.method, stream.id, piece)
+			this.#queue.push({ stream, bytes, counted: piece.length, request: at === 0 })
+		}
+		this.#drain()
 	}
 
 	/**
@@ -700,6 +752,14 @@ export class Session {
 		to: number,
 		kept: boolean,
 	): void {
+		if (
+			this.#agreed !== undefined &&
+			h.kind === Kind.response &&
+			((h.flags & Flag.more) !== 0 || this.#joining.has(h.stream))
+		) {
+			this.#join(h, bytes.slice(from, to))
+			return
+		}
 		if (this.#agreed !== undefined && (h.kind === Kind.response || h.kind === Kind.data)) {
 			this.#answer(h, bytes, from, to, kept)
 			return
@@ -723,6 +783,35 @@ export class Session {
 				return
 		}
 		throw new ProtocolError(`a ${kindName(h.kind)} from the server`)
+	}
+
+	// joins a piece of an answer to those before it, and takes the answer as
+	// one frame once its last piece came
+	#join(h: ReturnType<typeof parseHeader>, piece: Uint8Array): void {
+		const most = this.#agreed?.maxMessage ?? 0
+		if (most === 0) {
+			throw new ProtocolError(`a RESPONSE with MORE on stream ${h.stream}, where none was agreed`)
+		}
+		const joining = this.#joining.get(h.stream) ?? { pieces: [], length: 0 }
+		joining.pieces.push(piece)
+		joining.length += piece.length
+		if (joining.length > most) {
+			throw new ProtocolError(
+				`an answer on stream ${h.stream} past the ${most} bytes a message holds`,
+			)
+		}
+		if ((h.flags & Flag.more) !== 0) {
+			this.#joining.set(h.stream, joining)
+			return
+		}
+		this.#joining.delete(h.stream)
+		const message = new Uint8Array(joining.length)
+		let at = 0
+		for (const part of joining.pieces) {
+			message.set(part, at)
+			at += part.length
+		}
+		this.#answer({ ...h, length: message.length }, message, 0, message.length, true)
 	}
 
 	#handshake(kind: number, body: Uint8Array): void {
@@ -759,6 +848,7 @@ export class Session {
 			inFlight: welcome.inFlight ?? 1,
 			connectionCredit: welcome.connectionCredit ?? 0,
 			streamCredit: welcome.streamCredit ?? 0,
+			maxMessage: welcome.maxMessage ?? 0,
 			engines: welcome.engines ?? [],
 			now: welcome.now ?? 0,
 			durability: welcome.durability,
@@ -884,6 +974,10 @@ export class Session {
 		}
 		this.#streams.clear()
 		this.#queue = []
+		this.#joining.clear()
+		for (const resolve of this.#roomForPieces.splice(0)) {
+			resolve()
+		}
 		for (const w of this.#waitingToOpen.splice(0)) {
 			w.reject(new ConnectionLostError(`the connection ended: ${err.message}`, false))
 		}

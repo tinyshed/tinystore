@@ -3738,6 +3738,8 @@ type Hello struct {
 	StreamCredit *uint64 `wire:"5,streamCredit"`
 	// 16 random bytes, when the client found the server through SERVE
 	Challenge *[]byte `wire:"6,challenge"`
+	// the largest message the client sends and takes in several frames; it joins none when absent
+	MaxMessage *uint64 `wire:"7,maxMessage"`
 }
 
 func (m Hello) Write(w *Writer) {
@@ -3773,6 +3775,11 @@ func (m Hello) Write(w *Writer) {
 		w.Bin(*m.Challenge)
 		n++
 	}
+	if m.MaxMessage != nil {
+		w.Uint(7)
+		w.Uint(*m.MaxMessage)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -3797,6 +3804,9 @@ func (m *Hello) Read(r *Reader) {
 		case 6:
 			v := r.Bin()
 			m.Challenge = &v
+		case 7:
+			v := r.Uint()
+			m.MaxMessage = &v
 		default:
 			r.Skip()
 		}
@@ -3811,7 +3821,8 @@ func (m Hello) IsZero() bool {
 		m.Token == nil &&
 		m.MaxBody == nil &&
 		m.StreamCredit == nil &&
-		m.Challenge == nil
+		m.Challenge == nil &&
+		m.MaxMessage == nil
 }
 
 // Welcome is the schema's Welcome.
@@ -3842,6 +3853,8 @@ type Welcome struct {
 	Proof *[]byte `wire:"11,proof"`
 	// full or os, when the store was opened with one: how far its files' commits go
 	Durability *string `wire:"12,durability"`
+	// the largest message either side sends in several frames, when HELLO gave one; absent, a message is one frame
+	MaxMessage *uint64 `wire:"13,maxMessage"`
 }
 
 func (m Welcome) Write(w *Writer) {
@@ -3910,6 +3923,11 @@ func (m Welcome) Write(w *Writer) {
 		w.Str(*m.Durability)
 		n++
 	}
+	if m.MaxMessage != nil {
+		w.Uint(13)
+		w.Uint(*m.MaxMessage)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -3950,6 +3968,9 @@ func (m *Welcome) Read(r *Reader) {
 		case 12:
 			v := r.Str()
 			m.Durability = &v
+		case 13:
+			v := r.Uint()
+			m.MaxMessage = &v
 		default:
 			r.Skip()
 		}
@@ -3970,7 +3991,8 @@ func (m Welcome) IsZero() bool {
 		len(m.Engines) == 0 &&
 		m.Now == 0 &&
 		m.Proof == nil &&
-		m.Durability == nil
+		m.Durability == nil &&
+		m.MaxMessage == nil
 }
 
 // StoreOptions is the schema's store.Options.

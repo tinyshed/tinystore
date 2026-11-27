@@ -84,7 +84,7 @@ QUERY_ANSWER = Limit("answer", 100_000)
 SET_MANY_DOCUMENTS = Limit("set_many documents", 1000)
 """The documents of one ``set_many``."""
 SET_MANY_BYTES = Limit("set_many bytes", 16 << 20)
-"""The documents of one ``set_many`` as JSON; one request body, ``REQUEST_BYTES``, bounds it first."""
+"""The documents of one ``set_many`` as JSON."""
 DOCUMENT_BYTES = Limit("document bytes", 1 << 20)
 """One document as JSON, or a table's row as its index reads it."""
 SEARCH_HITS = Limit("search hits", 1000)
@@ -101,7 +101,10 @@ FILTER_TEXT = Limit("filter text", 256)
 """A text a filter keeps or asks for, in bytes."""
 VECTOR_DIMENSIONS = Limit("vector dimensions", 4096)
 """A vector's dimensions."""
-REQUEST_BYTES = Limit("request bytes", 2 << 20)
-"""One request, its message as the SDK sends it: a larger one fails before it is sent."""
-ANSWER_BYTES = Limit("answer bytes", 2 << 20)
+REQUEST_BYTES = Limit("request bytes", 64 << 20)
+"""One request, its message as the SDK sends it, in several frames past one: a larger one fails before it is sent.
+
+A server released before messages in several frames takes one frame's body, 2 MiB.
+"""
+ANSWER_BYTES = Limit("answer bytes", 64 << 20)
 """One answer, its message as the store sends it."""

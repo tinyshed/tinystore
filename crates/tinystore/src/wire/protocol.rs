@@ -2786,6 +2786,8 @@ pub(crate) struct Hello {
     pub(crate) stream_credit: Option<u64>,
     /// 16 random bytes, when the client found the server through SERVE.
     pub(crate) challenge: Option<Vec<u8>>,
+    /// The largest message the client sends and takes in several frames; it joins none when absent.
+    pub(crate) max_message: Option<u64>,
 }
 
 impl Message for Hello {
@@ -2802,6 +2804,7 @@ impl Message for Hello {
                 4 => message.max_body = Some(codec::uint(r, "maxBody")?),
                 5 => message.stream_credit = Some(codec::uint(r, "streamCredit")?),
                 6 => message.challenge = Some(codec::bin(r, "challenge")?),
+                7 => message.max_message = Some(codec::uint(r, "maxMessage")?),
                 _ => codec::skip(r, Self::NAME)?,
             }
         }
@@ -2834,6 +2837,10 @@ impl Message for Hello {
             map.field(out, 6);
             codec::write_bin(out, challenge);
         }
+        if let Some(max_message) = &self.max_message {
+            map.field(out, 7);
+            codec::write_uint(out, max_message);
+        }
         map.close(out);
     }
 
@@ -2845,6 +2852,7 @@ impl Message for Hello {
             + self.max_body.map_or(0, |_| 10)
             + self.stream_credit.map_or(0, |_| 10)
             + self.challenge.as_ref().map_or(0, |challenge| 1 + 5 + challenge.len())
+            + self.max_message.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -2854,6 +2862,7 @@ impl Message for Hello {
             && self.max_body.is_none()
             && self.stream_credit.is_none()
             && self.challenge.is_none()
+            && self.max_message.is_none()
     }
 }
 
@@ -2884,6 +2893,8 @@ pub(crate) struct Welcome {
     pub(crate) proof: Option<Vec<u8>>,
     /// Full or os, when the store was opened with one: how far its files' commits go.
     pub(crate) durability: Option<String>,
+    /// The largest message either side sends in several frames, when HELLO gave one; absent, a message is one frame.
+    pub(crate) max_message: Option<u64>,
 }
 
 impl Message for Welcome {
@@ -2906,6 +2917,7 @@ impl Message for Welcome {
                 10 => message.now = codec::int(r, "now")?,
                 11 => message.proof = Some(codec::bin(r, "proof")?),
                 12 => message.durability = Some(codec::str(r, "durability")?),
+                13 => message.max_message = Some(codec::uint(r, "maxMessage")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2962,6 +2974,10 @@ impl Message for Welcome {
             map.field(out, 12);
             codec::write_str(out, durability);
         }
+        if let Some(max_message) = &self.max_message {
+            map.field(out, 13);
+            codec::write_uint(out, max_message);
+        }
         map.close(out);
     }
 
@@ -2979,6 +2995,7 @@ impl Message for Welcome {
             + 10
             + self.proof.as_ref().map_or(0, |proof| 1 + 5 + proof.len())
             + self.durability.as_ref().map_or(0, |durability| 1 + 5 + durability.len())
+            + self.max_message.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -2994,6 +3011,7 @@ impl Message for Welcome {
             && self.now == 0
             && self.proof.is_none()
             && self.durability.is_none()
+            && self.max_message.is_none()
     }
 }
 

@@ -55,23 +55,53 @@ for (const way of ways) {
 			expect(facts(hits)).toEqual({ limit: 'search hits', wanted: 2000, bound: 1000 })
 		})
 
-		// contract: ERR-05
-		test('a request past one body fails before it is sent, naming its call and the body', async () => {
+		// contract: WIRE-13
+		test('a request and an answer past one body go in several frames, each one message', async () => {
 			const courses = store.index<{ name: string }>('catalogue', { fields: { name: 1 } })
-			const long = Array.from({ length: 300 }, (_, i) => ({
+			// 1000 documents of 5 KB: 5 MB in pieces of the 2 MiB body, set in one write
+			const long = Array.from({ length: 1000 }, (_, i) => ({
 				id: i,
-				value: { name: `course ${i} `.repeat(1000) },
+				value: { name: `course ${i} `.repeat(500) },
 			}))
-			const refused = await caught(courses.setMany(long))
+			await courses.setMany(long)
+			const found = await courses.search({ text: 'course', limit: 1000 })
+			expect(found.hits.length).toBe(1000)
+			const answered = found.hits.reduce((bytes, hit) => bytes + hit.value.name.length, 0)
+			expect(answered).toBeGreaterThan(5 << 20)
+
+			// an append of 3.5 MB passes the body and is written whole; one of
+			// 5 MB reaches the store, whose own bound of an append refuses it
+			const imports = store.events('imports')
+			const lines = (count: number) =>
+				Array.from({ length: count }, (_, i) => ({
+					name: 'imported',
+					fields: { line: i, text: 'x'.repeat(5000) },
+				}))
+			expect(await imports.append(lines(700))).toBe(700)
+			const past = facts(await caught(imports.append(lines(1000))))
+			expect({ limit: past.limit, bound: past.bound }).toEqual({
+				limit: limits.appendBytes.name,
+				bound: limits.appendBytes.bound,
+			})
+		})
+
+		// contract: ERR-05, WIRE-14
+		test('a request past the max message fails before it is sent, naming its call and the bound', async () => {
+			const courses = store.index<{ name: string }>('catalogue', { fields: { name: 1 } })
+			const huge = Array.from({ length: 1000 }, (_, i) => ({
+				id: 5000 + i,
+				value: { name: 'x'.repeat(70_000) },
+			}))
+			const refused = await caught(courses.setMany(huge))
 			const { limit, wanted, bound } = facts(refused)
 			expect({ limit, bound }).toEqual({
 				limit: limits.requestBytes.name,
 				bound: limits.requestBytes.bound,
 			})
 			expect(wanted).toBeGreaterThan(limits.requestBytes.bound)
-			const said = `search.setMany: a request of ${wanted} bytes, past the ${bound} a body holds`
+			const said = `search.setMany: a request of ${wanted} bytes, past the ${bound} a message holds`
 			expect((refused as Error).message).toBe(said)
-			expect(await courses.get(0)).toBeUndefined()
+			expect(await courses.get(5000)).toBeUndefined()
 		})
 	})
 }

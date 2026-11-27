@@ -249,7 +249,7 @@ Set sets the document id to value, replacing it whole; the next search sees it.
 func (x *Index[T]) SetMany(ctx context.Context, docs []Doc[T]) error
 ```
 
-SetMany sets every document in one commit, all of them or none. A call holds 1,000 documents at most, limits.SetManyDocuments, and no more than one request body holds, 2 MiB, limits.RequestBytes. Past either it fails with a limit error that names the bound.
+SetMany sets every document in one commit, all of them or none. A call holds 1,000 documents at most, limits.SetManyDocuments, and 16 MiB of JSON, limits.SetManyBytes. Past either it fails with a limit error that names the bound.
 
 ### Index.Status
 

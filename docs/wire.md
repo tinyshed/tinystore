@@ -30,26 +30,31 @@ Everything is little-endian. A frame is a twelve-byte header and a body:
 ```
 
 - **The length is the body's.** A frame is 12 + body length bytes; a body
-  past the agreed maximum is refused before a byte of it is read.
+  past the agreed maximum is refused before a byte of it is read. A message
+  past it goes in several frames, as [Messages in several
+  frames](#messages-in-several-frames) says.
 - **What is reserved is zero.** An unknown kind, a flag this kind does not
   define, a method outside a `REQUEST` or a stream where the kind names none
   is a protocol error, and the connection ends.
 
-| kind |            | stream                              | method        | body                                    | flags      |
-|------|------------|-------------------------------------|---------------|-----------------------------------------|------------|
-| 1    | `HELLO`    | 0                                   | 0             | a message                               | —          |
-| 2    | `WELCOME`  | 0                                   | 0             | a message                               | —          |
-| 3    | `REQUEST`  | the new stream                      | the operation | a message                               | END        |
-| 4    | `RESPONSE` | its stream                          | 0             | a message, or an error                  | END, ERROR |
-| 5    | `DATA`     | its stream                          | 0             | bytes, or a message, as the method says | END, ERROR |
-| 6    | `CANCEL`   | its stream                          | 0             | empty                                   | —          |
-| 7    | `CREDIT`   | its stream, or 0 for the connection | 0             | u32: bytes granted                      | —          |
-| 8    | `PING`     | 0                                   | 0             | 8 bytes                                 | —          |
-| 9    | `PONG`     | 0                                   | 0             | the `PING`'s 8 bytes                    | —          |
-| 10   | `GOAWAY`   | 0                                   | 0             | a message                               | —          |
+| kind |            | stream                              | method        | body                                    | flags            |
+|------|------------|-------------------------------------|---------------|-----------------------------------------|------------------|
+| 1    | `HELLO`    | 0                                   | 0             | a message                               | —                |
+| 2    | `WELCOME`  | 0                                   | 0             | a message                               | —                |
+| 3    | `REQUEST`  | the new stream                      | the operation | a message, or a piece of one            | END, MORE        |
+| 4    | `RESPONSE` | its stream                          | 0             | a message, a piece of one, or an error  | END, ERROR, MORE |
+| 5    | `DATA`     | its stream                          | 0             | bytes, or a message, as the method says | END, ERROR       |
+| 6    | `CANCEL`   | its stream                          | 0             | empty                                   | —                |
+| 7    | `CREDIT`   | its stream, or 0 for the connection | 0             | u32: bytes granted                      | —                |
+| 8    | `PING`     | 0                                   | 0             | 8 bytes                                 | —                |
+| 9    | `PONG`     | 0                                   | 0             | the `PING`'s 8 bytes                    | —                |
+| 10   | `GOAWAY`   | 0                                   | 0             | a message                               | —                |
 
 END is 1: the sender's last frame on its stream. ERROR is 2, only beside END:
-the body is [an error](#errors).
+the body is [an error](#errors). MORE is 4, on a `REQUEST` or a `RESPONSE`
+alone, never beside END or ERROR and never on an empty body: the message
+goes on in the next frame, as [Messages in several
+frames](#messages-in-several-frames) says.
 
 A method's high byte is its engine and its low byte the operation, so a new
 engine takes a new high byte and the frame stays as it is; [Methods](#methods)
@@ -92,12 +97,15 @@ A `HELLO` from Bun:
 | 4   | max body      | uint | the largest body the client takes; the server's when absent                                 |
 | 5   | stream credit | uint | the `DATA` the server may send on a stream before the client grants more; 2 MiB when absent |
 | 6   | challenge     | bin  | 16 random bytes, when the client found the server through `SERVE`                           |
+| 7   | max message   | uint | the largest message the client sends and takes in several frames; none when absent          |
 
 A body must fit the credit it is sent under, so the max body both sides agree
 is the smallest of the server's, the client's and the client's stream
 credit: a client granting 64 KiB a stream takes bodies of 64 KiB at most.
-Every SDK grants 2 MiB, and refuses a larger request before it sends it, with
-the `limit` error that [Over the
+Every SDK grants 2 MiB, so its frames carry 2 MiB at most. Every SDK and
+the command line ask for a max message of 64 MiB, send a larger message in
+frames of the agreed body, and refuse a request past the max message before
+they send it, with the `limit` error that [Over the
 wire](handbook/production/limits.md#over-the-wire) shows.
 
 `WELCOME`:
@@ -116,6 +124,7 @@ wire](handbook/production/limits.md#over-the-wire) shows.
 | 10  | now               | int          | the store's clock, unix milliseconds                                                                                                   |
 | 11  | proof             | bin          | on a local connection whose `HELLO` carried a challenge: the HMAC-SHA256 of the challenge, keyed with the 32 bytes of `SERVE`'s secret |
 | 12  | durability        | str          | `full` or `os`, when the store was opened with one: how far its files' commits go before they return                                   |
+| 13  | max message       | uint         | the largest message either side sends in several frames, when `HELLO` asked for one: the smaller of the two, and never below max body  |
 
 A client that found the server through `SERVE` sends no `REQUEST` before the
 proof checks, as [the proof](#finding-a-local-server) says below.
@@ -287,6 +296,61 @@ connection.
   `invalid`, naming the rule it broke; a frame that is not a frame ends the
   connection.
 
+## Messages in several frames
+
+A message past the agreed body travels as pieces, on a connection whose
+`WELCOME` agreed a max message. A client asks for one with `HELLO`'s key 7,
+and the server answers with the smaller of the client's and its own, 64 MiB,
+in `WELCOME`'s key 13. A server that does not know the key skips it and
+answers no max message; a client that asks for none is sent none. Either
+way that connection sends every message in one frame, as before.
+
+```text
+REQUEST·MORE  stream 5, search.setMany, 2 MiB    the first piece
+REQUEST·MORE  stream 5, search.setMany, 2 MiB
+REQUEST·END   stream 5, search.setMany, 1 MiB    the last: the 5 MiB message is whole
+RESPONSE·END  stream 5, {}
+```
+
+- **Pieces are frames of one kind on one stream.** Every piece but the last
+  has MORE and no other flag; the last has none of MORE and the flags the
+  message's one frame would have, END on a call's `REQUEST`. Each carries at
+  least a byte and at most the agreed body, and a `REQUEST`'s pieces each
+  name its method. The receiver joins the bodies in order and reads the
+  message as one frame's body: a call the engine commits once commits once.
+- **The first piece takes the stream's number into use**, as a `REQUEST`
+  does, and the others belong to it. A `REQUEST` piece of another method, or
+  MORE on a connection that agreed no max message, ends the connection.
+- **What is joined is bounded.** A server holds at most the max message of
+  joined requests on a connection at once, counted from a request's first
+  piece to its stream's end. A piece past it drops what that request had,
+  and the server drops the pieces that follow; once the last one comes, the
+  stream answers `limit`, with `request bytes`, `wanted`, the message's size
+  and those of the others it was held beside, and `bound`. Nothing of it
+  runs, and the connection goes on. An SDK sends a large request only once
+  those before it leave room. A client reading pieces past its max message
+  ends the connection.
+- **What waits to be sent is bounded too.** An answer is built whole before
+  its first piece leaves. A connection holds at most the max message of
+  reads' answers waiting in pieces: a read whose answer would pass it while
+  others wait runs again once they have gone, so it is never refused for
+  what others hold. A write's answer always waits its turn, since the write
+  already ran. What waits counts toward what the connection owes its client,
+  so past 8 MiB it reads no frame more and starts no call more, as for a
+  client that does not read.
+- **A client ends a request early with `CANCEL`** before its last piece:
+  the server drops what it joined and answers `cancelled`.
+- **An answer past the max message** is `limit` `answer bytes` for a read
+  and `outcome_unknown` for a write, as one past the body is on a connection
+  that agreed none. An error is never sent in pieces.
+- **Pieces share the connection.** A request's pieces count against the
+  connection's credit as any `REQUEST` does, and the server gives that
+  credit back as soon as it has copied a piece into its message, so a large
+  request never holds the window. An answer's pieces go out one at a time
+  while the connection owes its client less than 1 MiB, each answer in turn
+  with the others in pieces, and the frames of other streams go between them
+  as the client reads.
+
 ## Credit
 
 A sender never sends more than it was granted, and a receiver grants only room
@@ -299,9 +363,10 @@ never waits.
   connection, on a stream's number for that stream.
 - **Server to client.** `DATA` bodies count against the stream credit
   `HELLO` stated, and the client grants more with `CREDIT` on the stream as it
-  consumes them. A `RESPONSE` body is not counted: it is one message within
-  the agreed body, and every collection travels as `DATA` instead, so a client
-  holds at most its streams in flight times the agreed body in answers. Nor is
+  consumes them. A `RESPONSE` body is not counted, nor are its pieces: it is
+  one message within the agreed body, or the max message the client asked
+  for, and every collection travels as `DATA` instead, so a client holds at
+  most its streams in flight times that message in answers. Nor is
   the `DATA`·END·ERROR that fails a download, so that a stream always has
   room for its end. A client grants nothing for the connection: its `CREDIT`
   names a stream.

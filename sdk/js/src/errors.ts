@@ -190,7 +190,7 @@ export const limits = Object.freeze({
 	queryAnswer: limit('answer', 100_000),
 	/** The documents of one `setMany`. */
 	setManyDocuments: limit('set_many documents', 1000),
-	/** The documents of one `setMany` as JSON; one request body, `requestBytes`, bounds it first. */
+	/** The documents of one `setMany` as JSON. */
 	setManyBytes: limit('set_many bytes', 16 << 20),
 	/** One document as JSON, or a table's row as its index reads it. */
 	documentBytes: limit('document bytes', 1 << 20),
@@ -208,10 +208,14 @@ export const limits = Object.freeze({
 	filterText: limit('filter text', 256),
 	/** A vector's dimensions. */
 	vectorDimensions: limit('vector dimensions', 4096),
-	/** One request, its message as the SDK sends it: a larger one fails before it is sent. */
-	requestBytes: limit('request bytes', 2 << 20),
+	/**
+	 * One request, its message as the SDK sends it, in several frames past one:
+	 * a larger one fails before it is sent. A server released before messages
+	 * in several frames takes one frame's body, 2 MiB.
+	 */
+	requestBytes: limit('request bytes', 64 << 20),
 	/** One answer, its message as the store sends it. */
-	answerBytes: limit('answer bytes', 2 << 20),
+	answerBytes: limit('answer bytes', 64 << 20),
 })
 
 /** What the call needs is not there: a file to copy or rename. */

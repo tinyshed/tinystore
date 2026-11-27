@@ -10,6 +10,7 @@ import (
 	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/internal/ways"
 	"tinyshed.org/tinystore/limits"
+	"tinyshed.org/tinystore/records"
 	"tinyshed.org/tinystore/search"
 )
 
@@ -51,24 +52,66 @@ func TestACallPastABoundNamesItWhatItWantedAndTheBound(t *testing.T) {
 	})
 }
 
-// contract: ERR-05
-func TestARequestPastOneBodyFailsBeforeItIsSent(t *testing.T) {
+// contract: WIRE-13
+func TestARequestAndAnAnswerPastOneBodyGoInSeveralFrames(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
 		catalogue := ways.Must(search.OpenIndex[named](store, "catalogue", search.Fields{"name": 1}))
-		long := make([]search.Doc[named], 300)
+		// 1000 documents of 5 KB: 5 MB in pieces of the 2 MiB body, set in one write
+		long := make([]search.Doc[named], 1000)
 		for n := range long {
-			long[n] = search.Doc[named]{ID: fmt.Sprint(n), Value: named{strings.Repeat(fmt.Sprintf("course %d ", n), 1000)}}
+			long[n] = search.Doc[named]{ID: fmt.Sprint(n), Value: named{strings.Repeat(fmt.Sprintf("course %d ", n), 500)}}
 		}
-		err := catalogue.SetMany(ctx, long)
+		if err := catalogue.SetMany(ctx, long); err != nil {
+			t.Fatal(err)
+		}
+		found := ways.Must(catalogue.Search(ctx, "course", search.Limit(1000)))
+		answered := 0
+		for _, hit := range found.Hits {
+			answered += len(hit.Value.Name)
+		}
+		if len(found.Hits) != 1000 || answered <= 5<<20 {
+			t.Fatalf("%d hits of %d bytes", len(found.Hits), answered)
+		}
+
+		// an append of 3.5 MB passes the body and is written whole; one of
+		// 5 MB reaches the store, whose own bound of an append refuses it
+		imports := ways.Must(records.OpenEvents(store, "imports"))
+		lines := func(count int) []records.Event {
+			events := make([]records.Event, count)
+			for n := range events {
+				events[n] = records.Event{Name: "imported", Fields: map[string]any{"line": n, "text": strings.Repeat("x", 5000)}}
+			}
+			return events
+		}
+		if written, err := imports.AppendMany(ctx, lines(700)); err != nil || written != 700 {
+			t.Fatalf("wrote %d: %v", written, err)
+		}
+		_, err := imports.AppendMany(ctx, lines(1000))
+		if limit, _, bound := limitOf(t, err); limit != limits.AppendBytes.Name || bound != limits.AppendBytes.Bound {
+			t.Fatalf("append %q %d", limit, bound)
+		}
+	})
+}
+
+// contract: ERR-05, WIRE-14
+func TestARequestPastTheMaxMessageFailsBeforeItIsSent(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		catalogue := ways.Must(search.OpenIndex[named](store, "catalogue", search.Fields{"name": 1}))
+		huge := make([]search.Doc[named], 1000)
+		for n := range huge {
+			huge[n] = search.Doc[named]{ID: fmt.Sprint(5000 + n), Value: named{strings.Repeat("x", 70_000)}}
+		}
+		err := catalogue.SetMany(ctx, huge)
 		limit, wanted, bound := limitOf(t, err)
 		if limit != limits.RequestBytes.Name || bound != limits.RequestBytes.Bound || wanted <= bound {
 			t.Fatalf("request %q %d %d", limit, wanted, bound)
 		}
-		if said := fmt.Sprintf("search.setMany: a request of %d bytes, past the %d a body holds", wanted, bound); err.Error() != said {
+		if said := fmt.Sprintf("search.setMany: a request of %d bytes, past the %d a message holds", wanted, bound); err.Error() != said {
 			t.Fatalf("got %v, want %s", err, said)
 		}
-		if _, found := ways.Must2(catalogue.Get(ctx, "0")); found {
+		if _, found := ways.Must2(catalogue.Get(ctx, "5000")); found {
 			t.Fatal("a refused request set a document")
 		}
 	})

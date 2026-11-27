@@ -1040,8 +1040,7 @@ The documents of one `set_many`.
 pub const SET_MANY_BYTES: Limit
 ```
 
-The documents of one `set_many` as JSON. Over the wire one request body
-bounds it first, `REQUEST_BYTES`.
+The documents of one `set_many` as JSON.
 
 ## DOCUMENT_BYTES
 
@@ -1113,8 +1112,11 @@ A vector's dimensions.
 pub const REQUEST_BYTES: Limit
 ```
 
-One request over the wire, as every SDK and the command line agree it at
-their HELLO: a call whose message is larger fails before it is sent.
+One request over the wire, its message sent in several frames past one,
+as every SDK and the command line agree it at their HELLO: a call whose
+message is larger fails before it is sent. Against a server that agrees no
+max message, one released before multi-frame messages, it is one frame's
+body, 2 MiB.
 
 ## ANSWER_BYTES
 

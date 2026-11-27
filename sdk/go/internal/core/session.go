@@ -35,6 +35,11 @@ const DownloadWindow = 2 << 20
 // welcomeMost is the largest body a WELCOME may come in, before a body is agreed.
 const welcomeMost = 1 << 20
 
+// MaxMessage is the largest message this client sends and takes in several
+// frames, each within the agreed body. A server that agrees none, released
+// before them, takes and sends a message of one frame.
+const MaxMessage = 64 << 20
+
 // Agreed is what a WELCOME agreed.
 type Agreed struct {
 	Server           string
@@ -45,8 +50,11 @@ type Agreed struct {
 	InFlight         uint64
 	ConnectionCredit uint64
 	StreamCredit     uint64
-	Engines          []string
-	Now              int64
+	// MaxMessage is the largest message sent in several frames, 0 when the
+	// server agreed none.
+	MaxMessage uint64
+	Engines    []string
+	Now        int64
 	// Durability is how far the store's files' commits go, when it was opened with one: full or os.
 	Durability string
 }
@@ -70,14 +78,21 @@ type Session struct {
 	next      uint32
 	queue     []*queued
 	credit    uint64
-	rest      []byte
-	going     bool
-	ended     error
-	waiting   []chan struct{}
-	onEnd     []func(error)
-	out       [][]byte
-	wake      chan struct{}
-	stopped   chan struct{}
+	// sendingInPieces is the bytes of the requests in pieces whose streams
+	// have not ended, which the server holds together within the max
+	// message; roomForPieces, who waits for room among them.
+	sendingInPieces uint64
+	roomForPieces   []chan struct{}
+	// joining is the pieces of each answer that came in several frames, until its last.
+	joining map[uint32][]byte
+	rest    []byte
+	going   bool
+	ended   error
+	waiting []chan struct{}
+	onEnd   []func(error)
+	out     [][]byte
+	wake    chan struct{}
+	stopped chan struct{}
 }
 
 // queued is a frame waiting for the connection's credit, in the order it was asked for.
@@ -105,10 +120,14 @@ func NewSession(write func([]byte) error, hello Hello) *Session {
 		challenge: hello.Challenge,
 		welcomed:  make(chan struct{}),
 		streams:   map[uint32]*Stream{},
+		joining:   map[uint32][]byte{},
 		wake:      make(chan struct{}, 1),
 		stopped:   make(chan struct{}),
 	}
-	message := wire.Hello{Protocol: ProtocolVersion, Client: hello.Client, StreamCredit: ptr(uint64(DownloadWindow))}
+	message := wire.Hello{
+		Protocol: ProtocolVersion, Client: hello.Client, StreamCredit: ptr(uint64(DownloadWindow)),
+		MaxMessage: ptr(uint64(MaxMessage)),
+	}
 	if hello.Token != "" {
 		message.Token = &hello.Token
 	}
@@ -170,18 +189,31 @@ var methodNames = func() map[uint16]string {
 	return names
 }()
 
-// pastTheBody is the limit error of a request of size bytes, past the body
-// the connection agreed, named by its call and by the bound every SDK names.
-func pastTheBody(method uint16, size int, body uint64) *Error {
+// pastTheMost is the limit error of a request of size bytes, past the most
+// the connection agreed, its max message or else its body, named by its call
+// and by the bound every SDK names.
+func pastTheMost(method uint16, size int, agreed *Agreed) *Error {
 	name, ok := methodNames[method]
 	if !ok {
 		name = fmt.Sprintf("method %d", method)
 	}
-	message := fmt.Sprintf("%s: a request of %d bytes, past the %d a body holds", name, size, body)
+	most, holds := agreed.MaxMessage, "a message holds"
+	if most == 0 {
+		most, holds = agreed.MaxBody, "a body holds"
+	}
+	message := fmt.Sprintf("%s: a request of %d bytes, past the %d %s", name, size, most, holds)
 	what := map[string]string{
-		"limit": limits.RequestBytes.Name, "wanted": strconv.Itoa(size), "bound": strconv.FormatUint(body, 10),
+		"limit": limits.RequestBytes.Name, "wanted": strconv.Itoa(size), "bound": strconv.FormatUint(most, 10),
 	}
 	return Failed(string(Limit), message, what)
+}
+
+// most is the largest request the connection takes: its max message, or else its body.
+func (a *Agreed) most() uint64 {
+	if a.MaxMessage > 0 {
+		return a.MaxMessage
+	}
+	return a.MaxBody
 }
 
 // OnEnd calls listener once the session ends, at once when it has.
@@ -205,10 +237,22 @@ func (s *Session) Open(ctx context.Context, method uint16, body []byte, end bool
 	if err != nil {
 		return nil, err
 	}
-	if uint64(len(body)) > agreed.MaxBody {
-		return nil, pastTheBody(method, len(body), agreed.MaxBody)
+	if uint64(len(body)) > agreed.most() {
+		return nil, pastTheMost(method, len(body), agreed)
 	}
+	inPieces := uint64(len(body)) > agreed.MaxBody
 	s.mu.Lock()
+	for inPieces && !s.roomInPieces(uint64(len(body)), agreed) && s.refused() == nil {
+		room := make(chan struct{})
+		s.roomForPieces = append(s.roomForPieces, room)
+		s.mu.Unlock()
+		select {
+		case <-room:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		s.mu.Lock()
+	}
 	for uint64(len(s.streams)) >= agreed.InFlight && s.refused() == nil {
 		slot := make(chan struct{})
 		s.waiting = append(s.waiting, slot)
@@ -241,9 +285,53 @@ func (s *Session) Open(ctx context.Context, method uint16, body []byte, end bool
 	if end {
 		flags = flagEnd
 	}
-	s.enqueue(&queued{st, frame(kindRequest, flags, method, st.ID, body), uint64(len(body)), true})
+	if inPieces {
+		s.sendInPieces(st, body, flags, agreed.MaxBody)
+	} else {
+		s.enqueue(&queued{st, frame(kindRequest, flags, method, st.ID, body), uint64(len(body)), true})
+	}
 	s.mu.Unlock()
 	return st, nil
+}
+
+// roomInPieces says whether a request of length bytes may go in pieces now:
+// the server holds the messages a connection sends in pieces together within
+// the max message, from a first piece to its stream's end, and refuses one
+// past it, so a request waits for those before it to end. One alone always may.
+func (s *Session) roomInPieces(length uint64, agreed *Agreed) bool {
+	return s.sendingInPieces == 0 || s.sendingInPieces+length <= agreed.MaxMessage
+}
+
+// sendInPieces queues a request's pieces, each within the body, the last with
+// last's flags and the rest with MORE: one after another in the queue, so
+// that no other frame that waits for credit goes between them.
+func (s *Session) sendInPieces(st *Stream, body []byte, last uint8, maxBody uint64) {
+	st.inPieces = uint64(len(body))
+	s.sendingInPieces += st.inPieces
+	for at := uint64(0); at < uint64(len(body)); at += maxBody {
+		stop := min(at+maxBody, uint64(len(body)))
+		flags := uint8(flagMore)
+		if stop == uint64(len(body)) {
+			flags = last
+		}
+		piece := frame(kindRequest, flags, st.Method, st.ID, body[at:stop])
+		s.queue = append(s.queue, &queued{st, piece, stop - at, at == 0})
+	}
+	s.drain()
+}
+
+// piecesEnded gives back the room a request in pieces held once its stream
+// ended, and wakes who waited for it.
+func (s *Session) piecesEnded(st *Stream) {
+	if st.inPieces == 0 {
+		return
+	}
+	s.sendingInPieces -= st.inPieces
+	st.inPieces = 0
+	for _, room := range s.roomForPieces {
+		close(room)
+	}
+	s.roomForPieces = nil
 }
 
 // Call is a call: one REQUEST, and the RESPONSE that answers it. A ctx done
@@ -445,9 +533,14 @@ func (s *Session) take(h header, body []byte) error {
 	if s.agreed == nil {
 		return s.handshake(h.kind, body)
 	}
-	switch h.kind {
-	case kindResponse, kindData:
+	_, joining := s.joining[h.stream]
+	switch {
+	case h.kind == kindResponse && (h.flags&flagMore != 0 || joining):
+		return s.join(h, body)
+	case h.kind == kindResponse || h.kind == kindData:
 		return s.answer(h.kind, h.flags, h.stream, body)
+	}
+	switch h.kind {
 	case kindCredit:
 		s.credited(h.stream, uint64(binary.LittleEndian.Uint32(body)))
 	case kindPing:
@@ -459,6 +552,24 @@ func (s *Session) take(h header, body []byte) error {
 		return Errorf(Protocol, "a %s from the server", kindName(h.kind))
 	}
 	return nil
+}
+
+// join joins a piece of an answer to those before it, and takes the answer
+// as one frame once its last piece came.
+func (s *Session) join(h header, piece []byte) error {
+	if s.agreed.MaxMessage == 0 {
+		return Errorf(Protocol, "a RESPONSE with MORE on stream %d, where none was agreed", h.stream)
+	}
+	joined := append(s.joining[h.stream], piece...)
+	if uint64(len(joined)) > s.agreed.MaxMessage {
+		return Errorf(Protocol, "an answer on stream %d past the %d bytes a message holds", h.stream, s.agreed.MaxMessage)
+	}
+	if h.flags&flagMore != 0 {
+		s.joining[h.stream] = joined
+		return nil
+	}
+	delete(s.joining, h.stream)
+	return s.answer(h.kind, h.flags, h.stream, joined)
 }
 
 func (s *Session) handshake(kind uint8, body []byte) error {
@@ -487,6 +598,9 @@ func (s *Session) handshake(kind uint8, body []byte) error {
 		Server: w.Server, Protocol: w.Protocol, Instance: w.Instance, Capability: w.Capability,
 		MaxBody: w.MaxBody, InFlight: max(w.InFlight, 1), ConnectionCredit: w.ConnectionCredit,
 		StreamCredit: w.StreamCredit, Engines: w.Engines, Now: w.Now,
+	}
+	if w.MaxMessage != nil {
+		s.agreed.MaxMessage = max(*w.MaxMessage, w.MaxBody)
 	}
 	if w.Durability != nil {
 		s.agreed.Durability = *w.Durability
@@ -585,6 +699,11 @@ func (s *Session) end(err error) {
 	}
 	s.streams = map[uint32]*Stream{}
 	s.queue = nil
+	s.joining = map[uint32][]byte{}
+	for _, room := range s.roomForPieces {
+		close(room)
+	}
+	s.roomForPieces = nil
 	for _, slot := range s.waiting {
 		close(slot)
 	}
@@ -648,6 +767,9 @@ type Stream struct {
 	uploadCredit uint64
 	credited     chan struct{}
 	granting     uint64
+	// inPieces is the bytes of its request when it went in pieces, which the
+	// session's room for pieces gets back at the stream's end.
+	inPieces uint64
 	// ended is closed once finished is set
 	ended chan struct{}
 }
@@ -757,6 +879,7 @@ func (st *Stream) finish() {
 	if !st.finished {
 		st.finished = true
 		close(st.ended)
+		st.s.piecesEnded(st)
 	}
 }
 

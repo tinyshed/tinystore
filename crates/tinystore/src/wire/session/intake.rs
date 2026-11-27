@@ -8,7 +8,8 @@ use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use super::{
-    CONNECTION_CREDIT, ClientRun, HELLO_MOST, IN_FLIGHT, Input, OUTPUT_LOW, OUTPUT_MOST, STREAM_CREDIT, Shared, guarded,
+    CONNECTION_CREDIT, ClientRun, HELLO_MOST, IN_FLIGHT, Input, MAX_MESSAGE, OUTPUT_LOW, OUTPUT_MOST, STREAM_CREDIT,
+    Shared, guarded,
 };
 use crate::pipe::Capability;
 use crate::unix_millis;
@@ -53,9 +54,9 @@ impl Shared {
     /// `held`: one of the two sees the other, so frames are never held with
     /// nobody to read them on.
     fn owes_past_bound(&self) -> bool {
-        if self.owing.load(Ordering::SeqCst) > OUTPUT_MOST {
+        if self.held_for_client() > OUTPUT_MOST {
             self.held.store(true, Ordering::SeqCst);
-            if self.owing.load(Ordering::SeqCst) > OUTPUT_MOST {
+            if self.held_for_client() > OUTPUT_MOST {
                 return true;
             }
         }
@@ -68,7 +69,7 @@ impl Shared {
     /// Reads the frames held for the host's take, once the connection owes
     /// little.
     pub(super) fn read_held(self: &Arc<Self>) {
-        if !self.held.load(Ordering::SeqCst) || self.owing.load(Ordering::SeqCst) > OUTPUT_LOW {
+        if !self.held.load(Ordering::SeqCst) || self.held_for_client() > OUTPUT_LOW {
             return;
         }
         let mut input = self.lock_input();
@@ -79,9 +80,16 @@ impl Shared {
         match (input.max_body, frame.kind) {
             (None, Kind::Hello) => self.welcome(input, &frame.body),
             (None, kind) => self.go_away(input, "protocol", &format!("a {kind:?} before HELLO")),
+            (Some(_), Kind::Request) if frame.flags & frame::MORE != 0 || input.joining.contains_key(&frame.stream) => {
+                self.join(input, frame);
+            }
             (Some(_), Kind::Request) => self.request(input, frame),
             (Some(_), Kind::Data) => self.data(input, frame),
-            (Some(_), Kind::Cancel) => self.cancel(frame.stream),
+            (Some(_), Kind::Cancel) => {
+                if !self.cancel_joining(input, frame.stream) {
+                    self.cancel(frame.stream);
+                }
+            }
             (Some(_), Kind::Ping) => self.send(&[Frame::new(Kind::Pong, 0, frame.body)]),
             (Some(_), Kind::Credit) => self.credit(&frame),
             (Some(_), Kind::GoAway) => self.finish(input),
@@ -89,9 +97,10 @@ impl Shared {
         }
     }
 
-    /// Answers HELLO with what the connection agrees: the protocol, and the
+    /// Answers HELLO with what the connection agrees: the protocol, the
     /// smallest of the bodies either side takes and the client's stream
-    /// credit, so that one body always fits a stream's window.
+    /// credit, so that one body always fits a stream's window, and the
+    /// largest message joined from frames when the client asked for one.
     fn welcome(&self, input: &mut Input, body: &[u8]) {
         let hello = match Hello::decode(body) {
             Ok(hello) => hello,
@@ -123,14 +132,20 @@ impl Shared {
         input.max_body = Some(max_body as usize);
         self.agreed.store(max_body as usize, Ordering::Release);
         input.stream_credit = stream_credit;
+        // never smaller than a body, which is a message of one frame
+        let max_message = hello.max_message.map(|asked| asked.min(MAX_MESSAGE).max(max_body));
+        input.max_message = max_message.map(|most| most as usize);
+        self.max_message.store(max_message.unwrap_or(0) as usize, Ordering::Release);
         let proof = hello.challenge.zip(self.connect.prove.as_ref()).map(|(challenge, prove)| prove(&challenge));
-        self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body, capability, proof))]);
+        let agreed = (max_body, max_message);
+        self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(agreed, capability, proof))]);
         if let Some(greeted) = &self.connect.greeted {
             greeted(&hello.client);
         }
     }
 
-    fn welcome_body(&self, max_body: u64, capability: Capability, proof: Option<Vec<u8>>) -> Vec<u8> {
+    fn welcome_body(&self, agreed: (u64, Option<u64>), capability: Capability, proof: Option<Vec<u8>>) -> Vec<u8> {
+        let (max_body, max_message) = agreed;
         let capability = match capability {
             Capability::Admin => "admin",
             Capability::Data => "data",
@@ -149,6 +164,7 @@ impl Shared {
             now: unix_millis(self.store.now()),
             proof,
             durability: self.store.durability().map(|durability| durability.to_string()),
+            max_message,
         };
         welcome.encode()
     }

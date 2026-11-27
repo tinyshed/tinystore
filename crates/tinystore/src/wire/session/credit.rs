@@ -55,18 +55,31 @@ impl Shared {
         self.channels.grant(frame.stream, granted);
     }
 
-    /// Ends a stream with its RESPONSE.
+    /// Ends a stream with its RESPONSE: in pieces past the agreed body, on a
+    /// connection that agreed a max message.
     pub(super) fn answer(&self, stream: u32, answered: std::result::Result<Vec<u8>, Failure>) {
-        let response = match self.within_agreed(answered) {
+        let agreed = self.agreed.load(Ordering::Acquire);
+        let response = match self.within(answered, self.answer_most()) {
+            Ok(body) if body.len() > agreed => return self.answer_in_pieces(stream, body),
             Ok(body) => Frame::new(Kind::Response, stream, body).ending(),
             Err(failure) => Frame::new(Kind::Response, stream, failure.encode()).failing(),
         };
         self.send_last(response);
     }
 
-    /// Ends a stream whose RESPONSE went out already, with its last DATA.
+    /// The largest answer that may go out: the max message, when the
+    /// connection agreed one, or else one body.
+    fn answer_most(&self) -> usize {
+        match self.max_message.load(Ordering::Acquire) {
+            0 => self.agreed.load(Ordering::Acquire),
+            most => most,
+        }
+    }
+
+    /// Ends a stream whose RESPONSE went out already, with its last DATA,
+    /// which is one frame.
     pub(super) fn end_stream(&self, stream: u32, answered: std::result::Result<Vec<u8>, Failure>) {
-        let data = match self.within_agreed(answered) {
+        let data = match self.within(answered, self.agreed.load(Ordering::Acquire)) {
             Ok(body) => Frame::new(Kind::Data, stream, body).ending(),
             Err(failure) => Frame::new(Kind::Data, stream, failure.encode()).failing(),
         };
@@ -115,7 +128,7 @@ impl Shared {
         if open.len() >= IN_FLIGHT as usize {
             return Err(format!("a REQUEST past the {IN_FLIGHT} streams in flight WELCOME allowed"));
         }
-        open.insert(stream, OpenStream { left: STREAM_CREDIT, held: body.len() as u64 });
+        open.insert(stream, OpenStream { left: STREAM_CREDIT, held: body.len() as u64, joined: 0 });
         Ok(())
     }
 
@@ -163,12 +176,12 @@ impl Shared {
     }
 
     /// Bytes the server let go of, which the next grant gives back.
-    fn let_go(&self, bytes: u64) {
+    pub(super) fn let_go(&self, bytes: u64) {
         self.to_grant.fetch_add(bytes, Ordering::AcqRel);
     }
 
     /// Grants the connection's credit back once half its window gathered.
-    fn grant_when_due(&self) {
+    pub(super) fn grant_when_due(&self) {
         let gathered = self.to_grant.load(Ordering::Acquire);
         if gathered < CONNECTION_CREDIT / 2 {
             return;
@@ -182,20 +195,29 @@ impl Shared {
         self.send(&[Frame::new(Kind::Credit, 0, granted.to_le_bytes().to_vec())]);
     }
 
-    /// A body as it may go out: one past the agreed body is `limit`, which a
-    /// client takes, rather than a frame it would end the connection over.
-    fn within_agreed(&self, answered: std::result::Result<Vec<u8>, Failure>) -> std::result::Result<Vec<u8>, Failure> {
-        let agreed = self.agreed.load(Ordering::Acquire);
+    /// A body as it may go out: one past `most` is `limit`, which a client
+    /// takes, rather than a frame it would end the connection over.
+    fn within(
+        &self,
+        answered: std::result::Result<Vec<u8>, Failure>,
+        most: usize,
+    ) -> std::result::Result<Vec<u8>, Failure> {
         match answered {
-            Ok(body) if body.len() > agreed => {
-                let refused = format!("an answer of {} bytes, past the {agreed} a body holds", body.len());
-                Err(Failure::from(Limit { bound: agreed as u64, ..ANSWER_BYTES }.refuse(body.len() as u64, refused)))
+            Ok(body) if body.len() > most => {
+                let refused = format!("an answer of {} bytes, past the {most} {}", body.len(), self.holding(most));
+                Err(Failure::from(Limit { bound: most as u64, ..ANSWER_BYTES }.refuse(body.len() as u64, refused)))
             }
             answered => answered,
         }
     }
 
-    /// A write's answer as it may go out. Past the agreed body it is
+    /// What holds `most`: a message, when the connection agreed one past a
+    /// body, or else a body.
+    fn holding(&self, most: usize) -> &'static str {
+        if most > self.agreed.load(Ordering::Acquire) { "a message holds" } else { "a body holds" }
+    }
+
+    /// A write's answer as it may go out. Past the largest answer it is
     /// `outcome_unknown`, never `limit`: the write ran, what it took is gone,
     /// and a client that sent it again, as it does a `limit`, would write
     /// twice.
@@ -203,13 +225,14 @@ impl Shared {
         &self,
         answered: std::result::Result<Vec<u8>, Failure>,
     ) -> std::result::Result<Vec<u8>, Failure> {
-        let agreed = self.agreed.load(Ordering::Acquire);
+        let most = self.answer_most();
         match answered {
-            Ok(body) if body.len() > agreed => Err(Failure {
+            Ok(body) if body.len() > most => Err(Failure {
                 code: "outcome_unknown".to_owned(),
                 message: format!(
-                    "the write ran, and its answer of {} bytes is past the {agreed} a body holds: read what it wrote",
-                    body.len()
+                    "the write ran, and its answer of {} bytes is past the {most} {}: read what it wrote",
+                    body.len(),
+                    self.holding(most)
                 ),
                 what: None,
             }),
@@ -268,6 +291,7 @@ impl Shared {
             }
             if let Some(opened) = ended.and_then(|stream| open.remove(&stream)) {
                 let_go += opened.held;
+                self.joined.fetch_sub(opened.joined, Ordering::AcqRel);
             }
         }
         if let_go > 0 {

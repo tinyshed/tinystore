@@ -2345,6 +2345,10 @@ def _write_hello(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(6)
         w.bin(x)
         n += 1
+    if (x := v.get("max_message")) is not None:
+        w.uint(7)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -2365,6 +2369,8 @@ def _read_hello(r: Reader) -> dict[str, Any]:
                 read["stream_credit"] = r.uint()
             case 6:
                 read["challenge"] = r.bin()
+            case 7:
+                read["max_message"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -2387,6 +2393,8 @@ Hello = Message(
         "stream_credit": (5, uint),
         # 16 random bytes, when the client found the server through SERVE
         "challenge": (6, bin_),
+        # the largest message the client sends and takes in several frames; it joins none when absent
+        "max_message": (7, uint),
     },
     _write_hello,
     _read_hello,
@@ -2446,6 +2454,10 @@ def _write_welcome(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(12)
         w.str(x)
         n += 1
+    if (x := v.get("max_message")) is not None:
+        w.uint(13)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -2480,6 +2492,8 @@ def _read_welcome(r: Reader) -> dict[str, Any]:
                 read["proof"] = r.bin()
             case 12:
                 read["durability"] = r.str()
+            case 13:
+                read["max_message"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -2514,6 +2528,8 @@ Welcome = Message(
         "proof": (11, bin_),
         # full or os, when the store was opened with one: how far its files' commits go
         "durability": (12, str_),
+        # the largest message either side sends in several frames, when HELLO gave one; absent, a message is one frame
+        "max_message": (13, uint),
     },
     _write_welcome,
     _read_welcome,

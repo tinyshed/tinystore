@@ -32,6 +32,10 @@ const (
 	flagEnd = 1
 	// flagError beside flagEnd alone: the body is an error.
 	flagError = 2
+	// flagMore on a REQUEST or a RESPONSE alone: the message goes on in the
+	// next frame of its kind on the stream, and the frame without it ends the
+	// message with the flags its one frame would have.
+	flagMore = 4
 )
 
 type header struct {
@@ -54,8 +58,8 @@ type rule struct {
 var rules = map[uint8]rule{
 	kindHello:    {"HELLO", "none", 0, -1},
 	kindWelcome:  {"WELCOME", "none", 0, -1},
-	kindRequest:  {"REQUEST", "own", flagEnd, -1},
-	kindResponse: {"RESPONSE", "own", flagEnd | flagError, -1},
+	kindRequest:  {"REQUEST", "own", flagEnd | flagMore, -1},
+	kindResponse: {"RESPONSE", "own", flagEnd | flagError | flagMore, -1},
 	kindData:     {"DATA", "own", flagEnd | flagError, -1},
 	kindCancel:   {"CANCEL", "own", 0, 0},
 	kindCredit:   {"CREDIT", "either", 0, 4},
@@ -94,6 +98,8 @@ func (h header) check(maxBody uint64) error {
 		return Errorf(Protocol, "flags %#x on a %s", h.flags, r.name)
 	case h.flags&flagError != 0 && h.flags&flagEnd == 0:
 		return Errorf(Protocol, "ERROR without END on stream %d", h.stream)
+	case h.flags&flagMore != 0 && (h.flags != flagMore || h.length == 0):
+		return Errorf(Protocol, "MORE beside another flag or on an empty %s on stream %d", r.name, h.stream)
 	case h.kind == kindRequest && h.method == 0:
 		return Errorf(Protocol, "a REQUEST without a method on stream %d", h.stream)
 	case h.kind != kindRequest && h.method != 0:

@@ -2848,6 +2848,8 @@ export const Hello = message(
 		streamCredit: [5, uint],
 		/** 16 random bytes, when the client found the server through SERVE */
 		challenge: [6, bin],
+		/** the largest message the client sends and takes in several frames; it joins none when absent */
+		maxMessage: [7, uint],
 	},
 	{
 		write(w, v) {
@@ -2883,6 +2885,11 @@ export const Hello = message(
 				w.bin(v.challenge)
 				n++
 			}
+			if (v.maxMessage !== undefined) {
+				w.field(7)
+				w.uint(v.maxMessage)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -2892,6 +2899,7 @@ export const Hello = message(
 			let $maxBody: number | undefined
 			let $streamCredit: number | undefined
 			let $challenge: Uint8Array | undefined
+			let $maxMessage: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2912,6 +2920,9 @@ export const Hello = message(
 					case 6:
 						$challenge = r.bytes()
 						break
+					case 7:
+						$maxMessage = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -2924,6 +2935,7 @@ export const Hello = message(
 				maxBody: $maxBody,
 				streamCredit: $streamCredit,
 				challenge: $challenge,
+				maxMessage: $maxMessage,
 			}
 		},
 	},
@@ -2959,6 +2971,8 @@ export const Welcome = message(
 		proof: [11, bin],
 		/** full or os, when the store was opened with one: how far its files' commits go */
 		durability: [12, str],
+		/** the largest message either side sends in several frames, when HELLO gave one; absent, a message is one frame */
+		maxMessage: [13, uint],
 	},
 	{
 		write(w, v) {
@@ -3027,6 +3041,11 @@ export const Welcome = message(
 				w.str(v.durability)
 				n++
 			}
+			if (v.maxMessage !== undefined) {
+				w.field(13)
+				w.uint(v.maxMessage)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -3042,6 +3061,7 @@ export const Welcome = message(
 			let $now: number | undefined
 			let $proof: Uint8Array | undefined
 			let $durability: string | undefined
+			let $maxMessage: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -3086,6 +3106,9 @@ export const Welcome = message(
 					case 12:
 						$durability = r.str()
 						break
+					case 13:
+						$maxMessage = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -3104,6 +3127,7 @@ export const Welcome = message(
 				now: $now,
 				proof: $proof,
 				durability: $durability,
+				maxMessage: $maxMessage,
 			}
 		},
 	},

@@ -144,13 +144,13 @@ and an exact top 1,000 stays cheap.
 
 ## Limits
 
-| What               | Limit                                                                         |
-|--------------------|-------------------------------------------------------------------------------|
-| a field's weight   | above 0, at most 1,000                                                        |
-| `setMany`          | 1,000 documents; one request body, 2 MiB, from an SDK; 16 MiB of JSON in Rust |
-| a search's text    | 1 KiB, its first 32 words                                                     |
-| `limit` + `offset` | 1,000; `limit` is 10 unless set                                               |
-| an index's name    | `[a-z0-9][a-z0-9_-]{0,63}`                                                    |
+| What               | Limit                           |
+|--------------------|---------------------------------|
+| a field's weight   | above 0, at most 1,000          |
+| `setMany`          | 1,000 documents; 16 MiB of JSON |
+| a search's text    | 1 KiB, its first 32 words       |
+| `limit` + `offset` | 1,000; `limit` is 10 unless set |
+| an index's name    | `[a-z0-9][a-z0-9_-]{0,63}`      |
 
 ## See also
 

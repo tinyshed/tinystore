@@ -37,6 +37,12 @@ PROTOCOL = 1
 DOWNLOAD_WINDOW = 2 << 20
 """What this client lets the server send on a stream before it grants more: a body at least."""
 
+MAX_MESSAGE = 64 << 20
+"""The largest message this client sends and takes in several frames, each within the agreed body.
+
+A server that agrees none, released before them, takes and sends a message of one frame.
+"""
+
 _WELCOME_MOST = 1 << 20
 """The largest body a WELCOME may come in, before a body is agreed."""
 
@@ -74,6 +80,8 @@ class Agreed:
     in_flight: int
     connection_credit: int
     stream_credit: int
+    max_message: int
+    """the largest message sent in several frames, 0 when the server agreed none"""
     engines: list[str]
     now: int
     durability: str | None
@@ -164,6 +172,13 @@ class Stream:
         self._session.cancel(self)
         self.fail(failure or CallCancelledError("the call was cancelled"))
 
+    def when_finished(self, waiter: asyncio.Future[None]) -> None:
+        """Sets waiter's result once the server's final frame came, or the connection ended."""
+        if self.finished:
+            waiter.set_result(None)
+            return
+        self._finishing.append(waiter)
+
     async def finishing(self) -> None:
         """Returns once the server's final frame came, or the connection ended."""
         if self.finished:
@@ -249,6 +264,12 @@ class Session:
         self._waiting_to_open: deque[asyncio.Future[None]] = deque()
         self._queue: deque[_Queued] = deque()
         self._credit = 0
+        # the bytes of the requests in pieces whose streams have not ended,
+        # which the server holds together within the max message
+        self._sending_in_pieces = 0
+        self._room_for_pieces: list[asyncio.Future[None]] = []
+        # the pieces of each answer that came in several frames, until its last
+        self._joining: dict[int, list[bytes]] = {}
         self._out: list[bytes] = []
         self._flushing = False
         self._rest = b""
@@ -256,7 +277,12 @@ class Session:
         self.ended: BaseException | None = None
         self._end_listeners: list[Callable[[BaseException], None]] = []
         hello = Hello.encode(
-            protocol=PROTOCOL, client=client, token=token, stream_credit=DOWNLOAD_WINDOW, challenge=challenge
+            protocol=PROTOCOL,
+            client=client,
+            token=token,
+            stream_credit=DOWNLOAD_WINDOW,
+            challenge=challenge,
+            max_message=MAX_MESSAGE,
         )
         self.post(f.frame(f.HELLO, 0, 0, 0, hello))
 
@@ -278,11 +304,16 @@ class Session:
         follows through the stream otherwise.
         """
         agreed = await asyncio.shield(self.welcomed)
-        if len(body) > agreed.max_body:
-            said = f"{_method_name(method)}: a request of {len(body)} bytes, past the {agreed.max_body} a body holds"
-            raise LimitError(
-                said, {"limit": REQUEST_BYTES.name, "wanted": str(len(body)), "bound": str(agreed.max_body)}
-            )
+        most = agreed.max_message or agreed.max_body
+        if len(body) > most:
+            holds = "a message holds" if agreed.max_message else "a body holds"
+            said = f"{_method_name(method)}: a request of {len(body)} bytes, past the {most} {holds}"
+            raise LimitError(said, {"limit": REQUEST_BYTES.name, "wanted": str(len(body)), "bound": str(most)})
+        in_pieces = len(body) > agreed.max_body
+        while in_pieces and not self._room_in_pieces(len(body), agreed) and self._refused() is None:
+            room: asyncio.Future[None] = self.loop.create_future()
+            self._room_for_pieces.append(room)
+            await room
         while len(self._streams) >= agreed.in_flight and self._refused() is None:
             waiter: asyncio.Future[None] = self.loop.create_future()
             self._waiting_to_open.append(waiter)
@@ -292,9 +323,49 @@ class Session:
             raise refused
         stream = Stream(self, self._next_id(), method, agreed.stream_credit)
         self._streams[stream.id] = stream
+        if in_pieces:
+            self._send_in_pieces(stream, body, f.END if end else 0, agreed.max_body)
+            return stream
         request = f.frame(f.REQUEST, f.END if end else 0, method, stream.id, body)
         self._enqueue(_Queued(stream, request, len(body), True))
         return stream
+
+    def _room_in_pieces(self, length: int, agreed: Agreed) -> bool:
+        """Whether a request of length bytes may go in pieces now.
+
+        The server holds the messages a connection sends in pieces together
+        within the max message, from a first piece to its stream's end, and
+        refuses one past it, so a request waits for those before it to end.
+        One alone always may.
+        """
+        return self._sending_in_pieces == 0 or self._sending_in_pieces + length <= agreed.max_message
+
+    def _send_in_pieces(self, stream: Stream, body: bytes, last: int, max_body: int) -> None:
+        """Queues a request's pieces, each within the body, the last with last's flags and the rest with MORE.
+
+        They wait one after another, so that no other frame that waits for
+        credit goes between them.
+        """
+        self._sending_in_pieces += len(body)
+
+        def ended(_: object) -> None:
+            self._sending_in_pieces -= len(body)
+            rooms, self._room_for_pieces = self._room_for_pieces, []
+            for room in rooms:
+                if not room.done():
+                    room.set_result(None)
+
+        finished: asyncio.Future[None] = self.loop.create_future()
+        finished.add_done_callback(ended)
+        stream.when_finished(finished)
+        view = memoryview(body)
+        for at in range(0, len(body), max_body):
+            piece = bytes(view[at : at + max_body])
+            flags = last if at + max_body >= len(body) else f.MORE
+            self._queue.append(
+                _Queued(stream, f.frame(f.REQUEST, flags, stream.method, stream.id, piece), len(piece), at == 0)
+            )
+        self._drain()
 
     def _refused(self) -> TinystoreError | None:
         """Why no stream may open now: the connection ended or is going away."""
@@ -408,6 +479,8 @@ class Session:
             self._handshake(h.kind, body)
             return
         match h.kind:
+            case f.RESPONSE if h.flags & f.MORE or h.stream in self._joining:
+                self._join(h, body)
             case f.RESPONSE | f.DATA:
                 self._answer(h.kind, h.flags, h.stream, body)
             case f.CREDIT:
@@ -420,6 +493,20 @@ class Session:
                 self._go_away(body)
             case _:
                 raise ProtocolError(f"a {f.kind_name(h.kind)} from the server")
+
+    def _join(self, h: f.Header, piece: bytes) -> None:
+        """Joins a piece of an answer to those before it, and takes the answer as one frame once its last came."""
+        most = self.agreed.max_message if self.agreed is not None else 0
+        if not most:
+            raise ProtocolError(f"a RESPONSE with MORE on stream {h.stream}, where none was agreed")
+        pieces = self._joining.setdefault(h.stream, [])
+        pieces.append(piece)
+        if sum(len(each) for each in pieces) > most:
+            raise ProtocolError(f"an answer on stream {h.stream} past the {most} bytes a message holds")
+        if h.flags & f.MORE:
+            return
+        del self._joining[h.stream]
+        self._answer(h.kind, h.flags, h.stream, b"".join(pieces))
 
     def _handshake(self, kind: int, body: bytes) -> None:
         if kind == f.GOAWAY:
@@ -446,6 +533,7 @@ class Session:
             in_flight=w.get("in_flight", 1),
             connection_credit=w.get("connection_credit", 0),
             stream_credit=w.get("stream_credit", 0),
+            max_message=w.get("max_message", 0),
             engines=w.get("engines", []),
             now=w.get("now", 0),
             durability=w.get("durability"),
@@ -507,6 +595,11 @@ class Session:
             stream.finish()
         self._streams.clear()
         self._queue.clear()
+        self._joining.clear()
+        rooms, self._room_for_pieces = self._room_for_pieces, []
+        for room in rooms:
+            if not room.done():
+                room.set_result(None)
         while self._waiting_to_open:
             waiter = self._waiting_to_open.popleft()
             if not waiter.done():

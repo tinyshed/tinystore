@@ -24,6 +24,11 @@ END = 1
 """The sender's last frame on its stream."""
 ERROR = 2
 """Beside END alone: the body is an error."""
+MORE = 4
+"""On a REQUEST or a RESPONSE alone: the message goes on in the next frame of its kind on the stream.
+
+The frame without it ends the message, with the flags its one frame would have.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,8 +51,8 @@ class _Rule:
 _rules = {
     HELLO: _Rule("HELLO", "none", 0),
     WELCOME: _Rule("WELCOME", "none", 0),
-    REQUEST: _Rule("REQUEST", "own", END),
-    RESPONSE: _Rule("RESPONSE", "own", END | ERROR),
+    REQUEST: _Rule("REQUEST", "own", END | MORE),
+    RESPONSE: _Rule("RESPONSE", "own", END | ERROR | MORE),
     DATA: _Rule("DATA", "own", END | ERROR),
     CANCEL: _Rule("CANCEL", "own", 0, 0),
     CREDIT: _Rule("CREDIT", "either", 0, 4),
@@ -82,6 +87,8 @@ def check_header(h: Header, max_body: int) -> None:
         raise ProtocolError(f"flags {h.flags:#x} on a {rule.name}")
     if h.flags & ERROR and not h.flags & END:
         raise ProtocolError(f"ERROR without END on stream {h.stream}")
+    if h.flags & MORE and (h.flags != MORE or h.length == 0):
+        raise ProtocolError(f"MORE beside another flag or on an empty {rule.name} on stream {h.stream}")
     if h.kind == REQUEST and h.method == 0:
         raise ProtocolError(f"a REQUEST without a method on stream {h.stream}")
     if h.kind != REQUEST and h.method != 0:

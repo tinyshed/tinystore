@@ -138,8 +138,7 @@ pub const QUERY_ANSWER: Limit = Limit { name: "answer", bound: 100_000 };
 /// The documents of one `set_many`.
 #[cfg(feature = "search")]
 pub const SET_MANY_DOCUMENTS: Limit = Limit { name: "set_many documents", bound: 1000 };
-/// The documents of one `set_many` as JSON. Over the wire one request body
-/// bounds it first, [`REQUEST_BYTES`].
+/// The documents of one `set_many` as JSON.
 #[cfg(feature = "search")]
 pub const SET_MANY_BYTES: Limit = Limit { name: "set_many bytes", bound: 16 << 20 };
 /// One document as JSON, or a table's row as its index reads it.
@@ -167,13 +166,16 @@ pub const FILTER_TEXT: Limit = Limit { name: "filter text", bound: 256 };
 #[cfg(feature = "search")]
 pub const VECTOR_DIMENSIONS: Limit = Limit { name: "vector dimensions", bound: 4096 };
 
-/// One request over the wire, as every SDK and the command line agree it at
-/// their HELLO: a call whose message is larger fails before it is sent.
+/// One request over the wire, its message sent in several frames past one,
+/// as every SDK and the command line agree it at their HELLO: a call whose
+/// message is larger fails before it is sent. Against a server that agrees no
+/// max message, one released before multi-frame messages, it is one frame's
+/// body, 2 MiB.
 #[cfg(feature = "wire")]
-pub const REQUEST_BYTES: Limit = Limit { name: "request bytes", bound: 2 << 20 };
+pub const REQUEST_BYTES: Limit = Limit { name: "request bytes", bound: 64 << 20 };
 /// One answer over the wire, agreed as a request is.
 #[cfg(feature = "wire")]
-pub const ANSWER_BYTES: Limit = Limit { name: "answer bytes", bound: 2 << 20 };
+pub const ANSWER_BYTES: Limit = Limit { name: "answer bytes", bound: 64 << 20 };
 
 /// Every bound above, which testdata/wire/limits.json holds for the SDKs.
 #[cfg(all(

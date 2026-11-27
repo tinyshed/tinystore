@@ -1454,6 +1454,9 @@
         "maxBody": {
           "uint": "407"
         },
+        "maxMessage": {
+          "uint": "707"
+        },
         "protocol": {
           "uint": "107"
         },
@@ -1464,7 +1467,7 @@
           "str": "token"
         }
       },
-      "hex": "86016b02a6636c69656e7403a5746f6b656e04cd019705cd01fb06c40201ff",
+      "hex": "87016b02a6636c69656e7403a5746f6b656e04cd019705cd01fb06c40201ff07cd02c3",
       "message": "Hello",
       "name": "Hello with every field"
     },
@@ -1501,6 +1504,9 @@
         "maxBody": {
           "uint": "507"
         },
+        "maxMessage": {
+          "uint": "1307"
+        },
         "now": {
           "int": "1790000000000"
         },
@@ -1517,7 +1523,7 @@
           "uint": "807"
         }
       },
-      "hex": "8c016b02a673657276657203c40201ff04aa6361706162696c69747905cd01fb06cd025f07cd02c308cd03270991a7656e67696e65730acf000001a0c4506c000bc40201ff0caa6475726162696c697479",
+      "hex": "8d016b02a673657276657203c40201ff04aa6361706162696c69747905cd01fb06cd025f07cd02c308cd03270991a7656e67696e65730acf000001a0c4506c000bc40201ff0caa6475726162696c6974790dcd051b",
       "message": "Welcome",
       "name": "Welcome with every field"
     },

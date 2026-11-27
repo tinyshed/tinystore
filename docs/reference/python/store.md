@@ -1031,8 +1031,8 @@ FILTER_VALUES = Limit('filter values', 100)
 FILTER_ROWS = Limit('filter rows', 100000)
 FILTER_TEXT = Limit('filter text', 256)
 VECTOR_DIMENSIONS = Limit('vector dimensions', 4096)
-REQUEST_BYTES = Limit('request bytes', 2 << 20)
-ANSWER_BYTES = Limit('answer bytes', 2 << 20)
+REQUEST_BYTES = Limit('request bytes', 64 << 20)
+ANSWER_BYTES = Limit('answer bytes', 64 << 20)
 ```
 
 The bounds one call meets, each by the name a ``LimitError`` gives it.

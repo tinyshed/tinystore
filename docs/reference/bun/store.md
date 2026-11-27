@@ -772,7 +772,7 @@ const limits: Readonly<{
     queryAnswer: Limit
     /** The documents of one `setMany`. */
     setManyDocuments: Limit
-    /** The documents of one `setMany` as JSON; one request body, `requestBytes`, bounds it first. */
+    /** The documents of one `setMany` as JSON. */
     setManyBytes: Limit
     /** One document as JSON, or a table's row as its index reads it. */
     documentBytes: Limit
@@ -790,7 +790,11 @@ const limits: Readonly<{
     filterText: Limit
     /** A vector's dimensions. */
     vectorDimensions: Limit
-    /** One request, its message as the SDK sends it: a larger one fails before it is sent. */
+    /**
+     * One request, its message as the SDK sends it, in several frames past one:
+     * a larger one fails before it is sent. A server released before messages
+     * in several frames takes one frame's body, 2 MiB.
+     */
     requestBytes: Limit
     /** One answer, its message as the store sends it. */
     answerBytes: Limit

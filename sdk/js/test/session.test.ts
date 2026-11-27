@@ -20,6 +20,7 @@ import { ConnectionLostError, Session, type SessionOptions } from '../src/sessio
 import { connect } from '../src/store.ts'
 import { credit, Flag, frame, headerSize, Kind, parseHeader } from '../src/wire/frame.ts'
 import { Empty, Failure, GoAway, Hello, KvEntry, Welcome } from '../src/wire/messages.ts'
+import * as protocol from '../src/wire/protocol.ts'
 
 /**
  * What a promise rejected with. Bun's expect(...).rejects waits for a
@@ -434,4 +435,63 @@ test('an address nobody listens on is closed', async () => {
 	const err = await caught(connect(`tcp://127.0.0.1:${port}`, { token: 'unused' }))
 	expect(err).toBeInstanceOf(ClosedError)
 	expect((err as Error).message).toContain(`cannot reach tcp://127.0.0.1:${port}`)
+})
+
+describe('messages in several frames', () => {
+	/** A WELCOME of the schema's, which a max message is a field of. */
+	const welcome = (peer: Peer, fields: { maxBody: number; maxMessage?: number }) =>
+		peer.session.receive(
+			frame(
+				Kind.welcome,
+				0,
+				0,
+				0,
+				protocol.Welcome.encode({
+					protocol: 1,
+					server: 'test',
+					capability: 'admin',
+					inFlight: 4,
+					connectionCredit: 1 << 20,
+					streamCredit: 1 << 16,
+					now: Date.now(),
+					...fields,
+				}),
+			),
+		)
+
+	// contract: WIRE-13
+	test('a request past the body goes in pieces, and an answer in pieces is joined', async () => {
+		const peer = new Peer()
+		const [hello] = await peer.frames()
+		expect(protocol.Hello.decode(hello!.body).maxMessage).toBe(64 << 20)
+		welcome(peer, { maxBody: 4, maxMessage: 64 })
+		const answered = peer.session.call(0x0104, Uint8Array.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9))
+		const sent = (await peer.frames()).filter(f => f.kind === Kind.request)
+		expect(sent.map(f => [f.flags, f.method, f.stream, f.body.length])).toEqual([
+			[Flag.more, 0x0104, 1, 4],
+			[Flag.more, 0x0104, 1, 4],
+			[Flag.end, 0x0104, 1, 2],
+		])
+		peer.answer(1, Uint8Array.of(1, 2, 3, 4), Flag.more)
+		peer.answer(1, Uint8Array.of(5, 6), Flag.end)
+		expect(await answered).toEqual(Uint8Array.of(1, 2, 3, 4, 5, 6))
+		expect(peer.session.streams).toBe(0)
+	})
+
+	// contract: WIRE-15
+	test('a server that agrees no max message is sent one frame, and sends none in pieces', async () => {
+		const peer = new Peer()
+		welcome(peer, { maxBody: 4 })
+		const refused = await caught(peer.session.call(0x0104, new Uint8Array(10)))
+		expect(refused).toBeInstanceOf(LimitError)
+		expect((refused as LimitError).bound).toBe(4)
+		expect((refused as Error).message).toBe(
+			'kv.set: a request of 10 bytes, past the 4 a body holds',
+		)
+		const asked = peer.session.call(0x0102, new Uint8Array(2))
+		await peer.frames()
+		peer.answer(1, Uint8Array.of(1, 2), Flag.more)
+		expect(await caught(asked)).toBeInstanceOf(ClosedError)
+		expect(peer.session.ended).toBeInstanceOf(ProtocolError)
+	})
 })

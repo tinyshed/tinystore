@@ -179,21 +179,26 @@ fn an_ingest_past_the_body_agreed_goes_up_in_pieces_and_is_written_whole() {
     assert_eq!(samples_of(&store, "wide"), 600);
 }
 
-// contract: ERR-05
+// contract: ERR-05, WIRE-13
 #[test]
-fn a_request_past_the_body_agreed_names_its_call_its_bytes_and_the_body() {
+fn a_request_past_the_body_goes_in_pieces_and_one_past_the_message_names_its_call_its_bytes_and_the_bound() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options::default()).unwrap();
     let (mut client, _) = welcomed(&store);
-    // a replace goes in one message, which 140,000 samples pass
+    // a replace goes in one message, which 140,000 samples take past one body:
+    // its pieces reach the engine, whose own bound answers
     let at = SystemTime::now() - Duration::from_hours(1);
     let mut wide = Series::gauge("wide");
     wide.extend((0..140_000_u32).map(|n| (at + Duration::from_millis(u64::from(n)), 1.0)));
     let refused = client.replace(&wide, at..at + Duration::from_mins(10)).unwrap_err();
+    assert_eq!(refused.fact("limit"), Some("replace samples"), "{refused}");
+
+    let bucket = client.bucket("files", None).unwrap();
+    let value = super::KvValue::Text("x".repeat((64 << 20) + 1));
+    let refused = client.set(bucket, "k", &value, None).unwrap_err();
     let wanted: u64 = refused.fact("wanted").unwrap().parse().unwrap();
-    assert!(wanted > 2 << 20, "{refused}");
-    let said = format!("metrics.replace: a request of {wanted} bytes, past the 2097152 a body holds: limit");
+    let said = format!("kv.set: a request of {wanted} bytes, past the 67108864 a message holds: limit");
     assert_eq!((refused.kind(), refused.to_string()), (ErrorKind::Limit, said));
-    assert_eq!((refused.fact("limit"), refused.fact("bound")), (Some("request bytes"), Some("2097152")));
-    assert_eq!(samples_of(&store, "wide"), 0, "nothing was sent");
+    assert_eq!((refused.fact("limit"), refused.fact("bound")), (Some("request bytes"), Some("67108864")));
+    assert_eq!(samples_of(&store, "wide"), 0, "nothing was written");
 }

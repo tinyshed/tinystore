@@ -355,6 +355,10 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **WIRE-10** A read whose client cancels its stream or leaves MUST stop on the server as a cancelled read does, its stream ending `cancelled`.
 - **WIRE-11** An `open` or `connect` whose caller cancelled it, or whose timeout passed, MUST fail at once with that caller's own cancel, start no further server and keep no connection, so that a sidecar it started leaves once idle with no client, never sooner than the 15 seconds a client may wait for it; a store closed while it dials MUST fail its waiting calls `closed`.
 - **WIRE-12** A server given `--max-connections` MUST serve no more remote connections at once than it says, answer the next one's `HELLO` with `GOAWAY` `limit` naming the bound, and count no connection of its local endpoint.
+- **WIRE-13** A request or an answer past one frame's body, on a connection whose `WELCOME` agreed a max message, MUST travel in pieces that the other side joins into one message and handles as that message in one frame, so that a call that commits once commits once or not at all; every SDK and the command line MUST send and join them without their caller seeing it.
+- **WIRE-14** A request past the agreed max message, alone or beside the others its connection joins at once, MUST fail `limit` naming `request bytes`, what it wanted and the bound, run nothing of it, and leave its connection usable; an SDK MUST refuse one past it before it sends it.
+- **WIRE-15** A server MUST send no message in pieces to a client whose `HELLO` asked for no max message, and answer it as before, one past the body failing `limit` or `outcome_unknown`; a client MUST send none to a server whose `WELCOME` names none.
+- **WIRE-16** An answer in pieces MUST leave the server a piece at a time while its connection owes its client little, in turn with the other answers in pieces, so that the frames of other streams go out between them.
 
 ## 7. Security
 

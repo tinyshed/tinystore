@@ -230,9 +230,11 @@ let diff = run.commit()?; // gone: what no page named
   connection drops, the run's next call fails, and you start again.
 - A run commits on its own, never inside a transaction.
 
-You rarely need a run just for size. A plain `replace` whose list or answer
-is too large for one message (2 MiB) sends the same list as a run by itself,
-so a scope of 20,000 rows is one call in every SDK.
+You rarely need a run just for size. A list and its answer travel as one
+message of up to 64 MiB, so a scope of 20,000 rows is one call in every SDK.
+A plain `replace` whose list or answer is still too large sends the same list
+as a run by itself. Against a server of 0.13 or older, which takes one
+message of 2 MiB, that run is what carries a large list.
 
 ## A list that cannot be right
 
@@ -294,15 +296,15 @@ db.tx(|tx| -> tinystore::Result<()> {
 
 ## Limits and defaults
 
-| What                                | Bound                                                            |
-|-------------------------------------|------------------------------------------------------------------|
-| rows in one list, or in one run     | 100,000 (`mirror rows`), past it fails with `limit`              |
-| rows in a scope                     | 100,000 (`mirror rows`)                                          |
-| the rows a scope reads into memory  | within the store's memory, and 64 MiB per call                   |
-| a list and its answer over the wire | one message of 2 MiB each; `replace` goes as a run past that     |
-| a part of a run                     | one message; an SDK splits a larger one by itself                |
-| a run's wait for its next call      | five minutes, then it ends (`mirror run idle millis`)            |
-| runs open on one connection         | 64 (`mirror runs`)                                               |
+| What                                | Bound                                                                                             |
+|-------------------------------------|---------------------------------------------------------------------------------------------------|
+| rows in one list, or in one run     | 100,000 (`mirror rows`), past it fails with `limit`                                               |
+| rows in a scope                     | 100,000 (`mirror rows`)                                                                           |
+| the rows a scope reads into memory  | within the store's memory, and 64 MiB per call                                                    |
+| a list and its answer over the wire | one message of 64 MiB each, 2 MiB to a server of 0.13 or older; `replace` goes as a run past that |
+| a part of a run                     | one message; an SDK splits a larger one by itself                                                 |
+| a run's wait for its next call      | five minutes, then it ends (`mirror run idle millis`)                                             |
+| runs open on one connection         | 64 (`mirror runs`)                                                                                |
 
 `upsert` has no run. Over the wire, if its answer doesn't fit in one
 message, it fails with `limit` before anything is written.

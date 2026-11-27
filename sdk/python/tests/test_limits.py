@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import tinystore
-from tinystore import LimitError, bounds
+from tinystore import Event, LimitError, bounds
 
 TABLE = json.loads((Path(__file__).parents[3] / "testdata" / "wire" / "limits.json").read_text(encoding="utf-8"))
 
@@ -45,13 +45,36 @@ async def test_a_call_past_a_bound_names_it_what_it_wanted_and_the_bound(store: 
     assert facts(hits.value) == ("search hits", 2000, 1000)
 
 
-# contract: ERR-05
-async def test_a_request_past_one_body_fails_before_it_is_sent(store: tinystore.Store) -> None:
+# contract: WIRE-13
+async def test_a_request_and_an_answer_past_one_body_go_in_several_frames(store: tinystore.Store) -> None:
+    courses = store.index("catalogue", Course, fields={"name": 1})
+    # 1000 documents of 5 KB: 5 MB in pieces of the 2 MiB body, set in one write
+    await courses.set_many([(n, Course(f"course {n} " * 500)) for n in range(1000)])
+    found = await courses.search("course", limit=1000)
+    assert len(found.hits) == 1000
+    assert sum(len(hit.value.name) for hit in found.hits) > 5 << 20
+
+    # an append of 3.5 MB passes the body and is written whole; one of 5 MB
+    # reaches the store, whose own bound of an append refuses it
+    imports = store.events("imports")
+
+    def lines(count: int) -> list[Event]:
+        return [Event("imported", {"line": n, "text": "x" * 5000}) for n in range(count)]
+
+    assert await imports.append(lines(700)) == 700
+    with pytest.raises(LimitError) as past:
+        await imports.append(lines(1000))
+    limit, _, bound = facts(past.value)
+    assert (limit, bound) == (bounds.APPEND_BYTES.name, bounds.APPEND_BYTES.bound)
+
+
+# contract: ERR-05, WIRE-14
+async def test_a_request_past_the_max_message_fails_before_it_is_sent(store: tinystore.Store) -> None:
     courses = store.index("catalogue", Course, fields={"name": 1})
     with pytest.raises(LimitError) as refused:
-        await courses.set_many([(n, Course(f"course {n} " * 1000)) for n in range(300)])
+        await courses.set_many([(5000 + n, Course("x" * 70_000)) for n in range(1000)])
     limit, wanted, bound = facts(refused.value)
     assert (limit, bound) == (bounds.REQUEST_BYTES.name, bounds.REQUEST_BYTES.bound)
     assert wanted is not None and wanted > bounds.REQUEST_BYTES.bound
-    assert str(refused.value) == f"search.setMany: a request of {wanted} bytes, past the {bound} a body holds"
-    assert await courses.get(0) is None
+    assert str(refused.value) == f"search.setMany: a request of {wanted} bytes, past the {bound} a message holds"
+    assert await courses.get(5000) is None

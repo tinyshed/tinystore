@@ -49,6 +49,12 @@ impl Shared {
         if let Err(refused) = opened {
             return self.go_away(input, "protocol", &refused);
         }
+        self.admit(input, frame);
+    }
+
+    /// Answers a request whose stream is open and whose message is whole, as
+    /// one frame's body or joined from pieces, as its method's route says.
+    pub(super) fn admit(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         if input.going_away {
             let closing = Failure::unavailable("the server is closing; ask another connection");
             return self.answer(frame.stream, Err(closing));
@@ -90,7 +96,10 @@ impl Shared {
         let max_body = input.max_body.unwrap_or(HELLO_MOST);
         let (method, stream, body) = (frame.method, frame.stream, frame.body);
         match route {
-            Route::Inline => self.answer(stream, guarded(|| self.call(method, &body, max_body))),
+            Route::Inline => {
+                let answered = guarded(|| self.call(method, &body, max_body));
+                self.answer_read(stream, answered, || self.read_again(stream, method, body, max_body));
+            }
             Route::Submit => self.submit(stream, method, body),
             Route::Handover => self.hand_over(stream, body),
             #[cfg(feature = "jobs")]
@@ -137,8 +146,24 @@ impl Shared {
         let writes = method::access(method) == Some(Access::Write);
         self.run_call(Box::new(move || {
             let answered = shared.read_under(stream, reading, || guarded(|| shared.call(method, &body, max_body)));
-            shared.answer(stream, if writes { shared.written_within_agreed(answered) } else { answered });
+            if writes {
+                return shared.answer(stream, shared.written_within_agreed(answered));
+            }
+            shared.answer_read(stream, answered, || shared.read_again(stream, method, body, max_body));
         }));
+    }
+
+    /// A read run again on a worker, once the answers in pieces before its
+    /// own have gone out.
+    fn read_again(
+        self: &Arc<Self>,
+        stream: u32,
+        method: u16,
+        body: Vec<u8>,
+        max_body: usize,
+    ) -> Box<dyn FnOnce() + Send> {
+        let shared = Arc::clone(self);
+        Box::new(move || shared.run_on_worker(stream, method, body, max_body))
     }
 
     /// Hands a write to its engine on a worker, which answers once its group
@@ -180,7 +205,7 @@ impl Shared {
         self.run_call(Box::new(move || {
             let answered = guarded(|| shared.call(method, &body, max_body));
             shared.reads_away.fetch_sub(1, Ordering::AcqRel);
-            shared.answer(stream, answered);
+            shared.answer_read(stream, answered, || shared.read_again(stream, method, body, max_body));
         }));
     }
 
@@ -200,7 +225,7 @@ impl Shared {
     /// marks a call waits behind those already waiting, which the calls that
     /// keep coming would otherwise hold off for as long as they come.
     fn start_call(self: &Arc<Self>, call: Box<dyn FnOnce() + Send>) {
-        let owing = self.owing.load(Ordering::SeqCst);
+        let owing = self.held_for_client();
         if owing <= OUTPUT_LOW || (owing <= OUTPUT_MOST && lock(&self.waiting_output).is_empty()) {
             return call();
         }

@@ -171,9 +171,9 @@ async def set_many(
 
 Sets every document in one commit, all of them or none: (id, value), (id, value, vector) or a Doc.
 
-A call holds 1,000 documents at most, ``bounds.SET_MANY_DOCUMENTS``, and no
-more than one request body holds, 2 MiB, ``bounds.REQUEST_BYTES``. Past
-either it raises a ``LimitError`` that names the bound.
+A call holds 1,000 documents at most, ``bounds.SET_MANY_DOCUMENTS``, and
+16 MiB of JSON, ``bounds.SET_MANY_BYTES``. Past either it raises a
+``LimitError`` that names the bound.
 
 ### SearchIndex.delete
 

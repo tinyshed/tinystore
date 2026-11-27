@@ -7,12 +7,17 @@
 //! promises nothing to a program, and the documentation leaves it out.
 //!
 //! ```text
-//! HELLO    {1: 1, 2: "tinystore-cli/0.2.0", 6: challenge}
-//! WELCOME  {2: "0.2.0", 5: max body, 7: connection credit, 11: proof, …}
+//! HELLO    {1: 1, 2: "tinystore-cli/0.2.0", 6: challenge, 7: max message}
+//! WELCOME  {2: "0.2.0", 5: max body, 7: connection credit, 11: proof, 13: max message, …}
 //! REQUEST  stream 1, END, metrics.ingest {1: [series]}
 //! RESPONSE stream 1, END, {}        or END·ERROR, {1: code, 2: message}
 //! ```
+//!
+//! A message past the agreed body goes in pieces, `REQUEST·MORE` and the
+//! last `REQUEST·END`, each within the connection's credit, when the server
+//! agreed a max message; an answer in pieces is joined before it is read.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Read, Write};
 
@@ -28,6 +33,8 @@ use crate::{Error, ErrorKind, Result};
 const PROTOCOL: u64 = 1;
 /// The largest body read before the WELCOME agrees one.
 const FIRST_BODY: usize = 1 << 20;
+/// The largest message this client sends and takes in several frames.
+const MAX_MESSAGE: u64 = 64 << 20;
 /// The bytes read from the stream at once.
 const READ: usize = 64 << 10;
 /// The most bytes a DATA of another program's output, a text or a file
@@ -195,6 +202,11 @@ pub struct Client<S> {
     frames: frame::Reader,
     read: Vec<u8>,
     max_body: usize,
+    /// The largest message sent or taken in several frames, when the server
+    /// agreed one: an older server agrees none, and a message is one body.
+    max_message: Option<usize>,
+    /// The answers whose pieces are coming, by stream.
+    joining: HashMap<u32, Vec<u8>>,
     /// The REQUEST and DATA bytes the server takes before it gives credit back.
     credit: u64,
     /// The DATA bytes a stream may send before the server grants more.
@@ -218,6 +230,8 @@ impl<S: Read + Write> Client<S> {
             frames: frame::Reader::default(),
             read: vec![0; READ],
             max_body: FIRST_BODY,
+            max_message: None,
+            joining: HashMap::new(),
             credit: 0,
             stream_credit: 0,
             last_stream: 0,
@@ -226,6 +240,7 @@ impl<S: Read + Write> Client<S> {
             protocol: PROTOCOL,
             client: name.to_owned(),
             challenge: challenge.map(Vec::from),
+            max_message: Some(MAX_MESSAGE),
             ..Hello::default()
         };
         client.send(&Frame::new(Kind::Hello, 0, hello.encode())).map_err(unreachable)?;
@@ -234,6 +249,7 @@ impl<S: Read + Write> Client<S> {
             Kind::Welcome => {
                 let welcome = wire::Welcome::decode(&answer.body).map_err(|failure| error_of(failure, ""))?;
                 client.max_body = usize::try_from(welcome.max_body).unwrap_or(usize::MAX);
+                client.max_message = welcome.max_message.map(|most| usize::try_from(most).unwrap_or(usize::MAX));
                 client.credit = welcome.connection_credit;
                 client.stream_credit = welcome.stream_credit;
                 Ok((client, Welcome { server: welcome.server, proof: welcome.proof, durability: welcome.durability }))
@@ -431,29 +447,35 @@ impl<S: Read + Write> Client<S> {
     }
 
     /// Sends a REQUEST once the connection's credit takes it, ending its
-    /// stream when `ends`, and gives the stream's number.
+    /// stream when `ends`, and gives the stream's number: in pieces past the
+    /// agreed body, each sent once the credit takes it.
     fn request(&mut self, called: u16, request: &impl Message, ends: bool) -> Result<u32> {
         let body = request.encode();
-        if body.len() > self.max_body {
-            let refused = format!(
-                "{}: a request of {} bytes, past the {} a body holds",
-                method_name(called),
-                body.len(),
-                self.max_body
-            );
-            let agreed = Limit { bound: self.max_body as u64, ..REQUEST_BYTES };
+        let (most, holding) = match self.max_message {
+            Some(most) => (most, "a message holds"),
+            None => (self.max_body, "a body holds"),
+        };
+        if body.len() > most {
+            let refused =
+                format!("{}: a request of {} bytes, past the {most} {holding}", method_name(called), body.len());
+            let agreed = Limit { bound: most as u64, ..REQUEST_BYTES };
             return Err(agreed.refuse(body.len() as u64, refused));
-        }
-        let length = body.len() as u64;
-        while self.credit < length {
-            let frame = self.receive().map_err(unreachable)?;
-            self.take(frame).map_err(unreachable)?;
         }
         self.last_stream = self.last_stream.checked_add(1).unwrap_or(1);
         let stream = self.last_stream;
         let frame = Frame { method: called, ..Frame::new(Kind::Request, stream, body) };
-        self.send(&if ends { frame.ending() } else { frame }).map_err(unreachable)?;
-        self.credit -= length;
+        let message = if ends { frame.ending() } else { frame };
+        for (at, piece) in message.pieces(self.max_body).into_iter().enumerate() {
+            // once a piece has left, the server may have run what it joined
+            let lost: fn(io::Error) -> Error = if at == 0 { unreachable } else { unanswered };
+            let length = piece.body.len() as u64;
+            while self.credit < length {
+                let frame = self.receive().map_err(lost)?;
+                self.take(frame).map_err(lost)?;
+            }
+            self.send(&piece).map_err(lost)?;
+            self.credit -= length;
+        }
         Ok(stream)
     }
 
@@ -502,7 +524,35 @@ impl<S: Read + Write> Client<S> {
         self.stream.flush()
     }
 
+    /// The next frame whole: an answer's pieces joined into the one frame
+    /// it would have been.
     fn receive(&mut self) -> io::Result<Frame> {
+        loop {
+            let frame = self.next_frame()?;
+            let joining = self.joining.contains_key(&frame.stream) && frame.kind == Kind::Response;
+            if frame.flags & frame::MORE == 0 && !joining {
+                return Ok(frame);
+            }
+            if frame.kind != Kind::Response {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "a REQUEST with MORE from the server"));
+            }
+            let Some(most) = self.max_message else {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "a RESPONSE with MORE, where none was agreed"));
+            };
+            let joined = self.joining.entry(frame.stream).or_default();
+            if joined.len() + frame.body.len() > most {
+                let refused = format!("an answer past the {most} bytes of a message the server agreed");
+                return Err(io::Error::new(io::ErrorKind::InvalidData, refused));
+            }
+            joined.extend_from_slice(&frame.body);
+            if frame.flags & frame::MORE == 0 {
+                let body = self.joining.remove(&frame.stream).unwrap_or_default();
+                return Ok(Frame { body, ..frame });
+            }
+        }
+    }
+
+    fn next_frame(&mut self) -> io::Result<Frame> {
         loop {
             match self.frames.next(self.max_body) {
                 Ok(Some(frame)) => return Ok(frame),

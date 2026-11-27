@@ -14,6 +14,11 @@ pub(crate) const HEADER: usize = 12;
 /// body is an error.
 pub(crate) const END: u8 = 1;
 pub(crate) const ERROR: u8 = 2;
+/// MORE, on a REQUEST or a RESPONSE alone and never beside END or ERROR: the
+/// message goes on in the next frame of the same kind on this stream, and the
+/// frame without MORE that ends it carries the flags its one frame would.
+/// Only a connection whose WELCOME agreed a max message sends it.
+pub(crate) const MORE: u8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -51,6 +56,29 @@ impl Frame {
     pub(crate) fn failing(mut self) -> Frame {
         self.flags |= END | ERROR;
         self
+    }
+
+    /// The frames a message past `max_body` goes in: pieces of `max_body`
+    /// bytes, each but the last with MORE, the last with the flags of the one
+    /// frame it would have been. A body within `max_body` is that one frame.
+    #[cfg(any(test, feature = "client"))]
+    pub(crate) fn pieces(self, max_body: usize) -> Vec<Frame> {
+        if self.body.len() <= max_body || max_body == 0 {
+            return vec![self];
+        }
+        let count = self.body.len().div_ceil(max_body);
+        let mut pieces = Vec::with_capacity(count);
+        for (at, piece) in self.body.chunks(max_body).enumerate() {
+            let flags = if at + 1 == count { self.flags } else { MORE };
+            pieces.push(Frame {
+                kind: self.kind,
+                flags,
+                method: self.method,
+                stream: self.stream,
+                body: piece.to_vec(),
+            });
+        }
+        pieces
     }
 
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
@@ -138,6 +166,9 @@ fn check(header: &[u8; HEADER], max_body: usize) -> Result<Header, Refused> {
     check_method(kind, method)?;
     check_stream(kind, stream)?;
     check_length(kind, length)?;
+    if flags & MORE != 0 && length == 0 {
+        return Err(Refused(format!("an empty {kind:?} with MORE, which carries nothing of its message")));
+    }
     Ok(Header { kind, flags, method, stream, length })
 }
 
@@ -159,8 +190,9 @@ fn kind_of(byte: u8) -> Result<Kind, Refused> {
 
 fn check_flags(kind: Kind, flags: u8) -> Result<(), Refused> {
     let allowed = match kind {
-        Kind::Request => END,
-        Kind::Response | Kind::Data => END | ERROR,
+        Kind::Request => END | MORE,
+        Kind::Response => END | ERROR | MORE,
+        Kind::Data => END | ERROR,
         _ => 0,
     };
     if flags & !allowed != 0 {
@@ -168,6 +200,9 @@ fn check_flags(kind: Kind, flags: u8) -> Result<(), Refused> {
     }
     if flags & ERROR != 0 && flags & END == 0 {
         return Err(Refused("ERROR without END".to_owned()));
+    }
+    if flags & MORE != 0 && flags != MORE {
+        return Err(Refused("MORE beside END or ERROR".to_owned()));
     }
     Ok(())
 }
@@ -257,6 +292,18 @@ mod tests {
         assert!(reader.holds(3) && !reader.holds(4));
         reader.next(1 << 20).unwrap().unwrap();
         assert!(reader.holds(2) && !reader.holds(3), "one was read");
+    }
+
+    #[test]
+    fn a_message_past_the_body_goes_in_pieces_the_last_with_its_flags() {
+        let message = Frame { method: 0x0b02, ..Frame::new(Kind::Request, 7, (0..10).collect()) }.ending();
+        let pieces = message.clone().pieces(4);
+        let flags: Vec<_> = pieces.iter().map(|piece| piece.flags).collect();
+        assert_eq!(flags, [MORE, MORE, END]);
+        assert!(pieces.iter().all(|piece| piece.method == 0x0b02 && piece.stream == 7));
+        let joined: Vec<u8> = pieces.iter().flat_map(|piece| piece.body.clone()).collect();
+        assert_eq!(joined, message.body);
+        assert_eq!(message.clone().pieces(10), [message], "a body within the frame is the one frame it was");
     }
 
     #[test]

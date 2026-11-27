@@ -23,8 +23,13 @@ export const Kind = {
 
 export type Kind = (typeof Kind)[keyof typeof Kind]
 
-/** END marks the sender's last frame on its stream; ERROR, only beside END, an error's body. */
-export const Flag = { end: 1, error: 2 } as const
+/**
+ * END marks the sender's last frame on its stream; ERROR, only beside END, an
+ * error's body. MORE, on a REQUEST or a RESPONSE alone, says the message goes
+ * on in the next frame of its kind on the stream: the frame without it ends
+ * the message, with the flags its one frame would have.
+ */
+export const Flag = { end: 1, error: 2, more: 4 } as const
 
 export interface Header {
 	length: number
@@ -47,8 +52,8 @@ interface Rule {
 const rules: Record<number, Rule> = {
 	[Kind.hello]: { name: 'HELLO', stream: 'none', flags: 0 },
 	[Kind.welcome]: { name: 'WELCOME', stream: 'none', flags: 0 },
-	[Kind.request]: { name: 'REQUEST', stream: 'own', flags: Flag.end },
-	[Kind.response]: { name: 'RESPONSE', stream: 'own', flags: Flag.end | Flag.error },
+	[Kind.request]: { name: 'REQUEST', stream: 'own', flags: Flag.end | Flag.more },
+	[Kind.response]: { name: 'RESPONSE', stream: 'own', flags: Flag.end | Flag.error | Flag.more },
 	[Kind.data]: { name: 'DATA', stream: 'own', flags: Flag.end | Flag.error },
 	[Kind.cancel]: { name: 'CANCEL', stream: 'own', flags: 0, length: 0 },
 	[Kind.credit]: { name: 'CREDIT', stream: 'either', flags: 0, length: 4 },
@@ -130,6 +135,9 @@ export function checkHeader(h: Header, maxBody: number): void {
 	}
 	if ((h.flags & Flag.error) !== 0 && (h.flags & Flag.end) === 0) {
 		throw new ProtocolError(`ERROR without END on stream ${h.stream}`)
+	}
+	if ((h.flags & Flag.more) !== 0 && (h.flags !== Flag.more || h.length === 0)) {
+		throw new ProtocolError(`MORE beside another flag or on an empty ${name} on stream ${h.stream}`)
 	}
 	if (h.kind === Kind.request && h.method === 0) {
 		throw new ProtocolError(`a REQUEST without a method on stream ${h.stream}`)

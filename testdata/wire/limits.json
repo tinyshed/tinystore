@@ -34,6 +34,6 @@
   "filter rows": 100000,
   "filter text": 256,
   "vector dimensions": 4096,
-  "request bytes": 2097152,
-  "answer bytes": 2097152
+  "request bytes": 67108864,
+  "answer bytes": 67108864
 }
