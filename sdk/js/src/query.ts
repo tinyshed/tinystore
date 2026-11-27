@@ -42,7 +42,7 @@ export interface TableOptions {
 	deleted?: string
 	/**
 	 * an integer column, not null, default 0, that every update of the handle
-	 * raises by one; an update or a delete with `expect` writes only rows at
+	 * raises by one; an update or a delete with `ifVersion` writes only rows at
 	 * the version it names
 	 */
 	version?: string
@@ -51,7 +51,7 @@ export interface TableOptions {
 /** An edit made from the version a program saw: every row the where names must be at it. */
 export interface EditOptions {
 	/** the version every row must be at, or nothing is written and the call fails ConflictError */
-	expect?: number
+	ifVersion?: number
 }
 
 /** What an upsert does when the row's key is taken. */
@@ -368,11 +368,11 @@ export class Query<T = Row> implements Embeddable {
 
 	/**
 	 * Sets columns of the rows the conditions match, and says how many
-	 * changed. A versioned table's version goes up by one; with `expect`, the
+	 * changed. A versioned table's version goes up by one; with `ifVersion`, the
 	 * update writes every row only if each is at that version, and otherwise
 	 * nothing, failing ConflictError.
 	 *
-	 *     await tasks.where({ id: 1 }).update({ title: 'from b' }, { expect: seen.version })
+	 *     await tasks.where({ id: 1 }).update({ title: 'from b' }, { ifVersion: seen.version })
 	 */
 	async update(
 		values: { [K in keyof T]?: T[K] | Sql } & Record<string, unknown>,
@@ -399,28 +399,30 @@ export class Query<T = Row> implements Embeddable {
 				out.push(fieldOf(value, name, this.#source.types))
 			}
 		}
-		return this.#edit(sets, out, this.#parts.sees, options.expect)
+		return this.#edit(sets, out, this.#parts.sees, options.ifVersion)
 	}
 
 	/**
 	 * Deletes the rows the conditions match, and says how many it deleted. On
 	 * a table with a deleted column it marks the live ones instead, at this
-	 * process's clock, and raises a versioned table's version; `expect` is
+	 * process's clock, and raises a versioned table's version; `ifVersion` is
 	 * update's.
 	 */
 	async delete(options: EditOptions = {}): Promise<Done> {
 		this.#refuseEveryRow('a delete')
 		const deleted = this.#parts.deleted
 		if (deleted === undefined) {
-			if (options.expect !== undefined) {
-				throw this.#refusal("expect on a delete is a mark's: open the table with a deleted column")
+			if (options.ifVersion !== undefined) {
+				throw this.#refusal(
+					"ifVersion on a delete is a mark's: open the table with a deleted column",
+				)
 			}
 			const where = conditionsText(this.#parts.conditions)
 			return this.#source.runner.exec(
 				new Sql(`delete from ${tableName(this.#parts)} where ${where.text}`, where.values),
 			)
 		}
-		return this.#edit([`${identOf(deleted)} = ?`], [Date.now()], 'live', options.expect)
+		return this.#edit([`${identOf(deleted)} = ?`], [Date.now()], 'live', options.ifVersion)
 	}
 
 	/** The query of every row, those the deleted column marks among them. */
@@ -520,7 +522,7 @@ export class Query<T = Row> implements Embeddable {
 	/**
 	 * An update of the rows `sees` shows of those the conditions match, which
 	 * `update`, a marking `delete` and `restore` are. A versioned table's
-	 * version goes up by one; with `expect`, one statement writes every row
+	 * version goes up by one; with `ifVersion`, one statement writes every row
 	 * the conditions match or none, guarded by a read of a row at another
 	 * version, and after one that wrote none, the same read in the same
 	 * transaction tells a conflict from no row at all.
@@ -529,7 +531,7 @@ export class Query<T = Row> implements Embeddable {
 		sets: string[],
 		values: SqlArg[],
 		sees: Sees,
-		expect: number | undefined,
+		ifVersion: number | undefined,
 	): Promise<Done> {
 		const version = this.#source.version === undefined ? undefined : identOf(this.#source.version)
 		if (version !== undefined) {
@@ -538,7 +540,7 @@ export class Query<T = Row> implements Embeddable {
 		const table = tableName(this.#parts)
 		const named = withMark(this.#parts.conditions, markOf(this.#parts, sees))
 		const runner = this.#source.runner
-		if (expect === undefined) {
+		if (ifVersion === undefined) {
 			const where = conditionsText(named)
 			return runner.exec(
 				new Sql(`update ${table} set ${sets.join(', ')} where ${where.text}`, [
@@ -548,10 +550,10 @@ export class Query<T = Row> implements Embeddable {
 			)
 		}
 		if (version === undefined) {
-			throw this.#refusal("expect is a versioned table's: open the table with a version column")
+			throw this.#refusal("ifVersion is a versioned table's: open the table with a version column")
 		}
 		const at = (test: string): Kept => ({
-			piece: new Sql(`${version} ${test} ?`, [whole(expect, 'a version')]),
+			piece: new Sql(`${version} ${test} ?`, [whole(ifVersion, 'a version')]),
 			bare: true,
 		})
 		const other = conditionsText([...named, at('is not')])
@@ -575,7 +577,7 @@ export class Query<T = Row> implements Embeddable {
 				return done
 			}
 			throw new ConflictError(
-				`${runner.label}: table ${this.#parts.table}: the row is at version ${found.rows[0]![0]}, not ${expect}`,
+				`${runner.label}: table ${this.#parts.table}: the row is at version ${found.rows[0]![0]}, not ${ifVersion}`,
 			)
 		}
 		return runner.tx === undefined ? edit(runner) : runner.tx(edit)

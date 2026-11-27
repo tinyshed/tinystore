@@ -7,7 +7,7 @@
 //! tinystore metrics ./data names
 //! tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h
 //! tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target
-//! tinystore metrics ./data export --prefix shop_ -o shop.prom
+//! tinystore metrics ./data export --only-prefix shop_ -o shop.prom
 //! curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
 //! ping … | awk '…' | tinystore metrics ./data ingest -f --kind ping_lost_total=counter
 //! tinystore metrics ./data delete ping_rtt_ms target=poland
@@ -140,14 +140,16 @@ fn read(asked: Asked) -> Done {
 fn export(asked: Asked) -> Done {
     let (dir, rest) = asked.placed("metrics", "export", true)?;
     if let Some(word) = rest.first() {
-        return Err(wrong(format!("{word}: export takes no words; --prefix {word} for the names that start with it")));
+        return Err(wrong(format!(
+            "{word}: export takes no words; --only-prefix {word} for the names that start with it"
+        )));
     }
     let since = asked.value("--since").map(asked::span).transpose().map_err(wrong)?;
     let (_store, Some(metrics)) = beside(&dir)? else {
         asked::say("metrics export", format!("{} holds no metrics yet", dir.display()));
         return Ok(());
     };
-    let mut exposition = metrics.exposition().prefix(asked.value("--prefix").unwrap_or_default());
+    let mut exposition = metrics.exposition().only_prefix(asked.value("--only-prefix").unwrap_or_default());
     if let Some(since) = since {
         exposition = exposition.since(since);
     }

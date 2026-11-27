@@ -53,11 +53,11 @@ for (const way of clocked) {
 				return { user, built }
 			}
 
-			const first = await books.answer('7', () => cabinet(7))
+			const first = await books.fetch('7', () => cabinet(7))
 			expect(first).toEqual({ value: { user: 7, built: 1 }, age: '0s', stale: false })
 
 			await store.clock.advance('5m')
-			expect(await books.answer('7', () => cabinet(7))).toEqual({
+			expect(await books.fetch('7', () => cabinet(7))).toEqual({
 				value: { user: 7, built: 1 },
 				age: '5m',
 				stale: false,
@@ -65,7 +65,7 @@ for (const way of clocked) {
 			expect(built).toBe(1)
 
 			await store.clock.advance('6m')
-			const stale = await Promise.all([1, 2, 3].map(() => books.answer('7', () => cabinet(7))))
+			const stale = await Promise.all([1, 2, 3].map(() => books.fetch('7', () => cabinet(7))))
 			for (const answer of stale) {
 				expect(answer).toEqual({ value: { user: 7, built: 1 }, age: '11m', stale: true })
 			}
@@ -75,9 +75,9 @@ for (const way of clocked) {
 
 			down = true
 			await store.clock.advance('11m')
-			expect((await books.answer('7', () => cabinet(7))).value).toEqual({ user: 7, built: 2 })
+			expect((await books.fetch('7', () => cabinet(7))).value).toEqual({ user: 7, built: 2 })
 			await store.clock.advance('1m')
-			expect((await books.answer('7', () => cabinet(7))).stale).toBe(true)
+			expect((await books.fetch('7', () => cabinet(7))).stale).toBe(true)
 			expect(await books.get('7')).toEqual({ user: 7, built: 2 })
 
 			await store.clock.advance('12h')
@@ -105,7 +105,7 @@ for (const way of clocked) {
 			const charges = store.once<string>('charges', { keep: '1h' })
 			await charges.run('req-1', () => 'receipt')
 			await store.clock.advance('59m')
-			expect(await charges.answer('req-1', () => 'never')).toEqual({
+			expect(await charges.fetch('req-1', () => 'never')).toEqual({
 				value: 'receipt',
 				age: '59m',
 				stale: false,

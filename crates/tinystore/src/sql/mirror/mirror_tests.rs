@@ -74,7 +74,7 @@ fn three() -> Vec<Work> {
 fn replace_answers_exactly_what_was_added_changed_gone_and_the_same() {
     let f = fixture();
     let works =
-        f.db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").compare(["grade"]).open().unwrap();
+        f.db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").change_on(["grade"]).open().unwrap();
     let first = works.replace(&[("course_id", 1)], &three()).unwrap();
     assert_eq!(first, Diff { added: three(), changed: vec![], gone: vec![], same: 0, suspect: false });
 
@@ -143,11 +143,11 @@ fn without_a_gone_column_what_the_list_leaves_out_is_deleted_and_other_scopes_st
 }
 
 #[test]
-fn patch_writes_what_it_adds_and_changes_and_marks_nothing_gone() {
+fn upsert_writes_what_it_adds_and_changes_and_marks_nothing_gone() {
     let f = fixture();
     let works = f.db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").open().unwrap();
     works.replace(&[("course_id", 1)], &three()).unwrap();
-    let diff = works.patch(&[work(1, "b", "Quiz", Some(1.0)), work(3, "z", "New", None)]).unwrap();
+    let diff = works.upsert(&[work(1, "b", "Quiz", Some(1.0)), work(3, "z", "New", None)]).unwrap();
     assert_eq!(diff.added, [work(3, "z", "New", None)]);
     assert_eq!(diff.changed.len(), 1);
     assert!(diff.gone.is_empty());
@@ -311,25 +311,25 @@ fn a_mirror_on_a_copy_is_refused_unavailable_naming_it() {
 
 // contract: SQL-20
 #[test]
-fn the_shrink_guard_answers_what_it_would_do_and_writes_nothing() {
+fn the_min_kept_guard_answers_what_it_would_do_and_writes_nothing() {
     let f = fixture();
     let works = f.db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").open().unwrap();
     works.replace(&[("course_id", 1)], &three()).unwrap();
     f.written();
     let held = f.held();
-    let empty = works.shrink(0.5).replace(&[("course_id", 1)], &[]).unwrap();
+    let empty = works.min_kept(0.5).replace(&[("course_id", 1)], &[]).unwrap();
     assert_eq!((empty.gone.len(), empty.suspect), (3, true));
-    let one = works.shrink(0.5).replace(&[("course_id", 1)], &[work(1, "a", "Essay", Some(9.0))]).unwrap();
+    let one = works.min_kept(0.5).replace(&[("course_id", 1)], &[work(1, "a", "Essay", Some(9.0))]).unwrap();
     assert_eq!((one.changed.len(), one.gone.len(), one.suspect), (1, 2, true));
     assert_eq!(f.held(), held, "a suspect answer wrote nothing");
     assert!(f.written().is_empty());
-    let two = works.shrink(0.5).replace(&[("course_id", 1)], &three()[..2]).unwrap();
+    let two = works.min_kept(0.5).replace(&[("course_id", 1)], &three()[..2]).unwrap();
     assert_eq!((two.gone.len(), two.suspect), (1, false), "two of three live is past a half");
-    // a scope that holds nothing live is no shrink
-    let fresh = works.shrink(1.0).replace(&[("course_id", 9)], &[]).unwrap();
+    // a scope that holds nothing live is never held back
+    let fresh = works.min_kept(1.0).replace(&[("course_id", 9)], &[]).unwrap();
     assert!(!fresh.suspect);
     for fraction in [0.0, 1.5, f64::NAN] {
-        let refused = works.shrink(fraction).replace(&[("course_id", 1)], &[]).unwrap_err();
+        let refused = works.min_kept(fraction).replace(&[("course_id", 1)], &[]).unwrap_err();
         assert_eq!(refused.kind(), ErrorKind::Invalid, "{fraction}");
     }
 }

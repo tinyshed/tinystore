@@ -47,7 +47,7 @@ from ._wire.protocol import (
 from .blobs import Files, FilesOptions, Size, WhenFull, files_open
 from .channels import Channel, TxChannel
 from .errors import InvalidError, OutcomeUnknownError, error_of
-from .jobs import Adding, Backoff, Concurrency, Dedupe, Job, Queue, QueueOptions, Quiet, adding_in, open_queue
+from .jobs import Adding, Backoff, Concurrency, Dedupe, Gathered, Job, Queue, QueueOptions, Quiet, adding_in, open_queue
 from .kv import Bucket, Parts, bucket_open
 from .records import Appending, Events, TxEvents, appending_in, events_open
 from .search import Fields, Hybrid, KeyboardLayout, TableIndex, Vectors, drop_index, index_open
@@ -1063,7 +1063,7 @@ class Database:
         *,
         key: Sequence[str],
         gone: str | None = None,
-        compare: Sequence[str] | None = None,
+        change_on: Sequence[str] | None = None,
     ) -> Mirror[T]: ...
     @overload
     def mirror(
@@ -1073,7 +1073,7 @@ class Database:
         *,
         key: Sequence[str],
         gone: str | None = None,
-        compare: Sequence[str] | None = None,
+        change_on: Sequence[str] | None = None,
     ) -> Mirror[dict[str, Any]]: ...
     def mirror(
         self,
@@ -1082,17 +1082,17 @@ class Database:
         *,
         key: Sequence[str],
         gone: str | None = None,
-        compare: Sequence[str] | None = None,
+        change_on: Sequence[str] | None = None,
     ) -> Mirror[Any]:
-        """A table that mirrors another system: its ``replace`` and ``patch`` answer what was added, changed and gone.
+        """A table that mirrors another system: its ``replace`` and ``upsert`` answer what was added, changed and gone.
 
         ``key`` names a row at the source, and a unique index or the table's
         primary key covers it; ``gone`` marks what the source dropped with the
-        store's time, unix milliseconds, instead of deleting it; ``compare``
+        store's time, unix milliseconds, instead of deleting it; ``change_on``
         names the columns whose change makes a row changed, every column the
         rows carry but the key's when not given.
 
-            works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", compare=["grade"])
+            works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
         """
         from .mirror import Mirror
 
@@ -1104,7 +1104,7 @@ class Database:
 
             return await self._link.run("write", attempt)
 
-        options = (list(key), gone, None if compare is None else list(compare))
+        options = (list(key), gone, None if change_on is None else list(change_on))
         return Mirror(table, of, options, call)
 
     @overload

@@ -13,7 +13,7 @@ core may hand this client the build of the next one, which runs in the
 background::
 
     books = store.once("cabinet-books", GradeBook, fresh="10m", keep="12h")
-    answer = await books.answer(str(user_id), lambda: cabinet.book(user_id))
+    answer = await books.fetch(str(user_id), lambda: cabinet.book(user_id))
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ _BUILDING: set[asyncio.Task[None]] = set()
 @dataclass(frozen=True, slots=True)
 class OnceOpens:
     """What a once's opens send: ``aged`` asks for each answer's age, which
-    ``answer`` reads and ``run`` does not, so that ``run`` without ``fresh``
+    ``fetch`` reads and ``run`` does not, so that ``run`` without ``fresh``
     opens as an older client did and still reaches an older server."""
 
     plain: bytes
@@ -70,7 +70,7 @@ def once_open(name: str, keep: Duration | None, fresh: Duration | None = None) -
 
 
 @dataclass(frozen=True, slots=True)
-class Answer[T]:
+class Fetched[T]:
     """An answer with how old it is: stale once older than the ``fresh`` its answers opened with."""
 
     value: T
@@ -102,7 +102,7 @@ class Once[T]:
         """
         return (await self._ask(key, fn, cast("bytes", self._parts.opener))).value
 
-    async def answer(self, key: Key, fn: Callable[[], Awaitable[T] | T]) -> Answer[T]:
+    async def fetch(self, key: Key, fn: Callable[[], Awaitable[T] | T]) -> Fetched[T]:
         """run's answer with how old it is.
 
         Opened with ``fresh``, a kept answer older than it comes back at once,
@@ -112,9 +112,9 @@ class Once[T]:
         """
         return await self._ask(key, fn, self._aged)
 
-    async def _ask(self, key: Key, fn: Callable[[], Awaitable[T] | T], opener: bytes) -> Answer[T]:
+    async def _ask(self, key: Key, fn: Callable[[], Awaitable[T] | T], opener: bytes) -> Fetched[T]:
         handed = await self._claim(key, opener)
-        if isinstance(handed, Answer):
+        if isinstance(handed, Fetched):
             return handed
         stream, stale = handed
         if stale is not None:
@@ -129,7 +129,7 @@ class Once[T]:
                 await _end(stream, KvAnswer.encode())
             raise
         await _end(stream, kept)
-        return Answer(answer, timedelta(0), False)
+        return Fetched(answer, timedelta(0), False)
 
     def _background(self, stream: Stream, fn: Callable[[], Awaitable[T] | T]) -> None:
         """Runs a build the core handed over in the background, its caller answered
@@ -186,10 +186,10 @@ class Once[T]:
             "write",
         )
 
-    async def _claim(self, key: Key, opener: bytes) -> tuple[Stream, Answer[T] | None] | Answer[T]:
+    async def _claim(self, key: Key, opener: bytes) -> tuple[Stream, Fetched[T] | None] | Fetched[T]:
         # asks for key's run: the answer kept for it, or the run the core handed
         # over, which a connection lost before the answer asks for again
-        async def attempt(connection: Connection) -> tuple[Stream, Answer[T] | None] | Answer[T]:
+        async def attempt(connection: Connection) -> tuple[Stream, Fetched[T] | None] | Fetched[T]:
             handle = await handle_on(connection, methods["kv.once.open"], opener)
             call = KvCall.encode(handle=handle, under=under_field(self._parts.under), key=key)
             stream = await connection.session.open(methods["kv.once.run"], call, False)
@@ -207,9 +207,9 @@ class Once[T]:
 
         return await self._parts.link.run("read", attempt)
 
-    def _kept(self, offered: dict[str, Any]) -> Answer[T]:
+    def _kept(self, offered: dict[str, Any]) -> Fetched[T]:
         age = timedelta(milliseconds=offered.get("age", 0))
-        return Answer(self._values.decode(offered.get("value")), age, bool(offered.get("stale")))
+        return Fetched(self._values.decode(offered.get("value")), age, bool(offered.get("stale")))
 
 
 async def _called[T](fn: Callable[[], Awaitable[T] | T]) -> T:

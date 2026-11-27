@@ -403,10 +403,10 @@ impl Permit {
         self.ends.lost()
     }
 
-    /// As [`crate::locks::Permit::succeeded`]: the breaker does not count the
+    /// As [`crate::locks::Permit::healthy`]: the breaker does not count the
     /// hold a failure though its future then answers an error.
-    pub fn succeeded(&self) {
-        self.ends.succeed();
+    pub fn healthy(&self) {
+        self.ends.healthy();
     }
 
     /// As [`Lease::waited`].

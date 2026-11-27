@@ -587,7 +587,7 @@ pub(crate) const METRICS_EXPORT: Command = Command {
     takes: "[dir] export",
     does: "the newest sample of every series, as the Prometheus text a scrape reads",
     flags: &[
-        flag("--prefix", "<prefix>", "only the names that start with it"),
+        flag("--only-prefix", "<prefix>", "only the names that start with it"),
         flag("--since", "<span>", "only the series whose newest sample is at most this old; every series otherwise"),
         flag(
             "--no-timestamps",

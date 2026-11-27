@@ -424,10 +424,10 @@ it and gets its answer; an exception of fn keeps nothing and is raised,
 so the next run runs fn again. A connection lost after fn returned and
 before its answer was kept is OutcomeUnknownError.
 
-### Once.answer
+### Once.fetch
 
 ```python
-async def answer(key: Key, fn: Callable[[], Awaitable[T] | T]) -> Answer[T]: ...
+async def fetch(key: Key, fn: Callable[[], Awaitable[T] | T]) -> Fetched[T]: ...
 ```
 
 run's answer with how old it is.

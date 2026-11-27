@@ -68,7 +68,7 @@ impl Runner<'_> {
     /// it changed no row, so that both see one state; on a copy of a node,
     /// which holds no transaction, passed on to its home as `exec` is.
     fn edit(&self, edit: Edit) -> Result<Done> {
-        if !edit.expects() {
+        if !edit.checks_version() {
             return self.exec_of(edit.into_statement());
         }
         match self {
@@ -126,16 +126,16 @@ pub(crate) struct Tracked {
     sees: Sees,
 }
 
-/// A write of a table's rows: its statement, and, with `expect`, what tells
-/// a row at another version from no row at all when it changed none.
+/// A write of a table's rows: its statement, and, with `if_version`, what
+/// tells a row at another version from no row at all when it changed none.
 #[derive(Debug)]
 pub(crate) struct Edit {
     statement: Sql,
-    expected: Option<Expected>,
+    check: Option<VersionCheck>,
 }
 
 #[derive(Debug)]
-struct Expected {
+struct VersionCheck {
     table: String,
     version: i64,
     /// The version of a row the edit's conditions name that is not `version`.
@@ -143,10 +143,10 @@ struct Expected {
 }
 
 impl Edit {
-    /// Whether the edit has `expect`, and runs in a transaction with
+    /// Whether the edit has `if_version`, and runs in a transaction with
     /// [`Edit::run_in`]; one without it is its statement, run alone.
-    pub(crate) fn expects(&self) -> bool {
-        self.expected.is_some()
+    pub(crate) fn checks_version(&self) -> bool {
+        self.check.is_some()
     }
 
     pub(crate) fn into_statement(self) -> Sql {
@@ -158,7 +158,7 @@ impl Edit {
     /// that tells a row at another version, a conflict, from no row.
     pub(crate) fn run_in(self, tx: &Tx<'_>) -> Result<Done> {
         let done = tx.exec(self.statement)?;
-        let Some(expected) = self.expected else { return Ok(done) };
+        let Some(check) = self.check else { return Ok(done) };
         if done.changes > 0 {
             return Ok(done);
         }
@@ -336,7 +336,7 @@ pub struct Query<'r, T> {
 /// # fn main() -> tinystore::Result<()> {
 /// # let db = tinystore::Store::open("data", Default::default())?.database("app").open()?;
 /// let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
-/// let edit = tasks.filter(sql::eq("id", &1)).expect(0).update([("title", sql::value("from b"))]);
+/// let edit = tasks.filter(sql::eq("id", &1)).if_version(0).update([("title", sql::value("from b"))]);
 /// if edit.as_ref().is_err_and(|error| error.kind() == ErrorKind::Conflict) {
 ///     // sql app: table tasks: the row is at version 1, not 0
 /// }
@@ -615,8 +615,8 @@ impl<'r, T> Query<'r, T> {
     /// when every row the conditions match is at it, all of those rows, and
     /// otherwise nothing, failing `Conflict` with the version a row is at.
     /// No row at all is no conflict: the edit changes none.
-    pub fn expect(&self, version: i64) -> Expecting<'r, T> {
-        Expecting { query: self.with(|_| {}), version }
+    pub fn if_version(&self, version: i64) -> AtVersion<'r, T> {
+        AtVersion { query: self.with(|_| {}), version }
     }
 
     /// What building a statement refused, named by the database on a
@@ -633,15 +633,15 @@ impl<'r, T> Query<'r, T> {
 }
 
 /// The edits of a query made from a version a program saw, from
-/// [`Query::expect`]: `tasks.filter(sql::eq("id", &1)).expect(3).update(…)`.
+/// [`Query::if_version`]: `tasks.filter(sql::eq("id", &1)).if_version(3).update(…)`.
 #[derive(Clone, Debug)]
-#[must_use = "an expect is an edit's: update or delete"]
-pub struct Expecting<'r, T> {
+#[must_use = "an if_version is an edit's: update or delete"]
+pub struct AtVersion<'r, T> {
     query: Query<'r, T>,
     version: i64,
 }
 
-impl<T> Expecting<'_, T> {
+impl<T> AtVersion<'_, T> {
     /// [`Query::update`] of the rows at the version, all of them or none.
     pub fn update<I, S>(&self, sets: I) -> Result<Done>
     where
@@ -914,7 +914,7 @@ impl Parts {
 
     /// What `update` runs: the columns `sets` names set on the rows the
     /// conditions match, of those the handle shows.
-    pub(crate) fn update_sql<I, S>(&self, sets: I, expect: Option<i64>) -> Result<Edit>
+    pub(crate) fn update_sql<I, S>(&self, sets: I, if_version: Option<i64>) -> Result<Edit>
     where
         I: IntoIterator<Item = (S, Sql)>,
         S: AsRef<str>,
@@ -937,20 +937,20 @@ impl Parts {
         if texts.is_empty() {
             return Err(Error::invalid("an update sets at least one column"));
         }
-        self.edit(texts, values, self.tracked.sees, expect)
+        self.edit(texts, values, self.tracked.sees, if_version)
     }
 
     /// What `delete` runs: a delete of the rows the conditions match, or,
     /// on a table with a deleted column, a mark of the live ones at `now`.
-    pub(crate) fn delete_sql(&self, now: impl FnOnce() -> i64, expect: Option<i64>) -> Result<Edit> {
+    pub(crate) fn delete_sql(&self, now: impl FnOnce() -> i64, if_version: Option<i64>) -> Result<Edit> {
         self.refuse_every_row("a delete")?;
         let Some(deleted) = &self.tracked.deleted else {
-            if expect.is_some() {
-                return Err(self.refusal("expect on a delete is a mark's: open the table with a deleted column"));
+            if if_version.is_some() {
+                return Err(self.refusal("if_version on a delete is a mark's: open the table with a deleted column"));
             }
             let (table, condition, values) = self.target(None)?;
             let statement = Sql::piece(format!("delete from {table} where {condition}"), values, false);
-            return Ok(Edit { statement, expected: None });
+            return Ok(Edit { statement, check: None });
         };
         let mark = format!("{} = ?", quote_one(deleted).map_err(Error::invalid)?);
         self.edit(vec![mark], vec![Value::Integer(now())], Sees::Live, if_version)
@@ -982,8 +982,8 @@ impl Parts {
 
     /// An update of the rows `sees` shows of those the conditions match,
     /// which `update`, a marking `delete` and `restore` are. A versioned
-    /// table's version goes up by one; with `expect`, the update writes only
-    /// when no row the conditions match is at another version, so that one
+    /// table's version goes up by one; with `if_version`, the update writes
+    /// only when no row the conditions match is at another version, so that one
     /// statement writes every row or none:
     ///
     /// ```text
@@ -997,19 +997,19 @@ impl Parts {
             sets.push(format!("{version} = {version} + 1"));
         }
         let mark = self.mark(sees, None);
-        let Some(expect) = expect else {
+        let Some(if_version) = if_version else {
             let (table, condition, condition_values) = self.target(mark)?;
             values.extend(condition_values);
             let statement =
                 Sql::piece(format!("update {table} set {} where {condition}", sets.join(", ")), values, false);
-            return Ok(Edit { statement, expected: None });
+            return Ok(Edit { statement, check: None });
         };
         let Some(version) = version else {
-            return Err(self.refusal("expect is a versioned table's: open the table with a version column"));
+            return Err(self.refusal("if_version is a versioned table's: open the table with a version column"));
         };
         let table = quote(&self.table).map_err(Error::invalid)?;
         let named = self.conditions.iter().cloned().chain(mark);
-        let at = |test: &str| Sql::piece(format!("{version} {test} ?"), vec![Value::Integer(expect)], true);
+        let at = |test: &str| Sql::piece(format!("{version} {test} ?"), vec![Value::Integer(if_version)], true);
         let (other, other_values) = conditions_text(&named.clone().chain([at("is not")]).collect::<Vec<_>>())?;
         let guard = format!("not exists (select 1 from {table} where {other})");
         let guarded = named.chain([at("="), Sql::piece(guard, other_values.clone(), true)]).collect::<Vec<_>>();
@@ -1017,7 +1017,7 @@ impl Parts {
         values.extend(condition_values);
         let statement = Sql::piece(format!("update {table} set {} where {condition}", sets.join(", ")), values, false);
         let other = Sql::piece(format!("select {version} from {table} where {other} limit 1"), other_values, false);
-        Ok(Edit { statement, expected: Some(Expected { table: self.table.clone(), version: expect, other }) })
+        Ok(Edit { statement, check: Some(VersionCheck { table: self.table.clone(), version: if_version, other }) })
     }
 
     /// The condition that shows the rows `sees` asks for of a table with a

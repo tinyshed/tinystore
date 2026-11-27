@@ -416,9 +416,9 @@ impl Database {
             }
         };
         async move {
-            match (alone, expected) {
+            match (alone, check) {
                 (Some(alone), _) => alone.await,
-                (None, Some(expected)) => expected.await,
+                (None, Some(check)) => check.await,
                 (None, None) => Err(Error::internal("an edit with nothing to run")),
             }
         }
@@ -701,9 +701,9 @@ impl<T> Query<T> {
         self.database.exec_of(self.built(self.parts.purge_sql()))
     }
 
-    /// The edits made from `version`, as [`sql::Query::expect`] gives them.
-    pub fn expect(&self, version: i64) -> Expecting<T> {
-        Expecting { query: self.clone(), version }
+    /// The edits made from `version`, as [`sql::Query::if_version`] gives them.
+    pub fn if_version(&self, version: i64) -> AtVersion<T> {
+        AtVersion { query: self.clone(), version }
     }
 
     fn now_millis(&self) -> i64 {
@@ -790,14 +790,14 @@ impl<T: DeserializeOwned + Send + 'static> Query<T> {
 }
 
 /// The awaited edits made from a version a program saw, as
-/// [`sql::Expecting`] has them.
-#[must_use = "an expect is an edit's: update or delete"]
-pub struct Expecting<T> {
+/// [`sql::AtVersion`] has them.
+#[must_use = "an if_version is an edit's: update or delete"]
+pub struct AtVersion<T> {
     query: Query<T>,
     version: i64,
 }
 
-impl<T> Expecting<T> {
+impl<T> AtVersion<T> {
     /// An update of the rows at the version, all of them or none.
     pub fn update<I, S>(&self, sets: I) -> impl Future<Output = Result<Done>> + Send + 'static
     where
@@ -816,9 +816,9 @@ impl<T> Expecting<T> {
     }
 }
 
-impl<T> fmt::Debug for Expecting<T> {
+impl<T> fmt::Debug for AtVersion<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Expecting").field("query", &self.query).field("version", &self.version).finish()
+        f.debug_struct("AtVersion").field("query", &self.query).field("version", &self.version).finish()
     }
 }
 

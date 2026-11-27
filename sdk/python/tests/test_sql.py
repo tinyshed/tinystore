@@ -307,7 +307,7 @@ async def test_a_mirror_answers_what_was_added_changed_and_gone_and_its_guard_wr
         "create table works (course_id integer, id text, title text, grade real, gone_at integer,"
         " primary key (course_id, id))"
     )
-    works = app.mirror("works", Work, key=["course_id", "id"], gone="gone_at", compare=["grade"])
+    works = app.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
 
     def work(id: str, grade: float | None, title: str = "Essay") -> Work:
         return Work(1, id, title, grade)
@@ -319,11 +319,11 @@ async def test_a_mirror_answers_what_was_added_changed_and_gone_and_its_guard_wr
     assert diff.changed == [tinystore.Changed(work("b", None), work("b", 5.0))]
     assert (diff.gone, diff.same) == ([work("c", 3.0)], 1)
     assert isinstance(await app.scalar("select gone_at from works where id = 'c'"), int)
-    held = await works.replace({"course_id": 1}, [], shrink=0.5)
+    held = await works.replace({"course_id": 1}, [], min_kept=0.5)
     assert (len(held.gone), held.suspect) == (3, True)
     assert await app.scalar("select count(*) from works where gone_at is null") == 3
-    patched = await works.patch([work("e", 1.0)])
-    assert (patched.added, patched.gone) == ([work("e", 1.0)], [])
+    upserted = await works.upsert([work("e", 1.0)])
+    assert (upserted.added, upserted.gone) == ([work("e", 1.0)], [])
     with pytest.raises(tinystore.InvalidError, match='row \\(course_id 1, id "a"\\)'):
         await works.replace({"course_id": 2}, [work("a", 4.0)])
 
@@ -977,9 +977,9 @@ async def test_a_second_writer_from_the_old_version_is_refused_and_a_deleted_row
     one = tasks.where(id=1)
     seen = await one.one()
     assert seen is not None
-    assert (await one.update({"title": "from a"}, expect=seen.version)).changes == 1
+    assert (await one.update({"title": "from a"}, if_version=seen.version)).changes == 1
     with pytest.raises(tinystore.ConflictError) as b:
-        await one.update({"title": "from b"}, expect=seen.version)
+        await one.update({"title": "from b"}, if_version=seen.version)
     assert str(b.value) == "sql sp: table tasks: the row is at version 1, not 0"
     assert (await one.one()) == Task(1, "from a", None, 1)
 
@@ -1038,7 +1038,7 @@ async def test_an_insert_starts_a_row_at_version_0_and_a_marked_row_keeps_its_ke
 
 
 # contract: SQL-23, SQL-24
-async def test_an_upsert_onto_a_marked_row_brings_it_back_and_an_expect_writes_every_row_or_none(
+async def test_an_upsert_onto_a_marked_row_brings_it_back_and_an_if_version_writes_every_row_or_none(
     store: tinystore.Store,
 ) -> None:
     sp = await sp_of(store)
@@ -1054,21 +1054,21 @@ async def test_an_upsert_onto_a_marked_row_brings_it_back_and_an_expect_writes_e
 
     both = tasks.where(id=[1, 2])
     with pytest.raises(tinystore.ConflictError, match="the row is at version 2, not 0"):
-        await both.update(title="z", expect=0)
+        await both.update(title="z", if_version=0)
     assert (await tasks.where(id=2).one()) == Task(2, "b", None, 0)
     await tasks.where(id=2).update(title="b2")
     await tasks.where(id=2).update(title="b3")
-    assert (await both.update(title="z", expect=2)).changes == 2
-    assert (await tasks.where(id=9).update(title="z", expect=0)).changes == 0
+    assert (await both.update(title="z", if_version=2)).changes == 2
+    assert (await tasks.where(id=9).update(title="z", if_version=0)).changes == 0
     with pytest.raises(tinystore.InvalidError):
-        await sp.table("tasks", Task).where(id=1).update(title="z", expect=3)
+        await sp.table("tasks", Task).where(id=1).update(title="z", if_version=3)
 
     async def inside(tx: tinystore.SqlTx) -> None:
         one = tx.table("tasks", Task, deleted="deleted_at", version="version").where(id=1)
-        assert (await one.update(title="in tx", expect=3)).changes == 1
+        assert (await one.update(title="in tx", if_version=3)).changes == 1
         with pytest.raises(tinystore.ConflictError):
-            await one.delete(expect=3)
-        assert (await one.delete(expect=4)).changes == 1
+            await one.delete(if_version=3)
+        assert (await one.delete(if_version=4)).changes == 1
 
     await sp.tx(inside)
     marked = await tasks.deleted_only().where(id=1).one()

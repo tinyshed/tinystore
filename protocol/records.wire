@@ -174,8 +174,8 @@ message records.SessionsAsked {
   2 by: [str]                         # fields', contexts', or stream, name or level
   3 gap: duration                     # a pause past it begins the next session
   4 max: duration?                    # a session ends this long after its first event, pause or none
-  5 first: uint?                      # each value's first sessions alone, its later events passed over
-  6 events: uint                      # the first events each session keeps, 1000 at most
+  5 firstSessions: uint?              # each value's first sessions alone, its later events passed over
+  6 maxEvents: uint                   # the first events each session keeps, 1000 at most
 }
 
 message records.Session {

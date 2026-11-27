@@ -64,6 +64,12 @@ class _Asked:
 _holding: contextvars.ContextVar[tuple[tuple[int, str], ...]] = contextvars.ContextVar("tinystore holding", default=())
 """The keys the caller holds or waits for, each with the link of the store it is of."""
 
+
+def outside_holds() -> None:
+    """Holds no key from here on in this context: work that outlives the hold its caller is inside."""
+    _holding.set(())
+
+
 _opened: weakref.WeakKeyDictionary[Link, dict[str, _Shape]] = weakref.WeakKeyDictionary()
 """The limit and the background each semaphore's first open gave, by the link of the store that opened it.
 
@@ -123,11 +129,11 @@ class Permit:
 
     waited: timedelta
     """how long the hold waited for its place, from its call to the grant, the round trip included"""
-    _succeed: Callable[[], None] = field(repr=False, compare=False, default=lambda: None)
+    _healthy: Callable[[], None] = field(repr=False, compare=False, default=lambda: None)
 
-    def succeeded(self) -> None:
-        """Says the hold succeeded, so that the breaker does not count it a failure though the block then raises."""
-        self._succeed()
+    def healthy(self) -> None:
+        """Says the guarded service is healthy, so that the breaker counts no failure though the block then raises."""
+        self._healthy()
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +141,7 @@ class Breaker:
     """A semaphore's breaker: ``failures`` failed holds of a key in a row put it down for ``pause``.
 
     A hold failed when its block raised, unless its permit said
-    ``succeeded()``, or when it ran past its timeout or max_hold; a success
+    ``healthy()``, or when it ran past its timeout or max_hold; a success
     resets the count. While the key is down every hold is UnavailableError at
     once. Once the pause is over, one hold goes through: its success puts the
     key up, its failure pauses it again. The store's process keeps it in
@@ -258,7 +264,7 @@ class Holding[V]:
         self._cancel_sent = False
         self._token: contextvars.Token[tuple[tuple[int, str], ...]] | None = None
         self._inside = False
-        self._succeeded = False
+        self._said_healthy = False
 
     async def __aenter__(self) -> V:
         # a holding entered again says nothing of its last hold's health
@@ -278,10 +284,10 @@ class Holding[V]:
         fence = answer.get("fence") or "0"
         if self._view is Lease:
             return Lease(int(fence), waited)  # type: ignore[return-value]
-        return Permit(waited, self._succeed)  # type: ignore[return-value]
+        return Permit(waited, self._say_healthy)  # type: ignore[return-value]
 
-    def _succeed(self) -> None:
-        self._succeeded = True
+    def _say_healthy(self) -> None:
+        self._said_healthy = True
 
     async def __aexit__(
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
@@ -294,7 +300,7 @@ class Holding[V]:
         self._stop()
         lost = self._lost
         if lost is None:
-            await self._release(failed=kind is not None and not self._succeeded)
+            await self._release(failed=kind is not None and not self._said_healthy)
             return None
         # a lease lost lets nothing go, so nothing waits here while a cancel this sent may still be pending
         if self._cancel_sent and self._task is not None:

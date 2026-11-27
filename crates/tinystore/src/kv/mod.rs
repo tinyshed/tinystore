@@ -47,7 +47,7 @@ pub use counters::{Counters, CountersBuilder};
 pub use engine::Maintenance;
 pub use fresh::{Fresh, FreshBuilder};
 pub use key_call::KeyCall;
-pub use once::{Answer, Once, OnceBuilder};
+pub use once::{Fetched, Once, OnceBuilder};
 pub use path::Key;
 pub use quota::{Quota, QuotaBuilder};
 pub use rate_limit::{RateLimit, RateLimitBuilder};

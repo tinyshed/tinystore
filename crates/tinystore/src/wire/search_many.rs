@@ -1,12 +1,12 @@
 //! search.searchMany: one question of several indexes a connection opened,
-//! each group's hits as a search's own, `best` as each hit's group and place.
+//! each group's hits as a search's own, `merged` as each hit's group and place.
 
 use serde_json::Value;
 
 use super::super::Answered;
 use super::super::codec::Message;
 use super::super::protocol::{
-    Failure, SearchAmong, SearchBest, SearchGroup, SearchHit, SearchManyFound, SearchManyQuery,
+    Failure, SearchAmong, SearchGroup, SearchHit, SearchManyFound, SearchManyQuery, SearchMerged,
 };
 use super::{Handles, matches, one_unit, snippet, statement, unit};
 use crate::search::{self, Among, Group, Index, Many, Reading};
@@ -48,10 +48,10 @@ impl Reading<Sent> for Wire {
 pub(super) fn searched_many(store: &Store, handles: &Handles, asked: SearchManyQuery) -> Answered {
     let among = asked.among.iter().map(|among| asked_of(handles, among)).collect::<Result<Vec<_>, Failure>>()?;
     let listed: Vec<bool> = asked.among.iter().map(|among| among.query.matches.is_some()).collect();
-    let Many { groups, best } = search::searched(store, &asked.text, &among, &Wire)?;
+    let Many { groups, merged } = search::searched(store, &asked.text, &among, &Wire)?;
     let groups = groups.into_iter().zip(listed).map(|(group, listed)| group_of(group, listed));
-    let best = best.into_iter().map(|(group, hit)| SearchBest { group: wide(group), hit: wide(hit) });
-    Ok(SearchManyFound { groups: groups.collect(), best: best.collect() }.encode())
+    let merged = merged.into_iter().map(|(group, hit)| SearchMerged { group: wide(group), hit: wide(hit) });
+    Ok(SearchManyFound { groups: groups.collect(), merged: merged.collect() }.encode())
 }
 
 /// An index a call asks, and its search's options, refusing what only a

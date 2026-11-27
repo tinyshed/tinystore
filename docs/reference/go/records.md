@@ -444,7 +444,7 @@ func (e *Events) Sessions(ctx context.Context, q Query) ([]Session, error)
 Sessions is the events the query finds cut into sessions by a pause: the events of one value of each key of By, each within Gap of the one before, in the order of their first events. The answer is whole, not paged, and ErrLimit past 10,000 sessions held, open ones among them, or 64 MiB of what they keep.
 
 	visits, err := events.Sessions(ctx, records.Query{Since: 30 * 24 * time.Hour,
-		By: []string{"userId"}, Gap: 30 * time.Minute, Max: 4 * time.Hour, First: 1, Events: 50})
+		By: []string{"userId"}, Gap: 30 * time.Minute, Max: 4 * time.Hour, FirstSessions: 1, MaxEvents: 50})
 
 ### Events.Tail
 
@@ -725,11 +725,11 @@ type Query struct {
 	// Max is the longest a session lasts: an event later than this after its
 	// first begins the next, pause or none.
 	Max time.Duration
-	// First is each value's first sessions of the range alone, its later
-	// events passed over; every session when zero.
-	First int
-	// Events is the first events each session keeps, 1000 at most.
-	Events int
+	// FirstSessions is each value's first sessions of the range alone, its
+	// later events passed over; every session when zero.
+	FirstSessions int
+	// MaxEvents is the first events each session keeps, 1000 at most.
+	MaxEvents int
 }
 ```
 

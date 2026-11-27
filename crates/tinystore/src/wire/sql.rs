@@ -216,7 +216,7 @@ pub(crate) fn submit(
 fn mirrored(handles: &Handles, asked: SqlMirror) -> Result<(Database, (Shape, Given, Mode)), Failure> {
     let database = handles.database(asked.handle)?;
     let describe = format!("sql {}: mirror {}", database.name(), asked.table);
-    let shape = Shape { table: asked.table, key: asked.key, gone: asked.gone, compare: asked.compare };
+    let shape = Shape { table: asked.table, key: asked.key, gone: asked.gone, change_on: asked.change_on };
     let mode = match asked.mode.as_str() {
         "replace" => {
             let (columns, values) = (asked.scope.unwrap_or_default(), asked.scope_values.unwrap_or_default());
@@ -228,12 +228,12 @@ fn mirrored(handles: &Handles, asked: SqlMirror) -> Result<(Database, (Shape, Gi
                 )));
             }
             let values = values.into_iter().map(value_of).collect::<Result<Vec<_>, _>>()?;
-            Mode::Replace { scope: columns.into_iter().zip(values).collect(), shrink: asked.shrink }
+            Mode::Replace { scope: columns.into_iter().zip(values).collect(), min_kept: asked.min_kept }
         }
-        "patch" if asked.scope.is_none() && asked.shrink.is_none() => Mode::Patch,
-        "patch" => return Err(Failure::invalid(format!("{describe}: a patch takes no scope and no shrink"))),
+        "upsert" if asked.scope.is_none() && asked.min_kept.is_none() => Mode::Upsert,
+        "upsert" => return Err(Failure::invalid(format!("{describe}: an upsert takes no scope and no minKept"))),
         other => {
-            return Err(Failure::invalid(format!("{describe}: a mirror's mode {other:?}: it is replace or patch")));
+            return Err(Failure::invalid(format!("{describe}: a mirror's mode {other:?}: it is replace or upsert")));
         }
     };
     let rows = asked.rows.rows.into_iter().map(|row| row.into_iter().map(value_of).collect::<Result<Vec<_>, _>>());

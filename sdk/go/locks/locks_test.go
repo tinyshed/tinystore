@@ -385,7 +385,7 @@ func TestFailedHoldsInARowPutTheKeyDownAndOneHoldAfterThePausePutsItUp(t *testin
 		notFound := errors.New("no such student")
 		for range 2 {
 			err := flaky.Hold(ctx, "requests", func(_ context.Context, lease *locks.Lease) error {
-				lease.Succeeded()
+				lease.Healthy()
 				return notFound
 			})
 			if !errors.Is(err, notFound) {
@@ -393,7 +393,7 @@ func TestFailedHoldsInARowPutTheKeyDownAndOneHoldAfterThePausePutsItUp(t *testin
 			}
 		}
 		if state := ways.Must(flaky.State(ctx, "requests")); !state.Up {
-			t.Fatalf("down after holds that said they succeeded: %+v", state)
+			t.Fatalf("down after holds that said the service is healthy: %+v", state)
 		}
 		_, err = locks.OpenSemaphore(store, "flaky", locks.Limit(1))
 		if want := "with a breaker of 2 failures and 300ms, not none"; err == nil || !strings.Contains(err.Error(), want) {

@@ -37,7 +37,7 @@ interface Breaker {
 ```
 
 A semaphore's breaker. A hold failed when its function threw, unless its
-permit said `succeeded()`, or when it ran past its timeout or maxHold; a
+permit said `healthy()`, or when it ran past its timeout or maxHold; a
 success resets the count. Once the pause is over, one hold goes through:
 its success puts the key up, its failure pauses it again. The store's
 process keeps it in memory, so a restart of that process puts every key up.
@@ -131,8 +131,8 @@ interface Permit {
     readonly signal: AbortSignal
     /** how long the hold waited for its place, from its call to the grant, the round trip included */
     readonly waited: DurationText
-    /** says the hold succeeded, so that the breaker does not count it a failure though fn then throws: a 404 that is the caller's */
-    succeeded(): void
+    /** says the guarded service is healthy, so that the breaker does not count the hold a failure though fn then throws: a 404 that is the caller's */
+    healthy(): void
 }
 ```
 

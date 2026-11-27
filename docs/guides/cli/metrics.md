@@ -11,7 +11,7 @@ server, as [every write](README.md#who-writes) of the command line does.
 tinystore metrics ./data names
 tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h
 tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target
-tinystore metrics ./data export --prefix ping_ > ping.prom
+tinystore metrics ./data export --only-prefix ping_ > ping.prom
 curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
 ping … | awk '…' | tinystore metrics ./data ingest -f
 printf '2026-11-02T00:00Z 900\n' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-02T00:00Z --to 2026-11-03T00:00Z
@@ -100,7 +100,7 @@ ping_rtt_ms max every 10m   26 Oct 13:40–14:40 Europe/Moscow
 
 ```sh
 tinystore metrics ./data export
-tinystore metrics ./data export --prefix shop_ --since 5m -o shop.prom
+tinystore metrics ./data export --only-prefix shop_ --since 5m -o shop.prom
 ```
 
 ```text
@@ -113,7 +113,7 @@ shop_orders_total{shop="msk"} 1027 1795737044534
   Prometheus' text format, a family a name and a line a series with its
   newest value and that sample's time in milliseconds.
   [To Prometheus](../metrics/exposition.md) says what each kind becomes.
-- `--prefix shop_` writes only the names that start with it. `--since 5m`
+- `--only-prefix shop_` writes only the names that start with it. `--since 5m`
   leaves out a series whose newest sample is older; without it, every
   series the store still keeps is written, however long it has been silent.
 - `-o shop.prom` writes the file rather than stdout: it is written beside as

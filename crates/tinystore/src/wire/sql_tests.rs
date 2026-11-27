@@ -1012,12 +1012,12 @@ fn a_mirror_answers_what_it_added_changed_and_dropped_and_refuses_what_cannot_be
         table: "works".to_owned(),
         key: vec!["course_id".to_owned(), "id".to_owned()],
         gone: None,
-        compare: None,
+        change_on: None,
         mode: "replace".to_owned(),
         scope: Some(vec!["course_id".to_owned()]),
         scope_values: Some(vec![Cell::Int(1)]),
         rows: SqlRows { columns: vec!["course_id".to_owned(), "id".to_owned(), "grade".to_owned()], rows },
-        shrink: None,
+        min_kept: None,
     };
     let first: SqlDiff = client.call(method::SQL_MIRROR, &asked(vec![row("a", 4.0), row("b", 3.0)])).unwrap();
     assert_eq!((first.added.len(), first.same), (2, 0));
@@ -1025,7 +1025,7 @@ fn a_mirror_answers_what_it_added_changed_and_dropped_and_refuses_what_cannot_be
     assert_eq!(diff.columns, ["course_id", "id", "grade"]);
     assert_eq!((diff.added, diff.gone, diff.same, diff.suspect), (vec![row("c", 1.0)], vec![row("b", 3.0)], 1, false));
     assert!(diff.before.is_empty() && diff.after.is_empty());
-    let guarded = SqlMirror { shrink: Some(0.9), ..asked(vec![]) };
+    let guarded = SqlMirror { min_kept: Some(0.9), ..asked(vec![]) };
     let held: SqlDiff = client.call(method::SQL_MIRROR, &guarded).unwrap();
     assert!(held.suspect);
     assert_eq!(
@@ -1034,9 +1034,9 @@ fn a_mirror_answers_what_it_added_changed_and_dropped_and_refuses_what_cannot_be
         "nothing was written"
     );
 
-    let unknown = SqlMirror { mode: "upsert".to_owned(), ..asked(vec![]) };
+    let unknown = SqlMirror { mode: "patch".to_owned(), ..asked(vec![]) };
     let refused = client.call::<SqlDiff>(method::SQL_MIRROR, &unknown).unwrap_err();
-    assert_eq!(refused.message, "sql app: mirror works: a mirror's mode \"upsert\": it is replace or patch");
+    assert_eq!(refused.message, "sql app: mirror works: a mirror's mode \"patch\": it is replace or upsert");
     let several = SqlMirror { key: vec!["id".to_owned()], ..asked(vec![]) };
     let refused = client.call::<SqlDiff>(method::SQL_MIRROR, &several).unwrap_err();
     assert_eq!(refused.code, "invalid");

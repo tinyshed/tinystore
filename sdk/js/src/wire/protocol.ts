@@ -11626,9 +11626,9 @@ export const RecordsSessionsAsked = message(
 		/** a session ends this long after its first event, pause or none */
 		max: [4, uint],
 		/** each value's first sessions alone, its later events passed over */
-		first: [5, uint],
+		firstSessions: [5, uint],
 		/** the first events each session keeps, 1000 at most */
-		events: [6, uint],
+		maxEvents: [6, uint],
 	},
 	{
 		write(w, v) {
@@ -11657,14 +11657,14 @@ export const RecordsSessionsAsked = message(
 				w.uint(v.max)
 				n++
 			}
-			if (v.first !== undefined) {
+			if (v.firstSessions !== undefined) {
 				w.field(5)
-				w.uint(v.first)
+				w.uint(v.firstSessions)
 				n++
 			}
-			if (v.events !== undefined) {
+			if (v.maxEvents !== undefined) {
 				w.field(6)
-				w.uint(v.events)
+				w.uint(v.maxEvents)
 				n++
 			}
 			w.closeMap(head, n)
@@ -11674,8 +11674,8 @@ export const RecordsSessionsAsked = message(
 			let $by: string[] | undefined
 			let $gap: number | undefined
 			let $max: number | undefined
-			let $first: number | undefined
-			let $events: number | undefined
+			let $firstSessions: number | undefined
+			let $maxEvents: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -11697,17 +11697,24 @@ export const RecordsSessionsAsked = message(
 						$max = r.uint()
 						break
 					case 5:
-						$first = r.uint()
+						$firstSessions = r.uint()
 						break
 					case 6:
-						$events = r.uint()
+						$maxEvents = r.uint()
 						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { query: $query, by: $by, gap: $gap, max: $max, first: $first, events: $events }
+			return {
+				query: $query,
+				by: $by,
+				gap: $gap,
+				max: $max,
+				firstSessions: $firstSessions,
+				maxEvents: $maxEvents,
+			}
 		},
 	},
 )
@@ -13526,10 +13533,10 @@ export const SearchListed = message(
 )
 
 /**
- * A hit of best, by its group's place and its own place in that group's hits.
+ * A hit of merged, by its group's place and its own place in that group's hits.
  */
-export const SearchBest = message(
-	'search.Best',
+export const SearchMerged = message(
+	'search.Merged',
 	{
 		group: [1, uint],
 		hit: [2, uint],
@@ -14759,7 +14766,7 @@ export const SqlDescribed = message(
 /**
  * A table that mirrors another system, given the source's list: replace
  * makes the scope, the rows whose columns hold its values, what the list
- * lists, and patch writes what the list adds and changes. The table's key,
+ * lists, and upsert writes what the list adds and changes. The table's key,
  * the columns that name a row at the source, is covered by a unique index or
  * its primary key. A row the same as held is not written.
  */
@@ -14772,8 +14779,8 @@ export const SqlMirror = message(
 		/** the column that marks what the source dropped with the store's time, rather than a delete */
 		gone: [4, str],
 		/** the columns whose change makes a row changed: every column of the rows but the key's when absent */
-		compare: [5, list(str)],
-		/** replace or patch */
+		changeOn: [5, list(str)],
+		/** replace or upsert */
 		mode: [6, str],
 		/** replace: the columns of its scope */
 		scope: [7, list(str)],
@@ -14782,7 +14789,7 @@ export const SqlMirror = message(
 		/** the list, one message at most */
 		rows: [9, SqlRows],
 		/** replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live */
-		shrink: [10, float],
+		minKept: [10, float],
 	},
 	{
 		write(w, v) {
@@ -14811,10 +14818,10 @@ export const SqlMirror = message(
 				w.str(v.gone)
 				n++
 			}
-			if (v.compare !== undefined) {
+			if (v.changeOn !== undefined) {
 				w.field(5)
-				w.array(v.compare.length)
-				for (const item0 of v.compare) {
+				w.array(v.changeOn.length)
+				for (const item0 of v.changeOn) {
 					w.str(item0)
 				}
 				n++
@@ -14845,9 +14852,9 @@ export const SqlMirror = message(
 				SqlRows.write(w, v.rows)
 				n++
 			}
-			if (v.shrink !== undefined) {
+			if (v.minKept !== undefined) {
 				w.field(10)
-				w.float(v.shrink)
+				w.float(v.minKept)
 				n++
 			}
 			w.closeMap(head, n)
@@ -14857,12 +14864,12 @@ export const SqlMirror = message(
 			let $table: string | undefined
 			let $key: string[] | undefined
 			let $gone: string | undefined
-			let $compare: string[] | undefined
+			let $changeOn: string[] | undefined
 			let $mode: string | undefined
 			let $scope: string[] | undefined
 			let $scopeValues: (SqlValue | boolean)[] | undefined
 			let $rows: Read<typeof SqlRows.fields> | undefined
-			let $shrink: number | undefined
+			let $minKept: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -14889,7 +14896,7 @@ export const SqlMirror = message(
 							items0.push(r.str())
 						}
 						r.leave()
-						$compare = items0
+						$changeOn = items0
 						break
 					}
 					case 6:
@@ -14917,7 +14924,7 @@ export const SqlMirror = message(
 						$rows = SqlRows.read(r)
 						break
 					case 10:
-						$shrink = r.float()
+						$minKept = r.float()
 						break
 					default:
 						r.skip()
@@ -14929,12 +14936,12 @@ export const SqlMirror = message(
 				table: $table,
 				key: $key,
 				gone: $gone,
-				compare: $compare,
+				changeOn: $changeOn,
 				mode: $mode,
 				scope: $scope,
 				scopeValues: $scopeValues,
 				rows: $rows,
-				shrink: $shrink,
+				minKept: $minKept,
 			}
 		},
 	},
@@ -15970,7 +15977,7 @@ export const SearchAmong = message(
 	{
 		/** limit 1 to 100, 10 when absent */
 		query: [1, SearchQuery],
-		/** what its hits weigh in best, above 0; 1 when absent */
+		/** what its hits weigh in merged, above 0; 1 when absent */
 		boost: [2, float],
 	},
 	{
@@ -16612,7 +16619,7 @@ export const SearchManyFound = message(
 	'search.ManyFound',
 	{
 		groups: [1, list(SearchGroup)],
-		best: [2, list(SearchBest)],
+		merged: [2, list(SearchMerged)],
 	},
 	{
 		write(w, v) {
@@ -16626,11 +16633,11 @@ export const SearchManyFound = message(
 				}
 				n++
 			}
-			if (v.best !== undefined) {
+			if (v.merged !== undefined) {
 				w.field(2)
-				w.array(v.best.length)
-				for (const item0 of v.best) {
-					SearchBest.write(w, item0)
+				w.array(v.merged.length)
+				for (const item0 of v.merged) {
+					SearchMerged.write(w, item0)
 				}
 				n++
 			}
@@ -16638,7 +16645,7 @@ export const SearchManyFound = message(
 		},
 		read(r) {
 			let $groups: Read<typeof SearchGroup.fields>[] | undefined
-			let $best: Read<typeof SearchBest.fields>[] | undefined
+			let $merged: Read<typeof SearchMerged.fields>[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1: {
@@ -16651,12 +16658,12 @@ export const SearchManyFound = message(
 						break
 					}
 					case 2: {
-						const items0: Read<typeof SearchBest.fields>[] = []
+						const items0: Read<typeof SearchMerged.fields>[] = []
 						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(SearchBest.read(r))
+							items0.push(SearchMerged.read(r))
 						}
 						r.leave()
-						$best = items0
+						$merged = items0
 						break
 					}
 					default:
@@ -16664,7 +16671,7 @@ export const SearchManyFound = message(
 				}
 			}
 			r.leave()
-			return { groups: $groups, best: $best }
+			return { groups: $groups, merged: $merged }
 		},
 	},
 )

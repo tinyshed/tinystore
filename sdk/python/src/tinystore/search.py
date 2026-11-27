@@ -310,9 +310,9 @@ class _Searchable[T]:
                 self._read({**hit, "columns": found.get("columns")}),
                 hit.get("score", 0.0),
                 _matches_of(hit.get("matches")),
-                _snippet_of(hit.get("snippet")),
                 hit.get("text_score"),
                 hit.get("similarity"),
+                _snippet_of(hit.get("snippet")),
             )
             for hit in found.get("hits", [])
         ]
@@ -410,7 +410,7 @@ class TableIndex[T](_Searchable[T]):
 class Among:
     """An index a search among several asks, and its search as a search of it alone says it.
 
-    ``boost`` is what its hits weigh in ``best``, a positive number; ``limit``
+    ``boost`` is what its hits weigh in ``merged``, a positive number; ``limit``
     1 to 100, 10 unless said, and the group's ``more`` says whether the index
     has more; ``where``, ``prefix``, ``matches`` and ``snippet`` as a search
     of the index alone takes them.
@@ -438,8 +438,8 @@ class ManyGroup:
 
 
 @dataclass(frozen=True, slots=True)
-class Best:
-    """A hit of best: its group's index, the group's place among the groups, and the hit its group holds."""
+class Merged:
+    """A hit of merged: its group's index, the group's place among the groups, and the hit its group holds."""
 
     index: str
     group: int
@@ -450,13 +450,13 @@ class Best:
 class ManyResult:
     """What a search among several indexes found: a group an index, in the order asked, and every hit in one order.
 
-    ``best`` is every group's hits by reciprocal rank fusion, never by score:
+    ``merged`` is every group's hits by reciprocal rank fusion, never by score:
     the hit at rank r of its group, from 1, weighs boost / (60 + r); of equal
     weights the group asked first comes first, then the higher rank.
     """
 
     groups: list[ManyGroup]
-    best: list[Best]
+    merged: list[Merged]
 
 
 async def search_many(link: Link, text: str, among: Sequence[Among]) -> ManyResult:

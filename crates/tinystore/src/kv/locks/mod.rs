@@ -134,7 +134,7 @@ impl SemaphoreBuilder {
     /// success puts the key up again, and its failure pauses it again.
     ///
     /// A hold failed when its work answered an error, unless its permit said
-    /// [`Permit::succeeded`], or when it ran past its timeout or `max_hold`. A
+    /// [`Permit::healthy`], or when it ran past its timeout or `max_hold`. A
     /// success resets the count. The breaker lives in the memory of the
     /// process that holds the store, beside the lines: every program of the
     /// store sees one answer, and a restart of that process starts every key
@@ -364,11 +364,11 @@ impl Permit<'_> {
         self.holding.ended()
     }
 
-    /// Says the hold succeeded, so that the semaphore's breaker does not count
-    /// it a failure though its work then answers an error: a 404 that is the
-    /// caller's, not the service's.
-    pub fn succeeded(&self) {
-        self.holding.granted.watch.succeed();
+    /// Says the guarded service is healthy, so that the semaphore's breaker
+    /// does not count the hold a failure though its work then answers an
+    /// error: a 404 that is the caller's, not the service's.
+    pub fn healthy(&self) {
+        self.holding.granted.watch.healthy();
     }
 
     /// How long the hold waited for its place, from its call to the grant.
@@ -583,7 +583,7 @@ impl Finished {
     /// said so.
     fn outcome(&self, watch: &lease::Watch) -> Outcome {
         match self.0.load(Ordering::Acquire) {
-            _ if watch.succeeded() => Outcome::Succeeded,
+            _ if watch.said_healthy() => Outcome::Succeeded,
             code if code == Outcome::Succeeded as u8 => Outcome::Succeeded,
             code if code == Outcome::Failed as u8 => Outcome::Failed,
             _ => Outcome::Abandoned,

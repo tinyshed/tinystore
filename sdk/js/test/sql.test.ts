@@ -376,7 +376,7 @@ for (const way of ways) {
 			const works = app.mirror<Work>('works', {
 				key: ['course_id', 'id'],
 				gone: 'gone_at',
-				compare: ['grade'],
+				changeOn: ['grade'],
 			})
 			const work = (id: string, grade: number | null, title = 'Essay'): Work => ({
 				course_id: 1,
@@ -410,18 +410,18 @@ for (const way of ways) {
 			expect(typeof marked).toBe('number')
 			expect(await app.scalar<string>`select title from works where id = 'a'`).toBe('Essay')
 
-			const held = await works.replace({ course_id: 1 }, [], { shrink: 0.5 })
+			const held = await works.replace({ course_id: 1 }, [], { minKept: 0.5 })
 			expect([held.gone.length, held.suspect]).toEqual([3, true])
 			expect(await app.scalar<number>`select count(*) from works where gone_at is null`).toBe(3)
 
-			const patched = await works.patch([work('e', 1)])
-			expect([patched.added, patched.gone]).toEqual([[work('e', 1)], []])
+			const upserted = await works.upsert([work('e', 1)])
+			expect([upserted.added, upserted.gone]).toEqual([[work('e', 1)], []])
 			const outside = await caught(works.replace({ course_id: 2 }, [work('a', 4)]))
 			expect(outside).toBeInstanceOf(InvalidError)
 			expect((outside as Error).message).toContain(
 				'sql app: mirror works: row (course_id 1, id "a")',
 			)
-			const inside = await caught(app.tx(async () => works.patch([work('f', 1)])))
+			const inside = await caught(app.tx(async () => works.upsert([work('f', 1)])))
 			expect(inside).toBeInstanceOf(InvalidError)
 			await app.exec('drop table works')
 		})
@@ -629,8 +629,8 @@ for (const way of ways) {
 			await tasks.insert({ id: 1, title: 'first' })
 			const one = tasks.where({ id: 1 })
 			const seen = (await one.one())!.version
-			expect((await one.update({ title: 'from a' }, { expect: seen })).changes).toBe(1)
-			const b = await caught(one.update({ title: 'from b' }, { expect: seen }))
+			expect((await one.update({ title: 'from a' }, { ifVersion: seen })).changes).toBe(1)
+			const b = await caught(one.update({ title: 'from b' }, { ifVersion: seen }))
 			expect(b).toBeInstanceOf(ConflictError)
 			expect((b as Error).message).toBe('sql sp: table tasks: the row is at version 1, not 0')
 			expect((await one.one())?.title).toBe('from a')
@@ -698,7 +698,7 @@ for (const way of ways) {
 		})
 
 		// contract: SQL-23, SQL-24
-		test('an upsert onto a marked row brings it back, and an expect writes every row or none', async () => {
+		test('an upsert onto a marked row brings it back, and an ifVersion writes every row or none', async () => {
 			const tasks = sp.table<Task>('tasks', { deleted: 'deleted_at', version: 'version' })
 			await tasks.insert([
 				{ id: 1, title: 'a' },
@@ -718,22 +718,26 @@ for (const way of ways) {
 			)
 
 			const both = tasks.where({ id: [1, 2] })
-			const refused = await caught(both.update({ title: 'z' }, { expect: 0 }))
+			const refused = await caught(both.update({ title: 'z' }, { ifVersion: 0 }))
 			expect((refused as Error).message).toBe('sql sp: table tasks: the row is at version 2, not 0')
 			expect((await tasks.where({ id: 2 }).one())?.title).toBe('b')
 			await tasks.where({ id: 2 }).update({ title: 'b2' })
 			await tasks.where({ id: 2 }).update({ title: 'b3' })
-			expect((await both.update({ title: 'z' }, { expect: 2 })).changes).toBe(2)
-			expect((await tasks.where({ id: 9 }).update({ title: 'z' }, { expect: 0 })).changes).toBe(0)
+			expect((await both.update({ title: 'z' }, { ifVersion: 2 })).changes).toBe(2)
+			expect((await tasks.where({ id: 9 }).update({ title: 'z' }, { ifVersion: 0 })).changes).toBe(
+				0,
+			)
 			const plain = sp.table<Task>('tasks').where({ id: 1 })
-			expect(await caught(plain.update({ title: 'z' }, { expect: 3 }))).toBeInstanceOf(InvalidError)
+			expect(await caught(plain.update({ title: 'z' }, { ifVersion: 3 }))).toBeInstanceOf(
+				InvalidError,
+			)
 
 			await sp.tx(async tx => {
 				const inside = tx.table<Task>('tasks', { deleted: 'deleted_at', version: 'version' })
 				const one = inside.where({ id: 1 })
-				expect((await one.update({ title: 'in tx' }, { expect: 3 })).changes).toBe(1)
-				expect(await caught(one.delete({ expect: 3 }))).toBeInstanceOf(ConflictError)
-				expect((await one.delete({ expect: 4 })).changes).toBe(1)
+				expect((await one.update({ title: 'in tx' }, { ifVersion: 3 })).changes).toBe(1)
+				expect(await caught(one.delete({ ifVersion: 3 }))).toBeInstanceOf(ConflictError)
+				expect((await one.delete({ ifVersion: 4 })).changes).toBe(1)
 			})
 			expect((await tasks.deletedOnly().where({ id: 1 }).one())?.title).toBe('in tx')
 			await sp.exec`delete from tasks`

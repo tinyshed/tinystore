@@ -322,7 +322,7 @@ for (const way of ways) {
 			for (const _ of [1, 2]) {
 				const notFound = await caught(
 					flaky.hold('requests', permit => {
-						permit.succeeded()
+						permit.healthy()
 						throw new Error('no such student')
 					}),
 				)

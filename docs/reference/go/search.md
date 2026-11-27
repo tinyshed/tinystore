@@ -42,7 +42,7 @@ AmongOption is how one index of a search among several is searched: Boost, Limit
 func Boost(b float64) AmongOption
 ```
 
-Boost is what an index's hits weigh in ManyResult.Best, a positive number, 1 unless given.
+Boost is what an index's hits weigh in ManyResult.Merged, a positive number, 1 unless given.
 
 ## Asked
 
@@ -61,18 +61,6 @@ func Among[T any](x *Index[T], opts ...AmongOption) Asked
 ```
 
 Among is the index x in a search among several, searched as opts say: each of its hits' Value is a T, as a search of x alone reads it. Limit is 1 to 100, 10 unless given, and the group's More says whether x has more.
-
-## Best
-
-```go
-type Best struct {
-	Index string
-	Group int
-	Hit   *Hit[any]
-}
-```
-
-Best is a hit of ManyResult.Best: its group's index, the group's place among the groups, and the hit its group holds.
 
 ## Counted
 
@@ -303,11 +291,11 @@ ManyGroup is an index's hits in a search among several, the best by its own scor
 ```go
 type ManyResult struct {
 	Groups []ManyGroup
-	Best   []Best
+	Merged []Merged
 }
 ```
 
-ManyResult is what a search among several indexes found: a group an index, in the order asked, and every group's hits in one order, Best, by reciprocal rank fusion and never by score: the hit at rank r of its group, from 1, weighs boost / (60 + r); of equal weights the group asked first comes first, then the higher rank.
+ManyResult is what a search among several indexes found: a group an index, in the order asked, and every group's hits in one order, Merged, by reciprocal rank fusion and never by score: the hit at rank r of its group, from 1, weighs boost / (60 + r); of equal weights the group asked first comes first, then the higher rank.
 
 ### Many
 
@@ -348,6 +336,18 @@ type Match struct {
 ```
 
 Match is where a search's word matched a hit: bytes Start to End of a field's text, so that text\[m.Start:m.End] is what matched. Field is its path, or a table's column, and "" for a document that is its own text; Item is the string's place in a field that holds a list, 0 in one that holds a string; Word is the query's word, as its text wrote it.
+
+## Merged
+
+```go
+type Merged struct {
+	Index string
+	Group int
+	Hit   *Hit[any]
+}
+```
+
+Merged is a hit of ManyResult.Merged: its group's index, the group's place among the groups, and the hit its group holds.
 
 ## Option
 

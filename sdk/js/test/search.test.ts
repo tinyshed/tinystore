@@ -289,11 +289,11 @@ for (const way of ways) {
 			expect(second.hits.map(hit => hit.id)).toEqual(['p-1'])
 			expect(second.hits[0]?.snippet?.text).toBe('…read linear algebra.')
 			expect(third !== undefined && !('error' in third) && third.hits).toEqual([])
-			expect(found.best.map(best => [best.index, best.hit.id])).toEqual([
+			expect(found.merged.map(merged => [merged.index, merged.hit.id])).toEqual([
 				['box_courses', first.hits[0]?.id ?? ''],
 				['box_pages', 'p-1'],
 			])
-			expect(found.best[0]?.hit).toBe(first.hits[0] as never)
+			expect(found.merged[0]?.hit).toBe(first.hits[0] as never)
 			await store.dropIndex('box_people')
 			const failed = await store.search({
 				text: 'algebra',
@@ -303,7 +303,7 @@ for (const way of ways) {
 			expect(gone !== undefined && 'error' in gone && gone.error.message).toContain(
 				'index box_people',
 			)
-			expect(failed.best.map(best => best.hit.id).sort()).toEqual(['c-1', 'c-2'])
+			expect(failed.merged.map(merged => merged.hit.id).sort()).toEqual(['c-1', 'c-2'])
 			expect(await caught(store.search({ text: 'algebra', in: [] }))).toBeInstanceOf(InvalidError)
 		})
 

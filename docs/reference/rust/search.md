@@ -27,14 +27,14 @@ let found = store
     .among(&pages, |a| a.filter(eq("space_id", &7)).limit(5).snippet("plain", 60))
     .among(&people, |a| a.limit(5))
     .run()?;
-for best in &found.best {
-    println!("{} {}", best.index, best.hit.id);
+for merged in &found.merged {
+    println!("{} {}", merged.index, merged.hit.id);
 }
 ```
 
 Each group holds its index's best by its own scores, and says whether
-it has more; [`best`](ManyFound::best) merges them by reciprocal rank
-fusion, since scores of two indexes cannot be compared. An index that
+it has more; [`merged`](ManyFound::merged) holds them merged by
+reciprocal rank fusion, since scores of two indexes cannot be compared. An index that
 fails is its group's error, and the others answer; the call fails
 only when every group does. The store's indexes of documents are
 searched in one snapshot of search.db, so that no write lands between
@@ -725,7 +725,7 @@ alone would: the text is the call's.
 pub fn boost(self, boost: f64) -> Self
 ```
 
-What the group's hits weigh in `ManyFound::best`, a positive number,
+What the group's hits weigh in `ManyFound::merged`, a positive number,
 1 unless said: a hit of a group of 2 weighs what a hit of half its
 rank would in a group of 1, near enough.
 
@@ -778,19 +778,6 @@ pub fn snippet(self, field: &str, around: usize) -> Self
 
 As [`SearchCall::snippet`](super::SearchCall::snippet).
 
-## Best
-
-```rust
-pub struct Best {
-    pub index: String,
-    pub group: usize,
-    pub hit: Hit<Value>,
-}
-```
-
-A hit of `ManyFound::best`: its group's index, the group's place among
-the groups, and the hit as its group holds it.
-
 ## Group
 
 ```rust
@@ -811,7 +798,7 @@ why its search failed.
 ```rust
 pub struct ManyFound {
     pub groups: Vec<Group>,
-    pub best: Vec<Best>,
+    pub merged: Vec<Merged>,
 }
 ```
 
@@ -842,6 +829,19 @@ pub fn run(self) -> Result<ManyFound>
 ```
 
 Searches every index asked, 1 to 32, each group in the order asked.
+
+## Merged
+
+```rust
+pub struct Merged {
+    pub index: String,
+    pub group: usize,
+    pub hit: Hit<Value>,
+}
+```
+
+A hit of `ManyFound::merged`: its group's index, the group's place among
+the groups, and the hit as its group holds it.
 
 ## Searched
 

@@ -43,11 +43,11 @@ class Diff[T]:
 class Mirror[T]:
     """A table that mirrors another system, from ``db.mirror``.
 
-    Its ``replace`` takes the source's list of a scope, its ``patch`` a change
+    Its ``replace`` takes the source's list of a scope, its ``upsert`` a change
     of some rows, and each answers what was added, changed and gone. A row the
     list gives as it is held is not written at all.
 
-        works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", compare=["grade"])
+        works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
         diff = await works.replace({"course_id": 1}, fetched)
     """
 
@@ -60,17 +60,17 @@ class Mirror[T]:
     ) -> None:
         self.table = table
         self._read: Callable[[dict[str, Any]], T] = reader(of)
-        self._key, self._gone, self._compare = options
+        self._key, self._gone, self._change_on = options
         self._call = call
 
     async def replace(
-        self, scope: Mapping[str, Any], rows: Sequence[T | Mapping[str, Any]], *, shrink: float | None = None
+        self, scope: Mapping[str, Any], rows: Sequence[T | Mapping[str, Any]], *, min_kept: float | None = None
     ) -> Diff[T]:
         """Makes the scope, the rows whose columns hold its values, what ``rows`` lists.
 
         ``{}`` is the whole table. It adds what the table lacks, writes what
         changed, and deletes, or marks gone, what the list leaves out; a row
-        outside the scope is InvalidError. With ``shrink``, a list that would
+        outside the scope is InvalidError. With ``min_kept``, a list that would
         leave fewer than that fraction of the scope's live rows live writes
         nothing and answers ``suspect``. Values compare as the table keeps
         them: ``4`` given to a text column is ``"4"``, and a key's text
@@ -79,11 +79,11 @@ class Mirror[T]:
         """
         columns = list(scope)
         values = [cell_of(scope[column], f"the scope's {column}") for column in columns]
-        return await self._run(rows, mode="replace", scope=columns, scope_values=values, shrink=shrink)
+        return await self._run(rows, mode="replace", scope=columns, scope_values=values, min_kept=min_kept)
 
-    async def patch(self, rows: Sequence[T | Mapping[str, Any]]) -> Diff[T]:
+    async def upsert(self, rows: Sequence[T | Mapping[str, Any]]) -> Diff[T]:
         """Writes what ``rows`` adds and changes, a delta of the source's; its ``gone`` is always empty."""
-        return await self._run(rows, mode="patch")
+        return await self._run(rows, mode="upsert")
 
     async def _run(self, rows: Sequence[T | Mapping[str, Any]], **asked: Any) -> Diff[T]:
         listed = _list_of(rows)
@@ -94,7 +94,7 @@ class Mirror[T]:
                 table=self.table,
                 key=self._key,
                 gone=self._gone,
-                compare=self._compare,
+                change_on=self._change_on,
                 rows=listed,
                 **{name: value for name, value in asked.items() if value is not None},
             )

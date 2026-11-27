@@ -333,7 +333,7 @@ async def test_failed_holds_in_a_row_put_the_key_down_and_one_hold_after_the_pau
     for _ in range(2):
         with pytest.raises(KeyError):
             async with flaky.hold("requests") as permit:
-                permit.succeeded()
+                permit.healthy()
                 raise KeyError("no such student")
     assert (await flaky.state("requests")).up
 

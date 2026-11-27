@@ -9,7 +9,7 @@ import { cellOf, rowsOf } from './sql.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
 import { SqlDiff, SqlMirror } from './wire/protocol.ts'
 
-/** How a mirror opens: what names a row at the source, and what marks and compares a row. */
+/** How a mirror opens: what names a row at the source, what marks it gone, and what makes it changed. */
 export interface MirrorOptions {
 	/** the columns that name a row at the source: a unique index or the table's primary key covers them */
 	key: string | readonly string[]
@@ -24,7 +24,7 @@ export interface MirrorOptions {
 /** How a replace guards against a list that cannot be right. */
 export interface ReplaceOptions {
 	/** writes nothing, and answers `suspect`, when fewer than this fraction of the scope's live rows would stay live */
-	shrink?: number | undefined
+	minKept?: number | undefined
 }
 
 /** What a mirror's call changed. A suspect answer wrote nothing. */
@@ -41,11 +41,11 @@ export type MirrorCall = (asked: (handle: number) => Uint8Array) => Promise<Uint
 
 /**
  * A table that mirrors another system, from `db.mirror`: its `replace` takes
- * the source's list of a scope, its `patch` a change of some rows, and each
+ * the source's list of a scope, its `upsert` a change of some rows, and each
  * answers what was added, changed and gone. A row the list gives as it is
  * held is not written at all.
  *
- *     const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', compare: ['grade'] })
+ *     const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', changeOn: ['grade'] })
  *     const diff = await works.replace({ course_id: 1 }, fetched)
  */
 export class Mirror<T = Record<string, SqlValue>> {
@@ -79,18 +79,18 @@ export class Mirror<T = Record<string, SqlValue>> {
 			mode: 'replace',
 			scope: columns,
 			scopeValues: values,
-			shrink: options.shrink,
+			minKept: options.minKept,
 		})
 	}
 
 	/** Writes what `rows` adds and changes, a delta of the source's; its `gone` is always empty. */
-	async patch(rows: readonly Partial<T>[]): Promise<Diff<T>> {
-		return this.#run(rows, { mode: 'patch' })
+	async upsert(rows: readonly Partial<T>[]): Promise<Diff<T>> {
+		return this.#run(rows, { mode: 'upsert' })
 	}
 
 	async #run(
 		rows: readonly Partial<T>[],
-		asked: { mode: string; scope?: string[]; scopeValues?: SqlArg[]; shrink?: number | undefined },
+		asked: { mode: string; scope?: string[]; scopeValues?: SqlArg[]; minKept?: number | undefined },
 	): Promise<Diff<T>> {
 		const types = this.#options.types ?? {}
 		const listed = listOf(rows as readonly Record<string, unknown>[], types)
@@ -101,7 +101,7 @@ export class Mirror<T = Record<string, SqlValue>> {
 				table: this.table,
 				key,
 				gone: this.#options.gone,
-				compare: this.#options.compare === undefined ? undefined : [...this.#options.compare],
+				changeOn: this.#options.changeOn === undefined ? undefined : [...this.#options.changeOn],
 				...asked,
 				rows: listed,
 			}),

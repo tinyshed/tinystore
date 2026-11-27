@@ -1323,7 +1323,7 @@ use std::time::Duration;
 use tinystore::records::Sessions;
 let events = store.events("activity").open()?;
 let (month, minute) = (Duration::from_hours(30 * 24), Duration::from_secs(60));
-let visits = Sessions::by(["userId"]).gap(minute * 30).max(minute * 240).first(1).events(50);
+let visits = Sessions::by(["userId"]).gap(minute * 30).max(minute * 240).first_sessions(1).max_events(50);
 let first_visits = events.list().since(month).sessions(&visits)?;
 ```
 
@@ -1428,19 +1428,19 @@ pub fn max(self, max: Duration) -> Self
 The longest a session lasts: an event later than this after its
 first begins the next, pause or none.
 
-### Sessions.first
+### Sessions.first_sessions
 
 ```rust
-pub fn first(self, sessions: usize) -> Self
+pub fn first_sessions(self, sessions: usize) -> Self
 ```
 
 Only each value's first `sessions` of the range; its later events are
 passed over.
 
-### Sessions.events
+### Sessions.max_events
 
 ```rust
-pub fn events(self, events: usize) -> Self
+pub fn max_events(self, events: usize) -> Self
 ```
 
 The first events each session keeps, 1000 at most; none unless asked.

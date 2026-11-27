@@ -293,9 +293,9 @@ class Topped(Counted, total=False):
 class Sessioned(Counted, total=False):
     max: Duration
     """the longest a session lasts: an event later than this after its first begins the next"""
-    first: int
+    first_sessions: int
     """each value's first sessions of the range alone, its later events passed over"""
-    events: int
+    max_events: int
     """the first events each session keeps, 1000 at most; none unless asked"""
 
 
@@ -631,9 +631,10 @@ class _Reads:
         A session is the events of one value of each key of by, each within gap of the one before. The answer is whole,
         not paged, and LimitError past 10,000 sessions held, open ones among them, or 64 MiB of what they keep.
 
-            await events.sessions(since="30d", by="userId", gap="30m", max="4h", first=1, events=50)
+            await events.sessions(since="30d", by="userId", gap="30m", max="4h", first_sessions=1, max_events=50)
         """
-        longest, first, events = query.pop("max", None), query.pop("first", None), query.pop("events", None)
+        longest = query.pop("max", None)
+        first_sessions, max_events = query.pop("first_sessions", None), query.pop("max_events", None)
         asked = _query_of(query)
         answer = await self._ask(
             "records.sessions",
@@ -642,8 +643,8 @@ class _Reads:
                 by=[by] if isinstance(by, str) else list(by),
                 gap=ms(gap, "a session's gap"),
                 max=None if longest is None else ms(longest, "a session's max"),
-                first=first,
-                events=events,
+                first_sessions=first_sessions,
+                max_events=max_events,
             ),
             asked,
         )

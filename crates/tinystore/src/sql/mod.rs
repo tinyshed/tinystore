@@ -53,7 +53,7 @@ pub use mirror::{Changed, Diff, Guarded, Mirror, MirrorBuilder, TxMirror};
 #[cfg(any(feature = "wire", feature = "async"))]
 pub(crate) use mirror::{Found, Mode};
 pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};
-pub use query::{Direction, Expecting, Page, Query, Table, Upsert};
+pub use query::{AtVersion, Direction, Page, Query, Table, Upsert};
 pub use statement::{BoundStatement, Sql};
 pub use tx::Tx;
 

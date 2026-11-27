@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, TypedDict
 import pytest
 
 import tinystore
-from tinystore.once import Answer
+from tinystore.once import Fetched
 from tinystore.testing import open_temp
 from ways import CORE, SERVED
 
@@ -51,18 +51,18 @@ async def test_first_within_fresh_stale_while_it_builds_and_the_last_good_while_
             built += 1
             return GradeBook(user=user, built=built)
 
-        first = await books.answer("7", lambda: cabinet(7))
-        assert first == Answer(GradeBook(user=7, built=1), timedelta(0), False)
+        first = await books.fetch("7", lambda: cabinet(7))
+        assert first == Fetched(GradeBook(user=7, built=1), timedelta(0), False)
 
         await store.clock.advance("5m")
-        assert await books.answer("7", lambda: cabinet(7)) == Answer(
+        assert await books.fetch("7", lambda: cabinet(7)) == Fetched(
             GradeBook(user=7, built=1), timedelta(minutes=5), False
         )
         assert built == 1
 
         await store.clock.advance("6m")
-        stale = await books.answer("7", lambda: cabinet(7))
-        assert stale == Answer(GradeBook(user=7, built=1), timedelta(minutes=11), True)
+        stale = await books.fetch("7", lambda: cabinet(7))
+        assert stale == Fetched(GradeBook(user=7, built=1), timedelta(minutes=11), True)
 
         for _ in range(500):
             if await books.get("7") == GradeBook(user=7, built=2):
@@ -72,9 +72,9 @@ async def test_first_within_fresh_stale_while_it_builds_and_the_last_good_while_
 
         down = True
         await store.clock.advance("11m")
-        assert (await books.answer("7", lambda: cabinet(7))).value == GradeBook(user=7, built=2)
+        assert (await books.fetch("7", lambda: cabinet(7))).value == GradeBook(user=7, built=2)
         await store.clock.advance("1m")
-        assert (await books.answer("7", lambda: cabinet(7))).stale
+        assert (await books.fetch("7", lambda: cabinet(7))).stale
         assert await books.get("7") == GradeBook(user=7, built=2)
 
         await store.clock.advance("12h")
@@ -105,7 +105,7 @@ async def test_an_answer_without_fresh_says_its_age_and_a_fresh_as_long_as_keep_
         charges = store.once("charges", str, keep="1h")
         await charges.run("req-1", lambda: "receipt")
         await store.clock.advance("59m")
-        assert await charges.answer("req-1", lambda: "never") == Answer("receipt", timedelta(minutes=59), False)
+        assert await charges.fetch("req-1", lambda: "never") == Fetched("receipt", timedelta(minutes=59), False)
         with pytest.raises(tinystore.InvalidError, match="kv once books"):
             await store.once("books", str, fresh="1h", keep="1h").run("7", lambda: "x")
 

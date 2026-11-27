@@ -71,11 +71,11 @@ type Query struct {
 	// Max is the longest a session lasts: an event later than this after its
 	// first begins the next, pause or none.
 	Max time.Duration
-	// First is each value's first sessions of the range alone, its later
-	// events passed over; every session when zero.
-	First int
-	// Events is the first events each session keeps, 1000 at most.
-	Events int
+	// FirstSessions is each value's first sessions of the range alone, its
+	// later events passed over; every session when zero.
+	FirstSessions int
+	// MaxEvents is the first events each session keeps, 1000 at most.
+	MaxEvents int
 }
 
 // asked is the query as the wire carries it, of a stream's handle or every
@@ -448,7 +448,7 @@ func (r reads) sessions(ctx context.Context, q Query) ([]Session, error) {
 	if q.FirstSessions < 0 || q.MaxEvents < 0 {
 		return nil, core.Errorf(core.Invalid, "sessions of FirstSessions %d and MaxEvents %d: neither below 0", q.FirstSessions, q.MaxEvents)
 	}
-	asked := wire.RecordsSessionsAsked{By: q.By, Events: uint64(q.Events)}
+	asked := wire.RecordsSessionsAsked{By: q.By, MaxEvents: uint64(q.MaxEvents)}
 	var err error
 	if asked.Gap, err = core.Millis(q.Gap, "a session's gap"); err != nil {
 		return nil, err
@@ -460,9 +460,9 @@ func (r reads) sessions(ctx context.Context, q Query) ([]Session, error) {
 		}
 		asked.Max = &longest
 	}
-	if q.First > 0 {
-		first := uint64(q.First)
-		asked.First = &first
+	if q.FirstSessions > 0 {
+		first := uint64(q.FirstSessions)
+		asked.FirstSessions = &first
 	}
 	answer, err := r.ask(ctx, wire.MethodRecordsSessions, q, func(query wire.RecordsQuery) []byte {
 		message := asked

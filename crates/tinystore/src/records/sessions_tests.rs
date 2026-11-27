@@ -51,7 +51,7 @@ fn well_cut(sessions: &[Session], gap: Duration, events: u64) {
 
 // contract: REC-23
 #[test]
-fn two_visits_ninety_minutes_apart_are_two_sessions_and_first_keeps_the_first() {
+fn two_visits_ninety_minutes_apart_are_two_sessions_and_first_sessions_keeps_the_first() {
     let fixture = fixture();
     let activity = fixture.events("activity");
     let start = fixture.now() - 4 * HOUR;
@@ -63,7 +63,7 @@ fn two_visits_ninety_minutes_apart_are_two_sessions_and_first_keeps_the_first() 
     assert_eq!(shown(&sessions, start), [(0, 1, 3, true), (15, 2, 1, true), (115, 1, 2, false), (200, 2, 1, false)]);
     well_cut(&sessions, 30 * MINUTE, 7);
     // each person's first visit alone
-    let first = activity.list().from(start).sessions(&cut.clone().first(1)).unwrap();
+    let first = activity.list().from(start).sessions(&cut.clone().first_sessions(1)).unwrap();
     assert_eq!(shown(&first, start), [(0, 1, 3, true), (15, 2, 1, true)]);
     // max ends a visit that long after its first event, pause or none
     let longest = activity.list().from(start).sessions(&cut.clone().max(20 * MINUTE)).unwrap();
@@ -95,7 +95,7 @@ fn a_session_counts_every_event_keeps_its_first_and_is_partial_where_the_range_c
     let start = fixture.now() - 2 * HOUR;
     activity.append_all((0..6).map(|n| used(7, &format!("step-{n}"), start + n * MINUTE))).unwrap();
     activity.append_all([used(8, "late", fixture.now() - 5 * MINUTE)]).unwrap();
-    let cut = Sessions::by(["userId"]).gap(10 * MINUTE).events(2);
+    let cut = Sessions::by(["userId"]).gap(10 * MINUTE).max_events(2);
     let sessions = activity.list().from(start - HOUR).sessions(&cut).unwrap();
     let kept: Vec<&str> = sessions[0].events.iter().map(|event| event.name.as_str()).collect();
     assert_eq!((sessions[0].count, kept), (6, vec!["step-0", "step-1"]));
@@ -121,7 +121,7 @@ fn sessions_are_cut_in_the_order_of_times_whatever_the_order_appended_streams_an
     // two events of one time come as they arrived
     api.append_all([used(1, "e", start + 50 * MINUTE), used(1, "f", start + 50 * MINUTE)]).unwrap();
     let every = fixture.store.all_events().unwrap();
-    let cut = Sessions::by(["userId"]).gap(30 * MINUTE).events(10);
+    let cut = Sessions::by(["userId"]).gap(30 * MINUTE).max_events(10);
     let sessions = every.list().from(start).sessions(&cut).unwrap();
     let names: Vec<&str> = sessions[0].events.iter().map(|event| event.name.as_str()).collect();
     assert_eq!((sessions.len(), names), (1, vec!["a", "b", "c", "d", "e", "f"]));
@@ -149,8 +149,8 @@ fn sessions_past_their_bound_are_limit_and_a_cut_out_of_bounds_is_invalid() {
     for (wrong, why) in [
         (Sessions::by(["userId"]), "a gap"),
         (Sessions::by(Vec::<String>::new()).gap(MINUTE), "take by"),
-        (cut.clone().first(0), "first 0"),
-        (cut.clone().events(1001), "1001 events"),
+        (cut.clone().first_sessions(0), "first 0"),
+        (cut.clone().max_events(1001), "1001 events"),
         (cut.clone().max(Duration::ZERO), "max"),
     ] {
         let refused = activity.list().since(DAY).sessions(&wrong).unwrap_err();
@@ -168,7 +168,7 @@ fn what_v0_1_0_packed_is_cut_into_sessions_in_the_order_it_reads() {
     let every = fixture.store.all_events().unwrap();
     let events = every.list().count().unwrap();
     let gap = 30 * MINUTE;
-    let sessions = every.list().sessions(&Sessions::by(["stream"]).gap(gap).events(1000)).unwrap();
+    let sessions = every.list().sessions(&Sessions::by(["stream"]).gap(gap).max_events(1000)).unwrap();
     well_cut(&sessions, gap, events);
     // what a page reads, one after another
     let read: Vec<(String, String)> =
@@ -214,9 +214,9 @@ fn a_million_events_of_eight_thousand_people_cut_into_sessions_beside_their_coun
     let activity = visits(&fixture);
     let since = DAY + 2 * HOUR;
     let count = || activity.list().since(since).count().unwrap();
-    let cut = Sessions::by(["userId"]).gap(30 * MINUTE).first(1);
+    let cut = Sessions::by(["userId"]).gap(30 * MINUTE).first_sessions(1);
     let first = || activity.list().since(since).sessions(&cut).unwrap().len() as u64;
-    let kept = Sessions::by(["userId"]).gap(30 * MINUTE).first(1).events(5);
+    let kept = Sessions::by(["userId"]).gap(30 * MINUTE).first_sessions(1).max_events(5);
     let with_events = || activity.list().since(since).sessions(&kept).unwrap().len() as u64;
     println!("1000000 events of 8000 people, 5 visits each, the median of 7 passes in turns");
     timed_in_turns(

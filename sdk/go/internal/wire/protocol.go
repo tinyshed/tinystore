@@ -734,8 +734,8 @@ func NewMessage(name string) Message {
 		return &SearchManyFound{}
 	case "search.Group":
 		return &SearchGroup{}
-	case "search.Best":
-		return &SearchBest{}
+	case "search.Merged":
+		return &SearchMerged{}
 	case "server.Clock":
 		return &ServerClock{}
 	case "sql.Migration":
@@ -12497,9 +12497,9 @@ type RecordsSessionsAsked struct {
 	// a session ends this long after its first event, pause or none
 	Max *uint64 `wire:"4,max"`
 	// each value's first sessions alone, its later events passed over
-	First *uint64 `wire:"5,first"`
+	FirstSessions *uint64 `wire:"5,firstSessions"`
 	// the first events each session keeps, 1000 at most
-	Events uint64 `wire:"6,events"`
+	MaxEvents uint64 `wire:"6,maxEvents"`
 }
 
 func (m RecordsSessionsAsked) Write(w *Writer) {
@@ -12528,14 +12528,14 @@ func (m RecordsSessionsAsked) Write(w *Writer) {
 		w.Uint(*m.Max)
 		n++
 	}
-	if m.First != nil {
+	if m.FirstSessions != nil {
 		w.Uint(5)
-		w.Uint(*m.First)
+		w.Uint(*m.FirstSessions)
 		n++
 	}
-	if m.Events != 0 {
+	if m.MaxEvents != 0 {
 		w.Uint(6)
-		w.Uint(m.Events)
+		w.Uint(m.MaxEvents)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -12563,9 +12563,9 @@ func (m *RecordsSessionsAsked) Read(r *Reader) {
 			m.Max = &v
 		case 5:
 			v := r.Uint()
-			m.First = &v
+			m.FirstSessions = &v
 		case 6:
-			m.Events = r.Uint()
+			m.MaxEvents = r.Uint()
 		default:
 			r.Skip()
 		}
@@ -12579,8 +12579,8 @@ func (m RecordsSessionsAsked) IsZero() bool {
 		len(m.By) == 0 &&
 		m.Gap == 0 &&
 		m.Max == nil &&
-		m.First == nil &&
-		m.Events == 0
+		m.FirstSessions == nil &&
+		m.MaxEvents == 0
 }
 
 // RecordsSession is the schema's records.Session.
@@ -15278,7 +15278,7 @@ func (m SearchManyQuery) IsZero() bool {
 type SearchAmong struct {
 	// limit 1 to 100, 10 when absent
 	Query SearchQuery `wire:"1,query"`
-	// what its hits weigh in best, above 0; 1 when absent
+	// what its hits weigh in merged, above 0; 1 when absent
 	Boost *float64 `wire:"2,boost"`
 }
 
@@ -15327,8 +15327,8 @@ func (m SearchAmong) IsZero() bool {
 // order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
 // weighs boost / (60 + r); equal weights by the group asked first, then rank.
 type SearchManyFound struct {
-	Groups []SearchGroup `wire:"1,groups"`
-	Best   []SearchBest  `wire:"2,best"`
+	Groups []SearchGroup  `wire:"1,groups"`
+	Merged []SearchMerged `wire:"2,merged"`
 }
 
 func (m SearchManyFound) Write(w *Writer) {
@@ -15342,10 +15342,10 @@ func (m SearchManyFound) Write(w *Writer) {
 		}
 		n++
 	}
-	if len(m.Best) > 0 {
+	if len(m.Merged) > 0 {
 		w.Uint(2)
-		w.Array(len(m.Best))
-		for _, item0 := range m.Best {
+		w.Array(len(m.Merged))
+		for _, item0 := range m.Merged {
 			item0.Write(w)
 		}
 		n++
@@ -15368,14 +15368,14 @@ func (m *SearchManyFound) Read(r *Reader) {
 			r.Leave()
 			m.Groups = v
 		case 2:
-			v := []SearchBest{}
+			v := []SearchMerged{}
 			for k0 := r.Array(); k0 > 0; k0-- {
-				var item0 SearchBest
+				var item0 SearchMerged
 				item0.Read(r)
 				v = append(v, item0)
 			}
 			r.Leave()
-			m.Best = v
+			m.Merged = v
 		default:
 			r.Skip()
 		}
@@ -15386,7 +15386,7 @@ func (m *SearchManyFound) Read(r *Reader) {
 // IsZero says whether SearchManyFound writes as no field at all.
 func (m SearchManyFound) IsZero() bool {
 	return len(m.Groups) == 0 &&
-		len(m.Best) == 0
+		len(m.Merged) == 0
 }
 
 // SearchGroup is the schema's search.Group.
@@ -15499,15 +15499,15 @@ func (m SearchGroup) IsZero() bool {
 		m.Failure == nil
 }
 
-// SearchBest is the schema's search.Best.
+// SearchMerged is the schema's search.Merged.
 //
-// A hit of best, by its group's place and its own place in that group's hits.
-type SearchBest struct {
+// A hit of merged, by its group's place and its own place in that group's hits.
+type SearchMerged struct {
 	Group uint64 `wire:"1,group"`
 	Hit   uint64 `wire:"2,hit"`
 }
 
-func (m SearchBest) Write(w *Writer) {
+func (m SearchMerged) Write(w *Writer) {
 	head := w.OpenMap()
 	n := 0
 	if m.Group != 0 {
@@ -15523,8 +15523,8 @@ func (m SearchBest) Write(w *Writer) {
 	w.CloseMap(head, n)
 }
 
-func (m *SearchBest) Read(r *Reader) {
-	*m = SearchBest{}
+func (m *SearchMerged) Read(r *Reader) {
+	*m = SearchMerged{}
 	var seen Seen
 	for n := r.Map(); n > 0; n-- {
 		switch r.Field(&seen) {
@@ -15539,8 +15539,8 @@ func (m *SearchBest) Read(r *Reader) {
 	r.Leave()
 }
 
-// IsZero says whether SearchBest writes as no field at all.
-func (m SearchBest) IsZero() bool {
+// IsZero says whether SearchMerged writes as no field at all.
+func (m SearchMerged) IsZero() bool {
 	return m.Group == 0 &&
 		m.Hit == 0
 }
@@ -16734,7 +16734,7 @@ func (m SqlDescribed) IsZero() bool {
 //
 // A table that mirrors another system, given the source's list: replace
 // makes the scope, the rows whose columns hold its values, what the list
-// lists, and patch writes what the list adds and changes. The table's key,
+// lists, and upsert writes what the list adds and changes. The table's key,
 // the columns that name a row at the source, is covered by a unique index or
 // its primary key. A row the same as held is not written.
 type SqlMirror struct {
@@ -16744,8 +16744,8 @@ type SqlMirror struct {
 	// the column that marks what the source dropped with the store's time, rather than a delete
 	Gone *string `wire:"4,gone"`
 	// the columns whose change makes a row changed: every column of the rows but the key's when absent
-	Compare *[]string `wire:"5,compare"`
-	// replace or patch
+	ChangeOn *[]string `wire:"5,changeOn"`
+	// replace or upsert
 	Mode string `wire:"6,mode"`
 	// replace: the columns of its scope
 	Scope *[]string `wire:"7,scope"`
@@ -16754,7 +16754,7 @@ type SqlMirror struct {
 	// the list, one message at most
 	Rows SqlRows `wire:"9,rows"`
 	// replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
-	Shrink *float64 `wire:"10,shrink"`
+	MinKept *float64 `wire:"10,minKept"`
 }
 
 func (m SqlMirror) Write(w *Writer) {
@@ -16783,10 +16783,10 @@ func (m SqlMirror) Write(w *Writer) {
 		w.Str(*m.Gone)
 		n++
 	}
-	if m.Compare != nil {
+	if m.ChangeOn != nil {
 		w.Uint(5)
-		w.Array(len(*m.Compare))
-		for _, item0 := range *m.Compare {
+		w.Array(len(*m.ChangeOn))
+		for _, item0 := range *m.ChangeOn {
 			w.Str(item0)
 		}
 		n++
@@ -16817,9 +16817,9 @@ func (m SqlMirror) Write(w *Writer) {
 		m.Rows.Write(w)
 		n++
 	}
-	if m.Shrink != nil {
+	if m.MinKept != nil {
 		w.Uint(10)
-		w.Float(*m.Shrink)
+		w.Float(*m.MinKept)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -16852,7 +16852,7 @@ func (m *SqlMirror) Read(r *Reader) {
 				v = append(v, item0)
 			}
 			r.Leave()
-			m.Compare = &v
+			m.ChangeOn = &v
 		case 6:
 			m.Mode = r.Str()
 		case 7:
@@ -16875,7 +16875,7 @@ func (m *SqlMirror) Read(r *Reader) {
 			m.Rows.Read(r)
 		case 10:
 			v := r.Float()
-			m.Shrink = &v
+			m.MinKept = &v
 		default:
 			r.Skip()
 		}
@@ -16889,12 +16889,12 @@ func (m SqlMirror) IsZero() bool {
 		m.Table == "" &&
 		len(m.Key) == 0 &&
 		m.Gone == nil &&
-		m.Compare == nil &&
+		m.ChangeOn == nil &&
 		m.Mode == "" &&
 		m.Scope == nil &&
 		m.ScopeValues == nil &&
 		m.Rows.IsZero() &&
-		m.Shrink == nil
+		m.MinKept == nil
 }
 
 // SqlDiff is the schema's sql.Diff.

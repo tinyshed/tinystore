@@ -116,8 +116,8 @@ fn refuse_overlaps(shape: &Shape) -> Result<()> {
     if let Some(gone) = shape.gone.as_ref().filter(|gone| shape.key.contains(gone)) {
         return Err(Error::invalid(format!("the column {gone:?} that marks what is gone is in the key")));
     }
-    if let Some(column) = shape.compare.iter().flatten().find(|column| shape.key.contains(column)) {
-        return Err(Error::invalid(format!("compare names the key's column {column:?}, which never changes")));
+    if let Some(column) = shape.change_on.iter().flatten().find(|column| shape.key.contains(column)) {
+        return Err(Error::invalid(format!("change_on names the key's column {column:?}, which never changes")));
     }
     Ok(())
 }

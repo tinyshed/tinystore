@@ -7,7 +7,7 @@ the source's key, writes only the difference in one commit, and answers what
 was added, changed and gone.
 
 ```ts
-const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', compare: ['grade'] })
+const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', changeOn: ['grade'] })
 
 const diff = await works.replace({ course_id: 1 }, fetched)
 for (const { before, after } of diff.changed) notify(after, before.grade, after.grade)
@@ -15,7 +15,7 @@ for (const { before, after } of diff.changed) notify(after, before.grade, after.
 ```
 
 ```python
-works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", compare=["grade"])
+works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
 
 diff = await works.replace({"course_id": 1}, fetched)
 for changed in diff.changed:
@@ -24,7 +24,7 @@ for changed in diff.changed:
 
 ```go
 works := sqldb.OpenMirror[Work](db, "works", sqldb.MirrorOptions{
-	Key: []string{"course_id", "id"}, Gone: "gone_at", Compare: []string{"grade"},
+	Key: []string{"course_id", "id"}, Gone: "gone_at", ChangeOn: []string{"grade"},
 })
 
 diff, err := works.Replace(ctx, map[string]any{"course_id": 1}, fetched)
@@ -34,7 +34,7 @@ for _, changed := range diff.Changed {
 ```
 
 ```rust
-let works = db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").compare(["grade"]).open()?;
+let works = db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").change_on(["grade"]).open()?;
 
 let diff = works.replace(&[("course_id", 1)], &fetched)?;
 for changed in &diff.changed {
@@ -54,14 +54,14 @@ scope's values, what the list lists. `{}` is the whole table. Every given row
 must carry the scope's columns and agree with them: a row of another course in
 course 1's list is `invalid`, naming its key, and so is a key given twice.
 
-| A given row's key | Held as                    | Written                                  | Answered  |
-|-------------------|----------------------------|------------------------------------------|-----------|
-| not held          |                            | an insert                                | `added`   |
-| held              | its compared columns apart | the given columns that differ            | `changed` |
-| held              | the same                   | nothing                                  | `same`    |
-| held              | marked gone                | the columns that differ, the mark nulled | `added`   |
-| not in the list   | live                       | the mark set to now, or a delete         | `gone`    |
-| not in the list   | marked gone                | nothing                                  |           |
+| A given row's key | Held as                      | Written                                  | Answered  |
+|-------------------|------------------------------|------------------------------------------|-----------|
+| not held          |                              | an insert                                | `added`   |
+| held              | its `changeOn` columns apart | the given columns that differ            | `changed` |
+| held              | the same                     | nothing                                  | `same`    |
+| held              | marked gone                  | the columns that differ, the mark nulled | `added`   |
+| not in the list   | live                         | the mark set to now, or a delete         | `gone`    |
+| not in the list   | marked gone                  | nothing                                  |           |
 
 A row answers by the columns the list's rows carry: `added` and a changed
 row's `after` as the list gave them, a changed row's `before` and a gone row
@@ -109,66 +109,67 @@ carry it, so the field reads as null there.
 
 ## What makes a row changed
 
-`compare` names the columns whose change makes a row `changed`; without it,
-every column the rows carry but the key's. A row whose compared columns are
+`changeOn` names the columns whose change makes a row `changed`; without it,
+every column the rows carry but the key's. A row whose `changeOn` columns are
 as held is `same` and is not written, even where its other columns differ:
 a `fetched_at` the source rewrites at every read changes nothing. A changed
-row has every given column that differs written, compared or not.
+row has every given column that differs written, named in `changeOn` or
+not.
 
 ## A delta
 
-`patch(rows)` takes a source's change of some rows rather than its whole
+`upsert(rows)` takes a source's change of some rows rather than its whole
 list: it writes what they add and change, and marks nothing gone. Its `gone`
 is always empty.
 
 ```ts
-const diff = await works.patch(changedSinceYesterday)
+const diff = await works.upsert(changedSinceYesterday)
 ```
 
 ```python
-diff = await works.patch(changed_since_yesterday)
+diff = await works.upsert(changed_since_yesterday)
 ```
 
 ```go
-diff, err := works.Patch(ctx, changedSinceYesterday)
+diff, err := works.Upsert(ctx, changedSinceYesterday)
 ```
 
 ```rust
-let diff = works.patch(&changed_since_yesterday)?;
+let diff = works.upsert(&changed_since_yesterday)?;
 ```
 
 ## A list that cannot be right
 
 A source that answers an empty page during an outage would have a `replace`
-mark the whole course gone. `shrink` guards against it: when the scope holds
+mark the whole course gone. `minKept` guards against it: when the scope holds
 live rows and the list would leave fewer than that fraction of them live, an
 empty list among them, nothing is written, and the answer is the diff that
 would have been, with `suspect: true` (contract SQL-20). A fraction outside
 (0, 1] is `invalid`.
 
 ```ts
-const diff = await works.replace({ course_id: 1 }, fetched, { shrink: 0.5 })
+const diff = await works.replace({ course_id: 1 }, fetched, { minKept: 0.5 })
 ```
 
 ```python
-diff = await works.replace({"course_id": 1}, fetched, shrink=0.5)
+diff = await works.replace({"course_id": 1}, fetched, min_kept=0.5)
 ```
 
 ```go
-diff, err := works.Replace(ctx, map[string]any{"course_id": 1}, fetched, sqldb.Shrink(0.5))
+diff, err := works.Replace(ctx, map[string]any{"course_id": 1}, fetched, sqldb.MinKept(0.5))
 ```
 
 ```rust
-let diff = works.shrink(0.5).replace(&[("course_id", 1)], &fetched)?;
+let diff = works.min_kept(0.5).replace(&[("course_id", 1)], &fetched)?;
 ```
 
 What a suspect answer means is the program's to decide. To believe a
-shrink the source keeps answering, count it with kv's counters and send the
+shorter list the source keeps answering, count it with kv's counters and send the
 list again without the guard after the third time:
 
 ```ts
 const doubts = store.counters('mirror-doubts', { ttl: '1d' })
-let diff = await works.replace({ course_id: 1 }, fetched, { shrink: 0.5 })
+let diff = await works.replace({ course_id: 1 }, fetched, { minKept: 0.5 })
 if (diff.suspect && (await doubts.add('works/1')) >= 3) {
 	diff = await works.replace({ course_id: 1 }, fetched)
 }
@@ -178,8 +179,8 @@ if (!diff.suspect) await doubts.delete('works/1')
 ## In a transaction
 
 In Rust, a mirror joins its database's transaction, `tx.with(&works)`, and
-its write commits with the transaction's or not at all; the shrink guard is
-not offered there. The SDKs have no mirror inside a transaction yet: in
+its write commits with the transaction's or not at all; `min_kept` is not
+offered there. The SDKs have no mirror inside a transaction yet: in
 TypeScript and Python, a mirror's call inside `db.tx` is `invalid`, as any
 call made around the transaction from inside it, and in Go, make it outside
 `Tx`, since inside it would wait for the writer the transaction holds.

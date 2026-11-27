@@ -158,7 +158,7 @@ async fn a_mirror_answers_as_the_blocking_one_and_its_guard_writes_nothing() {
     let first = notes.replace(&[("author_id", 42)], &list).await.unwrap();
     assert_eq!((first.added, first.same), (list.to_vec(), 0));
     let renamed = [note("n1", 42, "Buy oat milk")];
-    let held = notes.shrink(0.9).replace(&[("author_id", 42)], &renamed).await.unwrap();
+    let held = notes.min_kept(0.9).replace(&[("author_id", 42)], &renamed).await.unwrap();
     assert!(held.suspect);
     assert_eq!(db.scalar::<i64>("select count(*) from notes").await.unwrap(), 2, "a suspect answer wrote nothing");
     let blocking = db.blocking().mirror::<Note>("notes").key(["id"]).open().unwrap();
@@ -166,7 +166,7 @@ async fn a_mirror_answers_as_the_blocking_one_and_its_guard_writes_nothing() {
     assert_eq!(diff.changed[0].after.title, "Buy oat milk");
     assert_eq!(diff.gone, [note("n2", 42, "Call mom")]);
     assert_eq!(blocking.replace(&[("author_id", 42)], &renamed).unwrap().same, 1);
-    let outside = notes.patch(&[note("n1", 42, "x"), note("n1", 42, "y")]).await.unwrap_err();
+    let outside = notes.upsert(&[note("n1", 42, "x"), note("n1", 42, "y")]).await.unwrap_err();
     assert_eq!(outside.to_string(), "sql app: mirror notes: row (id \"n1\"): given twice: invalid");
     f.store.close().await.unwrap();
 }
@@ -728,10 +728,10 @@ async fn an_awaited_table_hides_its_deleted_rows_and_refuses_an_edit_from_an_old
     tasks.insert(&Task { id: 1, title: "first".to_owned(), deleted_at: None, version: 0 }).await.unwrap();
     let one = tasks.filter(sql::eq("id", &1));
 
-    assert_eq!(one.expect(0).update([("title", sql::value("from a"))]).await.unwrap().changes, 1);
-    let b = one.expect(0).update([("title", sql::value("from b"))]).await.unwrap_err();
+    assert_eq!(one.if_version(0).update([("title", sql::value("from a"))]).await.unwrap().changes, 1);
+    let b = one.if_version(0).update([("title", sql::value("from b"))]).await.unwrap_err();
     assert_eq!(b.to_string(), "sql sp: table tasks: the row is at version 1, not 0: conflict");
-    assert_eq!(one.expect(1).delete().await.unwrap().changes, 1);
+    assert_eq!(one.if_version(1).delete().await.unwrap().changes, 1);
     assert_eq!(tasks.count().await.unwrap(), 0);
     let marked = tasks.deleted_only().all().await.unwrap();
     assert_eq!((marked[0].version, marked[0].deleted_at), (2, Some(1_791_547_200_000)));

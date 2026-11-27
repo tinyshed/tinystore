@@ -28,14 +28,14 @@ export interface OnceOptions {
 }
 
 /** An answer with how old it is: stale once older than the `fresh` its answers opened with. */
-export interface OnceAnswer<T> {
+export interface Fetched<T> {
 	value: T
 	age: DurationText
 	stale: boolean
 }
 
 /**
- * What a once's open sends: `aged` asks for each answer's age, which `answer`
+ * What a once's open sends: `aged` asks for each answer's age, which `fetch`
  * reads and `run` does not, so that `run` without `fresh` opens as an older
  * client did and still reaches an older server.
  */
@@ -85,13 +85,13 @@ export class Once<T> {
 	 * background: its answer replaces the kept one, and its throw, which no
 	 * caller sees, keeps it until `keep` ends.
 	 *
-	 *     const { value, age, stale } = await books.answer(userId, () => cabinet.book(userId))
+	 *     const { value, age, stale } = await books.fetch(userId, () => cabinet.book(userId))
 	 */
-	async answer(key: Key, fn: () => T | Promise<T>): Promise<OnceAnswer<T>> {
+	async fetch(key: Key, fn: () => T | Promise<T>): Promise<Fetched<T>> {
 		return this.#ask(key, fn, this.#opens.aged)
 	}
 
-	async #ask(key: Key, fn: () => T | Promise<T>, open: Uint8Array): Promise<OnceAnswer<T>> {
+	async #ask(key: Key, fn: () => T | Promise<T>, open: Uint8Array): Promise<Fetched<T>> {
 		const handed = await this.#claim(key, open)
 		if (!(handed instanceof Run)) {
 			return handed
@@ -148,7 +148,7 @@ export class Once<T> {
 
 	// asks for key's run: the answer kept for it, or the run the core handed
 	// over, which a connection lost before the answer asks for again
-	async #claim(key: Key, open: Uint8Array): Promise<Run | OnceAnswer<T>> {
+	async #claim(key: Key, open: Uint8Array): Promise<Run | Fetched<T>> {
 		return this.#link.run('read', async connection => {
 			const handle = await handleOn(connection, methods['kv.once.open'], open)
 			const call = KvCall.encode({ handle, under: underField(this.#under), key })
@@ -185,7 +185,7 @@ export class Once<T> {
 		})
 	}
 
-	#kept(offered: ReturnType<typeof KvAnswer.decode>): OnceAnswer<T> {
+	#kept(offered: ReturnType<typeof KvAnswer.decode>): Fetched<T> {
 		return {
 			value: this.#values.decode(offered.value ?? null),
 			age: spelled(offered.age ?? 0),
@@ -227,11 +227,11 @@ function background(run: Run, made: () => Promise<Uint8Array>): void {
 class Run {
 	readonly #stream: Stream
 	/** The stale answer the caller gets at once, for a build in the background. */
-	readonly kept: OnceAnswer<never> | undefined
+	readonly kept: Fetched<never> | undefined
 
-	constructor(stream: Stream, kept: OnceAnswer<unknown> | undefined) {
+	constructor(stream: Stream, kept: Fetched<unknown> | undefined) {
 		this.#stream = stream
-		this.kept = kept as OnceAnswer<never> | undefined
+		this.kept = kept as Fetched<never> | undefined
 	}
 
 	/** Sends the run's answer as the stream's last DATA, and waits for the core's, once it is kept. */

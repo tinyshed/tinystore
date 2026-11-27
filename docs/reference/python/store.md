@@ -526,7 +526,7 @@ One question asked of several indexes in one call, each with its own options:
     found = await store.search("algebra", among=[search.Among(courses, boost=2, limit=5), search.Among(people)])
 
 ``groups`` holds each index's hits in the order asked, with ``more``,
-or the error it failed with while the others answer; ``best`` merges
+or the error it failed with while the others answer; ``merged`` merges
 every group's hits by reciprocal rank fusion, the hit at rank r of its
 group weighing boost / (60 + r), since scores of two indexes cannot be
 compared. The store's indexes are searched in one snapshot; a table's

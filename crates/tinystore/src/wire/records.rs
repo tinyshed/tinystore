@@ -308,12 +308,12 @@ fn largest(reading: &Reading<'_>, asked: &RecordsLargestAsked) -> Answered {
 /// The events a query finds cut into sessions, each with the events it keeps.
 fn sessions(reading: &Reading<'_>, asked: RecordsSessionsAsked) -> Answered {
     let count = |asked: u64| usize::try_from(asked).unwrap_or(usize::MAX);
-    let mut cut = Sessions::by(asked.by).gap(Duration::from_millis(asked.gap)).events(count(asked.events));
+    let mut cut = Sessions::by(asked.by).gap(Duration::from_millis(asked.gap)).max_events(count(asked.max_events));
     if let Some(max) = asked.max {
         cut = cut.max(Duration::from_millis(max));
     }
-    if let Some(first) = asked.first {
-        cut = cut.first(count(first));
+    if let Some(first) = asked.first_sessions {
+        cut = cut.first_sessions(count(first));
     }
     let sessions = query(reading, &asked.query)?.sessions(&cut)?;
     let sessions = sessions.into_iter().map(|session| RecordsSession {

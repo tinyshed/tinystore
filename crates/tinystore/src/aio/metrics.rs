@@ -595,8 +595,8 @@ impl fmt::Debug for Exposition {
 
 impl Exposition {
     /// Only the names that start with this text.
-    pub fn prefix(self, prefix: impl Into<String>) -> Exposition {
-        Exposition { blocking: self.blocking.prefix(prefix), pool: self.pool }
+    pub fn only_prefix(self, prefix: impl Into<String>) -> Exposition {
+        Exposition { blocking: self.blocking.only_prefix(prefix), pool: self.pool }
     }
 
     /// Only the series whose newest sample is at most this old, from the

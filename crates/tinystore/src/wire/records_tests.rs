@@ -468,7 +468,7 @@ fn sessions_answer_each_visit_with_its_count_and_first_events_and_refuse_no_gap(
         query: RecordsQuery { handle: Some(activity), since: Some(4 * 3_600_000), ..RecordsQuery::default() },
         by: vec!["userId".to_owned()],
         gap: 30 * 60_000,
-        events: 1,
+        max_events: 1,
         ..RecordsSessionsAsked::default()
     };
     let answer: RecordsSessions = client.call(method::RECORDS_SESSIONS, &asked).unwrap();
@@ -479,8 +479,10 @@ fn sessions_answer_each_visit_with_its_count_and_first_events_and_refuse_no_gap(
         .collect();
     assert_eq!(shown, [("1", 2, 1, false), ("2", 1, 1, false), ("1", 1, 1, false)]);
     assert_eq!(answer.sessions[0].from, answer.sessions[0].events[0].at);
-    let first = client
-        .call::<RecordsSessions>(method::RECORDS_SESSIONS, &RecordsSessionsAsked { first: Some(1), ..asked.clone() });
+    let first = client.call::<RecordsSessions>(
+        method::RECORDS_SESSIONS,
+        &RecordsSessionsAsked { first_sessions: Some(1), ..asked.clone() },
+    );
     assert_eq!(first.unwrap().sessions.len(), 2);
     let refused = client.call::<RecordsSessions>(method::RECORDS_SESSIONS, &RecordsSessionsAsked { gap: 0, ..asked });
     assert_eq!(refused.unwrap_err().code, "invalid");

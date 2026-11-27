@@ -213,9 +213,9 @@ export interface SessionsQuery extends Counted {
 	/** the longest a session lasts: an event later than this after its first begins the next */
 	max?: Duration
 	/** each value's first sessions of the range alone, its later events passed over */
-	first?: number
+	firstSessions?: number
 	/** the first events each session keeps, 1000 at most; none unless asked */
-	events?: number
+	maxEvents?: number
 }
 
 /** A session: the events of one value of each key of `by`, each within `gap` of the one before. */
@@ -227,7 +227,7 @@ export interface Session {
 	to: Date
 	/** every event of it, however few it keeps */
 	count: number
-	/** its first events, as many as `events` asked */
+	/** its first events, as many as `maxEvents` asked */
 	events: Event[]
 	/** whether it may go on outside what was read: its first event within gap of the range's start, or its last of its end */
 	partial: boolean
@@ -476,10 +476,10 @@ abstract class Reads {
 	 * their first events: the answer whole, not paged, and `LimitError` past
 	 * 10,000 sessions held, open ones among them, or 64 MiB of what they keep.
 	 *
-	 *     await events.sessions({ since: '30d', by: 'userId', gap: '30m', max: '4h', first: 1, events: 50 })
+	 *     await events.sessions({ since: '30d', by: 'userId', gap: '30m', max: '4h', firstSessions: 1, maxEvents: 50 })
 	 */
 	async sessions(query: SessionsQuery): Promise<Session[]> {
-		const { by, gap, max, first, events, ...counted } = query
+		const { by, gap, max, firstSessions, maxEvents, ...counted } = query
 		const asked = queryOf(counted)
 		const answer = await this.ask(
 			'records.sessions',
@@ -489,8 +489,8 @@ abstract class Reads {
 					by: typeof by === 'string' ? [by] : [...by],
 					gap: ms(gap),
 					max: max === undefined ? undefined : ms(max),
-					first,
-					events,
+					firstSessions,
+					maxEvents,
 				}),
 			databasesOf(asked),
 		)

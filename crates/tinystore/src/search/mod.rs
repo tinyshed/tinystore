@@ -80,7 +80,7 @@ pub use filter::{Condition, Listing, Values, and, eq, is_in, missing, or, range}
 #[cfg(feature = "client")]
 pub(crate) use held::held;
 pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall, Total};
-pub use many::{Among, Best, Group, ManyFound, ManySearch, Searched};
+pub use many::{Among, Group, ManyFound, ManySearch, Merged, Searched};
 #[cfg(feature = "wire")]
 pub(crate) use many::{Many, Reading, searched};
 #[cfg(feature = "async")]

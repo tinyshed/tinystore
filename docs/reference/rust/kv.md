@@ -536,7 +536,7 @@ answered at once while one new answer is made in the background, until
 let (fresh, keep) = (Duration::from_mins(10), Duration::from_hours(12));
 let books = store.once::<String>("cabinet-books").fresh(fresh).keep(keep).open()?;
 let user = 7;
-let answer = books.answer(user, move || book(user))?;
+let answer = books.fetch(user, move || book(user))?;
 println!("{} made {:?} ago, stale: {}", answer.value, answer.age, answer.stale);
 ```
 
@@ -553,10 +553,10 @@ other build of its key starts for a tenth of `fresh`, a second at least
 and a minute at most. One build of a key runs at a time across every
 client of the store; on a node that copies kv.db, one a node.
 
-### Fresh.answer
+### Fresh.fetch
 
 ```rust
-pub fn answer<E, W>(&self, key: impl Key, work: W) -> Result<Answer<V>, E>
+pub fn fetch<E, W>(&self, key: impl Key, work: W) -> Result<Fetched<V>, E>
 where
     E: From<Error> + Send + 'static,
     W: FnOnce() -> Result<V, E> + Send + 'static,
@@ -577,7 +577,7 @@ where
     W: FnOnce() -> Result<V, E> + Send + 'static,
 ```
 
-`Fresh::answer`'s value alone.
+`Fresh::fetch`'s value alone.
 
 ### Fresh.get
 
@@ -710,10 +710,10 @@ pub fn expire(self) -> Result<bool>
 Gives a live key the expiry `ttl` or `expires_at` named, keeping its
 value and version, and says whether it was there.
 
-## Answer
+## Fetched
 
 ```rust
-pub struct Answer<V> {
+pub struct Fetched<V> {
     pub value: V,
     pub age: Duration,
     pub stale: bool,
@@ -740,14 +740,14 @@ pub fn under(&self, owner: impl Key) -> Once<V>
 
 The same answers seen from the branch `owner` names under these.
 
-### Once.answer
+### Once.fetch
 
 ```rust
-pub fn answer<E: From<Error>>(
+pub fn fetch<E: From<Error>>(
     &self,
     key: impl Key,
     work: impl FnOnce() -> Result<V, E>,
-) -> Result<Answer<V>, E>
+) -> Result<Fetched<V>, E>
 ```
 
 `Once::run`'s answer with how old it is: no older than `keep`, and
@@ -755,7 +755,7 @@ never stale, since these answers were opened without `fresh`.
 
 ```rust
 let charges = store.once::<String>("charges").open()?;
-let receipt = charges.answer("key-7f", || Ok::<_, tinystore::Error>("receipt 1".to_owned()))?;
+let receipt = charges.fetch("key-7f", || Ok::<_, tinystore::Error>("receipt 1".to_owned()))?;
 println!("{} made {:?} ago", receipt.value, receipt.age);
 ```
 
@@ -1645,17 +1645,17 @@ let books = store
     .keep(Duration::from_hours(12))
     .spawn(|build| drop(tokio::spawn(build)))
     .open()?;
-let answer = books.answer(7, || book(7)).await?; // at once, stale or not, once one is kept
+let answer = books.fetch(7, || book(7)).await?; // at once, stale or not, once one is kept
 ```
 
-### aio::kv::Fresh.answer
+### aio::kv::Fresh.fetch
 
 ```rust
-pub fn answer<K, E, W, F>(
+pub fn fetch<K, E, W, F>(
     &self,
     key: K,
     work: W,
-) -> impl Future<Output = Result<Answer<V>, E>> + Send + use<K, V, E, W, F>
+) -> impl Future<Output = Result<Fetched<V>, E>> + Send + use<K, V, E, W, F>
 where
     K: Key,
     E: From<Error> + Send + 'static,
@@ -1664,7 +1664,7 @@ where
 ```
 
 The answer kept under `key`, with how old it is, or the answer of the
-future `work` gives once none is kept, as `crate::kv::Fresh::answer`
+future `work` gives once none is kept, as `crate::kv::Fresh::fetch`
 gives it. A kept answer older than `fresh` is answered at once,
 `stale`, and `work`'s future, given to `spawn`, makes the new one,
 unless a build of the key is under way or failed within its pause.
@@ -1684,7 +1684,7 @@ where
     F: Future<Output = Result<V, E>> + Send + 'static,
 ```
 
-`Fresh::answer`'s value alone.
+`Fresh::fetch`'s value alone.
 
 ### aio::kv::Fresh.get
 
@@ -1812,14 +1812,14 @@ runs again; once the function answered, its answer is kept all the
 same and the key let go after it. A run of a key inside its own run,
 awaited or blocking, is `Invalid`.
 
-### aio::kv::Once.answer
+### aio::kv::Once.fetch
 
 ```rust
-pub fn answer<K, E, W, F>(
+pub fn fetch<K, E, W, F>(
     &self,
     key: K,
     work: W,
-) -> impl Future<Output = Result<Answer<V>, E>> + Send + use<K, V, E, W, F>
+) -> impl Future<Output = Result<Fetched<V>, E>> + Send + use<K, V, E, W, F>
 where
     K: Key,
     E: From<Error> + Send,
@@ -1828,7 +1828,7 @@ where
 ```
 
 `Once::run`'s answer with how old it is, as
-`crate::kv::Once::answer` gives it.
+`crate::kv::Once::fetch` gives it.
 
 ### aio::kv::Once.get
 

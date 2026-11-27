@@ -455,10 +455,10 @@ interface OnceOptions {
 }
 ```
 
-## OnceAnswer
+## Fetched
 
 ```ts
-interface OnceAnswer<T> {
+interface Fetched<T> {
     value: T
     age: DurationText
     stale: boolean
@@ -499,10 +499,10 @@ kept is OutcomeUnknownError.
 
     const receipt = await charges.run(requestId, () => pay.charge(order, requestId))
 
-### Once.answer
+### Once.fetch
 
 ```ts
-answer(key: Key, fn: () => T | Promise<T>): Promise<OnceAnswer<T>>
+fetch(key: Key, fn: () => T | Promise<T>): Promise<Fetched<T>>
 ```
 
 run's answer with how old it is. Opened with `fresh`, a kept answer older
@@ -510,7 +510,7 @@ than it comes back at once, stale, and fn may make the next one in the
 background: its answer replaces the kept one, and its throw, which no
 caller sees, keeps it until `keep` ends.
 
-    const { value, age, stale } = await books.answer(userId, () => cabinet.book(userId))
+    const { value, age, stale } = await books.fetch(userId, () => cabinet.book(userId))
 
 ### Once.get
 

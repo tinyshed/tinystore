@@ -122,18 +122,6 @@ type Allowance struct {
 
 Allowance is what a rate limit or a quota answers a request.
 
-## Answer
-
-```go
-type Answer[T any] struct {
-	Value T
-	Age   time.Duration
-	Stale bool
-}
-```
-
-Answer is an answer with how old it is: Stale once it is older than the Fresh its answers opened with.
-
 ## Bucket
 
 ```go
@@ -438,6 +426,18 @@ type Entry[T any] struct {
 
 Entry is a key's value with its version and expiry.
 
+## Fetched
+
+```go
+type Fetched[T any] struct {
+	Value T
+	Age   time.Duration
+	Stale bool
+}
+```
+
+Fetched is an answer with how old it is: Stale once it is older than the Fresh its answers opened with.
+
 ## ListOption
 
 ```go
@@ -469,16 +469,6 @@ OpenOnce opens answers of type T kept once a key, a day unless Keep says.
 	charges, err := kv.OpenOnce[Receipt](store, "charges", kv.Keep(24*time.Hour))
 	books, err := kv.OpenOnce[GradeBook](store, "cabinet-books", kv.Fresh(10*time.Minute), kv.Keep(12*time.Hour))
 
-### Once.Answer
-
-```go
-func (o *Once[T]) Answer(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (Answer[T], error)
-```
-
-Answer is Run's answer with how old it is. Opened with Fresh, a kept answer older than it comes back at once, Stale, and fn may make the next one in the background, on a context that the caller's cancel does not reach: its answer replaces the kept one, and its error, which no caller sees, keeps it until Keep ends.
-
-	book, err := books.Answer(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
-
 ### Once.Clear
 
 ```go
@@ -494,6 +484,16 @@ func (o *Once[T]) Delete(ctx context.Context, key string) (bool, error)
 ```
 
 Delete forgets the answer kept for key, so that its next run runs fn again.
+
+### Once.Fetch
+
+```go
+func (o *Once[T]) Fetch(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (Fetched[T], error)
+```
+
+Fetch is Run's answer with how old it is. Opened with Fresh, a kept answer older than it comes back at once, Stale, and fn may make the next one in the background, on a context that the caller's cancel does not reach: its answer replaces the kept one, and its error, which no caller sees, keeps it until Keep ends.
+
+	book, err := books.Fetch(ctx, userID, func(ctx context.Context) (GradeBook, error) { return cabinet.Book(ctx, userID) })
 
 ### Once.Get
 

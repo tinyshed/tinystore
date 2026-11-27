@@ -396,7 +396,7 @@ func TestAMirrorAnswersWhatWasAddedChangedAndGoneAndItsGuardWritesNothing(t *tes
 		ctx := context.Background()
 		db := app(t, store)
 		ways.Must(db.Exec(ctx, `create table works (course_id integer, id text, title text, grade real, gone_at integer, primary key (course_id, id))`))
-		works := sqldb.OpenMirror[Work](db, "works", sqldb.MirrorOptions{Key: []string{"course_id", "id"}, Gone: "gone_at", Compare: []string{"grade"}})
+		works := sqldb.OpenMirror[Work](db, "works", sqldb.MirrorOptions{Key: []string{"course_id", "id"}, Gone: "gone_at", ChangeOn: []string{"grade"}})
 		grade := func(g float64) *float64 { return &g }
 		work := func(id string, g *float64, title string) Work {
 			return Work{CourseID: 1, ID: id, Title: title, Grade: g}
@@ -413,16 +413,16 @@ func TestAMirrorAnswersWhatWasAddedChangedAndGoneAndItsGuardWritesNothing(t *tes
 		if len(diff.Changed) != 1 || diff.Changed[0].Before.Grade != nil || *diff.Changed[0].After.Grade != 5 {
 			t.Fatalf("changed %+v", diff.Changed)
 		}
-		held := ways.Must(works.Replace(ctx, scope, nil, sqldb.Shrink(0.5)))
+		held := ways.Must(works.Replace(ctx, scope, nil, sqldb.MinKept(0.5)))
 		if !held.Suspect || len(held.Gone) != 3 {
 			t.Fatalf("held %+v", held)
 		}
 		if live := ways.Must(sqldb.Scalar[int64](ctx, db, `select count(*) from works where gone_at is null`)); live != 3 {
 			t.Fatalf("a suspect answer wrote: %d live", live)
 		}
-		patched := ways.Must(works.Patch(ctx, []Work{work("e", grade(1), "New")}))
-		if len(patched.Added) != 1 || len(patched.Gone) != 0 {
-			t.Fatalf("patched %+v", patched)
+		upserted := ways.Must(works.Upsert(ctx, []Work{work("e", grade(1), "New")}))
+		if len(upserted.Added) != 1 || len(upserted.Gone) != 0 {
+			t.Fatalf("upserted %+v", upserted)
 		}
 		_, err := works.Replace(ctx, map[string]any{"course_id": 2}, []Work{work("a", grade(4), "Essay")})
 		is(t, err, tinystore.ErrInvalid)
@@ -959,10 +959,10 @@ func TestASecondWriterFromTheOldVersionIsRefusedAndADeletedRowIsGoneFromTheHandl
 		ways.Must(tasks.Insert(ctx, Task{ID: 1, Title: "first"}))
 		one := tasks.Where(sqldb.Eq{"id": 1})
 		seen, _ := ways.Must2(one.One(ctx))
-		if done := ways.Must(one.Update(ctx, sqldb.Set{"title": "from a"}, sqldb.Expect(seen.Version))); done.Changes != 1 {
+		if done := ways.Must(one.Update(ctx, sqldb.Set{"title": "from a"}, sqldb.IfVersion(seen.Version))); done.Changes != 1 {
 			t.Fatalf("a %+v", done)
 		}
-		_, err := one.Update(ctx, sqldb.Set{"title": "from b"}, sqldb.Expect(seen.Version))
+		_, err := one.Update(ctx, sqldb.Set{"title": "from b"}, sqldb.IfVersion(seen.Version))
 		is(t, err, tinystore.ErrConflict)
 		if err.Error() != "sql sp: table tasks: the row is at version 1, not 0" {
 			t.Fatalf("b %v", err)
@@ -1076,7 +1076,7 @@ func TestAnInsertStartsARowAtVersion0AndAMarkedRowKeepsItsKeyFromAnInsert(t *tes
 }
 
 // contract: SQL-23, SQL-24
-func TestAnUpsertOntoAMarkedRowBringsItBackAndAnExpectWritesEveryRowOrNone(t *testing.T) {
+func TestAnUpsertOntoAMarkedRowBringsItBackAndAnIfVersionWritesEveryRowOrNone(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
 		db := sp(t, store)
@@ -1093,7 +1093,7 @@ func TestAnUpsertOntoAMarkedRowBringsItBackAndAnExpectWritesEveryRowOrNone(t *te
 		is(t, err, tinystore.ErrInvalid)
 
 		both := tasks.Where(sqldb.Eq{"id": []int64{1, 2}})
-		_, err = both.Update(ctx, sqldb.Set{"title": "z"}, sqldb.Expect(0))
+		_, err = both.Update(ctx, sqldb.Set{"title": "z"}, sqldb.IfVersion(0))
 		is(t, err, tinystore.ErrConflict)
 		if !strings.Contains(err.Error(), "the row is at version 2, not 0") {
 			t.Fatalf("refused %v", err)
@@ -1103,24 +1103,24 @@ func TestAnUpsertOntoAMarkedRowBringsItBackAndAnExpectWritesEveryRowOrNone(t *te
 		}
 		ways.Must(tasks.Where(sqldb.Eq{"id": 2}).Update(ctx, sqldb.Set{"title": "b2"}))
 		ways.Must(tasks.Where(sqldb.Eq{"id": 2}).Update(ctx, sqldb.Set{"title": "b3"}))
-		if done := ways.Must(both.Update(ctx, sqldb.Set{"title": "z"}, sqldb.Expect(2))); done.Changes != 2 {
+		if done := ways.Must(both.Update(ctx, sqldb.Set{"title": "z"}, sqldb.IfVersion(2))); done.Changes != 2 {
 			t.Fatalf("all %+v", done)
 		}
-		if done := ways.Must(tasks.Where(sqldb.Eq{"id": 9}).Update(ctx, sqldb.Set{"title": "z"}, sqldb.Expect(0))); done.Changes != 0 {
+		if done := ways.Must(tasks.Where(sqldb.Eq{"id": 9}).Update(ctx, sqldb.Set{"title": "z"}, sqldb.IfVersion(0))); done.Changes != 0 {
 			t.Fatalf("no row %+v", done)
 		}
-		_, err = sqldb.OpenTable[Task](db, "tasks").Where(sqldb.Eq{"id": 1}).Update(ctx, sqldb.Set{"title": "z"}, sqldb.Expect(3))
+		_, err = sqldb.OpenTable[Task](db, "tasks").Where(sqldb.Eq{"id": 1}).Update(ctx, sqldb.Set{"title": "z"}, sqldb.IfVersion(3))
 		is(t, err, tinystore.ErrInvalid)
 
 		err = db.Tx(ctx, func(tx *sqldb.Tx) error {
 			one := sqldb.OpenTable[Task](tx, "tasks", sqldb.Deleted("deleted_at"), sqldb.Version("version")).Where(sqldb.Eq{"id": 1})
-			if done, err := one.Update(ctx, sqldb.Set{"title": "in tx"}, sqldb.Expect(3)); err != nil || done.Changes != 1 {
+			if done, err := one.Update(ctx, sqldb.Set{"title": "in tx"}, sqldb.IfVersion(3)); err != nil || done.Changes != 1 {
 				return fmt.Errorf("update %+v: %w", done, err)
 			}
-			if _, err := one.Delete(ctx, sqldb.Expect(3)); !errors.Is(err, tinystore.ErrConflict) {
+			if _, err := one.Delete(ctx, sqldb.IfVersion(3)); !errors.Is(err, tinystore.ErrConflict) {
 				return fmt.Errorf("delete from 3: %w", err)
 			}
-			_, err := one.Delete(ctx, sqldb.Expect(4))
+			_, err := one.Delete(ctx, sqldb.IfVersion(4))
 			return err
 		})
 		if err != nil {

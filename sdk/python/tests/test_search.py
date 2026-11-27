@@ -243,16 +243,16 @@ async def test_one_question_of_several_indexes_answers_a_group_an_index_and_ever
     assert second.hits[0].snippet is not None
     assert second.hits[0].snippet.text == "…read linear algebra."
     assert third.hits == [] and third.error is None
-    assert [(best.index, best.hit.id) for best in found.best] == [
+    assert [(merged.index, merged.hit.id) for merged in found.merged] == [
         ("box_courses", first.hits[0].id),
         ("box_pages", "p-1"),
     ]
-    assert found.best[0].hit is first.hits[0], "the hit its group holds, not a copy"
+    assert found.merged[0].hit is first.hits[0], "the hit its group holds, not a copy"
     await store.drop_index("box_people")
     failed = await store.search("algebra", among=[search.Among(courses), search.Among(people)])
     assert isinstance(failed.groups[1].error, tinystore.InvalidError)
     assert "index box_people" in str(failed.groups[1].error)
-    assert sorted(best.hit.id for best in failed.best) == ["c-1", "c-2"]
+    assert sorted(merged.hit.id for merged in failed.merged) == ["c-1", "c-2"]
     with pytest.raises(tinystore.InvalidError):
         await store.search("algebra", among=[])
 

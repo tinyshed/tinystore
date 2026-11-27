@@ -58,16 +58,16 @@ func TestAStaleAnswerIsAnsweredAtOnceWhileItBuildsAndTheLastGoodStaysWhileTheSou
 		}
 		advance := func(d time.Duration) { check(t, store.Clock().Advance(ctx, d)) }
 
-		first := ways.Must(books.Answer(ctx, "7", cabinet))
-		if first != (kv.Answer[GradeBook]{Value: GradeBook{7, 1}}) {
+		first := ways.Must(books.Fetch(ctx, "7", cabinet))
+		if first != (kv.Fetched[GradeBook]{Value: GradeBook{7, 1}}) {
 			t.Fatalf("first: %+v", first)
 		}
 		advance(5 * time.Minute)
-		if within := ways.Must(books.Answer(ctx, "7", cabinet)); within != (kv.Answer[GradeBook]{GradeBook{7, 1}, 5 * time.Minute, false}) || built.Load() != 1 {
+		if within := ways.Must(books.Fetch(ctx, "7", cabinet)); within != (kv.Fetched[GradeBook]{GradeBook{7, 1}, 5 * time.Minute, false}) || built.Load() != 1 {
 			t.Fatalf("within fresh: %+v", within)
 		}
 		advance(6 * time.Minute)
-		if stale := ways.Must(books.Answer(ctx, "7", cabinet)); stale != (kv.Answer[GradeBook]{GradeBook{7, 1}, 11 * time.Minute, true}) {
+		if stale := ways.Must(books.Fetch(ctx, "7", cabinet)); stale != (kv.Fetched[GradeBook]{GradeBook{7, 1}, 11 * time.Minute, true}) {
 			t.Fatalf("stale: %+v", stale)
 		}
 		ways.Until(t, func() bool { book, _ := ways.Must2(books.Get(ctx, "7")); return book.Built == 2 })
@@ -77,11 +77,11 @@ func TestAStaleAnswerIsAnsweredAtOnceWhileItBuildsAndTheLastGoodStaysWhileTheSou
 
 		down.Store(true)
 		advance(11 * time.Minute)
-		if ways.Must(books.Answer(ctx, "7", cabinet)).Value.Built != 2 {
+		if ways.Must(books.Fetch(ctx, "7", cabinet)).Value.Built != 2 {
 			t.Fatal("the last good answer")
 		}
 		advance(time.Minute)
-		if !ways.Must(books.Answer(ctx, "7", cabinet)).Stale {
+		if !ways.Must(books.Fetch(ctx, "7", cabinet)).Stale {
 			t.Fatal("still stale while the source is down")
 		}
 		if book, _ := ways.Must2(books.Get(ctx, "7")); book.Built != 2 {

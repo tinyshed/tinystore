@@ -58,15 +58,15 @@ type Lease struct {
 	Fence  Fence
 	Waited time.Duration
 
-	succeeded *atomic.Bool
+	healthy *atomic.Bool
 }
 
-// Succeeded says a semaphore's hold succeeded, so that its Breaker does not
-// count it a failure though fn then returns an error: a 404 that is the
-// caller's, not the service's.
-func (l *Lease) Succeeded() {
-	if l.succeeded != nil {
-		l.succeeded.Store(true)
+// Healthy says the service a semaphore's hold guards is healthy, so that its
+// Breaker does not count the hold a failure though fn then returns an error:
+// a 404 that is the caller's, not the service's.
+func (l *Lease) Healthy() {
+	if l.healthy != nil {
+		l.healthy.Store(true)
 	}
 }
 
@@ -103,7 +103,7 @@ func Background(n int) Option { return func(k *keys) { k.background = &n } }
 
 // Breaker puts a semaphore's key down for pause once failures holds of it
 // failed in a row: every hold is then ErrUnavailable at once. A hold failed
-// when fn returned an error, unless its lease said Succeeded, or when it ran
+// when fn returned an error, unless its lease said Healthy, or when it ran
 // past its Timeout or MaxHold; a success resets the count. Once the pause is
 // over, one hold goes through: its success puts the key up, its failure
 // pauses it again. The store's process keeps it in memory, so a restart of
@@ -355,12 +355,12 @@ func (k *keys) hold(ctx context.Context, given any, a asked, fn func(context.Con
 	defer cancel(nil)
 	lease := newLeasing(k, place, answer, cancel)
 	defer lease.stop()
-	succeeded := new(atomic.Bool)
-	ran := fn(inner, &Lease{Fence: fenceOf(answer.Fence), Waited: waited, succeeded: succeeded})
+	healthy := new(atomic.Bool)
+	ran := fn(inner, &Lease{Fence: fenceOf(answer.Fence), Waited: waited, healthy: healthy})
 	if lost := lease.stop(); lost != nil {
 		return true, lost
 	}
-	k.release(answer.Lease, ran != nil && !succeeded.Load())
+	k.release(answer.Lease, ran != nil && !healthy.Load())
 	return true, ran
 }
 

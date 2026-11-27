@@ -10949,9 +10949,9 @@ pub(crate) struct RecordsSessionsAsked {
     /// A session ends this long after its first event, pause or none. Milliseconds.
     pub(crate) max: Option<u64>,
     /// Each value's first sessions alone, its later events passed over.
-    pub(crate) first: Option<u64>,
+    pub(crate) first_sessions: Option<u64>,
     /// The first events each session keeps, 1000 at most.
-    pub(crate) events: u64,
+    pub(crate) max_events: u64,
 }
 
 #[cfg(feature = "records")]
@@ -10967,8 +10967,8 @@ impl Message for RecordsSessionsAsked {
                 2 => message.by = codec::list(r, "by", codec::str)?,
                 3 => message.gap = codec::uint(r, "gap")?,
                 4 => message.max = Some(codec::uint(r, "max")?),
-                5 => message.first = Some(codec::uint(r, "first")?),
-                6 => message.events = codec::uint(r, "events")?,
+                5 => message.first_sessions = Some(codec::uint(r, "firstSessions")?),
+                6 => message.max_events = codec::uint(r, "maxEvents")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10993,13 +10993,13 @@ impl Message for RecordsSessionsAsked {
             map.field(out, 4);
             codec::write_uint(out, max);
         }
-        if let Some(first) = &self.first {
+        if let Some(first_sessions) = &self.first_sessions {
             map.field(out, 5);
-            codec::write_uint(out, first);
+            codec::write_uint(out, first_sessions);
         }
-        if self.events != 0 {
+        if self.max_events != 0 {
             map.field(out, 6);
-            codec::write_uint(out, &self.events);
+            codec::write_uint(out, &self.max_events);
         }
         map.close(out);
     }
@@ -11010,7 +11010,7 @@ impl Message for RecordsSessionsAsked {
             + 1 + codec::list_size(&self.by, |item| 5 + item.len())
             + 10
             + self.max.map_or(0, |_| 10)
-            + self.first.map_or(0, |_| 10)
+            + self.first_sessions.map_or(0, |_| 10)
             + 10
     }
 
@@ -11019,8 +11019,8 @@ impl Message for RecordsSessionsAsked {
             && self.by.is_empty()
             && self.gap == 0
             && self.max.is_none()
-            && self.first.is_none()
-            && self.events == 0
+            && self.first_sessions.is_none()
+            && self.max_events == 0
     }
 }
 
@@ -13545,7 +13545,7 @@ impl Message for SearchManyQuery {
 pub(crate) struct SearchAmong {
     /// Limit 1 to 100, 10 when absent.
     pub(crate) query: SearchQuery,
-    /// What its hits weigh in best, above 0; 1 when absent.
+    /// What its hits weigh in merged, above 0; 1 when absent.
     pub(crate) boost: Option<f64>,
 }
 
@@ -13598,7 +13598,7 @@ impl Message for SearchAmong {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SearchManyFound {
     pub(crate) groups: Vec<SearchGroup>,
-    pub(crate) best: Vec<SearchBest>,
+    pub(crate) merged: Vec<SearchMerged>,
 }
 
 #[cfg(feature = "search")]
@@ -13611,7 +13611,7 @@ impl Message for SearchManyFound {
         for _ in 0..codec::fields(r, Self::NAME)? {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.groups = codec::list(r, "groups", codec::message::<SearchGroup>)?,
-                2 => message.best = codec::list(r, "best", codec::message::<SearchBest>)?,
+                2 => message.merged = codec::list(r, "merged", codec::message::<SearchMerged>)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -13624,9 +13624,9 @@ impl Message for SearchManyFound {
             map.field(out, 1);
             codec::write_list(out, &self.groups, codec::write_message);
         }
-        if !self.best.is_empty() {
+        if !self.merged.is_empty() {
             map.field(out, 2);
-            codec::write_list(out, &self.best, codec::write_message);
+            codec::write_list(out, &self.merged, codec::write_message);
         }
         map.close(out);
     }
@@ -13634,12 +13634,12 @@ impl Message for SearchManyFound {
     fn size(&self) -> usize {
         3
             + 1 + codec::list_size(&self.groups, codec::message_size)
-            + 1 + codec::list_size(&self.best, codec::message_size)
+            + 1 + codec::list_size(&self.merged, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
         self.groups.is_empty()
-            && self.best.is_empty()
+            && self.merged.is_empty()
     }
 }
 
@@ -13731,17 +13731,17 @@ impl Message for SearchGroup {
     }
 }
 
-/// A hit of best, by its group's place and its own place in that group's hits.
+/// A hit of merged, by its group's place and its own place in that group's hits.
 #[cfg(feature = "search")]
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct SearchBest {
+pub(crate) struct SearchMerged {
     pub(crate) group: u64,
     pub(crate) hit: u64,
 }
 
 #[cfg(feature = "search")]
-impl Message for SearchBest {
-    const NAME: &'static str = "search.Best";
+impl Message for SearchMerged {
+    const NAME: &'static str = "search.Merged";
 
     fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
         let mut message = Self::default();
@@ -14873,7 +14873,7 @@ impl Message for SqlDescribed {
 
 /// A table that mirrors another system, given the source's list: replace
 /// makes the scope, the rows whose columns hold its values, what the list
-/// lists, and patch writes what the list adds and changes. The table's key,
+/// lists, and upsert writes what the list adds and changes. The table's key,
 /// the columns that name a row at the source, is covered by a unique index or
 /// its primary key. A row the same as held is not written.
 #[cfg(feature = "sql")]
@@ -14885,8 +14885,8 @@ pub(crate) struct SqlMirror {
     /// The column that marks what the source dropped with the store's time, rather than a delete.
     pub(crate) gone: Option<String>,
     /// The columns whose change makes a row changed: every column of the rows but the key's when absent.
-    pub(crate) compare: Option<Vec<String>>,
-    /// Replace or patch.
+    pub(crate) change_on: Option<Vec<String>>,
+    /// Replace or upsert.
     pub(crate) mode: String,
     /// Replace: the columns of its scope.
     pub(crate) scope: Option<Vec<String>>,
@@ -14895,7 +14895,7 @@ pub(crate) struct SqlMirror {
     /// The list, one message at most.
     pub(crate) rows: SqlRows,
     /// Replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live.
-    pub(crate) shrink: Option<f64>,
+    pub(crate) min_kept: Option<f64>,
 }
 
 #[cfg(feature = "sql")]
@@ -14911,12 +14911,12 @@ impl Message for SqlMirror {
                 2 => message.table = codec::str(r, "table")?,
                 3 => message.key = codec::list(r, "key", codec::str)?,
                 4 => message.gone = Some(codec::str(r, "gone")?),
-                5 => message.compare = Some(codec::list(r, "compare", codec::str)?),
+                5 => message.change_on = Some(codec::list(r, "changeOn", codec::str)?),
                 6 => message.mode = codec::str(r, "mode")?,
                 7 => message.scope = Some(codec::list(r, "scope", codec::str)?),
                 8 => message.scope_values = Some(codec::list(r, "scopeValues", codec::cell)?),
                 9 => message.rows = SqlRows::read(r)?,
-                10 => message.shrink = Some(codec::float(r, "shrink")?),
+                10 => message.min_kept = Some(codec::float(r, "minKept")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -14941,9 +14941,9 @@ impl Message for SqlMirror {
             map.field(out, 4);
             codec::write_str(out, gone);
         }
-        if let Some(compare) = &self.compare {
+        if let Some(change_on) = &self.change_on {
             map.field(out, 5);
-            codec::write_list(out, compare, codec::write_str);
+            codec::write_list(out, change_on, codec::write_str);
         }
         if !self.mode.is_empty() {
             map.field(out, 6);
@@ -14961,9 +14961,9 @@ impl Message for SqlMirror {
             map.field(out, 9);
             codec::write_message(out, &self.rows);
         }
-        if let Some(shrink) = &self.shrink {
+        if let Some(min_kept) = &self.min_kept {
             map.field(out, 10);
-            codec::write_float(out, shrink);
+            codec::write_float(out, min_kept);
         }
         map.close(out);
     }
@@ -14974,12 +14974,12 @@ impl Message for SqlMirror {
             + 1 + 5 + self.table.len()
             + 1 + codec::list_size(&self.key, |item| 5 + item.len())
             + self.gone.as_ref().map_or(0, |gone| 1 + 5 + gone.len())
-            + self.compare.as_ref().map_or(0, |compare| 1 + codec::list_size(compare, |item| 5 + item.len()))
+            + self.change_on.as_ref().map_or(0, |change_on| 1 + codec::list_size(change_on, |item| 5 + item.len()))
             + 1 + 5 + self.mode.len()
             + self.scope.as_ref().map_or(0, |scope| 1 + codec::list_size(scope, |item| 5 + item.len()))
             + self.scope_values.as_ref().map_or(0, |scope_values| 1 + codec::list_size(scope_values, codec::cell_size))
             + 1 + self.rows.size()
-            + self.shrink.map_or(0, |_| 10)
+            + self.min_kept.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -14987,12 +14987,12 @@ impl Message for SqlMirror {
             && self.table.is_empty()
             && self.key.is_empty()
             && self.gone.is_none()
-            && self.compare.is_none()
+            && self.change_on.is_none()
             && self.mode.is_empty()
             && self.scope.is_none()
             && self.scope_values.is_none()
             && self.rows.is_zero()
-            && self.shrink.is_none()
+            && self.min_kept.is_none()
     }
 }
 
@@ -16344,7 +16344,7 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         #[cfg(feature = "search")]
         "search.Group" => SearchGroup::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
-        "search.Best" => SearchBest::decode(body).map(|message| (message.encode(), message.size())),
+        "search.Merged" => SearchMerged::decode(body).map(|message| (message.encode(), message.size())),
         "server.Clock" => ServerClock::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Migration" => SqlMigration::decode(body).map(|message| (message.encode(), message.size())),
