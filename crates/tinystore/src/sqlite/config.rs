@@ -47,6 +47,9 @@ pub(crate) struct Config {
     /// How the file, while a copy, reaches where its home stands now: what a
     /// migration's check runs before it says a step has not arrived.
     pub(crate) catch_up: Option<CatchUp>,
+    /// The file is read beside the program that holds the store, which
+    /// applies its migrations, rather than as a node's copy of its home.
+    pub(crate) beside: bool,
 }
 
 /// Brings a copy to where its home stands now, or fails saying why not.
@@ -79,6 +82,7 @@ impl Default for Config {
             probe: None,
             gate: None,
             catch_up: None,
+            beside: false,
         }
     }
 }

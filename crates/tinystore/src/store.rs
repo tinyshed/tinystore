@@ -421,7 +421,8 @@ impl Store {
     )]
     pub(crate) fn open_to_read(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
         self.holds(name)?;
-        crate::sqlite::File::open_copy(self.inner.dir.join(name), self.file_config(name, config))
+        let config = crate::sqlite::Config { beside: true, ..self.file_config(name, config) };
+        crate::sqlite::File::open_copy(self.inner.dir.join(name), config)
     }
 
     /// `config` with what the store gives each file it opens: its memory, the

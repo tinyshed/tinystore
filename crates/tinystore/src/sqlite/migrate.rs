@@ -5,7 +5,7 @@ use rusqlite::{Connection, params};
 use super::Tx;
 use super::connection::{given_sql_error, sql_error};
 use super::given::given;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, Result};
 
 /// One step of a schema's history: applied once, in order, and never edited
 /// or renamed after it shipped. Until `v0.1.0` an engine keeps one step and
@@ -110,26 +110,30 @@ pub(crate) fn apply_steps(tx: &Tx<'_>, history: &str, steps: &[Migration]) -> Re
     Ok(())
 }
 
-/// Checks, on a copy, that its home applied these steps of `history` and no
-/// other: the steps are the home's to run, and arrive as its pages. A step
-/// not there yet is `Unavailable` until the home's commit of it arrives.
-pub(crate) fn check_applied_steps(
+/// What a file lacks of the program's steps of a history, for whoever
+/// writes the file to apply: a step it applied as a draft that has shipped
+/// since, or the first step it has not applied.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Behind {
+    Shipped(String),
+    Missing(String),
+}
+
+/// Checks that the file applied these steps of `history` and no other, and
+/// says what it lacks, if anything: on a copy the steps are its home's to
+/// run and arrive as its pages, and beside a store's holder they are the
+/// holder's.
+pub(crate) fn behind(
     connection: &Connection,
     history: &str,
     migrations: &[Migration],
     redo: Option<&str>,
-) -> Result<()> {
+) -> Result<Option<Behind>> {
     let compared = compare(connection, history, migrations, redo)?;
-    if let Some((_, name)) = compared.shipped.first() {
-        return Err(Error::new(ErrorKind::Unavailable, format!("{history}: {name} shipped since it was a draft")));
+    if let Some((_, name)) = compared.shipped.into_iter().next() {
+        return Ok(Some(Behind::Shipped(name)));
     }
-    match migrations.get(compared.applied) {
-        None => Ok(()),
-        Some(missing) => Err(Error::new(
-            ErrorKind::Unavailable,
-            format!("{history}: {} has not reached this copy from its home yet", missing.name),
-        )),
-    }
+    Ok(migrations.get(compared.applied).map(|missing| Behind::Missing(missing.name.to_string())))
 }
 
 /// Whether a step the file applied of `history` is a draft, whatever its

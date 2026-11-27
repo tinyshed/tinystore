@@ -2208,6 +2208,24 @@ fn a_dropped_index_refuses_its_handles_and_leaves_no_row() {
     assert!(search(&again, "bread").hits.is_empty(), "the name opens a new index");
 }
 
+// contract: STORE-14
+#[test]
+fn a_store_beside_a_holder_that_has_not_migrated_search_db_yet_says_so_without_copies_or_homes() {
+    let fixture = fixture();
+    fixture.articles::<Article>("articles").set("a", &article("Rye", "bread")).unwrap();
+    // search.db as the release before 0004 left it, as before its holder opens search
+    let file = rusqlite::Connection::open(fixture.dir.path().join("search.db")).unwrap();
+    file.execute("delete from _tinystore_migrations where history = 'search' and version = 4", []).unwrap();
+    drop(file);
+    let beside = crate::Store::open_beside(fixture.dir.path()).unwrap();
+    let refused = crate::search::list(&beside).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Unavailable, "{refused}");
+    let said = refused.to_string();
+    assert!(said.contains("search: 0004_synonyms.sql is not applied yet"), "{said}");
+    assert!(said.contains("the program that holds the store applies it when it opens search"), "{said}");
+    assert!(!said.contains("copy") && !said.contains("home"), "a store with no node has neither: {said}");
+}
+
 /// Waits up to five seconds for `holds`, and says whether it held.
 fn holds_soon(holds: impl Fn() -> bool) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

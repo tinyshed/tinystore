@@ -149,6 +149,17 @@ opens any more is kept until it is dropped, as
 [rebuilt](../search/rebuilds.md) under the same name keeps that time, so the
 open that started the rebuild still shows after it.
 
+After an upgrade, the program applies search.db's new migrations when it first
+opens an index. Until then, `list` from the new release fails and names the
+step the file lacks:
+
+```text
+tinystore search: /srv/app/data/search.db: search: 0004_synonyms.sql is not applied yet: the program that holds the store applies it when it opens search, unless that program runs an older release: unavailable
+```
+
+Run `list` again once the program has opened an index. If the program still
+runs the older release, use the command line of that release.
+
 ## See also
 
 - [The command line](README.md).

@@ -32,6 +32,7 @@ These contracts are what does not.
 - **STORE-11** A store MUST read every format an earlier release wrote, and MUST refuse at its open a file a later release migrated, naming the step it lacks, rather than read that release's bytes as damage.
 - **STORE-12** A store opened with `openTemp` MUST live in a directory of its own that its close removes.
 - **STORE-13** A store opened with `cli` MUST remove its `SERVE` before it lets go of its `LOCK`, so that a client never finds a `SERVE` whose endpoint another process may hold.
+- **STORE-14** A store opened beside its holder MUST refuse a file whose migrations the holder has not yet run to this release's steps `unavailable`, naming the step it lacks and saying that the program which holds the store applies it; it MUST NOT speak of a copy or a home, which only a node has.
 
 ## 2. Durability and transactions
 

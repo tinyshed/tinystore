@@ -604,7 +604,7 @@ impl File {
 
     pub(crate) fn migrate(&self, history: &str, migrations: &[Migration]) -> Result<()> {
         if self.is_copy() {
-            return self.check_its_home_migrated(history, migrations);
+            return self.check_its_writer_migrated(history, migrations);
         }
         if self.migrated(history, migrations, None)? {
             return Ok(());
@@ -617,30 +617,52 @@ impl File {
     /// answers, and no writer is taken, so that a file which takes no writes,
     /// as an old home's, still opens.
     fn migrated(&self, history: &str, migrations: &[Migration], redo: Option<&str>) -> Result<bool> {
-        match self.read(|connection| migrate::check_applied_steps(connection, history, migrations, redo)) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == ErrorKind::Unavailable => Ok(false),
+        match self.read(|connection| migrate::behind(connection, history, migrations, redo)) {
+            Ok(behind) => Ok(behind.is_none()),
             Err(error) => Err(error.within(self.describe())),
         }
     }
 
-    /// A copy's migrations are its home's: they arrive as pages, and the copy
-    /// only checks that its home applied these steps.
+    /// The migrations of a file read without its writer are its writer's: a
+    /// copy's home, whose steps arrive as pages, or the program that holds
+    /// the store a store beside it reads. The file only checks that its
+    /// writer applied these steps.
     ///
-    /// A step missing may be on its way: a copy lags its home, and one whole
-    /// from a snapshot read as the file was born lacks every step until the
-    /// home's first commit arrives. The copy then reaches where its home
-    /// stands now and checks again; a step still missing is the home's to run.
-    fn check_its_home_migrated(&self, history: &str, migrations: &[Migration]) -> Result<()> {
-        let check = || self.read(|connection| migrate::check_applied_steps(connection, history, migrations, None));
-        let checked = match (check(), &self.config.catch_up) {
-            (Err(missing), Some(catch_up)) if missing.kind() == ErrorKind::Unavailable => match (catch_up.0)() {
-                Ok(()) => check(),
-                Err(_) => Err(missing),
-            },
-            (checked, _) => checked,
+    /// A step missing from a copy may be on its way: a copy lags its home,
+    /// and one whole from a snapshot read as the file was born lacks every
+    /// step until the home's first commit arrives. The copy then reaches
+    /// where its home stands now and checks again; a step still missing is
+    /// the home's to run. Beside its holder, a file a release before wrote
+    /// lacks this one's steps until the holder opens its engine.
+    fn check_its_writer_migrated(&self, history: &str, migrations: &[Migration]) -> Result<()> {
+        let behind = || self.read(|connection| migrate::behind(connection, history, migrations, None));
+        let mut found = behind();
+        if let (Ok(Some(_)), Some(catch_up)) = (&found, &self.config.catch_up)
+            && (catch_up.0)().is_ok()
+        {
+            found = behind();
+        }
+        let checked = match found {
+            Ok(None) => Ok(()),
+            Ok(Some(lacking)) => Err(self.lacking(history, lacking)),
+            Err(error) => Err(error),
         };
         checked.map_err(|error| error.within(self.describe()))
+    }
+
+    /// Why a file read without its writer cannot be read yet, `Unavailable`
+    /// till that writer applies the step, and said as the writer is: a store
+    /// beside its holder speaks of no copy and no home, since it has none.
+    fn lacking(&self, history: &str, lacking: migrate::Behind) -> Error {
+        let said = match lacking {
+            migrate::Behind::Shipped(name) => format!("{history}: {name} shipped since it was a draft"),
+            migrate::Behind::Missing(name) if self.config.beside => format!(
+                "{history}: {name} is not applied yet: the program that holds the store applies it when it opens \
+                 {history}, unless that program runs an older release"
+            ),
+            migrate::Behind::Missing(name) => format!("{history}: {name} has not reached this copy from its home yet"),
+        };
+        Error::new(ErrorKind::Unavailable, said)
     }
 
     /// Applies migrations as `migrate` does, with foreign keys off while they
@@ -673,7 +695,7 @@ impl File {
             return Err(Error::invalid(refused).within(self.describe()));
         }
         if self.is_copy() {
-            return self.check_its_home_migrated(history, migrations);
+            return self.check_its_writer_migrated(history, migrations);
         }
         let redo = drafts.is_some_and(|drafts| drafts.redo);
         if !redo && self.migrated(history, migrations, drafts.map(|drafts| drafts.command.as_str()))? {
