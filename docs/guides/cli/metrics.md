@@ -49,11 +49,11 @@ ping_rtt_ms{target="poland"}   26 Oct 14:32–14:33 Europe/Moscow · 46 samples
   14:32:17   24.0
 ```
 
-- The first line of each series names it and the range that was read, in this
-  machine's time zone. Without `--since`, `--from` or `--to`, `read` reads the
-  last hour.
+- The first line of each series names it and the range that was read, in the
+  command's [zone](README.md#how-it-behaves): `--tz`'s, or this machine's.
+  Without `--since`, `--from` or `--to`, `read` reads the last hour.
 - `--from` and `--to` take `14:30` for today, `2026-10-25T03:00` for a date,
-  both in this machine's zone, or a time with its offset, such as
+  both in that zone, or a time with its offset, such as
   `2026-10-25T00:00:00Z`.
 - `--where target=poland` keeps the series whose label matches. Use
   `status=500,502` for either value, `env!=dev` for neither, and `host=api-*`

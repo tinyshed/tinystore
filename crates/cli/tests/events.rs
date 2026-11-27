@@ -152,6 +152,62 @@ fn an_export_writes_every_event_of_the_range_as_list_prints_each_a_page_at_a_tim
     held.close().unwrap();
 }
 
+const MINUTE: jiff::SignedDuration = jiff::SignedDuration::from_mins(1);
+
+/// The time of each event a list printed for a person: its first word.
+fn clocks(output: &Output) -> Vec<String> {
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.lines().map(|line| line.split(' ').next().unwrap_or_default().to_owned()).collect()
+}
+
+#[test]
+fn times_print_and_read_in_the_zone_tz_names_and_json_stays_utc() {
+    let dirs = tempfile::tempdir().unwrap();
+    let data = dirs.path().join("data");
+    let held = Store::open(&data, Options::default()).unwrap();
+    let now = jiff::Timestamp::now().round(jiff::Unit::Second).unwrap();
+    let at = now - jiff::SignedDuration::from_hours(1);
+    let audit = held.events("audit").open().unwrap();
+    audit.append_all([tinystore::records::NewEvent::new("login").at(at.into())]).unwrap();
+    let in_zone = |zone: &str, civil: jiff::Timestamp| {
+        let zone = jiff::tz::TimeZone::get(zone).unwrap();
+        civil.to_zoned(zone).strftime("%Y-%m-%dT%H:%M:%S").to_string()
+    };
+    let list = |extra: &[&dyn AsRef<std::ffi::OsStr>], env: Option<&str>| {
+        let mut command = Command::new(BINARY);
+        command.args(["events".as_ref(), data.as_os_str(), "list".as_ref(), "audit".as_ref(), "--since".as_ref()]);
+        command.arg("2h").args(extra.iter().map(|arg| arg.as_ref())).env_remove("TINYSTORE_TZ");
+        if let Some(zone) = env {
+            command.env("TINYSTORE_TZ", zone);
+        }
+        command.output().unwrap()
+    };
+    let utc = in_zone("UTC", at)[11..].to_owned() + ".000";
+    let kolkata = in_zone("Asia/Kolkata", at)[11..].to_owned() + ".000";
+    assert_eq!(clocks(&list(&[&"--tz", &"utc"], None)), [utc.as_str()]);
+    assert_eq!(clocks(&list(&[&"--tz=Asia/Kolkata"], None)), [kolkata.as_str()]);
+    assert_eq!(clocks(&list(&[], Some("Asia/Kolkata"))), [kolkata.as_str()], "TINYSTORE_TZ without the flag");
+    assert_eq!(clocks(&list(&[&"--tz", &"UTC"], Some("Asia/Kolkata"))), [utc.as_str()], "the flag wins");
+    let json = list(&[&"--tz", &"Asia/Kolkata", &"--json"], None);
+    let time = json_lines(&json.stdout)[0]["time"].as_str().unwrap().to_owned();
+    assert_eq!(time, at.strftime("%Y-%m-%dT%H:%M:%S.000Z").to_string(), "JSON is UTC whatever the zone");
+    // a range without offsets is read in the zone: a minute past the event in UTC ends 5h29m before it in Kolkata
+    let (from, to) = (in_zone("UTC", at - jiff::SignedDuration::from_hours(10)), in_zone("UTC", at + MINUTE));
+    let ranged = |zone: &str| {
+        let words: [&dyn AsRef<std::ffi::OsStr>; 10] =
+            [&"events", &data, &"list", &"audit", &"--from", &from, &"--to", &to, &"--tz", &zone];
+        said(&tinystore(&words, None))
+    };
+    assert!(ranged("utc").contains(" login"), "{}", ranged("utc"));
+    assert!(ranged("Asia/Kolkata").contains("no events of audit"), "{}", ranged("Asia/Kolkata"));
+    let misspelt = list(&[&"--tz", &"Asia/Kolkatta"], None);
+    assert_eq!(misspelt.status.code(), Some(2), "{}", said(&misspelt));
+    assert!(said(&misspelt).contains("--tz Asia/Kolkatta: no such zone") && said(&misspelt).contains("Asia/Kolkata?"));
+    let from_env = list(&[], Some("Mars/Olympus"));
+    assert!(said(&from_env).contains("TINYSTORE_TZ Mars/Olympus: no such zone"), "{}", said(&from_env));
+    held.close().unwrap();
+}
+
 // contract: CLI-09
 #[test]
 fn a_page_past_what_the_engine_holds_is_refused_naming_the_bound_and_export() {

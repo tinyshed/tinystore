@@ -1,20 +1,67 @@
 //! The range a command reads: `--since`, a span back from now, or `--from`
-//! and `--to`, times in this machine's zone unless they say their own, and
+//! and `--to`, times in the command's zone unless they say their own, and
 //! how a person's terminal names it.
 //!
 //! ```text
 //! --since 1h                    the last hour
-//! --from 14:30 --to 14:35       today, in this machine's zone
+//! --from 14:30 --to 14:35       today, in the command's zone
 //! --from 2026-10-25T03:00       a date and a time there
 //! --from 2026-10-25T00:00:00Z   a time that says its offset
 //! ```
+//!
+//! The command's zone is `--tz`'s, else `TINYSTORE_TZ`'s, else this
+//! machine's: every time printed for a person and every time read without
+//! its offset is in it, and JSON is UTC whatever it is.
 
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, Zoned};
 
 use crate::asked::{self, Asked, Refused, wrong};
+
+/// The zone a command prints and reads times in, chosen once before it runs.
+static ZONE: OnceLock<TimeZone> = OnceLock::new();
+
+/// The command's zone: this machine's until `choose_zone` chose another.
+pub(crate) fn zone() -> &'static TimeZone {
+    ZONE.get_or_init(TimeZone::system)
+}
+
+/// Chooses the command's zone: `--tz`'s when given, else `TINYSTORE_TZ`'s
+/// when set, else this machine's. A zone no one knows is refused, named
+/// with the nearest one.
+pub(crate) fn choose_zone(flag: Option<&str>) -> Result<(), String> {
+    let from_env = || std::env::var("TINYSTORE_TZ").ok().filter(|name| !name.is_empty());
+    let given = match flag {
+        Some(name) => ("--tz", name.to_owned()),
+        None => match from_env() {
+            Some(name) => ("TINYSTORE_TZ", name),
+            None => return Ok(()),
+        },
+    };
+    let (source, name) = given;
+    let chosen = zone_named(&name).map_err(|why| format!("{source} {name}: {why}"))?;
+    // a zone chosen twice in one process keeps the first, which a test alone does
+    let _ = ZONE.set(chosen);
+    Ok(())
+}
+
+/// A zone by its IANA name, `utc` or `local`, this machine's.
+fn zone_named(name: &str) -> Result<TimeZone, String> {
+    if name.eq_ignore_ascii_case("utc") {
+        return Ok(TimeZone::UTC);
+    }
+    if name.eq_ignore_ascii_case("local") {
+        return Ok(TimeZone::system());
+    }
+    TimeZone::get(name).map_err(|_| {
+        let known: Vec<String> = jiff::tz::db().available().map(|known| known.as_str().to_owned()).collect();
+        let names: Vec<&str> = known.iter().map(String::as_str).chain(["utc", "local"]).collect();
+        format!("no such zone: an IANA name as Asia/Tokyo, utc or local{}", crate::meant(name, &names))
+    })
+}
 
 /// A range: a start and an end, `None` the end being now.
 #[derive(Debug, Clone, Copy)]
@@ -43,12 +90,12 @@ impl Window {
         }
     }
 
-    /// The range as a person reads it, in this machine's zone:
+    /// The range as a person reads it, in the command's zone:
     /// `26 Oct 14:32–14:33 Europe/Moscow`.
     pub(crate) fn shown(&self) -> String {
-        let zone = TimeZone::system();
-        let from = local(self.from, &zone);
-        let to = local(self.to.unwrap_or_else(SystemTime::now), &zone);
+        let zone = zone();
+        let from = local(self.from, zone);
+        let to = local(self.to.unwrap_or_else(SystemTime::now), zone);
         let named = zone.iana_name().map_or_else(|| from.strftime("%:z").to_string(), str::to_owned);
         if from.date() == to.date() {
             format!("{}–{} {named}", from.strftime("%-d %b %H:%M"), to.strftime("%H:%M"))
@@ -57,18 +104,17 @@ impl Window {
         }
     }
 
-    /// Whether the range lies within one day of this machine's zone, so that
+    /// Whether the range lies within one day of the command's zone, so that
     /// a time of it needs no date.
     pub(crate) fn one_day(&self) -> bool {
-        let zone = TimeZone::system();
-        local(self.from, &zone).date() == local(self.to.unwrap_or_else(SystemTime::now), &zone).date()
+        local(self.from, zone()).date() == local(self.to.unwrap_or_else(SystemTime::now), zone()).date()
     }
 }
 
 /// A time as a person's terminal shows it: `14:32:01`, `.250` when it has
 /// milliseconds, and its date before it when the range is not one day.
 pub(crate) fn clock(at: SystemTime, with_date: bool) -> String {
-    let at = local(at, &TimeZone::system());
+    let at = local(at, zone());
     let time = if at.subsec_nanosecond() / 1_000_000 == 0 {
         at.strftime("%H:%M:%S").to_string()
     } else {
@@ -89,9 +135,9 @@ pub(crate) fn span_text(span: Duration) -> String {
     }
 }
 
-/// A time's date in this machine's zone: `2026-10-31`.
+/// A time's date in the command's zone: `2026-10-31`.
 pub(crate) fn date(at: SystemTime) -> String {
-    local(at, &TimeZone::system()).strftime("%Y-%m-%d").to_string()
+    local(at, zone()).strftime("%Y-%m-%d").to_string()
 }
 
 /// How long ago a time was, as a person reads it: `2s ago`, `3h ago`.
@@ -111,14 +157,18 @@ pub(crate) fn utc(at: SystemTime) -> String {
     Timestamp::try_from(at).map_or_else(|_| String::new(), |at| at.to_string())
 }
 
-fn local(at: SystemTime, zone: &TimeZone) -> Zoned {
+/// A time in a zone, as a person's terminal shows one.
+pub(crate) fn local(at: SystemTime, zone: &TimeZone) -> Zoned {
     Timestamp::try_from(at).unwrap_or(Timestamp::UNIX_EPOCH).to_zoned(zone.clone())
 }
 
 /// A time as `--from` and `--to` take it: one that says its offset, a date
-/// and a time in this machine's zone, or a time of today there.
+/// and a time in the command's zone, or a time of today there.
 pub(crate) fn time(text: &str) -> Result<SystemTime, String> {
-    let zone = TimeZone::system();
+    time_in(text, zone())
+}
+
+fn time_in(text: &str, zone: &TimeZone) -> Result<SystemTime, String> {
     let unread = || format!("the time {text}: as 14:30, 2026-10-25T03:00 or 2026-10-25T03:00:00Z");
     if let Ok(at) = text.parse::<Timestamp>() {
         return Ok(at.into());
@@ -130,7 +180,7 @@ pub(crate) fn time(text: &str) -> Result<SystemTime, String> {
             Zoned::now().with_time_zone(zone.clone()).date().to_datetime(time)
         }
     };
-    let zoned = civil.to_zoned(zone).map_err(|_| unread())?;
+    let zoned = civil.to_zoned(zone.clone()).map_err(|_| unread())?;
     Ok(zoned.timestamp().into())
 }
 
@@ -155,5 +205,24 @@ mod tests {
         assert!(!clock(whole, false).contains('.'));
         assert!(clock(whole + Duration::from_millis(250), false).ends_with(".250"));
         assert!(clock(whole, true).contains("Oct"));
+    }
+
+    #[test]
+    fn a_time_without_its_offset_is_read_in_the_zone_given() {
+        let tokyo = zone_named("Asia/Tokyo").unwrap();
+        assert_eq!(utc(time_in("2026-10-26T14:32", &tokyo).unwrap()), "2026-10-26T05:32:00Z");
+        assert_eq!(utc(time_in("2026-10-26T14:32", &zone_named("UTC").unwrap()).unwrap()), "2026-10-26T14:32:00Z");
+        assert_eq!(utc(time_in("2026-10-26T14:32:00Z", &tokyo).unwrap()), "2026-10-26T14:32:00Z", "its own offset");
+        let shown = local(time_in("2026-10-26T14:32Z", &zone_named("utc").unwrap()).unwrap(), &tokyo);
+        assert_eq!(shown.strftime("%H:%M").to_string(), "23:32");
+    }
+
+    #[test]
+    fn a_zone_no_one_knows_is_told_the_nearest() {
+        assert_eq!(
+            zone_named("Europe/Mosow").unwrap_err(),
+            "no such zone: an IANA name as Asia/Tokyo, utc or local; did you mean Europe/Moscow?"
+        );
+        assert!(zone_named("local").is_ok() && zone_named("Etc/UTC").is_ok());
     }
 }

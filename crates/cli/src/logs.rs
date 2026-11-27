@@ -28,6 +28,7 @@ use tinystore::{ErrorKind, Store};
 use crate::asked::{self, Asked, Done, failed, wrong};
 use crate::help;
 use crate::lines::{Terminal, paint};
+use crate::window;
 
 /// How many of the last lines print without `-n` or `--since`.
 const LAST: usize = 20;
@@ -217,7 +218,7 @@ fn nanos(at: SystemTime) -> u128 {
 }
 
 fn today() -> String {
-    Zoned::now().strftime("%Y-%m-%d").to_string()
+    Zoned::now().with_time_zone(window::zone().clone()).strftime("%Y-%m-%d").to_string()
 }
 
 /// How a line prints: as the console's pretty line, or one JSON object.
@@ -244,7 +245,7 @@ impl Printer {
     fn pretty(&self, event: &Event) -> String {
         let paint = |style: Style, text: &str| paint(self.colours, style, text);
         let dim = Style::new().dimmed();
-        let at = jiff::Timestamp::try_from(event.at).map(|at| at.to_zoned(jiff::tz::TimeZone::system()));
+        let at = jiff::Timestamp::try_from(event.at).map(|at| at.to_zoned(window::zone().clone()));
         let time = match at {
             Ok(at) if at.strftime("%Y-%m-%d").to_string() == self.today => at.strftime("%H:%M:%S%.3f").to_string(),
             Ok(at) => at.strftime("%Y-%m-%d %H:%M:%S%.3f").to_string(),
