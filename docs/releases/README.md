@@ -4,7 +4,12 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
-- **[TinyStore 0.13.0](v0.13.0.md)** · not yet released\
+- **[TinyStore 0.13.1](v0.13.1.md)** · 27 November 2026\
+  Requests and answers past 2 MiB, a mirror's list in parts, marks in
+  seconds, aliases of one document, a page of a group in `store.search`,
+  each group compared apart, `fill` in pages, encrypted `once`, and a
+  breaker's failures.
+- **[TinyStore 0.13.0](v0.13.0.md)** · 27 November 2026\
   Tables mirrored from another system, deleted rows and row versions, a memo
   that keeps answering while it rebuilds, semaphores with background holds
   and a breaker, gathered jobs and quiet hours, synonyms, one search across
