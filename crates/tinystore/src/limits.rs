@@ -280,4 +280,90 @@ mod tests {
         let names: std::collections::HashSet<_> = ALL.iter().map(|limit| limit.name).collect();
         assert_eq!(names.len(), ALL.len(), "each bound has a name of its own");
     }
+
+    /// How a caller goes on past each bound, or why it is owed no way: a
+    /// ceiling with neither is one a real program meets and cannot pass.
+    ///
+    /// | Shape     | Means                                                         |
+    /// |-----------|---------------------------------------------------------------|
+    /// | `page:`   | the same call in pages with `limit` and `next`                |
+    /// | `parts:`  | one call whose list or answer travels in parts, still whole   |
+    /// | `split:`  | several calls, each whole on its own                          |
+    /// | `item:`   | one value's size: a larger one belongs elsewhere              |
+    /// | `memory:` | working memory one call holds, which no cut of it shrinks     |
+    /// | `later:`  | a page owed and not built yet, with the release it is planned |
+    #[cfg(all(
+        feature = "config",
+        feature = "locks",
+        feature = "channels",
+        feature = "jobs",
+        feature = "sql",
+        feature = "records",
+        feature = "metrics",
+        feature = "search",
+        feature = "wire"
+    ))]
+    const WAYS: &[(Limit, &str)] = &[
+        (VALUE_BYTES, "item: a larger value is a file in blobs"),
+        (SETTING_BYTES, "item: a setting, not data"),
+        (CONFIG_BYTES, "item: settings, not data"),
+        (LOCK_WAITERS, "memory: callers at once; one past them asks again later"),
+        (SUBSCRIPTIONS, "memory: listeners at once, not data"),
+        (JOB_BYTES, "item: a larger payload is a file in blobs, its path in the job"),
+        (PROGRESS_BYTES, "item: a run's progress, not its result"),
+        (ROWS_BYTES, "page: a query's list with limit and after, or each a row at a time"),
+        (MIRROR_ROWS, "parts: a mirror's run, begin, add and commit"),
+        (EVENT_BYTES, "item: one event"),
+        (APPEND_BYTES, "split: appends, each whole"),
+        (AGGREGATE_ROWS, "later: 0.14.0 pages an aggregate's rows"),
+        (COUNT_BYTES, "memory: top counts its whole range first; a shorter range or a where"),
+        (SESSIONS, "later: 0.14.0 pages sessions"),
+        (SESSION_BYTES, "memory: the sessions open within one gap; fewer max_events or a where"),
+        (WHERE_VALUE_BYTES, "item: one value a statement gives"),
+        (SUM_RANGE, "item: an exact sum, never a float"),
+        (INGEST_SAMPLES, "split: ingests, each whole"),
+        (INGEST_BYTES, "split: ingests, each whole"),
+        (REPLACE_SAMPLES, "split: shorter ranges, each replaced whole"),
+        (REPLACE_BYTES, "split: shorter ranges, each replaced whole"),
+        (TEXT_SAMPLES, "item: one exporter's scrape"),
+        (TEXT_BYTES, "item: one exporter's scrape"),
+        (QUERY_SERIES, "page: read, aggregate and compare's groups a group at a time; latest later, 0.14.0"),
+        (QUERY_BYTES, "page: read and aggregate with limit"),
+        (QUERY_SAMPLES, "page: read and aggregate with limit"),
+        (QUERY_ANSWER, "page: read and aggregate with limit, filled ones too"),
+        (SET_MANY_DOCUMENTS, "split: set_many calls, each whole"),
+        (SET_MANY_BYTES, "split: set_many calls, each whole"),
+        (DOCUMENT_BYTES, "item: one document"),
+        (SEARCH_HITS, "memory: a ranking's depth; a narrower text or a filter"),
+        (SEARCH_TEXT, "item: one query's text"),
+        (FILTER_CONDITIONS, "item: one filter's shape"),
+        (FILTER_VALUES, "item: one filter's lists; a table's index takes a where's statement"),
+        (FILTER_ROWS, "memory: the ids a statement gives, held while it searches"),
+        (FILTER_TEXT, "item: one value a filter keeps"),
+        (VECTOR_DIMENSIONS, "item: one vector"),
+        (REQUEST_BYTES, "parts: frames joined into one message, up to it"),
+        (ANSWER_BYTES, "parts: frames joined into one message, up to it"),
+    ];
+
+    #[test]
+    #[cfg(all(
+        feature = "config",
+        feature = "locks",
+        feature = "channels",
+        feature = "jobs",
+        feature = "sql",
+        feature = "records",
+        feature = "metrics",
+        feature = "search",
+        feature = "wire"
+    ))]
+    fn every_bound_says_how_a_caller_goes_on_past_it_or_why_it_is_owed_none() {
+        const SHAPES: [&str; 6] = ["page: ", "parts: ", "split: ", "item: ", "memory: ", "later: "];
+        for limit in ALL {
+            let way = WAYS.iter().find(|(named, _)| named == limit).map(|(_, way)| *way);
+            let way = way.unwrap_or_else(|| panic!("{}: say in WAYS how a caller goes on past it", limit.name));
+            assert!(SHAPES.iter().any(|shape| way.starts_with(shape)), "{}: {way}", limit.name);
+        }
+        assert_eq!(WAYS.len(), ALL.len(), "WAYS names a bound ALL does not");
+    }
 }

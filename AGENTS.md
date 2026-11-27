@@ -505,6 +505,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 a test that keeps a contract names its id in a comment, `// contract: KV-04`,
 and `just contracts` fails when a MUST is named by no test.
 A change that makes or moves a promise changes that file in the same commit.
+A bound a call meets is a `Limit` in `limits.rs`, and its line in `WAYS`
+says how a caller goes on past it or why it is owed no way; a test fails on
+one without.
 
 CI on Linux, macOS and Windows is the gate, and a red run is real. `just
 quick` runs what a change reaches before each commit; `just check` runs all
