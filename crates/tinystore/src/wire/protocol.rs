@@ -15151,6 +15151,218 @@ impl Message for SqlDiff {
     }
 }
 
+/// Begins a mirror's replace whose list comes in parts: the mirror and its
+/// scope as sql.Mirror names them. Each add gives a part, which waits on the
+/// database's writer outside the file; the commit makes the scope what every
+/// part listed in one write, so that only what no part named is gone, and
+/// answers its difference in parts, each within the client's credit. A run
+/// is its connection's: one dropped, never committed, whose connection ended,
+/// or that no call reached for five minutes writes nothing. A connection
+/// holds 64 runs at once.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlBegin {
+    pub(crate) handle: u64,
+    pub(crate) table: String,
+    pub(crate) key: Vec<String>,
+    /// As sql.Mirror's.
+    pub(crate) gone: Option<String>,
+    /// S or ms; ms when absent.
+    pub(crate) gone_unit: Option<String>,
+    pub(crate) change_on: Option<Vec<String>>,
+    /// The columns of its scope.
+    pub(crate) scope: Option<Vec<String>>,
+    /// And their values, in their order.
+    pub(crate) scope_values: Option<Vec<Cell>>,
+    /// The commit writes nothing, and answers suspect, when fewer than this fraction would stay live.
+    pub(crate) min_kept: Option<f64>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlBegin {
+    const NAME: &'static str = "sql.Begin";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.table = codec::str(r, "table")?,
+                3 => message.key = codec::list(r, "key", codec::str)?,
+                4 => message.gone = Some(codec::str(r, "gone")?),
+                5 => message.gone_unit = Some(codec::str(r, "goneUnit")?),
+                6 => message.change_on = Some(codec::list(r, "changeOn", codec::str)?),
+                7 => message.scope = Some(codec::list(r, "scope", codec::str)?),
+                8 => message.scope_values = Some(codec::list(r, "scopeValues", codec::cell)?),
+                9 => message.min_kept = Some(codec::float(r, "minKept")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.table.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.table);
+        }
+        if !self.key.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.key, codec::write_str);
+        }
+        if let Some(gone) = &self.gone {
+            map.field(out, 4);
+            codec::write_str(out, gone);
+        }
+        if let Some(gone_unit) = &self.gone_unit {
+            map.field(out, 5);
+            codec::write_str(out, gone_unit);
+        }
+        if let Some(change_on) = &self.change_on {
+            map.field(out, 6);
+            codec::write_list(out, change_on, codec::write_str);
+        }
+        if let Some(scope) = &self.scope {
+            map.field(out, 7);
+            codec::write_list(out, scope, codec::write_str);
+        }
+        if let Some(scope_values) = &self.scope_values {
+            map.field(out, 8);
+            codec::write_list(out, scope_values, codec::write_cell);
+        }
+        if let Some(min_kept) = &self.min_kept {
+            map.field(out, 9);
+            codec::write_float(out, min_kept);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.table.len()
+            + 1 + codec::list_size(&self.key, |item| 5 + item.len())
+            + self.gone.as_ref().map_or(0, |gone| 1 + 5 + gone.len())
+            + self.gone_unit.as_ref().map_or(0, |gone_unit| 1 + 5 + gone_unit.len())
+            + self.change_on.as_ref().map_or(0, |change_on| 1 + codec::list_size(change_on, |item| 5 + item.len()))
+            + self.scope.as_ref().map_or(0, |scope| 1 + codec::list_size(scope, |item| 5 + item.len()))
+            + self.scope_values.as_ref().map_or(0, |scope_values| 1 + codec::list_size(scope_values, codec::cell_size))
+            + self.min_kept.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.table.is_empty()
+            && self.key.is_empty()
+            && self.gone.is_none()
+            && self.gone_unit.is_none()
+            && self.change_on.is_none()
+            && self.scope.is_none()
+            && self.scope_values.is_none()
+            && self.min_kept.is_none()
+    }
+}
+
+/// A part of a run's list, one message at most: rows of the first part's
+/// columns, inside the scope, each key once in the whole run.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlAdd {
+    /// The handle its begin answered.
+    pub(crate) run: u64,
+    pub(crate) rows: SqlRows,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlAdd {
+    const NAME: &'static str = "sql.Add";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.run = codec::uint(r, "run")?,
+                2 => message.rows = SqlRows::read(r)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.run != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.run);
+        }
+        if !self.rows.is_zero() {
+            map.field(out, 2);
+            codec::write_message(out, &self.rows);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + self.rows.size()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.run == 0
+            && self.rows.is_zero()
+    }
+}
+
+/// A run, by the handle its begin answered.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlRun {
+    pub(crate) run: u64,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlRun {
+    const NAME: &'static str = "sql.Run";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.run = codec::uint(r, "run")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.run != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.run);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.run == 0
+    }
+}
+
 /// Every method's number, by its name in the schema.
 pub(crate) mod method {
     #[cfg(feature = "backup")]
@@ -15448,6 +15660,14 @@ pub(crate) mod method {
     pub(crate) const SQL_DESCRIBE: u16 = 0x0307;
     #[cfg(feature = "sql")]
     pub(crate) const SQL_MIRROR: u16 = 0x0308;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_BEGIN: u16 = 0x0309;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_ADD: u16 = 0x030a;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_COMMIT: u16 = 0x030b;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_DROP: u16 = 0x030c;
 
     /// Who may call a method: the word its schema line starts with.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15724,6 +15944,14 @@ pub(crate) mod method {
             SQL_DESCRIBE => Some(Access::Read),
             #[cfg(feature = "sql")]
             SQL_MIRROR => Some(Access::Write),
+            #[cfg(feature = "sql")]
+            SQL_BEGIN => Some(Access::Write),
+            #[cfg(feature = "sql")]
+            SQL_ADD => Some(Access::Write),
+            #[cfg(feature = "sql")]
+            SQL_COMMIT => Some(Access::Write),
+            #[cfg(feature = "sql")]
+            SQL_DROP => Some(Access::Write),
             _ => None,
         }
     }
@@ -15997,6 +16225,14 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("sql.describe", 0x0307, "call"),
     #[cfg(feature = "sql")]
     ("sql.mirror", 0x0308, "call"),
+    #[cfg(feature = "sql")]
+    ("sql.begin", 0x0309, "call"),
+    #[cfg(feature = "sql")]
+    ("sql.add", 0x030a, "call"),
+    #[cfg(feature = "sql")]
+    ("sql.commit", 0x030b, "download"),
+    #[cfg(feature = "sql")]
+    ("sql.drop", 0x030c, "call"),
 ];
 
 /// A body of the message `name` read and written again, and the size the message
@@ -16447,6 +16683,12 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "sql.Mirror" => SqlMirror::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Diff" => SqlDiff::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Begin" => SqlBegin::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Add" => SqlAdd::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Run" => SqlRun::decode(body).map(|message| (message.encode(), message.size())),
         _ => return None,
     };
     Some(rewritten)

@@ -77,6 +77,12 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Mirror<T> {
         Guarded { mirror: self, min_kept: fraction }
     }
 
+    /// A `replace` whose list comes in parts, as [`sql::Mirror::begin`]
+    /// begins one: its table checked now, its parts and commit awaited.
+    pub fn begin<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)]) -> Result<Run<T>> {
+        Ok(Run { run: self.mirror.begin(scope)?, pool: Arc::clone(&self.pool) })
+    }
+
     /// What `rows` adds and changes, as [`sql::Mirror::upsert`] writes it.
     pub fn upsert(&self, rows: &[T]) -> impl Future<Output = Result<Diff<T>>> + Send + 'static {
         self.run(Ok(Mode::Upsert), rows)
@@ -118,5 +124,48 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Guarded<'_, T> {
     ) -> impl Future<Output = Result<Diff<T>>> + Send + 'static {
         let mode = sql::scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: Some(self.min_kept) });
         self.mirror.run(mode, rows)
+    }
+
+    /// [`Mirror::begin`], whose commit writes nothing when the guard holds it back.
+    pub fn begin<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)]) -> Result<Run<T>> {
+        let run = self.mirror.mirror.min_kept(self.min_kept).begin(scope)?;
+        Ok(Run { run, pool: Arc::clone(&self.mirror.pool) })
+    }
+}
+
+/// An awaited mirror's `replace` in parts, the same run as [`sql::Run`].
+#[derive(Debug)]
+pub struct Run<T> {
+    run: sql::Run<T>,
+    pool: Arc<Pool>,
+}
+
+impl<T: Serialize + DeserializeOwned + Send + 'static> Run<T> {
+    /// Gives a part of the list, as [`sql::Run::add`] does, checked when
+    /// the call is made.
+    pub fn add(&self, rows: &[T]) -> impl Future<Output = Result<()>> + Send + 'static {
+        let staged = Arc::clone(self.run.staged());
+        let listed = sql::listed_of(rows).map_err(|error| error.within(staged.describe()));
+        run::write(&self.pool, staged.describe().to_owned(), move |answer| match listed {
+            Ok(listed) => staged.add_then(listed, move |kept| answer.send(kept)),
+            Err(error) => answer.send(Err(error)),
+        })
+    }
+
+    /// Makes the scope what every part listed, as [`sql::Run::commit`]
+    /// does, its answer decoded on the store's pool.
+    pub fn commit(self) -> impl Future<Output = Result<Diff<T>>> + Send + 'static {
+        let (staged, decoding) = (Arc::clone(self.run.staged()), Arc::clone(&self.pool));
+        run::write(&self.pool, staged.describe().to_owned(), move |answer| {
+            let ran = Arc::clone(&staged);
+            ran.commit_then(None, move |found: Result<Found>| {
+                decoding.run_always(Box::new(move || {
+                    drop(staged);
+                    if answer.is_awaited() {
+                        answer.send(found.and_then(Diff::of));
+                    }
+                }));
+            });
+        })
     }
 }

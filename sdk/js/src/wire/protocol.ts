@@ -220,6 +220,10 @@ export const methods = {
 	'sql.columns': 0x0306,
 	'sql.describe': 0x0307,
 	'sql.mirror': 0x0308,
+	'sql.begin': 0x0309,
+	'sql.add': 0x030a,
+	'sql.commit': 0x030b,
+	'sql.drop': 0x030c,
 } as const
 
 export type Method = keyof typeof methods
@@ -15212,6 +15216,264 @@ export const SqlDiff = message(
 				same: $same,
 				suspect: $suspect,
 			}
+		},
+	},
+)
+
+/**
+ * Begins a mirror's replace whose list comes in parts: the mirror and its
+ * scope as sql.Mirror names them. Each add gives a part, which waits on the
+ * database's writer outside the file; the commit makes the scope what every
+ * part listed in one write, so that only what no part named is gone, and
+ * answers its difference in parts, each within the client's credit. A run
+ * is its connection's: one dropped, never committed, whose connection ended,
+ * or that no call reached for five minutes writes nothing. A connection
+ * holds 64 runs at once.
+ */
+export const SqlBegin = message(
+	'sql.Begin',
+	{
+		handle: [1, uint],
+		table: [2, str],
+		key: [3, list(str)],
+		/** as sql.Mirror's */
+		gone: [4, str],
+		/** s or ms; ms when absent */
+		goneUnit: [5, str],
+		changeOn: [6, list(str)],
+		/** the columns of its scope */
+		scope: [7, list(str)],
+		/** and their values, in their order */
+		scopeValues: [8, list(sqlValue)],
+		/** the commit writes nothing, and answers suspect, when fewer than this fraction would stay live */
+		minKept: [9, float],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.table !== undefined) {
+				w.field(2)
+				w.str(v.table)
+				n++
+			}
+			if (v.key !== undefined) {
+				w.field(3)
+				w.array(v.key.length)
+				for (const item0 of v.key) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.gone !== undefined) {
+				w.field(4)
+				w.str(v.gone)
+				n++
+			}
+			if (v.goneUnit !== undefined) {
+				w.field(5)
+				w.str(v.goneUnit)
+				n++
+			}
+			if (v.changeOn !== undefined) {
+				w.field(6)
+				w.array(v.changeOn.length)
+				for (const item0 of v.changeOn) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.scope !== undefined) {
+				w.field(7)
+				w.array(v.scope.length)
+				for (const item0 of v.scope) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.scopeValues !== undefined) {
+				w.field(8)
+				w.array(v.scopeValues.length)
+				for (const item0 of v.scopeValues) {
+					sqlValue.write(w, item0)
+				}
+				n++
+			}
+			if (v.minKept !== undefined) {
+				w.field(9)
+				w.float(v.minKept)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $table: string | undefined
+			let $key: string[] | undefined
+			let $gone: string | undefined
+			let $goneUnit: string | undefined
+			let $changeOn: string[] | undefined
+			let $scope: string[] | undefined
+			let $scopeValues: (SqlValue | boolean)[] | undefined
+			let $minKept: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$table = r.str()
+						break
+					case 3: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$key = items0
+						break
+					}
+					case 4:
+						$gone = r.str()
+						break
+					case 5:
+						$goneUnit = r.str()
+						break
+					case 6: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$changeOn = items0
+						break
+					}
+					case 7: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$scope = items0
+						break
+					}
+					case 8: {
+						const items0: (SqlValue | boolean)[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(sqlValue.read(r))
+						}
+						r.leave()
+						$scopeValues = items0
+						break
+					}
+					case 9:
+						$minKept = r.float()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				handle: $handle,
+				table: $table,
+				key: $key,
+				gone: $gone,
+				goneUnit: $goneUnit,
+				changeOn: $changeOn,
+				scope: $scope,
+				scopeValues: $scopeValues,
+				minKept: $minKept,
+			}
+		},
+	},
+)
+
+/**
+ * A part of a run's list, one message at most: rows of the first part's
+ * columns, inside the scope, each key once in the whole run.
+ */
+export const SqlAdd = message(
+	'sql.Add',
+	{
+		/** the handle its begin answered */
+		run: [1, uint],
+		rows: [2, SqlRows],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.run !== undefined) {
+				w.field(1)
+				w.uint(v.run)
+				n++
+			}
+			if (v.rows !== undefined) {
+				w.field(2)
+				SqlRows.write(w, v.rows)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $run: number | undefined
+			let $rows: Read<typeof SqlRows.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$run = r.uint()
+						break
+					case 2:
+						$rows = SqlRows.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { run: $run, rows: $rows }
+		},
+	},
+)
+
+/**
+ * A run, by the handle its begin answered.
+ */
+export const SqlRun = message(
+	'sql.Run',
+	{
+		run: [1, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.run !== undefined) {
+				w.field(1)
+				w.uint(v.run)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $run: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$run = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { run: $run }
 		},
 	},
 )

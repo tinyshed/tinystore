@@ -678,6 +678,10 @@ opens the file as it is, `not_found` when the store holds none.
 | `0x0306` | sql.columns  | read  | `sql.Statement` | download `sql.Columns` until `sql.Columns` |
 | `0x0307` | sql.describe | read  | `sql.Statement` | `sql.Described`                            |
 | `0x0308` | sql.mirror   | write | `sql.Mirror`    | `sql.Diff`                                 |
+| `0x0309` | sql.begin    | write | `sql.Begin`     | `Handle`                                   |
+| `0x030a` | sql.add      | write | `sql.Add`       | `Empty`                                    |
+| `0x030b` | sql.commit   | write | `sql.Run`       | download `sql.Diff` until `sql.Diff`       |
+| `0x030c` | sql.drop     | write | `sql.Run`       | `Empty`                                    |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/sql.wire`. A query's rows come in its

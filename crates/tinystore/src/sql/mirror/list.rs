@@ -76,20 +76,38 @@ impl Found {
     /// The bytes of the rows it answers with, each value's and row's with
     /// the five bytes at most that MessagePack puts before one.
     pub(crate) fn bytes(&self) -> usize {
-        let row = |row: &Vec<Value>| 5 + row.iter().map(|value| value.size() + 5).sum::<usize>();
-        let changed = self.changed.iter().map(|(before, after)| row(before) + row(after));
-        self.added.iter().chain(&self.gone).map(row).sum::<usize>() + changed.sum::<usize>()
+        self.rows().map(|row| row_bytes(row)).sum()
+    }
+
+    /// Every row it answers with, the changed ones before and after.
+    pub(crate) fn rows(&self) -> impl Iterator<Item = &Vec<Value>> {
+        let changed = self.changed.iter().flat_map(|(before, after)| [before, after]);
+        self.added.iter().chain(&self.gone).chain(changed)
     }
 }
 
+/// A row's bytes in an answer, with the five at most that MessagePack puts
+/// before it and before each value.
+pub(crate) fn row_bytes(row: &[Value]) -> usize {
+    5 + row.iter().map(|value| value.size() + 5).sum::<usize>()
+}
+
+/// What a call's answer must fit before it writes anything, over the wire:
+/// one message, or, for a run's commit, which answers in parts, each row one.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "wire"), expect(dead_code, reason = "only the wire answers within its messages"))]
+pub(crate) enum Fits {
+    Whole(Limit),
+    Parts(Limit),
+}
+
 /// What a call runs with besides its list: the store's time in the unit of
-/// the mirror's mark, the store's memory its read holds, and the bound of the
-/// bytes its answer may hold, past which it writes nothing: one message's,
-/// over the wire.
+/// the mirror's mark, the store's memory its read holds, and what its answer
+/// must fit, past which it writes nothing.
 pub(crate) struct Running<'a> {
     pub(crate) now: i64,
     pub(crate) memory: &'a Arc<Memory>,
-    pub(crate) answer: Option<Limit>,
+    pub(crate) answer: Option<Fits>,
 }
 
 /// Compares the list with what the table holds and writes the difference on
@@ -106,20 +124,32 @@ pub(crate) fn mirror_on(
     let held = held_rows(connection, shape, given, (mode, running.memory))?;
     let plan = Plan::of(shape, &as_kept, &held)?;
     let found = plan.found(given, &held, mode)?;
-    if let Some(answer) = running.answer
-        && found.bytes() as u64 > answer.bound
-    {
-        let why = format!(
-            "its answer of {} bytes passes one message's {}: mirror a scope at a time",
-            found.bytes(),
-            answer.bound
-        );
-        return Err(answer.refuse(found.bytes() as u64, why));
+    if let Some(answer) = running.answer {
+        refuse_past(&found, answer)?;
     }
     if !found.suspect {
         plan.write(connection, shape, (given, &held), running.now)?;
     }
     Ok(found)
+}
+
+/// Refuses an answer that does not fit what it must: past one message, or,
+/// in parts, with a row past one.
+fn refuse_past(found: &Found, answer: Fits) -> Result<()> {
+    let (wanted, bound) = match answer {
+        Fits::Whole(bound) => (found.bytes(), bound),
+        Fits::Parts(bound) => (found.rows().map(|row| row_bytes(row)).max().unwrap_or(0), bound),
+    };
+    if wanted as u64 <= bound.bound {
+        return Ok(());
+    }
+    let why = match answer {
+        Fits::Whole(_) => {
+            format!("its answer of {wanted} bytes passes one message's {}: mirror a scope at a time", bound.bound)
+        }
+        Fits::Parts(_) => format!("a row of {wanted} bytes in its answer passes one message's {}", bound.bound),
+    };
+    Err(bound.refuse(wanted as u64, why))
 }
 
 /// A key's value as a map holds it: an integer and a real of one number are
@@ -257,6 +287,11 @@ impl Given {
             }
         }
         Ok(())
+    }
+
+    /// The list as checked, the mark's column left out.
+    pub(crate) fn into_listed(self) -> Listed {
+        self.listed
     }
 
     /// What the list adds to a shared commit.

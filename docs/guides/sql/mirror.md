@@ -174,6 +174,66 @@ diff, err := works.Upsert(ctx, changedSinceYesterday)
 let diff = works.upsert(&changed_since_yesterday)?;
 ```
 
+## A list in parts
+
+`replace` must see the whole scope to know what is gone, so two calls with
+half the list each would mark the first half gone. A run gives the list in
+parts and decides what is gone only at the end. Use it when the source
+answers a page at a time, or when the list is very large:
+
+```ts
+const run = works.begin({ course_id: 1 })
+for await (const page of pages) await run.add(page)
+const diff = await run.commit() // gone: what no page named
+```
+
+```python
+async with works.begin({"course_id": 1}) as run:
+    async for page in pages:
+        await run.add(page)
+    diff = await run.commit()  # gone: what no page named
+```
+
+```go
+run := works.Begin(map[string]any{"course_id": 1})
+defer run.Close(ctx)
+for _, page := range pages {
+	err = run.Add(ctx, page)
+}
+diff, err := run.Commit(ctx) // gone: what no page named
+```
+
+```rust
+let run = works.begin(&[("course_id", 1)])?;
+for page in &pages {
+    run.add(page)?;
+}
+let diff = run.commit()?; // gone: what no page named
+```
+
+- `add` checks each part like a `replace` checks its list: the rows have the
+  first part's columns, sit inside the scope, and their keys are not null.
+  A key given twice across parts fails at `commit`. A part that fails ends
+  the run.
+- Nothing reaches the table before `commit`. The parts wait on the store's
+  side, in a temporary table of the database's writer, not in the program's
+  memory and not in the database file. `commit` compares every part with the
+  table and writes the difference in one commit, exactly as one `replace`
+  of all the rows would (contract SQL-26). `minKept` works the same:
+  `works.begin(scope, { minKept: 0.5 })`.
+- A run that is never committed writes nothing and leaves nothing behind:
+  closed with `close` (or `await using` in TypeScript, `async with` in
+  Python, `defer run.Close(ctx)` in Go, dropped in Rust), left idle for five
+  minutes, its connection lost, or its store closed. After `commit`, the run
+  is over.
+- Over the wire, a run belongs to the connection it began on. If that
+  connection drops, the run's next call fails, and you start again.
+- A run commits on its own, never inside a transaction.
+
+You rarely need a run just for size. A plain `replace` whose list or answer
+is too large for one message (2 MiB) sends the same list as a run by itself,
+so a scope of 20,000 rows is one call in every SDK.
+
 ## A list that cannot be right
 
 If a source returns an empty page during an outage, `replace` would mark the
@@ -234,15 +294,18 @@ db.tx(|tx| -> tinystore::Result<()> {
 
 ## Limits and defaults
 
-| What                                | Bound                                                  |
-|-------------------------------------|--------------------------------------------------------|
-| rows in one list                    | 100,000 (`mirror rows`), past it fails with `limit`    |
-| rows in a scope                     | 100,000 (`mirror rows`)                                |
-| the rows a scope reads into memory  | within the store's memory, and 64 MiB per call         |
-| a list and its answer over the wire | one message of 2 MiB each, so mirror a scope at a time |
+| What                                | Bound                                                            |
+|-------------------------------------|------------------------------------------------------------------|
+| rows in one list, or in one run     | 100,000 (`mirror rows`), past it fails with `limit`              |
+| rows in a scope                     | 100,000 (`mirror rows`)                                          |
+| the rows a scope reads into memory  | within the store's memory, and 64 MiB per call                   |
+| a list and its answer over the wire | one message of 2 MiB each; `replace` goes as a run past that     |
+| a part of a run                     | one message; an SDK splits a larger one by itself                |
+| a run's wait for its next call      | five minutes, then it ends (`mirror run idle millis`)            |
+| runs open on one connection         | 64 (`mirror runs`)                                               |
 
-Over the wire, if an answer doesn't fit in one message, the call fails with
-`limit` before anything is written.
+`upsert` has no run. Over the wire, if its answer doesn't fit in one
+message, it fails with `limit` before anything is written.
 
 ## What is not built
 

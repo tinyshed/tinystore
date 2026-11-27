@@ -327,13 +327,28 @@ OpenMirror is the table name of db mirroring another system, its rows Ts:
 	works := sqldb.OpenMirror[Work](db, "works", sqldb.MirrorOptions{Key: []string{"course_id", "id"}, Gone: "gone_at"})
 	diff, err := works.Replace(ctx, map[string]any{"course_id": 1}, fetched)
 
+### Mirror.Begin
+
+```go
+func (m *Mirror[T]) Begin(scope map[string]any, options ...ReplaceOption) *Run[T]
+```
+
+Begin begins a Replace of the scope whose list comes in parts: each Add gives a part, and Commit makes the scope what every part listed, in one write, so that only what no part named is gone. Nothing is sent until the first Add or Commit. A run never committed writes nothing: closed, idle for five minutes, its connection lost or the store closed; defer run.Close(ctx) lets go of one not committed.
+
+	run := works.Begin(map[string]any{"course_id": 1})
+	defer run.Close(ctx)
+	for page := range pages {
+		if err := run.Add(ctx, page); err != nil { … }
+	}
+	diff, err := run.Commit(ctx)
+
 ### Mirror.Replace
 
 ```go
 func (m *Mirror[T]) Replace(ctx context.Context, scope map[string]any, rows []T, options ...ReplaceOption) (Diff[T], error)
 ```
 
-Replace makes the scope, the rows whose columns hold its values, nil for the whole table, what rows lists: it adds what the table lacks, writes what changed, and deletes, or marks gone, what the list leaves out. A row outside the scope is invalid, and so is one whose key holds a null. Values compare as the table keeps them: 4 given to a text column is "4", and a key's text compares by its unique index's collation.
+Replace makes the scope, the rows whose columns hold its values, nil for the whole table, what rows lists: it adds what the table lacks, writes what changed, and deletes, or marks gone, what the list leaves out. A row outside the scope is invalid, and so is one whose key holds a null. Values compare as the table keeps them: 4 given to a text column is "4", and a key's text compares by its unique index's collation. A list, or an answer, past one message goes in the parts of a run, as Begin makes one, and writes in one commit all the same.
 
 ### Mirror.Upsert
 
@@ -730,6 +745,40 @@ type Row = map[string]any
 ```
 
 Row is a row as SQLite gave it, by its columns' names.
+
+## Run
+
+```go
+type Run[T any] struct {
+	// contains filtered or unexported fields
+}
+```
+
+Run is a mirror's Replace whose list comes in parts, from Begin. Its parts wait on the server, outside the table, until Commit. A run is its connection's: every call of it goes on the one it began on, never again on another, since another holds none of its parts.
+
+### Run.Add
+
+```go
+func (r *Run[T]) Add(ctx context.Context, rows []T) error
+```
+
+Add gives a part of the list: rows of the first part's shape, inside the scope, each key once in the whole run. A part past one message goes as several. A part the server refuses ends the run.
+
+### Run.Close
+
+```go
+func (r *Run[T]) Close(ctx context.Context) error
+```
+
+Close lets go of a run not committed, which writes nothing; after Commit, or before anything was sent, it sends nothing.
+
+### Run.Commit
+
+```go
+func (r *Run[T]) Commit(ctx context.Context) (Diff[T], error)
+```
+
+Commit makes the scope what every part listed, in one write, and answers what changed.
 
 ## Runner
 

@@ -2,25 +2,33 @@
 
 The server compares the list with what the table holds by the source's key
 and writes only the difference, in one commit; this module only says the
-call in Python.
+call in Python, and cuts a list past one message into the parts of a run.
 """
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ._connection import download
 from ._rows import SqlArg, cell_of, field_of, fields_of, reader, row_of
-from ._wire.protocol import SqlDiff, SqlMirror
-from .errors import InvalidError
+from ._wire.protocol import SqlAdd, SqlBegin, SqlDiff, SqlMirror, SqlRun, methods
+from .bounds import ANSWER_BYTES, REQUEST_BYTES
+from .errors import InvalidError, LimitError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from types import TracebackType
 
+    from ._connection import Connection
     from .sql import Mark
 
     MirrorCall = Callable[[Callable[[int], bytes]], Awaitable[bytes]]
     """What sends a mirror's request on the database's connection and gives back its answer."""
+
+    MirrorBegin = Callable[[Callable[[int], bytes]], Awaitable[tuple[int, Connection]]]
+    """What sends a run's begin with the database's handle, and gives the run's handle and the connection it is on."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +67,21 @@ class Mirror[T]:
         of: Any,
         options: tuple[list[str], Mark | None, list[str] | None],
         call: MirrorCall,
+        begin: MirrorBegin,
     ) -> None:
         self.table = table
         self._read: Callable[[dict[str, Any]], T] = reader(of)
-        self._key, self._gone, self._change_on = options
+        key, gone, change_on = options
+        self._shape = {
+            "table": table,
+            "key": key,
+            "gone": None if gone is None else gone.column,
+            # milliseconds go unnamed, which a server older than the unit reads too
+            "gone_unit": "s" if gone is not None and gone.unit == "s" else None,
+            "change_on": change_on,
+        }
         self._call = call
+        self._begin = begin
 
     async def replace(
         self, scope: Mapping[str, Any], rows: Sequence[T | Mapping[str, Any]], *, min_kept: float | None = None
@@ -77,47 +95,152 @@ class Mirror[T]:
         nothing and answers ``suspect``. Values compare as the table keeps
         them: ``4`` given to a text column is ``"4"``, and a key's text
         compares by its unique index's collation; a key holding None is
-        InvalidError.
+        InvalidError. A list, or an answer, past one message goes in the
+        parts of a run, as ``begin`` makes one, and writes in one commit all
+        the same.
         """
-        columns = list(scope)
-        values = [cell_of(scope[column], f"the scope's {column}") for column in columns]
-        return await self._run(rows, mode="replace", scope=columns, scope_values=values, min_kept=min_kept)
+        try:
+            return await self._run(rows, mode="replace", **_scope_of(scope), min_kept=min_kept)
+        except LimitError as err:
+            if err.limit not in (REQUEST_BYTES.name, ANSWER_BYTES.name):
+                raise
+        # refused before it was written: the same list, in parts over one run
+        async with self.begin(scope, min_kept=min_kept) as run:
+            await run.add(rows)
+            return await run.commit()
 
     async def upsert(self, rows: Sequence[T | Mapping[str, Any]]) -> Diff[T]:
         """Writes what ``rows`` adds and changes, a delta of the source's; its ``gone`` is always empty."""
         return await self._run(rows, mode="upsert")
 
+    def begin(self, scope: Mapping[str, Any], *, min_kept: float | None = None) -> MirrorRun[T]:
+        """Begins a ``replace`` of the scope whose list comes in parts.
+
+        Each ``add`` gives a part, and ``commit`` makes the scope what every
+        part listed, in one write, so that only what no part named is gone. A
+        run never committed writes nothing: closed, dropped, idle for five
+        minutes, its connection lost or the store closed. Nothing is sent
+        until the first ``add`` or ``commit``.
+
+            async with works.begin({"course_id": 1}) as run:
+                async for page in pages: await run.add(page)
+                diff = await run.commit()
+        """
+        asked = {**self._shape, **_scope_of(scope), "min_kept": min_kept}
+
+        async def begun() -> tuple[int, Connection]:
+            return await self._begin(lambda handle: SqlBegin.encode(handle=handle, **asked))
+
+        return MirrorRun(begun, self._read)
+
     async def _run(self, rows: Sequence[T | Mapping[str, Any]], **asked: Any) -> Diff[T]:
         listed = _list_of(rows)
-        gone = self._gone
+        given = {name: value for name, value in asked.items() if value is not None}
 
         def body(handle: int) -> bytes:
-            return SqlMirror.encode(
-                handle=handle,
-                table=self.table,
-                key=self._key,
-                gone=None if gone is None else gone.column,
-                # milliseconds go unnamed, which a server older than the unit reads too
-                gone_unit="s" if gone is not None and gone.unit == "s" else None,
-                change_on=self._change_on,
-                rows=listed,
-                **{name: value for name, value in asked.items() if value is not None},
-            )
+            return SqlMirror.encode(handle=handle, **self._shape, rows=listed, **given)
 
-        diff = SqlDiff.decode(await self._call(body))
-        columns: list[str] = diff.get("columns", [])
+        return _diff_of([await self._call(body)], self._read)
 
-        def read(rows: list[list[Any]]) -> list[T]:
-            return [self._read(row_of(columns, row)) for row in rows]
 
-        changed = zip(read(diff.get("before", [])), read(diff.get("after", [])), strict=True)
-        return Diff(
-            added=read(diff.get("added", [])),
-            changed=[Changed(before, after) for before, after in changed],
-            gone=read(diff.get("gone", [])),
-            same=diff.get("same", 0),
-            suspect=diff.get("suspect", False),
-        )
+class MirrorRun[T]:
+    """A mirror's ``replace`` whose list comes in parts, from ``mirror.begin``.
+
+    Its parts wait on the server, outside the table, until ``commit``; one
+    never committed writes nothing, and ``close``, or the end of an ``async
+    with``, lets go of it at once. Every call of a run goes on the connection
+    it began on, since the server keeps the parts there.
+    """
+
+    def __init__(
+        self, begin: Callable[[], Awaitable[tuple[int, Connection]]], read: Callable[[dict[str, Any]], T]
+    ) -> None:
+        self._begin = begin
+        self._read = read
+        self._begun: tuple[int, Connection] | None = None
+        self._ended = False
+
+    async def __aenter__(self) -> MirrorRun[T]:
+        return self
+
+    async def __aexit__(
+        self, kind: type[BaseException] | None, error: BaseException | None, traceback: TracebackType | None
+    ) -> None:
+        await self.close()
+
+    async def add(self, rows: Sequence[T | Mapping[str, Any]]) -> None:
+        """Gives a part of the list: rows of the first part's shape, inside the scope, each key once in the whole run.
+
+        A part past one message goes as several. A part that fails ends the run.
+        """
+        self._refuse_ended()
+        run, connection = await self._started()
+        await self._send(run, connection, rows)
+
+    async def commit(self) -> Diff[T]:
+        """Makes the scope what every part listed, in one write, and answers what changed."""
+        self._refuse_ended()
+        self._ended = True
+        run, connection = await self._started()
+        downloaded = await download(connection, methods["sql.commit"], SqlRun.encode(run=run))
+        return _diff_of([*downloaded.items, downloaded.trailer], self._read)
+
+    async def close(self) -> None:
+        """Lets go of a run not committed, which writes nothing; nothing after a commit, or before a begin."""
+        if self._ended:
+            return
+        self._ended = True
+        if self._begun is None:
+            return
+        run, connection = self._begun
+        # a connection lost let go of the run already
+        with contextlib.suppress(Exception):
+            await connection.session.call(methods["sql.drop"], SqlRun.encode(run=run))
+
+    async def _started(self) -> tuple[int, Connection]:
+        if self._begun is None:
+            self._begun = await self._begin()
+        return self._begun
+
+    async def _send(self, run: int, connection: Connection, rows: Sequence[Any]) -> None:
+        """Sends a part, halved until each half fits one message."""
+        body = SqlAdd.encode(run=run, rows=_list_of(rows))
+        try:
+            await connection.session.call(methods["sql.add"], body)
+        except LimitError as err:
+            if len(rows) < 2 or err.limit != REQUEST_BYTES.name:
+                raise
+            half = (len(rows) + 1) // 2
+            await self._send(run, connection, rows[:half])
+            await self._send(run, connection, rows[half:])
+
+    def _refuse_ended(self) -> None:
+        if self._ended:
+            raise InvalidError("the run is committed or closed: begin another")
+
+
+def _scope_of(scope: Mapping[str, Any]) -> dict[str, Any]:
+    columns = list(scope)
+    return {"scope": columns, "scope_values": [cell_of(scope[column], f"the scope's {column}") for column in columns]}
+
+
+def _diff_of[T](parts: Sequence[bytes], read: Callable[[dict[str, Any]], T]) -> Diff[T]:
+    """A difference from its parts, each list joined in their order, a row as the mirror's type reads it."""
+    diffs = [SqlDiff.decode(part) for part in parts]
+    none: list[str] = []
+    columns: list[str] = next((diff["columns"] for diff in diffs if diff.get("columns")), none)
+
+    def rows(name: str) -> list[T]:
+        return [read(row_of(columns, row)) for diff in diffs for row in diff.get(name, [])]
+
+    changed = zip(rows("before"), rows("after"), strict=True)
+    return Diff(
+        added=rows("added"),
+        changed=[Changed(before, after) for before, after in changed],
+        gone=rows("gone"),
+        same=sum(diff.get("same", 0) for diff in diffs),
+        suspect=any(diff.get("suspect", False) for diff in diffs),
+    )
 
 
 def _list_of(rows: Sequence[Any]) -> dict[str, Any]:

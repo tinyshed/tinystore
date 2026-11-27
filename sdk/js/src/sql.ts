@@ -34,7 +34,13 @@ import {
 	type Worker,
 } from './jobs.ts'
 import { Bucket, type BucketOptions, bucketOpen, partsOf, type Values, valuesOf } from './kv.ts'
-import { Mirror, type MirrorOptions } from './mirror.ts'
+import {
+	Mirror,
+	type MirrorBegin,
+	type MirrorCall,
+	type MirrorOptions,
+	type RunLink,
+} from './mirror.ts'
 import { Table, type TableOptions } from './query.ts'
 import {
 	Appending,
@@ -51,6 +57,7 @@ import { ConnectionLostError, type Stream } from './session.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
 import { int64Of } from './wire/msgpack.ts'
 import {
+	Handle,
 	methods,
 	SearchDropped,
 	SearchName,
@@ -1015,12 +1022,30 @@ export class Database implements Runner, Home {
 	 *     const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', changeOn: ['grade'] })
 	 */
 	mirror<T = Row>(table: string, options: MirrorOptions): Mirror<T> {
-		return new Mirror<T>(table, options, async asked => {
+		const call: MirrorCall = async asked => {
 			this.#refuseAround(`mirror ${table}`)
 			return this.#link.run('write', async connection =>
 				connection.session.call(methods['sql.mirror'], asked(await this.handle(connection))),
 			)
-		})
+		}
+		// a run is its connection's: every call of it goes on the one it began on, never again on another
+		const begin: MirrorBegin = async asked => {
+			this.#refuseAround(`mirror ${table}`)
+			const connection = await this.#link.connection()
+			const begun = await connection.session.call(
+				methods['sql.begin'],
+				asked(await this.handle(connection)),
+			)
+			const link: RunLink = {
+				call: (method, body) => connection.session.call(method, body),
+				download: async (method, body) => {
+					const { items, trailer } = await download(connection, method, body)
+					return [...items, trailer]
+				},
+			}
+			return { run: Handle.decode(begun).handle ?? 0, link }
+		}
+		return new Mirror<T>(table, options, call, begin)
 	}
 
 	/** Drops a table's index this database keeps, its triggers off the table; says whether there was one. */

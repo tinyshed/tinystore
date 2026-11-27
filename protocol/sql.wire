@@ -192,6 +192,38 @@ message sql.Diff {
   7 suspect: bool
 }
 
+# Begins a mirror's replace whose list comes in parts: the mirror and its
+# scope as sql.Mirror names them. Each add gives a part, which waits on the
+# database's writer outside the file; the commit makes the scope what every
+# part listed in one write, so that only what no part named is gone, and
+# answers its difference in parts, each within the client's credit. A run
+# is its connection's: one dropped, never committed, whose connection ended,
+# or that no call reached for five minutes writes nothing. A connection
+# holds 64 runs at once.
+message sql.Begin {
+  1 handle: uint
+  2 table: str
+  3 key: [str]
+  4 gone: str?            # as sql.Mirror's
+  5 goneUnit: str?        # s or ms; ms when absent
+  6 changeOn: [str]?
+  7 scope: [str]?         # the columns of its scope
+  8 scopeValues: [cell]?  # and their values, in their order
+  9 minKept: float?       # the commit writes nothing, and answers suspect, when fewer than this fraction would stay live
+}
+
+# A part of a run's list, one message at most: rows of the first part's
+# columns, inside the scope, each key once in the whole run.
+message sql.Add {
+  1 run: uint             # the handle its begin answered
+  2 rows: sql.Rows
+}
+
+# A run, by the handle its begin answered.
+message sql.Run {
+  1 run: uint
+}
+
 read  0x0301 sql.open(sql.Open)          -> Handle
 read  0x0302 sql.query(sql.Query)        -> download sql.Rows until sql.Rows
 write 0x0303 sql.exec(sql.Statement)     -> sql.Done
@@ -200,3 +232,7 @@ write 0x0305 sql.tx(sql.TxOpen)          -> exchange sql.TxAnswer for sql.TxCall
 read  0x0306 sql.columns(sql.Statement)  -> download sql.Columns until sql.Columns
 read  0x0307 sql.describe(sql.Statement) -> sql.Described
 write 0x0308 sql.mirror(sql.Mirror)      -> sql.Diff
+write 0x0309 sql.begin(sql.Begin)        -> Handle
+write 0x030a sql.add(sql.Add)            -> Empty
+write 0x030b sql.commit(sql.Run)         -> download sql.Diff until sql.Diff
+write 0x030c sql.drop(sql.Run)           -> Empty

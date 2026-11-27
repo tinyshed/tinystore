@@ -8947,6 +8947,116 @@
       "hex": "80",
       "message": "sql.Diff",
       "name": "sql.Diff with no field"
+    },
+    {
+      "fields": {
+        "changeOn": {
+          "list": [
+            {
+              "str": "changeOn"
+            }
+          ]
+        },
+        "gone": {
+          "str": "gone"
+        },
+        "goneUnit": {
+          "str": "goneUnit"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "key": {
+          "list": [
+            {
+              "str": "key"
+            }
+          ]
+        },
+        "minKept": {
+          "float": "3ff8000000000000"
+        },
+        "scope": {
+          "list": [
+            {
+              "str": "scope"
+            }
+          ]
+        },
+        "scopeValues": {
+          "list": [
+            {
+              "str": "scopeValues"
+            }
+          ]
+        },
+        "table": {
+          "str": "table"
+        }
+      },
+      "hex": "89016b02a57461626c650391a36b657904a4676f6e6505a8676f6e65556e69740691a86368616e67654f6e0791a573636f70650891ab73636f706556616c75657309cb3ff8000000000000",
+      "message": "sql.Begin",
+      "name": "sql.Begin with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Begin",
+      "name": "sql.Begin with no field"
+    },
+    {
+      "fields": {
+        "rows": {
+          "fields": {
+            "columns": {
+              "list": [
+                {
+                  "str": "columns"
+                }
+              ]
+            },
+            "rows": {
+              "list": [
+                {
+                  "list": [
+                    {
+                      "str": "rows"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "run": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b02820191a7636f6c756d6e73029191a4726f7773",
+      "message": "sql.Add",
+      "name": "sql.Add with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Add",
+      "name": "sql.Add with no field"
+    },
+    {
+      "fields": {
+        "run": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "sql.Run",
+      "name": "sql.Run with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Run",
+      "name": "sql.Run with no field"
     }
   ],
   "methods": {
@@ -9075,9 +9185,13 @@
     "search.status": 2823,
     "server.clock": 2,
     "server.stop": 1,
+    "sql.add": 778,
     "sql.batch": 772,
+    "sql.begin": 777,
     "sql.columns": 774,
+    "sql.commit": 779,
     "sql.describe": 775,
+    "sql.drop": 780,
     "sql.exec": 771,
     "sql.mirror": 776,
     "sql.open": 769,

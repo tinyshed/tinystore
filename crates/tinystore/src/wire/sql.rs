@@ -13,9 +13,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use super::codec::{Cell, Map, Message};
 use super::protocol::{
-    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn, SqlDiff,
-    SqlDone, SqlMirror, SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen,
-    method,
+    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlBegin, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn,
+    SqlDiff, SqlDone, SqlMirror, SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlRun, SqlStatement, SqlText, SqlTxAnswer,
+    SqlTxCall, SqlTxOpen, method,
 };
 use super::{Route, codec, msgpack};
 use crate::engine::SharedFile;
@@ -36,8 +36,8 @@ const TX_BOUND: Duration = if cfg!(test) { Duration::from_millis(300) } else { c
 
 pub(crate) fn route(called: u16) -> Route {
     match called {
-        method::SQL_EXEC | method::SQL_BATCH | method::SQL_MIRROR => Route::Submit,
-        method::SQL_QUERY | method::SQL_COLUMNS => Route::Download,
+        method::SQL_EXEC | method::SQL_BATCH | method::SQL_MIRROR | method::SQL_ADD => Route::Submit,
+        method::SQL_QUERY | method::SQL_COLUMNS | method::SQL_COMMIT => Route::Download,
         method::SQL_TX => Route::Transaction,
         _ => Route::Worker,
     }
@@ -63,6 +63,7 @@ pub(crate) struct Handles {
     open: super::ByHandle<Database>,
     downloads: Arc<Downloads>,
     txs: Mutex<HashMap<u32, Arc<Txing>>>,
+    runs: Mutex<run::Runs>,
 }
 
 impl Handles {
@@ -114,6 +115,7 @@ impl Handles {
         for (_, tx) in lock(&self.txs).drain() {
             tx.leave();
         }
+        lock(&self.runs).clear();
     }
 }
 
@@ -123,6 +125,8 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], r
     match called {
         method::SQL_OPEN => open(store, handles, SqlOpen::decode(body)?, read_only),
         method::SQL_DESCRIBE => describe(handles, SqlStatement::decode(body)?),
+        method::SQL_BEGIN => run::begin(handles, SqlBegin::decode(body)?),
+        method::SQL_DROP => run::drop(handles, SqlRun::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -211,6 +215,7 @@ pub(crate) fn submit(
             }),
             Err(failure) => done(Err(failure)),
         },
+        method::SQL_ADD => run::add(handles, body, done),
         other => done(Err(Failure::unimplemented(format!("method {other:#06x}")))),
     }
 }
@@ -224,18 +229,7 @@ fn mirrored(handles: &Handles, asked: SqlMirror) -> Result<(Database, (Shape, Gi
         .map_err(|failure| Failure::invalid(format!("{describe}: gone {}", failure.message)))?;
     let shape = Shape { table: asked.table, key: asked.key, gone: asked.gone, unit, change_on: asked.change_on };
     let mode = match asked.mode.as_str() {
-        "replace" => {
-            let (columns, values) = (asked.scope.unwrap_or_default(), asked.scope_values.unwrap_or_default());
-            if columns.len() != values.len() {
-                return Err(Failure::invalid(format!(
-                    "{describe}: a scope of {} columns and {} values",
-                    columns.len(),
-                    values.len()
-                )));
-            }
-            let values = values.into_iter().map(value_of).collect::<Result<Vec<_>, _>>()?;
-            Mode::Replace { scope: columns.into_iter().zip(values).collect(), min_kept: asked.min_kept }
-        }
+        "replace" => replace_mode(&describe, (asked.scope, asked.scope_values), asked.min_kept)?,
         "upsert" if asked.scope.is_none() && asked.min_kept.is_none() => Mode::Upsert,
         "upsert" => return Err(Failure::invalid(format!("{describe}: an upsert takes no scope and no minKept"))),
         other => {
@@ -246,6 +240,21 @@ fn mirrored(handles: &Handles, asked: SqlMirror) -> Result<(Database, (Shape, Gi
     let listed = Listed { columns: asked.rows.columns, rows: rows.collect::<Result<_, _>>()? };
     let given = Given::checked(&shape, listed, &mode).map_err(|error| error.within(describe))?;
     Ok((database, (shape, given, mode)))
+}
+
+/// A replace of the scope its columns and values name, with its guard.
+fn replace_mode(
+    describe: &str,
+    (columns, values): (Option<Vec<String>>, Option<Vec<Cell>>),
+    min_kept: Option<f64>,
+) -> Result<Mode, Failure> {
+    let (columns, values) = (columns.unwrap_or_default(), values.unwrap_or_default());
+    if columns.len() != values.len() {
+        let why = format!("{describe}: a scope of {} columns and {} values", columns.len(), values.len());
+        return Err(Failure::invalid(why));
+    }
+    let values = values.into_iter().map(value_of).collect::<Result<Vec<_>, _>>()?;
+    Ok(Mode::Replace { scope: columns.into_iter().zip(values).collect(), min_kept })
 }
 
 /// A mirror's answer as cells.
@@ -280,6 +289,9 @@ pub(crate) fn query(
     read_only: bool,
     done: impl FnOnce(Result<Queried, Failure>) + Send + 'static,
 ) {
+    if called == method::SQL_COMMIT {
+        return run::commit(handles, body, link, done);
+    }
     if called == method::SQL_COLUMNS {
         let asked = SqlStatement::decode(body).and_then(|asked| {
             let database = handles.database(asked.handle)?;
@@ -1128,6 +1140,9 @@ pub(super) fn cell_of(value: Value) -> Cell {
 fn done_of(done: &Done) -> SqlDone {
     SqlDone { changes: done.changes, last_insert_rowid: done.last_insert_rowid }
 }
+
+#[path = "sql_run.rs"]
+mod run;
 
 #[cfg(test)]
 #[path = "sql_tests.rs"]

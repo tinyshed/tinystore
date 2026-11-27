@@ -24,6 +24,7 @@
 
 mod affinity;
 mod list;
+mod staged;
 mod table;
 
 use std::marker::PhantomData;
@@ -39,7 +40,10 @@ use super::rows::Rows;
 use super::values::{Value, row_of, to_value};
 use crate::transaction::sealed::Sealed;
 use crate::{Error, ErrorKind, Result, Transaction, TxHandle};
+#[cfg(feature = "wire")]
+pub(crate) use list::{Fits, row_bytes};
 pub(crate) use list::{Found, Given, Listed, Mode, Running, Shape, mirror_on};
+pub(crate) use staged::Staged;
 
 impl Database {
     /// A table that mirrors another system, `T` its rows: its `replace`
@@ -189,6 +193,36 @@ impl<T: Serialize + DeserializeOwned> Mirror<T> {
         Guarded { mirror: self, min_kept: fraction }
     }
 
+    /// Begins a `replace` of the scope whose list comes in parts: each
+    /// [`Run::add`] gives a part, and [`Run::commit`] makes the scope what
+    /// every part listed, in one write, so that only what no part named is
+    /// gone. A run dropped before its commit writes nothing. For a list too
+    /// large for one call, or one read a page at a time from its source.
+    ///
+    /// ```no_run
+    /// # #[derive(serde::Serialize, serde::Deserialize)] struct Work { course_id: i64, id: String }
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let db = tinystore::Store::open("data", Default::default())?.database("lms").open()?;
+    /// # let works = db.mirror::<Work>("works").key(["course_id", "id"]).open()?;
+    /// # let pages: Vec<Vec<Work>> = Vec::new();
+    /// let run = works.begin(&[("course_id", 1)])?;
+    /// for page in &pages {
+    ///     run.add(page)?;
+    /// }
+    /// let diff = run.commit()?; // gone: what no page named
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn begin<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)]) -> Result<Run<T>> {
+        self.begin_in(scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: None }))
+    }
+
+    fn begin_in(&self, mode: Result<Mode>) -> Result<Run<T>> {
+        let mode = mode.map_err(|error| error.within(self.describe()))?;
+        let staged = Staged::begin(&self.db, Arc::clone(&self.shape), mode, self.describe())?;
+        Ok(Run { staged: Arc::new(staged), row: PhantomData })
+    }
+
     fn run(&self, mode: Result<Mode>, rows: &[T]) -> Result<Diff<T>> {
         self.prepare(mode, rows)?.write().and_then(Diff::of)
     }
@@ -269,6 +303,50 @@ impl<T: Serialize + DeserializeOwned> Guarded<'_, T> {
         let mode = scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: Some(self.min_kept) });
         self.mirror.run(mode, rows)
     }
+
+    /// [`Mirror::begin`], whose commit writes nothing when the guard holds it back.
+    pub fn begin<S: AsRef<str>, V: Serialize>(&self, scope: &[(S, V)]) -> Result<Run<T>> {
+        let mode = scope_of(scope).map(|scope| Mode::Replace { scope, min_kept: Some(self.min_kept) });
+        self.mirror.begin_in(mode)
+    }
+}
+
+/// A mirror's `replace` whose list comes in parts; [`Mirror::begin`] makes
+/// one. Its parts wait outside memory until the commit; a run dropped
+/// before it, or that no call reached for five minutes, writes nothing.
+pub struct Run<T> {
+    staged: Arc<Staged>,
+    row: PhantomData<fn() -> T>,
+}
+
+impl<T> Run<T> {
+    /// What the async API's run sends its parts and its commit through.
+    #[cfg(feature = "async")]
+    pub(crate) fn staged(&self) -> &Arc<Staged> {
+        &self.staged
+    }
+}
+
+impl<T> std::fmt::Debug for Run<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Run")
+    }
+}
+
+impl<T: Serialize + DeserializeOwned> Run<T> {
+    /// Gives a part of the list, checked as a `replace`'s list is: rows of
+    /// the first part's shape, inside the scope, each key once in the whole
+    /// run. A part that fails ends the run.
+    pub fn add(&self, rows: &[T]) -> Result<()> {
+        let listed = listed_of(rows).map_err(|error| error.within(self.staged.describe()))?;
+        self.staged.add(listed)
+    }
+
+    /// Makes the scope what every part listed, as [`Mirror::replace`] makes
+    /// it of one list, and answers what changed.
+    pub fn commit(self) -> Result<Diff<T>> {
+        self.staged.commit().and_then(Diff::of)
+    }
 }
 
 impl<T: DeserializeOwned> Diff<T> {
@@ -299,7 +377,7 @@ pub(crate) fn scope_of<S: AsRef<str>, V: Serialize>(scope: &[(S, V)]) -> Result<
 }
 
 /// The program's rows as cells: one shape, their columns once.
-fn listed_of<T: Serialize>(rows: &[T]) -> Result<Listed> {
+pub(crate) fn listed_of<T: Serialize>(rows: &[T]) -> Result<Listed> {
     let mut listed = Listed::default();
     for (at, row) in rows.iter().enumerate() {
         let fields = row_of(row).map_err(|why| Error::invalid(format!("row {}: {why}", at + 1)))?;
@@ -386,7 +464,8 @@ impl Database {
             return done(Err(error.within(describe)));
         }
         let write = move |tx: &crate::sqlite::Tx<'_>| {
-            mirror_on(tx, &shape, (&given, &mode), &Running { now, memory: &memory, answer: Some(answer) })
+            let answer = Some(Fits::Whole(answer));
+            mirror_on(tx, &shape, (&given, &mode), &Running { now, memory: &memory, answer })
         };
         self.file().submit(weight, write, move |found| done(found.map_err(|error| error.within(describe))));
     }

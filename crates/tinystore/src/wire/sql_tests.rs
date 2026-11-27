@@ -6,9 +6,9 @@ use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::{Cell, Message};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn, SqlDiff,
-    SqlDone, SqlMigration, SqlMirror, SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer,
-    SqlTxCall, SqlTxOpen, method,
+    Empty, Handle, Hello, SqlAdd, SqlBatch, SqlBatched, SqlBegin, SqlColumn, SqlColumns, SqlDescribed,
+    SqlDescribedColumn, SqlDiff, SqlDone, SqlMigration, SqlMirror, SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlRun,
+    SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
 };
 
 const NOTES: &str =
@@ -1100,6 +1100,72 @@ fn a_statement_and_a_mirror_mark_with_the_stores_clock_in_the_unit_they_name() {
     assert_eq!(at, [seconds.clone(), Cell::Int(1_795_790_506_171), Cell::Nil, Cell::Nil, seconds]);
     drop(client);
     store.close().unwrap();
+}
+
+/// Begins a run of a replace of the whole table `items` by its `id`.
+fn begin_run(client: &mut Client, handle: u64) -> u64 {
+    let begin = SqlBegin { handle, table: "items".to_owned(), key: vec!["id".to_owned()], ..SqlBegin::default() };
+    client.call::<Handle>(method::SQL_BEGIN, &begin).unwrap().handle
+}
+
+fn items(from: usize, to: usize, name: &str) -> SqlRows {
+    let rows = (from..to).map(|n| vec![text(&format!("a:{n}")), text(name)]).collect();
+    SqlRows { columns: vec!["id".to_owned(), "name".to_owned()], rows }
+}
+
+// contract: SQL-26
+#[test]
+fn a_run_takes_its_list_in_parts_and_answers_its_commit_in_parts_within_the_credit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::connect(dir.path());
+    let credit = 64 << 10;
+    client.greet(Hello { protocol: 1, stream_credit: Some(credit), ..Hello::default() }).unwrap();
+    let handle = open(&mut client);
+    exec(&mut client, handle, "create table items (id text primary key, name text not null)", vec![]);
+    let name = "x".repeat(200);
+    let run = begin_run(&mut client, handle);
+    for from in (0..2000).step_by(100) {
+        client.call::<Empty>(method::SQL_ADD, &SqlAdd { run, rows: items(from, from + 100, &name) }).unwrap();
+    }
+    let count = |client: &mut Client| query(client, handle, "select count(*) from items", "scalar").rows[0][0].clone();
+    assert_eq!(count(&mut client), Cell::Int(0), "no part writes the table");
+
+    let stream = client.start(method::SQL_COMMIT, &SqlRun { run });
+    let head = client.next_on(stream);
+    assert_eq!((head.kind, head.flags), (Kind::Response, 0), "the difference does not fit one message");
+    let (mut added, mut taken) = (0, 0u64);
+    loop {
+        while client.silent_on(stream, Duration::from_millis(50)) {
+            client.write(Frame::new(Kind::Credit, stream, u32::try_from(taken).unwrap().to_le_bytes().to_vec()));
+            taken = 0;
+        }
+        let part = client.next_on(stream);
+        assert!(part.body.len() as u64 <= credit, "a part within the credit");
+        taken += part.body.len() as u64;
+        let diff = SqlDiff::decode(&part.body).unwrap();
+        assert_eq!(diff.columns, ["id", "name"]);
+        added += diff.added.len();
+        if part.flags & frame::END != 0 {
+            break;
+        }
+    }
+    assert_eq!((added, count(&mut client)), (2000, Cell::Int(2000)));
+    let again = client.call::<Empty>(method::SQL_ADD, &SqlAdd { run, rows: items(0, 1, "x") }).unwrap_err();
+    assert!(again.message.contains("names no run this connection began"), "{}", again.message);
+
+    // a run dropped, and one whose connection ended, write nothing
+    let dropped = begin_run(&mut client, handle);
+    client.call::<Empty>(method::SQL_ADD, &SqlAdd { run: dropped, rows: items(0, 10, "y") }).unwrap();
+    client.call::<Empty>(method::SQL_DROP, &SqlRun { run: dropped }).unwrap();
+    let left = begin_run(&mut client, handle);
+    client.call::<Empty>(method::SQL_ADD, &SqlAdd { run: left, rows: items(0, 10, "y") }).unwrap();
+    drop(client);
+    let mut client = Client::connect(dir.path());
+    client.greet(Hello { protocol: 1, ..Hello::default() }).unwrap();
+    let handle = open(&mut client);
+    let named = query(&mut client, handle, "select count(*) from items where name = 'y'", "scalar").rows;
+    assert_eq!(named[0][0], Cell::Int(0));
+    assert_eq!(query(&mut client, handle, "select count(*) from items", "scalar").rows[0][0], Cell::Int(2000));
 }
 
 // contract: SEC-01

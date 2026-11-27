@@ -171,6 +171,10 @@ const (
 	MethodSqlColumns  = 0x0306
 	MethodSqlDescribe = 0x0307
 	MethodSqlMirror   = 0x0308
+	MethodSqlBegin    = 0x0309
+	MethodSqlAdd      = 0x030a
+	MethodSqlCommit   = 0x030b
+	MethodSqlDrop     = 0x030c
 )
 
 // methodNames is every method by its name in the schema.
@@ -311,6 +315,10 @@ var methodNames = []struct {
 	{"sql.columns", MethodSqlColumns},
 	{"sql.describe", MethodSqlDescribe},
 	{"sql.mirror", MethodSqlMirror},
+	{"sql.begin", MethodSqlBegin},
+	{"sql.add", MethodSqlAdd},
+	{"sql.commit", MethodSqlCommit},
+	{"sql.drop", MethodSqlDrop},
 }
 
 // Methods is every method by its name in the schema.
@@ -776,6 +784,12 @@ func NewMessage(name string) Message {
 		return &SqlMirror{}
 	case "sql.Diff":
 		return &SqlDiff{}
+	case "sql.Begin":
+		return &SqlBegin{}
+	case "sql.Add":
+		return &SqlAdd{}
+	case "sql.Run":
+		return &SqlRun{}
 	}
 	return nil
 }
@@ -17162,4 +17176,249 @@ func (m SqlDiff) IsZero() bool {
 		len(m.Gone) == 0 &&
 		m.Same == 0 &&
 		!m.Suspect
+}
+
+// SqlBegin is the schema's sql.Begin.
+//
+// Begins a mirror's replace whose list comes in parts: the mirror and its
+// scope as sql.Mirror names them. Each add gives a part, which waits on the
+// database's writer outside the file; the commit makes the scope what every
+// part listed in one write, so that only what no part named is gone, and
+// answers its difference in parts, each within the client's credit. A run
+// is its connection's: one dropped, never committed, whose connection ended,
+// or that no call reached for five minutes writes nothing. A connection
+// holds 64 runs at once.
+type SqlBegin struct {
+	Handle uint64   `wire:"1,handle"`
+	Table  string   `wire:"2,table"`
+	Key    []string `wire:"3,key"`
+	// as sql.Mirror's
+	Gone *string `wire:"4,gone"`
+	// s or ms; ms when absent
+	GoneUnit *string   `wire:"5,goneUnit"`
+	ChangeOn *[]string `wire:"6,changeOn"`
+	// the columns of its scope
+	Scope *[]string `wire:"7,scope"`
+	// and their values, in their order
+	ScopeValues *[]Cell `wire:"8,scopeValues"`
+	// the commit writes nothing, and answers suspect, when fewer than this fraction would stay live
+	MinKept *float64 `wire:"9,minKept"`
+}
+
+func (m SqlBegin) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Handle != 0 {
+		w.Uint(1)
+		w.Uint(m.Handle)
+		n++
+	}
+	if m.Table != "" {
+		w.Uint(2)
+		w.Str(m.Table)
+		n++
+	}
+	if len(m.Key) > 0 {
+		w.Uint(3)
+		w.Array(len(m.Key))
+		for _, item0 := range m.Key {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Gone != nil {
+		w.Uint(4)
+		w.Str(*m.Gone)
+		n++
+	}
+	if m.GoneUnit != nil {
+		w.Uint(5)
+		w.Str(*m.GoneUnit)
+		n++
+	}
+	if m.ChangeOn != nil {
+		w.Uint(6)
+		w.Array(len(*m.ChangeOn))
+		for _, item0 := range *m.ChangeOn {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Scope != nil {
+		w.Uint(7)
+		w.Array(len(*m.Scope))
+		for _, item0 := range *m.Scope {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.ScopeValues != nil {
+		w.Uint(8)
+		w.Array(len(*m.ScopeValues))
+		for _, item0 := range *m.ScopeValues {
+			w.Cell(item0)
+		}
+		n++
+	}
+	if m.MinKept != nil {
+		w.Uint(9)
+		w.Float(*m.MinKept)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SqlBegin) Read(r *Reader) {
+	*m = SqlBegin{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Handle = r.Uint()
+		case 2:
+			m.Table = r.Str()
+		case 3:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Key = v
+		case 4:
+			v := r.Str()
+			m.Gone = &v
+		case 5:
+			v := r.Str()
+			m.GoneUnit = &v
+		case 6:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.ChangeOn = &v
+		case 7:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Scope = &v
+		case 8:
+			v := []Cell{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Cell()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.ScopeValues = &v
+		case 9:
+			v := r.Float()
+			m.MinKept = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SqlBegin writes as no field at all.
+func (m SqlBegin) IsZero() bool {
+	return m.Handle == 0 &&
+		m.Table == "" &&
+		len(m.Key) == 0 &&
+		m.Gone == nil &&
+		m.GoneUnit == nil &&
+		m.ChangeOn == nil &&
+		m.Scope == nil &&
+		m.ScopeValues == nil &&
+		m.MinKept == nil
+}
+
+// SqlAdd is the schema's sql.Add.
+//
+// A part of a run's list, one message at most: rows of the first part's
+// columns, inside the scope, each key once in the whole run.
+type SqlAdd struct {
+	// the handle its begin answered
+	Run  uint64  `wire:"1,run"`
+	Rows SqlRows `wire:"2,rows"`
+}
+
+func (m SqlAdd) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Run != 0 {
+		w.Uint(1)
+		w.Uint(m.Run)
+		n++
+	}
+	if !m.Rows.IsZero() {
+		w.Uint(2)
+		m.Rows.Write(w)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SqlAdd) Read(r *Reader) {
+	*m = SqlAdd{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Run = r.Uint()
+		case 2:
+			m.Rows.Read(r)
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SqlAdd writes as no field at all.
+func (m SqlAdd) IsZero() bool {
+	return m.Run == 0 &&
+		m.Rows.IsZero()
+}
+
+// SqlRun is the schema's sql.Run.
+//
+// A run, by the handle its begin answered.
+type SqlRun struct {
+	Run uint64 `wire:"1,run"`
+}
+
+func (m SqlRun) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Run != 0 {
+		w.Uint(1)
+		w.Uint(m.Run)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SqlRun) Read(r *Reader) {
+	*m = SqlRun{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Run = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SqlRun writes as no field at all.
+func (m SqlRun) IsZero() bool {
+	return m.Run == 0
 }

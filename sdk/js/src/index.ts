@@ -175,7 +175,7 @@ export {
 	type ValueBucket,
 	type ValuePage,
 } from './metrics.ts'
-export type { Diff, Mirror, MirrorOptions, ReplaceOptions } from './mirror.ts'
+export type { Diff, Mirror, MirrorOptions, MirrorRun, ReplaceOptions } from './mirror.ts'
 export type { Fetched, Once, OnceOptions } from './once.ts'
 export type {
 	ColumnType,

@@ -180,6 +180,10 @@ methods: dict[str, int] = {
     "sql.columns": 0x0306,
     "sql.describe": 0x0307,
     "sql.mirror": 0x0308,
+    "sql.begin": 0x0309,
+    "sql.add": 0x030A,
+    "sql.commit": 0x030B,
+    "sql.drop": 0x030C,
 }
 
 
@@ -12422,6 +12426,201 @@ SqlDiff = Message(
 )
 
 
+def _write_sql_begin(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("handle")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("table")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("key")) is not None:
+        w.uint(3)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("gone")) is not None:
+        w.uint(4)
+        w.str(x)
+        n += 1
+    if (x := v.get("gone_unit")) is not None:
+        w.uint(5)
+        w.str(x)
+        n += 1
+    if (x := v.get("change_on")) is not None:
+        w.uint(6)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("scope")) is not None:
+        w.uint(7)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("scope_values")) is not None:
+        w.uint(8)
+        w.array(len(x))
+        for item0 in x:
+            sql_value.write(w, item0)
+        n += 1
+    if (x := v.get("min_kept")) is not None:
+        w.uint(9)
+        w.float(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_sql_begin(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["handle"] = r.uint()
+            case 2:
+                read["table"] = r.str()
+            case 3:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["key"] = items0
+            case 4:
+                read["gone"] = r.str()
+            case 5:
+                read["gone_unit"] = r.str()
+            case 6:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["change_on"] = items0
+            case 7:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["scope"] = items0
+            case 8:
+                items0 = [sql_value.read(r) for _ in range(r.array())]
+                r.leave()
+                read["scope_values"] = items0
+            case 9:
+                read["min_kept"] = r.float()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# Begins a mirror's replace whose list comes in parts: the mirror and its
+# scope as sql.Mirror names them. Each add gives a part, which waits on the
+# database's writer outside the file; the commit makes the scope what every
+# part listed in one write, so that only what no part named is gone, and
+# answers its difference in parts, each within the client's credit. A run
+# is its connection's: one dropped, never committed, whose connection ended,
+# or that no call reached for five minutes writes nothing. A connection
+# holds 64 runs at once.
+SqlBegin = Message(
+    "sql.Begin",
+    {
+        "handle": (1, uint),
+        "table": (2, str_),
+        "key": (3, list_(str_)),
+        # as sql.Mirror's
+        "gone": (4, str_),
+        # s or ms; ms when absent
+        "gone_unit": (5, str_),
+        "change_on": (6, list_(str_)),
+        # the columns of its scope
+        "scope": (7, list_(str_)),
+        # and their values, in their order
+        "scope_values": (8, list_(sql_value)),
+        # the commit writes nothing, and answers suspect, when fewer than this fraction would stay live
+        "min_kept": (9, float_),
+    },
+    _write_sql_begin,
+    _read_sql_begin,
+)
+
+
+def _write_sql_add(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("run")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("rows")) is not None:
+        w.uint(2)
+        SqlRows.write(w, x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_sql_add(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["run"] = r.uint()
+            case 2:
+                read["rows"] = SqlRows.read(r)
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A part of a run's list, one message at most: rows of the first part's
+# columns, inside the scope, each key once in the whole run.
+SqlAdd = Message(
+    "sql.Add",
+    {
+        # the handle its begin answered
+        "run": (1, uint),
+        "rows": (2, SqlRows),
+    },
+    _write_sql_add,
+    _read_sql_add,
+)
+
+
+def _write_sql_run(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("run")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_sql_run(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["run"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A run, by the handle its begin answered.
+SqlRun = Message(
+    "sql.Run",
+    {
+        "run": (1, uint),
+    },
+    _write_sql_run,
+    _read_sql_run,
+)
+
+
 def _write_blobs_filled(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -13805,6 +14004,9 @@ messages: dict[str, Message] = {
     "sql.Described": SqlDescribed,
     "sql.Mirror": SqlMirror,
     "sql.Diff": SqlDiff,
+    "sql.Begin": SqlBegin,
+    "sql.Add": SqlAdd,
+    "sql.Run": SqlRun,
     "blobs.Filled": BlobsFilled,
     "channels.Batch": ChannelsBatch,
     "config.Given": ConfigGiven,

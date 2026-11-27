@@ -142,6 +142,72 @@ fn without_a_gone_column_what_the_list_leaves_out_is_deleted_and_other_scopes_st
     assert_eq!(none.gone.len(), 2, "an empty scope is the whole table");
 }
 
+/// The temporary tables on the database's writer, where a run's parts wait.
+fn runs_left(db: &Database) -> Vec<String> {
+    db.tx(|tx| tx.all::<String>("select name from sqlite_temp_master where type = 'table'")).unwrap()
+}
+
+// contract: SQL-26
+#[test]
+fn a_replace_in_parts_writes_nothing_until_its_commit_and_answers_as_one_replace() {
+    let f = fixture();
+    let works = f.db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").open().unwrap();
+    works.replace(&[("course_id", 1)], &three()).unwrap();
+    f.written();
+    let run = works.begin(&[("course_id", 1)]).unwrap();
+    run.add(&[work(1, "a", "Essay", Some(5.0))]).unwrap();
+    run.add(&[]).unwrap();
+    run.add(&[work(1, "y", "New", None), work(1, "z", "Newer", None)]).unwrap();
+    assert!(f.written().is_empty(), "a part writes nothing to the table");
+    assert_eq!(runs_left(&f.db).len(), 1, "the parts wait on the writer");
+    let diff = run.commit().unwrap();
+    assert_eq!(diff.added, [work(1, "y", "New", None), work(1, "z", "Newer", None)]);
+    assert_eq!(diff.changed.len(), 1);
+    let gone: Vec<&str> = diff.gone.iter().map(|work| work.id.as_str()).collect();
+    assert_eq!((gone, diff.same), (vec!["b", "c"], 0), "gone: what no part named");
+    assert_eq!(f.held().iter().filter(|(_, _, _, gone)| gone.is_some()).count(), 2);
+    assert!(runs_left(&f.db).is_empty(), "the commit dropped the run's table");
+
+    let guarded = works.min_kept(0.9).begin(&[("course_id", 1)]).unwrap();
+    guarded.add(&[work(1, "a", "Essay", Some(5.0))]).unwrap();
+    assert!(guarded.commit().unwrap().suspect, "the guard holds the commit back");
+}
+
+// contract: SQL-26
+#[test]
+fn a_run_let_go_of_idle_or_refused_writes_nothing_and_leaves_no_table() {
+    let f = fixture();
+    let works = f.db.mirror::<Work>("works").key(["course_id", "id"]).open().unwrap();
+    works.replace(&[("course_id", 1)], &three()).unwrap();
+    let before = f.held();
+    {
+        let run = works.begin(&[("course_id", 1)]).unwrap();
+        run.add(&three()[..1]).unwrap();
+    }
+    f.db.exec("delete from writes").unwrap(); // a write after the drop's
+    assert!(runs_left(&f.db).is_empty(), "a run dropped leaves no table");
+    assert_eq!(f.held(), before, "and wrote nothing");
+
+    let run = works.begin(&[("course_id", 1)]).unwrap();
+    run.add(&three()[..1]).unwrap();
+    run.add(&three()[..1]).unwrap(); // the same key again, which the commit finds
+    let committed = run.commit().unwrap_err();
+    assert_eq!(committed.kind(), ErrorKind::Invalid, "{committed}");
+    assert!(committed.to_string().contains("given twice"), "a key once in the whole run: {committed}");
+    assert_eq!(f.held(), before, "a commit refused writes nothing");
+
+    let run = works.begin(&[("course_id", 1)]).unwrap();
+    let outside = run.add(&[work(2, "a", "Essay", None)]).unwrap_err();
+    assert!(outside.to_string().contains("outside the scope"), "{outside}");
+    assert!(run.add(&three()).unwrap_err().to_string().contains("a part failed"), "a part that fails ends the run");
+
+    let run = works.begin(&[("course_id", 1)]).unwrap();
+    f.clock.advance(Duration::from_secs(5 * 60 + 1));
+    let idle = run.add(&three()).unwrap_err();
+    assert_eq!(idle.kind(), ErrorKind::Limit, "{idle}");
+    assert_eq!(f.held(), before);
+}
+
 // contract: SQL-25
 #[test]
 fn gone_marks_with_the_stores_clock_in_the_unit_its_mark_names() {

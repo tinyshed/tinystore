@@ -353,6 +353,46 @@ async def test_a_dataclass_that_carries_the_gone_column_is_mirrored_while_it_is_
         await works.replace({"course_id": 1}, [MarkedWork(1, "a", "Essay", 5)])
 
 
+class Item(TypedDict):
+    id: str
+    course_id: int
+    name: str
+
+
+# contract: SQL-26
+async def test_a_replace_past_one_message_goes_in_parts_and_a_run_writes_only_at_its_commit(
+    app: tinystore.Database,
+) -> None:
+    await app.exec("create table items (id text primary key, course_id integer not null, name text not null)")
+    items = app.mirror("items", Item, key=["id"])
+
+    def item(n: int, name: str | None = None) -> Item:
+        return Item(id=f"a:{n}", course_id=1, name=f"Lecture {n}: {'x' * 160}" if name is None else name)
+
+    rows = [item(n) for n in range(20_000)]
+    first = await items.replace({"course_id": 1}, rows)  # ~4 MB, past one 2 MiB message
+    assert (len(first.added), len(first.gone)) == (20_000, 0)
+    assert first.added[19_999] == item(19_999)
+    again = await items.replace({"course_id": 1}, rows[1:])
+    assert (again.same, again.gone) == (19_999, [item(0)])
+
+    run = items.begin({"course_id": 1})
+    await run.add(rows[:2])
+    await run.add([item(2, "renamed")])
+    assert await app.scalar(int, "select count(*) from items") == 19_999  # no part writes the table
+    diff = await run.commit()
+    assert diff.added == [item(0)]
+    assert diff.changed == [tinystore.Changed(item(2), item(2, "renamed"))]
+    assert (diff.same, len(diff.gone)) == (1, 19_997)
+    with pytest.raises(tinystore.InvalidError, match="the run is committed or closed"):
+        await run.add([item(3)])
+
+    async with items.begin({"course_id": 1}) as closed:
+        await closed.add([item(9)])
+    assert await app.scalar(int, "select count(*) from items") == 3  # a run closed wrote nothing
+    await app.exec("drop table items")
+
+
 async def test_columns_past_one_message_come_in_parts_and_are_whole(app: tinystore.Database) -> None:
     rows = 150_000
     columns = await app.columns(

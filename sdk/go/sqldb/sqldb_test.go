@@ -432,6 +432,76 @@ func TestAMirrorAnswersWhatWasAddedChangedAndGoneAndItsGuardWritesNothing(t *tes
 	})
 }
 
+type Item struct {
+	ID       string
+	CourseID int64
+	Name     string
+}
+
+// contract: SQL-26
+func TestAReplacePastOneMessageGoesInPartsAndARunWritesOnlyAtItsCommit(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		ways.Must(db.Exec(ctx, `create table items (id text primary key, course_id integer not null, name text not null)`))
+		items := sqldb.OpenMirror[Item](db, "items", sqldb.MirrorOptions{Key: []string{"id"}})
+		item := func(n int, name ...string) Item {
+			it := Item{ID: fmt.Sprintf("a:%d", n), CourseID: 1, Name: fmt.Sprintf("Lecture %d: %s", n, strings.Repeat("x", 160))}
+			if len(name) > 0 {
+				it.Name = name[0]
+			}
+			return it
+		}
+		rows := make([]Item, 20_000)
+		for n := range rows {
+			rows[n] = item(n)
+		}
+		scope := map[string]any{"course_id": 1}
+		count := func() int64 { return ways.Must(sqldb.Scalar[int64](ctx, db, `select count(*) from items`)) }
+
+		first := ways.Must(items.Replace(ctx, scope, rows)) // ~4 MB, past one 2 MiB message
+		if len(first.Added) != 20_000 || len(first.Gone) != 0 || first.Added[19_999] != item(19_999) {
+			t.Fatalf("first: %d added, %d gone", len(first.Added), len(first.Gone))
+		}
+		again := ways.Must(items.Replace(ctx, scope, rows[1:]))
+		if again.Same != 19_999 || len(again.Gone) != 1 || again.Gone[0] != item(0) {
+			t.Fatalf("again: %d same, gone %v", again.Same, again.Gone)
+		}
+
+		run := items.Begin(scope)
+		defer func() { _ = run.Close(ctx) }()
+		ways.Must(0, run.Add(ctx, rows[:2]))
+		ways.Must(0, run.Add(ctx, []Item{item(2, "renamed")}))
+		if n := count(); n != 19_999 {
+			t.Fatalf("a part wrote the table: %d rows", n)
+		}
+		diff := ways.Must(run.Commit(ctx))
+		if len(diff.Added) != 1 || diff.Added[0] != item(0) {
+			t.Fatalf("added %v", diff.Added)
+		}
+		if len(diff.Changed) != 1 || diff.Changed[0].Before != item(2) || diff.Changed[0].After != item(2, "renamed") {
+			t.Fatalf("changed %v", diff.Changed)
+		}
+		if diff.Same != 1 || len(diff.Gone) != 19_997 {
+			t.Fatalf("%d same, %d gone", diff.Same, len(diff.Gone))
+		}
+		err := run.Add(ctx, []Item{item(3)})
+		is(t, err, tinystore.ErrInvalid)
+		if !strings.Contains(err.Error(), "the run is committed or closed: begin another") {
+			t.Fatalf("after the commit: %v", err)
+		}
+
+		closed := items.Begin(scope)
+		ways.Must(0, closed.Add(ctx, []Item{item(9)}))
+		ways.Must(0, closed.Close(ctx))
+		if n := count(); n != 3 {
+			t.Fatalf("a run closed wrote: %d rows", n)
+		}
+		_, err = closed.Commit(ctx)
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestATableInsertsUpdatesAndDeletesWhatItsConditionSays(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

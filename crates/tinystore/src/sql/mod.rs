@@ -49,11 +49,11 @@ pub use describe::Column;
 pub use each::Each;
 pub use mark::Mark;
 pub use migrations::Migrations;
-#[cfg(feature = "async")]
-pub(crate) use mirror::scope_of;
-pub use mirror::{Changed, Diff, Guarded, Mirror, MirrorBuilder, TxMirror};
+pub use mirror::{Changed, Diff, Guarded, Mirror, MirrorBuilder, Run, TxMirror};
 #[cfg(any(feature = "wire", feature = "async"))]
 pub(crate) use mirror::{Found, Mode};
+#[cfg(feature = "async")]
+pub(crate) use mirror::{listed_of, scope_of};
 pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};
 pub use query::{AtVersion, Direction, Page, Query, Table, Upsert};
 pub use statement::{BoundStatement, Sql};
@@ -65,7 +65,7 @@ pub(crate) use {
     columns::{Columns, Packed},
     database::is_query,
     mark::Unit,
-    mirror::{Given, Listed, Shape},
+    mirror::{Fits, Given, Listed, Shape, Staged, row_bytes},
     rows::{Answer, Held, Keep, Kept},
     tx::{BOUND as TX_BOUND, HELD as TX_HELD},
     values::Value,

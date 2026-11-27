@@ -96,7 +96,7 @@ from .metrics import (
     Timing,
     exponential_buckets,
 )
-from .mirror import Changed, Diff, Mirror
+from .mirror import Changed, Diff, Mirror, MirrorRun
 from .once import Fetched, Once
 from .query import Query, RowPage, Table
 from .records import (
@@ -226,6 +226,7 @@ __all__ = [
     "Metrics",
     "MetricsDamage",
     "Mirror",
+    "MirrorRun",
     "Missed",
     "NameCount",
     "NameInfo",

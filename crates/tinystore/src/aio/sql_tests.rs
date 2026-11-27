@@ -171,6 +171,26 @@ async fn a_mirror_answers_as_the_blocking_one_and_its_guard_writes_nothing() {
     f.store.close().await.unwrap();
 }
 
+// contract: SQL-26
+#[tokio::test]
+async fn an_awaited_run_takes_its_parts_and_writes_at_its_commit_alone() {
+    let f = fixture();
+    let db = f.app();
+    let notes = db.mirror::<Note>("notes").key(["id"]).open().unwrap();
+    notes.replace(&[("author_id", 42)], &[note("n1", 42, "Buy milk")]).await.unwrap();
+    let run = notes.begin(&[("author_id", 42)]).unwrap();
+    run.add(&[note("n2", 42, "Call mom")]).await.unwrap();
+    run.add(&[note("n3", 42, "Pay rent")]).await.unwrap();
+    assert_eq!(db.scalar::<i64>("select count(*) from notes").await.unwrap(), 1, "no part writes the table");
+    let diff = run.commit().await.unwrap();
+    assert_eq!((diff.added.len(), diff.gone), (2, vec![note("n1", 42, "Buy milk")]));
+    let never = notes.begin(&[("author_id", 42)]).unwrap();
+    never.add(&[]).await.unwrap();
+    drop(never);
+    assert_eq!(db.scalar::<i64>("select count(*) from notes").await.unwrap(), 2);
+    f.store.close().await.unwrap();
+}
+
 // contract: SQL-01
 #[tokio::test]
 async fn a_statement_with_returning_goes_on_from_its_read_to_the_writer() {

@@ -31,6 +31,7 @@ from ._rows import SqlArg, SqlValue, cell_of, check_columns, named_values, reade
 from ._session import ConnectionLostError
 from ._values import to_json, values_of
 from ._wire.protocol import (
+    Handle,
     SqlBatch,
     SqlBatched,
     SqlColumns,
@@ -1154,8 +1155,15 @@ class Database:
 
             return await self._link.run("write", attempt)
 
+        # a run is its connection's: every call of it goes on the one it began on, never again on another
+        async def begin(body: Callable[[int], bytes]) -> tuple[int, Connection]:
+            self.refuse_around(f"mirror {table}")
+            connection = await self._link.connection()
+            begun = await connection.session.call(methods["sql.begin"], body(await self.handle(connection)))
+            return Handle.decode(begun).get("handle", 0), connection
+
         options = (list(key), mark, None if change_on is None else list(change_on))
-        return Mirror(table, of, options, call)
+        return Mirror(table, of, options, call, begin)
 
     @overload
     def table[T](

@@ -600,6 +600,44 @@ for (const way of ways) {
 			expect(seen).toBe(1)
 		})
 
+		// contract: SQL-26
+		test('a replace past one message goes in parts, and a run writes only at its commit', async () => {
+			await app.exec`create table items (id text primary key, course_id integer not null, name text not null)`
+			interface Item {
+				id: string
+				course_id: number
+				name: string
+			}
+			const items = app.mirror<Item>('items', { key: 'id' })
+			const item = (n: number, name = `Lecture ${n}: ${'x'.repeat(160)}`): Item => ({
+				id: `a:${n}`,
+				course_id: 1,
+				name,
+			})
+			const rows = Array.from({ length: 20_000 }, (_, n) => item(n))
+			const first = await items.replace({ course_id: 1 }, rows) // ~4 MB, past one 2 MiB message
+			expect([first.added.length, first.gone.length]).toEqual([20_000, 0])
+			expect(first.added[19_999]).toEqual(item(19_999))
+			const again = await items.replace({ course_id: 1 }, rows.slice(1))
+			expect([again.same, again.gone]).toEqual([19_999, [item(0)]])
+
+			const run = items.begin({ course_id: 1 })
+			await run.add(rows.slice(0, 2))
+			await run.add([item(2, 'renamed')])
+			expect(await app.scalar<number>`select count(*) from items`).toBe(19_999) // no part writes the table
+			const diff = await run.commit()
+			expect(diff.added).toEqual([item(0)])
+			expect(diff.changed).toEqual([{ before: item(2), after: item(2, 'renamed') }])
+			expect([diff.same, diff.gone.length]).toEqual([1, 19_997])
+			expect(await caught(run.add([item(3)]))).toBeInstanceOf(InvalidError)
+
+			const closed = items.begin({ course_id: 1 })
+			await closed.add([item(9)])
+			await closed.close()
+			expect(await app.scalar<number>`select count(*) from items`).toBe(3) // a run closed wrote nothing
+			await app.exec`drop table items`
+		})
+
 		test('an update or a delete changes what its condition says, and refuses every row', async () => {
 			const notes = app.table<Typed>('notes', { types })
 			await notes.insert({ id: 'ud1', author_id: 6, title: 'a', created_at: new Date() })
