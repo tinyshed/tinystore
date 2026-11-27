@@ -377,3 +377,34 @@ async fn a_blocking_lock_crosses_to_the_async_api_and_its_holds_spawn() {
     assert!(!permit.await.unwrap().unwrap());
     store.close().await.unwrap();
 }
+
+// contract: LOCK-09, LOCK-11
+#[tokio::test]
+async fn an_awaited_urgent_hold_passes_a_background_one_and_a_timeout_fails_its_hold_lost() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = opened(&dir);
+    let lane = store.semaphore("cabinet").limit(1).background(1).open().unwrap();
+    let mut first = Box::pin(lane.hold("requests", |_| std::future::pending::<Result<&str, Error>>()));
+    assert!(poll(&mut first).is_pending());
+    let mut background =
+        Box::pin(lane.key("requests").background().wait(PATIENCE).hold(|_| async { Ok::<_, Error>("background") }));
+    assert!(poll(&mut background).is_pending());
+    let mut urgent = Box::pin(lane.key("requests").wait(PATIENCE).hold(|_| async { Ok::<_, Error>("urgent") }));
+    assert!(poll(&mut urgent).is_pending());
+    drop(first);
+    assert!(poll(&mut background).is_pending(), "the place freed went to the urgent hold");
+    assert_eq!(urgent.await.unwrap(), "urgent");
+    assert_eq!(background.await.unwrap(), "background");
+
+    let lost = lane
+        .key("requests")
+        .timeout(Duration::from_millis(50))
+        .hold(|permit| async move {
+            holds_within(PATIENCE, "the permit revoked at its timeout", || permit.lost());
+            Ok::<_, Error>(())
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(lost.kind(), ErrorKind::Lost, "{lost}");
+    store.close().await.unwrap();
+}

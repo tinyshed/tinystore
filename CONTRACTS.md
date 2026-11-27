@@ -102,7 +102,7 @@ These contracts are what does not.
 
 ### Locks
 
-- **LOCK-01** A key MUST be held by one holder at a time, and given to waiters in the order they came.
+- **LOCK-01** A key MUST be held by one holder at a time, and given to waiters of one priority in the order they came.
 - **LOCK-02** Each lease's fence MUST be larger than every earlier lease's fence of the store, across restarts and whatever the clock does.
 - **LOCK-03** A hold past `max_hold` MUST lose its lease and fail `lost`, even if its function succeeded.
 - **LOCK-04** A hold inside its own hold of the key, or inside a transaction, MUST be refused at once.
@@ -110,6 +110,9 @@ These contracts are what does not.
 - **LOCK-06** A panic, a cancel or the store's close MUST let the key go and answer every waiter.
 - **LOCK-07** A semaphore's name has one limit in a program: an open of the name with another limit than its first open in the program gave MUST fail `invalid`, naming both.
 - **LOCK-08** A holding's `waited` MUST be at least the time its ask stood in line.
+- **LOCK-09** A semaphore's place MUST be given to an urgent hold waiting before any background hold, and a background hold waiting MUST NOT keep an urgent one from a free place.
+- **LOCK-10** A semaphore's background holds of a key MUST NOT hold more of its places at once than its `background`.
+- **LOCK-11** A hold's `timeout` MUST count from its grant, not its ask, and a hold past it MUST lose its place and fail `lost`, as at `max_hold`.
 
 ### Channels
 
@@ -385,3 +388,4 @@ The server `tinystore mcp` runs, and a program's own through the `mcp` feature.
 - **NOT-10** A search with `recall` may miss some of the exact best; without it a vector search is exact.
 - **NOT-11** Nothing before `v0.1.0` is compatible: formats, schemas and the protocol change without migration.
 - **NOT-12** Records' events of one time that v0.1.0 packed keep the order v0.1.0 read them in, which is not always the order they were appended: a stream's late events apart from its others, and the streams by the blocks their events lie in (REC-04).
+- **NOT-13** A semaphore's background hold is promised no place: it waits while urgent holds keep coming and take the room, its `wait` at most (LOCK-09).

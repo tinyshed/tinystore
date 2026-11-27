@@ -6419,6 +6419,10 @@ pub(crate) struct LocksHold {
     pub(crate) wait: u64,
     /// 16 random bytes: asked again, the lease given answers.
     pub(crate) request: Vec<u8>,
+    /// Urgent or background; empty is urgent.
+    pub(crate) priority: String,
+    /// How many places background holds may take, 1 to limit; 0 for every place.
+    pub(crate) background: u64,
 }
 
 #[cfg(feature = "locks")]
@@ -6438,6 +6442,8 @@ impl Message for LocksHold {
                 6 => message.max_hold = Some(codec::uint(r, "maxHold")?),
                 7 => message.wait = codec::uint(r, "wait")?,
                 8 => message.request = codec::bin(r, "request")?,
+                9 => message.priority = codec::str(r, "priority")?,
+                10 => message.background = codec::uint(r, "background")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -6478,6 +6484,14 @@ impl Message for LocksHold {
             map.field(out, 8);
             codec::write_bin(out, &self.request);
         }
+        if !self.priority.is_empty() {
+            map.field(out, 9);
+            codec::write_str(out, &self.priority);
+        }
+        if self.background != 0 {
+            map.field(out, 10);
+            codec::write_uint(out, &self.background);
+        }
         map.close(out);
     }
 
@@ -6491,6 +6505,8 @@ impl Message for LocksHold {
             + self.max_hold.map_or(0, |_| 10)
             + 10
             + 1 + 5 + self.request.len()
+            + 1 + 5 + self.priority.len()
+            + 10
     }
 
     fn is_zero(&self) -> bool {
@@ -6502,6 +6518,8 @@ impl Message for LocksHold {
             && self.max_hold.is_none()
             && self.wait == 0
             && self.request.is_empty()
+            && self.priority.is_empty()
+            && self.background == 0
     }
 }
 

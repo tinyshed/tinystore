@@ -6765,6 +6765,10 @@ export const LocksHold = message(
 		wait: [7, uint],
 		/** 16 random bytes: asked again, the lease given answers */
 		request: [8, bin],
+		/** urgent or background; empty is urgent */
+		priority: [9, str],
+		/** how many places background holds may take, 1 to limit; 0 for every place */
+		background: [10, uint],
 	},
 	{
 		write(w, v) {
@@ -6810,6 +6814,16 @@ export const LocksHold = message(
 				w.bin(v.request)
 				n++
 			}
+			if (v.priority !== undefined) {
+				w.field(9)
+				w.str(v.priority)
+				n++
+			}
+			if (v.background !== undefined) {
+				w.field(10)
+				w.uint(v.background)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -6821,6 +6835,8 @@ export const LocksHold = message(
 			let $maxHold: number | undefined
 			let $wait: number | undefined
 			let $request: Uint8Array | undefined
+			let $priority: string | undefined
+			let $background: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -6847,6 +6863,12 @@ export const LocksHold = message(
 					case 8:
 						$request = r.bytes()
 						break
+					case 9:
+						$priority = r.str()
+						break
+					case 10:
+						$background = r.uint()
+						break
 					default:
 						r.skip()
 				}
@@ -6861,6 +6883,8 @@ export const LocksHold = message(
 				maxHold: $maxHold,
 				wait: $wait,
 				request: $request,
+				priority: $priority,
+				background: $background,
 			}
 		},
 	},

@@ -91,6 +91,12 @@ impl SemaphoreBuilder {
         SemaphoreBuilder { builder: self.builder.limit(limit) }
     }
 
+    /// How many of a key's places background holds may take at once, as
+    /// [`crate::locks::SemaphoreBuilder::background`].
+    pub fn background(self, places: u32) -> Self {
+        SemaphoreBuilder { builder: self.builder.background(places) }
+    }
+
     pub fn max_hold(self, bound: Duration) -> Self {
         SemaphoreBuilder { builder: self.builder.max_hold(bound) }
     }
@@ -275,6 +281,20 @@ impl SemaphoreKey<'_> {
     /// How long the hold waits in line; ten seconds unless said.
     pub fn wait(self, wait: Duration) -> Self {
         SemaphoreKey { key: self.key.wait(wait) }
+    }
+
+    /// Waits behind every urgent hold of the key, as
+    /// [`crate::locks::SemaphoreKey::background`]: nothing promises it a place
+    /// while urgent holds keep coming.
+    pub fn background(self) -> Self {
+        SemaphoreKey { key: self.key.background() }
+    }
+
+    /// How long the hold may keep its place from its grant, as
+    /// [`crate::locks::SemaphoreKey::timeout`]: past it the hold answers
+    /// `lost`.
+    pub fn timeout(self, timeout: Duration) -> Self {
+        SemaphoreKey { key: self.key.timeout(timeout) }
     }
 
     /// As [`Semaphore::hold`].

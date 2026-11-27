@@ -10,6 +10,8 @@ message locks.Hold {
   6 maxHold: duration?   # from the grant, however the lease is renewed
   7 wait: duration       # 0 takes the key only if it is free
   8 request: bin         # 16 random bytes: asked again, the lease given answers
+  9 priority: str        # urgent or background; empty is urgent
+  10 background: uint    # how many places background holds may take, 1 to limit; 0 for every place
 }
 
 # A lease, or the key held by others when the hold would not wait.

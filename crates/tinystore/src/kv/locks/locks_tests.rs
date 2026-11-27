@@ -319,7 +319,7 @@ fn names_keys_limits_and_bounds_are_checked() {
 #[cfg(feature = "wire")]
 fn remote(key: &str, ttl: Duration, wait: Duration, request: Option<lease::RequestId>) -> Ask {
     let place = Place::new(Kind::Lock, Arc::from("invoices"), key.to_owned());
-    Ask { place, limit: 1, ttl: Some(ttl), max_hold: None, wait, request }
+    Ask { place, limit: 1, priority: Priority::Urgent, background: None, ttl: Some(ttl), max_hold: None, wait, request }
 }
 
 #[cfg(feature = "wire")]

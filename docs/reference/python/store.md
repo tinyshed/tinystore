@@ -265,6 +265,7 @@ def semaphore(
     name: str,
     *,
     limit: int,
+    background: int | None = None,
     ttl: Duration = '10s',
     max_hold: Duration | None = None,
 ) -> Semaphore: ...
@@ -275,6 +276,9 @@ Keys held by up to limit holders at a time, 1 to 1000:
 uploads = store.semaphore("uploads", limit=3, ttl="30s")
 async with uploads.hold(user.id):
     await upload(file)
+
+``background`` is how many of a key's places background holds may take
+at once, 1 to limit; every place unless given.
 
 ### Store.files
 

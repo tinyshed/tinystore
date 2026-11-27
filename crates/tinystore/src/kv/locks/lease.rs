@@ -84,15 +84,33 @@ pub(crate) type LeaseId = [u8; 16];
 /// was lost is asked for again rather than given twice.
 pub(crate) type RequestId = [u8; 16];
 
+/// Which line of its key a hold waits in. Urgent holds are given the key
+/// before background ones, and a background hold waiting never holds an
+/// urgent one back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum Priority {
+    /// Every hold unless said: a person waiting for its answer.
+    #[default]
+    Urgent,
+    /// Work nobody waits for, which takes no more of the key's places than
+    /// the semaphore's `background` and waits while urgent holds keep coming.
+    Background,
+}
+
 /// What a holder asks for.
 pub(crate) struct Ask {
     pub(crate) place: Place,
     /// How many may hold the key at once: one for a lock.
     pub(crate) limit: u32,
+    pub(crate) priority: Priority,
+    /// How many of the key's places background holds may take at once; none
+    /// for every place.
+    pub(crate) background: Option<u32>,
     /// How long a lease lasts from its last renewal; none for a holder in the
     /// store's own process, whose lease ends with its function.
     pub(crate) ttl: Option<Duration>,
-    /// How long a lease lasts from its grant, however it is renewed.
+    /// How long a lease lasts from its grant, however it is renewed: the
+    /// lock's or semaphore's `max_hold`, or a hold's `timeout` when shorter.
     pub(crate) max_hold: Option<Duration>,
     /// How long the holder waits in line; zero to take the key only if free.
     pub(crate) wait: Duration,

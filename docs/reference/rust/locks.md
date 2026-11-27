@@ -110,6 +110,17 @@ in a program: an open with another limit than the name's first open
 in the program gave is `Invalid`. Another program's holds, a client's
 over a connection, are each admitted by their own limit.
 
+### SemaphoreBuilder.background
+
+```rust
+pub fn background(self, places: u32) -> Self
+```
+
+How many of a key's places background holds may take at once, from 1
+to the limit, so that urgent holds always find the rest; background
+holds may take every place unless given. A name keeps one in a
+program, as it keeps its limit.
+
 ### SemaphoreBuilder.max_hold
 
 ```rust
@@ -200,6 +211,9 @@ pub fn try_hold<T, E: From<Error>>(
 pub fn key(&self, key: impl Key) -> SemaphoreKey<'_>
 ```
 
+A key, for a hold that says how long it waits, whether it waits in
+the background and how long it may keep its place.
+
 ## LockKey
 
 ```rust
@@ -237,13 +251,35 @@ pub fn try_hold<T, E: From<Error>>(
 pub struct SemaphoreKey<'a> { /* private fields */ }
 ```
 
-A key of a semaphore, for a hold that says how long it waits.
+A key of a semaphore, for a hold that says how long it waits, at which
+priority, and how long it may keep its place.
 
 ### SemaphoreKey.wait
 
 ```rust
 pub fn wait(self, wait: Duration) -> Self
 ```
+
+### SemaphoreKey.background
+
+```rust
+pub fn background(self) -> Self
+```
+
+Waits behind every urgent hold of the key, and takes no more of its
+places than the semaphore's `background`. Nothing promises it a place:
+while urgent holds keep coming and take the room, it waits, `wait` at
+most.
+
+### SemaphoreKey.timeout
+
+```rust
+pub fn timeout(self, timeout: Duration) -> Self
+```
+
+How long the hold may keep its place, from its grant: past it the
+place goes to the next in line and the hold fails `lost`, as at the
+semaphore's `max_hold`, the shorter of the two counting.
 
 ### SemaphoreKey.hold
 
@@ -357,6 +393,15 @@ pub fn limit(self, limit: u32) -> Self
 ```
 
 How many may hold a key at once, from 1 to 1000.
+
+### aio::locks::SemaphoreBuilder.background
+
+```rust
+pub fn background(self, places: u32) -> Self
+```
+
+How many of a key's places background holds may take at once, as
+`crate::locks::SemaphoreBuilder::background`.
 
 ### aio::locks::SemaphoreBuilder.max_hold
 
@@ -553,6 +598,26 @@ pub fn wait(self, wait: Duration) -> Self
 ```
 
 How long the hold waits in line; ten seconds unless said.
+
+### aio::locks::SemaphoreKey.background
+
+```rust
+pub fn background(self) -> Self
+```
+
+Waits behind every urgent hold of the key, as
+`crate::locks::SemaphoreKey::background`: nothing promises it a place
+while urgent holds keep coming.
+
+### aio::locks::SemaphoreKey.timeout
+
+```rust
+pub fn timeout(self, timeout: Duration) -> Self
+```
+
+How long the hold may keep its place from its grant, as
+`crate::locks::SemaphoreKey::timeout`: past it the hold answers
+`lost`.
 
 ### aio::locks::SemaphoreKey.hold
 

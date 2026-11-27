@@ -3,7 +3,9 @@ package locks_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -210,6 +212,129 @@ func TestASemaphoreOpenedAgainWithAnotherLimitIsRefusedAtTheOpenAndWithTheSameLi
 			t.Fatalf("got %q, want it to say %q", err, want)
 		}
 		ways.Must(locks.OpenSemaphore(store, "tpu", locks.Limit(3)))
+	})
+}
+
+// served is the order holds of a key were given their places, by name.
+type served struct {
+	mu    sync.Mutex
+	names []string
+}
+
+func (s *served) add(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.names = append(s.names, name)
+}
+
+func (s *served) now() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.names)
+}
+
+func (s *served) until(t *testing.T, count int) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(s.now()) < count {
+		if time.Now().After(deadline) {
+			t.Fatalf("served %v, waiting for %d", s.now(), count)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return s.now()
+}
+
+// contract: LOCK-09
+func TestAnUrgentHoldTakesTheFirstPlaceFreedBeforeTheBackgroundHoldsThatCameFirst(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		cabinet := ways.Must(locks.OpenSemaphore(store, "cabinet", locks.Limit(2)))
+		order := &served{}
+		letGo := map[string]chan struct{}{}
+		ended := make(chan error, 5)
+		hold := func(name string, opts ...locks.HoldOption) {
+			letGo[name] = make(chan struct{})
+			release := letGo[name]
+			go func() {
+				ended <- cabinet.Hold(ctx, "requests", func(context.Context, *locks.Lease) error {
+					order.add(name)
+					<-release
+					return nil
+				}, append(opts, locks.Wait(time.Minute))...)
+			}()
+		}
+		hold("b1", locks.InBackground())
+		hold("b2", locks.InBackground())
+		order.until(t, 2)
+		hold("b3", locks.InBackground())
+		hold("b4", locks.InBackground())
+		time.Sleep(50 * time.Millisecond)
+		hold("urgent")
+		time.Sleep(50 * time.Millisecond)
+		close(letGo["b1"])
+		if got := order.until(t, 3); got[2] != "urgent" {
+			t.Fatalf("served %v: the first place freed goes to the urgent hold", got)
+		}
+		close(letGo["b2"])
+		order.until(t, 4)
+		close(letGo["urgent"])
+		order.until(t, 5)
+		close(letGo["b3"])
+		close(letGo["b4"])
+		for range 5 {
+			ways.Must(0, <-ended)
+		}
+	})
+}
+
+// contract: LOCK-10
+func TestBackgroundHoldsTakeNoMoreThanTheirPlacesAndAnUrgentHoldFindsTheRestAtOnce(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		lane := ways.Must(locks.OpenSemaphore(store, "lane", locks.Limit(2), locks.Background(1)))
+		background := func(ctx context.Context, key any, fn func(context.Context, *locks.Lease) error, opts ...locks.HoldOption) error {
+			return lane.Hold(ctx, key, fn, append(opts, locks.InBackground())...)
+		}
+		fences, letGo, ended := holding(t, background, "requests")
+		<-fences
+		if ways.Must(lane.TryHold(ctx, "requests", nothing, locks.InBackground())) {
+			t.Fatal("a second background hold took a place past the background's one")
+		}
+		if !ways.Must(lane.TryHold(ctx, "requests", nothing)) {
+			t.Fatal("an urgent hold did not find the place left")
+		}
+		close(letGo)
+		ways.Must(0, <-ended)
+		_, err := locks.OpenSemaphore(store, "lane", locks.Limit(2))
+		is(t, err, tinystore.ErrInvalid)
+		if want := "with a background of 1, not none"; !strings.Contains(err.Error(), want) {
+			t.Fatalf("got %q, want it to say %q", err, want)
+		}
+		_, err = locks.OpenSemaphore(store, "wide", locks.Limit(2), locks.Background(3))
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
+// contract: LOCK-11
+func TestAHoldsTimeoutCountsFromItsGrantAndEndsTheHoldLost(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		lane := ways.Must(locks.OpenSemaphore(store, "timed", locks.Limit(1)))
+		fences, letGo, firstEnded := holding(t, lane.Hold, "requests")
+		<-fences
+		ended := make(chan error, 1)
+		go func() {
+			ended <- lane.Hold(ctx, "requests", func(ctx context.Context, _ *locks.Lease) error {
+				<-ctx.Done()
+				return context.Cause(ctx)
+			}, locks.Wait(time.Minute), locks.Timeout(300*time.Millisecond))
+		}()
+		time.Sleep(400 * time.Millisecond)
+		close(letGo)
+		ways.Must(0, <-firstEnded)
+		ways.Must(0, lane.Hold(ctx, "requests", nothing, locks.Wait(5*time.Second)))
+		is(t, <-ended, tinystore.ErrLost)
 	})
 }
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import timedelta
+from typing import Literal
 
 import pytest
 
@@ -211,6 +212,95 @@ async def test_a_semaphore_admits_its_limit_a_key_its_permit_without_a_fence(sto
         assert permit is not None
     let_go.set()
     assert await asyncio.gather(*holders) == [False, False]
+
+
+async def _served_until(served: list[str], count: int) -> None:
+    while len(served) < count:
+        await asyncio.sleep(0.005)
+
+
+# contract: LOCK-09
+async def test_an_urgent_hold_takes_the_first_place_freed_before_the_background_holds_that_came_first(
+    store: tinystore.Store,
+) -> None:
+    cabinet = store.semaphore("cabinet", limit=2)
+    served: list[str] = []
+    let_go: dict[str, asyncio.Event] = {}
+
+    async def holder(name: str, priority: Literal["urgent", "background"]) -> None:
+        async with cabinet.hold("requests", priority=priority, wait="60s"):
+            served.append(name)
+            let_go[name] = asyncio.Event()
+            await let_go[name].wait()
+
+    holders = [asyncio.ensure_future(holder(name, "background")) for name in ("b1", "b2")]
+    await _served_until(served, 2)
+    holders += [asyncio.ensure_future(holder(name, "background")) for name in ("b3", "b4")]
+    await asyncio.sleep(0.05)
+    holders.append(asyncio.ensure_future(holder("urgent", "urgent")))
+    await asyncio.sleep(0.05)
+    let_go["b1"].set()
+    await _served_until(served, 3)
+    assert served == ["b1", "b2", "urgent"]
+    for count, name in enumerate(("b2", "urgent"), start=4):
+        let_go[name].set()
+        await _served_until(served, count)
+    let_go["b3"].set()
+    let_go["b4"].set()
+    await asyncio.gather(*holders)
+    assert served == ["b1", "b2", "urgent", "b3", "b4"]
+
+
+# contract: LOCK-10
+async def test_background_holds_take_no_more_than_their_places_and_an_urgent_hold_finds_the_rest_at_once(
+    store: tinystore.Store,
+) -> None:
+    lane = store.semaphore("lane", limit=2, background=1)
+    holding, let_go = asyncio.Event(), asyncio.Event()
+
+    async def first() -> None:
+        async with lane.hold("requests", priority="background"):
+            holding.set()
+            await let_go.wait()
+
+    held = asyncio.ensure_future(first())
+    await holding.wait()
+    async with lane.try_hold("requests", priority="background") as permit:
+        assert permit is None
+    async with lane.try_hold("requests") as permit:
+        assert permit is not None
+    let_go.set()
+    await held
+    with pytest.raises(tinystore.InvalidError, match="with a background of 1, not none"):
+        store.semaphore("lane", limit=2)
+    with pytest.raises(tinystore.InvalidError):
+        store.semaphore("wide", limit=2, background=3)
+
+
+# contract: LOCK-11
+async def test_a_holds_timeout_counts_from_its_grant_and_ends_the_block_lost(store: tinystore.Store) -> None:
+    lane = store.semaphore("timed", limit=1)
+    holding, let_go = asyncio.Event(), asyncio.Event()
+
+    async def first() -> None:
+        async with lane.hold("requests"):
+            holding.set()
+            await let_go.wait()
+
+    async def hung() -> None:
+        async with lane.hold("requests", wait="60s", timeout="300ms"):
+            await asyncio.sleep(10)
+
+    held = asyncio.ensure_future(first())
+    await holding.wait()
+    timed = asyncio.ensure_future(hung())
+    await asyncio.sleep(0.4)
+    let_go.set()
+    await held
+    async with lane.hold("requests", wait="5s") as permit:
+        assert permit is not None
+    with pytest.raises(tinystore.LostError):
+        await timed
 
 
 def test_names_and_limits_are_checked_before_anything_is_sent(store: tinystore.Store) -> None:

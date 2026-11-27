@@ -42,6 +42,7 @@ impl<S: Read + Write> Client<S> {
             max_hold: hold.max_hold.map(millis_of),
             wait: millis_of(hold.wait),
             request: hold.request.to_vec(),
+            ..Default::default()
         };
         match self.answer::<wire::LocksHeld>(method::LOCKS_HOLD, &asked) {
             Ok(held) if held.acquired => Ok(Some(Lease { lease: held.lease, fence: held.fence })),

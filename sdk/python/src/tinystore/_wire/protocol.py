@@ -5476,6 +5476,14 @@ def _write_locks_hold(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(8)
         w.bin(x)
         n += 1
+    if (x := v.get("priority")) is not None:
+        w.uint(9)
+        w.str(x)
+        n += 1
+    if (x := v.get("background")) is not None:
+        w.uint(10)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5500,6 +5508,10 @@ def _read_locks_hold(r: Reader) -> dict[str, Any]:
                 read["wait"] = r.uint()
             case 8:
                 read["request"] = r.bin()
+            case 9:
+                read["priority"] = r.str()
+            case 10:
+                read["background"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -5528,6 +5540,10 @@ LocksHold = Message(
         "wait": (7, uint),
         # 16 random bytes: asked again, the lease given answers
         "request": (8, bin_),
+        # urgent or background; empty is urgent
+        "priority": (9, str_),
+        # how many places background holds may take, 1 to limit; 0 for every place
+        "background": (10, uint),
     },
     _write_locks_hold,
     _read_locks_hold,
