@@ -7354,6 +7354,154 @@
       "hex": "80",
       "message": "sql.Described",
       "name": "sql.Described with no field"
+    },
+    {
+      "fields": {
+        "compare": {
+          "list": [
+            {
+              "str": "compare"
+            }
+          ]
+        },
+        "gone": {
+          "str": "gone"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "key": {
+          "list": [
+            {
+              "str": "key"
+            }
+          ]
+        },
+        "mode": {
+          "str": "mode"
+        },
+        "rows": {
+          "fields": {
+            "columns": {
+              "list": [
+                {
+                  "str": "columns"
+                }
+              ]
+            },
+            "rows": {
+              "list": [
+                {
+                  "list": [
+                    {
+                      "str": "rows"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "scope": {
+          "list": [
+            {
+              "str": "scope"
+            }
+          ]
+        },
+        "scopeValues": {
+          "list": [
+            {
+              "str": "scopeValues"
+            }
+          ]
+        },
+        "shrink": {
+          "float": "3ff8000000000000"
+        },
+        "table": {
+          "str": "table"
+        }
+      },
+      "hex": "8a016b02a57461626c650391a36b657904a4676f6e650591a7636f6d7061726506a46d6f64650791a573636f70650891ab73636f706556616c75657309820191a7636f6c756d6e73029191a4726f77730acb3ff8000000000000",
+      "message": "sql.Mirror",
+      "name": "sql.Mirror with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Mirror",
+      "name": "sql.Mirror with no field"
+    },
+    {
+      "fields": {
+        "added": {
+          "list": [
+            {
+              "list": [
+                {
+                  "str": "added"
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "list": [
+            {
+              "list": [
+                {
+                  "str": "after"
+                }
+              ]
+            }
+          ]
+        },
+        "before": {
+          "list": [
+            {
+              "list": [
+                {
+                  "str": "before"
+                }
+              ]
+            }
+          ]
+        },
+        "columns": {
+          "list": [
+            {
+              "str": "columns"
+            }
+          ]
+        },
+        "gone": {
+          "list": [
+            {
+              "list": [
+                {
+                  "str": "gone"
+                }
+              ]
+            }
+          ]
+        },
+        "same": {
+          "uint": "607"
+        },
+        "suspect": {
+          "bool": true
+        }
+      },
+      "hex": "870191a7636f6c756d6e73029191a56164646564039191a66265666f7265049191a56166746572059191a4676f6e6506cd025f07c3",
+      "message": "sql.Diff",
+      "name": "sql.Diff with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Diff",
+      "name": "sql.Diff with no field"
     }
   ],
   "methods": {
@@ -7481,6 +7629,7 @@
     "sql.columns": 774,
     "sql.describe": 775,
     "sql.exec": 771,
+    "sql.mirror": 776,
     "sql.open": 769,
     "sql.query": 770,
     "sql.tx": 773

@@ -13512,6 +13512,223 @@ impl Message for SqlDescribed {
     }
 }
 
+/// A table that mirrors another system, given the source's list: replace
+/// makes the scope, the rows whose columns hold its values, what the list
+/// lists, and patch writes what the list adds and changes. The table's key,
+/// the columns that name a row at the source, is covered by a unique index or
+/// its primary key. A row the same as held is not written.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlMirror {
+    pub(crate) handle: u64,
+    pub(crate) table: String,
+    pub(crate) key: Vec<String>,
+    /// The column that marks what the source dropped with the store's time, rather than a delete.
+    pub(crate) gone: Option<String>,
+    /// The columns whose change makes a row changed: every column of the rows but the key's when absent.
+    pub(crate) compare: Option<Vec<String>>,
+    /// Replace or patch.
+    pub(crate) mode: String,
+    /// Replace: the columns of its scope.
+    pub(crate) scope: Option<Vec<String>>,
+    /// And their values, in their order.
+    pub(crate) scope_values: Option<Vec<Cell>>,
+    /// The list, one message at most.
+    pub(crate) rows: SqlRows,
+    /// Replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live.
+    pub(crate) shrink: Option<f64>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlMirror {
+    const NAME: &'static str = "sql.Mirror";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.table = codec::str(r, "table")?,
+                3 => message.key = codec::list(r, "key", codec::str)?,
+                4 => message.gone = Some(codec::str(r, "gone")?),
+                5 => message.compare = Some(codec::list(r, "compare", codec::str)?),
+                6 => message.mode = codec::str(r, "mode")?,
+                7 => message.scope = Some(codec::list(r, "scope", codec::str)?),
+                8 => message.scope_values = Some(codec::list(r, "scopeValues", codec::cell)?),
+                9 => message.rows = SqlRows::read(r)?,
+                10 => message.shrink = Some(codec::float(r, "shrink")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.table.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.table);
+        }
+        if !self.key.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.key, codec::write_str);
+        }
+        if let Some(gone) = &self.gone {
+            map.field(out, 4);
+            codec::write_str(out, gone);
+        }
+        if let Some(compare) = &self.compare {
+            map.field(out, 5);
+            codec::write_list(out, compare, codec::write_str);
+        }
+        if !self.mode.is_empty() {
+            map.field(out, 6);
+            codec::write_str(out, &self.mode);
+        }
+        if let Some(scope) = &self.scope {
+            map.field(out, 7);
+            codec::write_list(out, scope, codec::write_str);
+        }
+        if let Some(scope_values) = &self.scope_values {
+            map.field(out, 8);
+            codec::write_list(out, scope_values, codec::write_cell);
+        }
+        if !self.rows.is_zero() {
+            map.field(out, 9);
+            codec::write_message(out, &self.rows);
+        }
+        if let Some(shrink) = &self.shrink {
+            map.field(out, 10);
+            codec::write_float(out, shrink);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.table.len()
+            + 1 + codec::list_size(&self.key, |item| 5 + item.len())
+            + self.gone.as_ref().map_or(0, |gone| 1 + 5 + gone.len())
+            + self.compare.as_ref().map_or(0, |compare| 1 + codec::list_size(compare, |item| 5 + item.len()))
+            + 1 + 5 + self.mode.len()
+            + self.scope.as_ref().map_or(0, |scope| 1 + codec::list_size(scope, |item| 5 + item.len()))
+            + self.scope_values.as_ref().map_or(0, |scope_values| 1 + codec::list_size(scope_values, codec::cell_size))
+            + 1 + self.rows.size()
+            + self.shrink.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.table.is_empty()
+            && self.key.is_empty()
+            && self.gone.is_none()
+            && self.compare.is_none()
+            && self.mode.is_empty()
+            && self.scope.is_none()
+            && self.scope_values.is_none()
+            && self.rows.is_zero()
+            && self.shrink.is_none()
+    }
+}
+
+/// What a mirror's call changed, each row by columns: the list's, or the
+/// table's when the list names none. A changed row is before as it was held
+/// and after as the list gave it, in the same order; suspect wrote nothing.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlDiff {
+    pub(crate) columns: Vec<String>,
+    pub(crate) added: Vec<Vec<Cell>>,
+    pub(crate) before: Vec<Vec<Cell>>,
+    pub(crate) after: Vec<Vec<Cell>>,
+    pub(crate) gone: Vec<Vec<Cell>>,
+    pub(crate) same: u64,
+    pub(crate) suspect: bool,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlDiff {
+    const NAME: &'static str = "sql.Diff";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.columns = codec::list(r, "columns", codec::str)?,
+                2 => message.added = codec::list(r, "added", |r, name| codec::list(r, name, codec::cell))?,
+                3 => message.before = codec::list(r, "before", |r, name| codec::list(r, name, codec::cell))?,
+                4 => message.after = codec::list(r, "after", |r, name| codec::list(r, name, codec::cell))?,
+                5 => message.gone = codec::list(r, "gone", |r, name| codec::list(r, name, codec::cell))?,
+                6 => message.same = codec::uint(r, "same")?,
+                7 => message.suspect = codec::bool(r, "suspect")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.columns.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.columns, codec::write_str);
+        }
+        if !self.added.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.added, |out, items| codec::write_list(out, items, codec::write_cell));
+        }
+        if !self.before.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.before, |out, items| codec::write_list(out, items, codec::write_cell));
+        }
+        if !self.after.is_empty() {
+            map.field(out, 4);
+            codec::write_list(out, &self.after, |out, items| codec::write_list(out, items, codec::write_cell));
+        }
+        if !self.gone.is_empty() {
+            map.field(out, 5);
+            codec::write_list(out, &self.gone, |out, items| codec::write_list(out, items, codec::write_cell));
+        }
+        if self.same != 0 {
+            map.field(out, 6);
+            codec::write_uint(out, &self.same);
+        }
+        if self.suspect {
+            map.field(out, 7);
+            codec::write_bool(out, &self.suspect);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.columns, |item| 5 + item.len())
+            + 1 + codec::list_size(&self.added, |item| codec::list_size(item, codec::cell_size))
+            + 1 + codec::list_size(&self.before, |item| codec::list_size(item, codec::cell_size))
+            + 1 + codec::list_size(&self.after, |item| codec::list_size(item, codec::cell_size))
+            + 1 + codec::list_size(&self.gone, |item| codec::list_size(item, codec::cell_size))
+            + 10
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.columns.is_empty()
+            && self.added.is_empty()
+            && self.before.is_empty()
+            && self.after.is_empty()
+            && self.gone.is_empty()
+            && self.same == 0
+            && !self.suspect
+    }
+}
+
 /// Every method's number, by its name in the schema.
 pub(crate) mod method {
     #[cfg(feature = "backup")]
@@ -13794,6 +14011,8 @@ pub(crate) mod method {
     pub(crate) const SQL_COLUMNS: u16 = 0x0306;
     #[cfg(feature = "sql")]
     pub(crate) const SQL_DESCRIBE: u16 = 0x0307;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_MIRROR: u16 = 0x0308;
 
     /// Who may call a method: the word its schema line starts with.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14058,6 +14277,8 @@ pub(crate) mod method {
             SQL_COLUMNS => Some(Access::Read),
             #[cfg(feature = "sql")]
             SQL_DESCRIBE => Some(Access::Read),
+            #[cfg(feature = "sql")]
+            SQL_MIRROR => Some(Access::Write),
             _ => None,
         }
     }
@@ -14319,6 +14540,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("sql.columns", 0x0306, "download"),
     #[cfg(feature = "sql")]
     ("sql.describe", 0x0307, "call"),
+    #[cfg(feature = "sql")]
+    ("sql.mirror", 0x0308, "call"),
 ];
 
 /// A body of the message `name` read and written again, and the size the message
@@ -14727,6 +14950,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "sql.DescribedColumn" => SqlDescribedColumn::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Described" => SqlDescribed::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Mirror" => SqlMirror::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Diff" => SqlDiff::decode(body).map(|message| (message.encode(), message.size())),
         _ => return None,
     };
     Some(rewritten)

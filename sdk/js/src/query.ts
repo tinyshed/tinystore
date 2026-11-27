@@ -1036,7 +1036,7 @@ function insertOf(
 }
 
 /** A row's field as it is written: an array or an object as its JSON. */
-function fieldOf(value: unknown, name: string, types: Record<string, ColumnType>): SqlArg {
+export function fieldOf(value: unknown, name: string, types: Record<string, ColumnType>): SqlArg {
 	if (value === undefined) {
 		throw new InvalidError(
 			`${name} is undefined, which never sets a column to null: leave the field out, or say null`,

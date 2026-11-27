@@ -181,7 +181,6 @@ impl Transaction<'_> {
 
     /// Refuses a handle kept in another file than the transaction's, `place`:
     /// what it wrote would not commit with the rest.
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
     pub(crate) fn takes(&self, file: &File, place: &str) -> Result<()> {
         self.writer.takes(file, place)
     }
@@ -208,7 +207,6 @@ impl fmt::Debug for Transaction<'_> {
 /// What holds a transaction's writer and says which file it is of.
 trait Writer {
     /// Refuses a handle kept in another file than the transaction's.
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
     fn takes(&self, file: &File, place: &str) -> Result<()>;
 
     /// Runs `work` on the writer the transaction holds.
@@ -224,28 +222,13 @@ trait Writer {
 #[cfg(feature = "sql")]
 struct OneFile<'t> {
     raw: &'t SqlTx<'t>,
-    #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")),
-        expect(
-            dead_code,
-            reason = "only kv's, jobs', blobs', search's and records' handles ask whether they are kept in a file"
-        )
-    )]
     file: &'t File,
     /// What an error calls the file: `sql app`.
-    #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")),
-        expect(
-            dead_code,
-            reason = "only kv's, jobs', blobs', search's and records' handles ask whether they are kept in a file"
-        )
-    )]
     owner: &'t str,
 }
 
 #[cfg(feature = "sql")]
 impl Writer for OneFile<'_> {
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
     fn takes(&self, file: &File, place: &str) -> Result<()> {
         if std::ptr::eq(self.file, file) {
             return Ok(());

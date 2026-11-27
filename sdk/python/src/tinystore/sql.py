@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from ._session import Stream
     from ._time import Duration
     from .jobs import Worker
+    from .mirror import Mirror
     from .query import Table
 
 
@@ -1033,6 +1034,58 @@ class Database:
                 yield read(row)
 
         return rows()
+
+    @overload
+    def mirror[T](
+        self,
+        table: str,
+        of: type[T],
+        *,
+        key: Sequence[str],
+        gone: str | None = None,
+        compare: Sequence[str] | None = None,
+    ) -> Mirror[T]: ...
+    @overload
+    def mirror(
+        self,
+        table: str,
+        of: None = None,
+        *,
+        key: Sequence[str],
+        gone: str | None = None,
+        compare: Sequence[str] | None = None,
+    ) -> Mirror[dict[str, Any]]: ...
+    def mirror(
+        self,
+        table: str,
+        of: Any = None,
+        *,
+        key: Sequence[str],
+        gone: str | None = None,
+        compare: Sequence[str] | None = None,
+    ) -> Mirror[Any]:
+        """A table that mirrors another system: its ``replace`` and ``patch`` answer what was added, changed and gone.
+
+        ``key`` names a row at the source, and a unique index or the table's
+        primary key covers it; ``gone`` marks what the source dropped with the
+        store's time, unix milliseconds, instead of deleting it; ``compare``
+        names the columns whose change makes a row changed, every column the
+        rows carry but the key's when not given.
+
+            works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", compare=["grade"])
+        """
+        from .mirror import Mirror
+
+        async def call(body: Callable[[int], bytes]) -> bytes:
+            self.refuse_around(f"mirror {table}")
+
+            async def attempt(connection: Connection) -> bytes:
+                return await connection.session.call(methods["sql.mirror"], body(await self.handle(connection)))
+
+            return await self._link.run("write", attempt)
+
+        options = (list(key), gone, None if compare is None else list(compare))
+        return Mirror(table, of, options, call)
 
     @overload
     def table[T](self, name: str, of: type[T]) -> Table[T]: ...

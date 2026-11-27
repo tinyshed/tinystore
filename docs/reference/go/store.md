@@ -424,6 +424,8 @@ var (
 	// RowsBytes is the values one call reads from a database: past them, read
 	// a page at a time.
 	RowsBytes = Limit{"bytes of a call's rows", 64 << 20}
+	// MirrorRows is the rows of a mirror's list, and those its scope holds.
+	MirrorRows = Limit{"mirror rows", 100_000}
 	// EventBytes is one event, its name, fields and text together.
 	EventBytes = Limit{"event bytes", 256 << 10}
 	// AppendBytes is the events of one append together.

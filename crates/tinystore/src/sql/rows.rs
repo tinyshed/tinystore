@@ -77,7 +77,6 @@ impl Held {
 
     /// Covers `bytes` of the rows several statements read for one call,
     /// within one call's bound, or fails `limit`.
-    #[cfg(feature = "search")]
     pub(crate) fn cover(&mut self, bytes: usize) -> Result<()> {
         if bytes > MOST_READ {
             return Err(past_bound(bytes, MOST_READ));
@@ -288,6 +287,18 @@ impl Rows {
     #[cfg(feature = "search")]
     pub(crate) fn bytes(&self) -> usize {
         self.values.iter().map(Value::size).sum()
+    }
+
+    /// Rows made of cells a call already holds, to be decoded as `all`
+    /// decodes what it read: a mirror's answer.
+    pub(crate) fn of(columns: Arc<[String]>, values: Vec<Value>) -> Rows {
+        Rows { columns, values, held: Held::default(), nested: Vec::new() }
+    }
+
+    /// Their columns, their values a row after another, and the store's
+    /// memory they hold.
+    pub(crate) fn into_parts(self) -> (Arc<[String]>, Vec<Value>, Held) {
+        (self.columns, self.values, self.held)
     }
 
     /// The values, a row after another, each `width()` long.

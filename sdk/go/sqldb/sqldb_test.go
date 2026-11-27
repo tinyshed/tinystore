@@ -383,6 +383,55 @@ func TestDescribeNamesTheColumnsOfAStatementThatAnswersNoRowInItsOrder(t *testin
 	})
 }
 
+type Work struct {
+	CourseID int64
+	ID       string
+	Title    string
+	Grade    *float64
+}
+
+// contract: SQL-17, SQL-20
+func TestAMirrorAnswersWhatWasAddedChangedAndGoneAndItsGuardWritesNothing(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		ways.Must(db.Exec(ctx, `create table works (course_id integer, id text, title text, grade real, gone_at integer, primary key (course_id, id))`))
+		works := sqldb.OpenMirror[Work](db, "works", sqldb.MirrorOptions{Key: []string{"course_id", "id"}, Gone: "gone_at", Compare: []string{"grade"}})
+		grade := func(g float64) *float64 { return &g }
+		work := func(id string, g *float64, title string) Work {
+			return Work{CourseID: 1, ID: id, Title: title, Grade: g}
+		}
+		scope := map[string]any{"course_id": 1}
+		first := ways.Must(works.Replace(ctx, scope, []Work{work("a", grade(4), "Essay"), work("b", nil, "Quiz"), work("c", grade(3), "Lab")}))
+		if len(first.Added) != 3 || first.Same != 0 || first.Suspect {
+			t.Fatalf("first %+v", first)
+		}
+		diff := ways.Must(works.Replace(ctx, scope, []Work{work("a", grade(4), "Essay (v2)"), work("b", grade(5), "Quiz"), work("d", nil, "Exam")}))
+		if len(diff.Added) != 1 || diff.Added[0].ID != "d" || len(diff.Gone) != 1 || diff.Gone[0].ID != "c" || diff.Same != 1 {
+			t.Fatalf("diff %+v", diff)
+		}
+		if len(diff.Changed) != 1 || diff.Changed[0].Before.Grade != nil || *diff.Changed[0].After.Grade != 5 {
+			t.Fatalf("changed %+v", diff.Changed)
+		}
+		held := ways.Must(works.Replace(ctx, scope, nil, sqldb.Shrink(0.5)))
+		if !held.Suspect || len(held.Gone) != 3 {
+			t.Fatalf("held %+v", held)
+		}
+		if live := ways.Must(sqldb.Scalar[int64](ctx, db, `select count(*) from works where gone_at is null`)); live != 3 {
+			t.Fatalf("a suspect answer wrote: %d live", live)
+		}
+		patched := ways.Must(works.Patch(ctx, []Work{work("e", grade(1), "New")}))
+		if len(patched.Added) != 1 || len(patched.Gone) != 0 {
+			t.Fatalf("patched %+v", patched)
+		}
+		_, err := works.Replace(ctx, map[string]any{"course_id": 2}, []Work{work("a", grade(4), "Essay")})
+		is(t, err, tinystore.ErrInvalid)
+		if !strings.Contains(err.Error(), `sql app: mirror works: row (course_id 1, id "a")`) {
+			t.Fatalf("outside the scope: %v", err)
+		}
+	})
+}
+
 func TestATableInsertsUpdatesAndDeletesWhatItsConditionSays(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

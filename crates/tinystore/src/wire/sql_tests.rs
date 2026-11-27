@@ -6,9 +6,9 @@ use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::{Cell, Message};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn, SqlDone,
-    SqlMigration, SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen,
-    method,
+    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn, SqlDiff,
+    SqlDone, SqlMigration, SqlMirror, SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer,
+    SqlTxCall, SqlTxOpen, method,
 };
 
 const NOTES: &str =
@@ -991,6 +991,60 @@ fn describe_names_a_statements_columns_without_its_rows_and_a_read_connection_as
     let mistyped = reader.call::<SqlDescribed>(method::SQL_DESCRIBE, &asked("select titel from notes")).unwrap_err();
     assert_eq!((mistyped.code.as_str(), mistyped.message.contains("no such column: titel")), ("invalid", true));
     assert!(!copy.exists(), "nothing ran");
+}
+
+// contract: SQL-17
+#[test]
+fn a_mirror_answers_what_it_added_changed_and_dropped_and_refuses_what_cannot_be_right() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let mut client = Client::admitted(&store, crate::pipe::Capability::Data);
+    let handle = open(&mut client);
+    exec(
+        &mut client,
+        handle,
+        "create table works (course_id integer, id text, grade real, primary key (course_id, id))",
+        vec![],
+    );
+    let row = |id: &str, grade: f64| vec![Cell::Int(1), text(id), Cell::Float(grade)];
+    let asked = |rows: Vec<Vec<Cell>>| SqlMirror {
+        handle,
+        table: "works".to_owned(),
+        key: vec!["course_id".to_owned(), "id".to_owned()],
+        gone: None,
+        compare: None,
+        mode: "replace".to_owned(),
+        scope: Some(vec!["course_id".to_owned()]),
+        scope_values: Some(vec![Cell::Int(1)]),
+        rows: SqlRows { columns: vec!["course_id".to_owned(), "id".to_owned(), "grade".to_owned()], rows },
+        shrink: None,
+    };
+    let first: SqlDiff = client.call(method::SQL_MIRROR, &asked(vec![row("a", 4.0), row("b", 3.0)])).unwrap();
+    assert_eq!((first.added.len(), first.same), (2, 0));
+    let diff: SqlDiff = client.call(method::SQL_MIRROR, &asked(vec![row("a", 4.0), row("c", 1.0)])).unwrap();
+    assert_eq!(diff.columns, ["course_id", "id", "grade"]);
+    assert_eq!((diff.added, diff.gone, diff.same, diff.suspect), (vec![row("c", 1.0)], vec![row("b", 3.0)], 1, false));
+    assert!(diff.before.is_empty() && diff.after.is_empty());
+    let guarded = SqlMirror { shrink: Some(0.9), ..asked(vec![]) };
+    let held: SqlDiff = client.call(method::SQL_MIRROR, &guarded).unwrap();
+    assert!(held.suspect);
+    assert_eq!(
+        query(&mut client, handle, "select id from works order by id", "all").rows.len(),
+        2,
+        "nothing was written"
+    );
+
+    let unknown = SqlMirror { mode: "upsert".to_owned(), ..asked(vec![]) };
+    let refused = client.call::<SqlDiff>(method::SQL_MIRROR, &unknown).unwrap_err();
+    assert_eq!(refused.message, "sql app: mirror works: a mirror's mode \"upsert\": it is replace or patch");
+    let several = SqlMirror { key: vec!["id".to_owned()], ..asked(vec![]) };
+    let refused = client.call::<SqlDiff>(method::SQL_MIRROR, &several).unwrap_err();
+    assert_eq!(refused.code, "invalid");
+    assert!(refused.message.starts_with("sql app: mirror works: the key (id) names no one row"), "{}", refused.message);
+    let mut reader = Client::admitted(&store, crate::pipe::Capability::Read);
+    let read = open(&mut reader);
+    let refused = reader.call::<SqlDiff>(method::SQL_MIRROR, &SqlMirror { handle: read, ..asked(vec![]) }).unwrap_err();
+    assert_eq!(refused.code, "permission");
 }
 
 // contract: SEC-01

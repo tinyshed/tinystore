@@ -32,6 +32,7 @@ mod engine;
 pub(crate) mod forward;
 mod included;
 mod migrations;
+mod mirror;
 mod pieces;
 mod query;
 mod rows;
@@ -46,6 +47,11 @@ pub use database::{Database, DatabaseBuilder, Done};
 pub use describe::Column;
 pub use each::Each;
 pub use migrations::Migrations;
+#[cfg(feature = "async")]
+pub(crate) use mirror::scope_of;
+pub use mirror::{Changed, Diff, Guarded, Mirror, MirrorBuilder, TxMirror};
+#[cfg(any(feature = "wire", feature = "async"))]
+pub(crate) use mirror::{Found, Mode};
 pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};
 pub use query::{Direction, Page, Query, Table, Upsert};
 pub use statement::Sql;
@@ -56,6 +62,7 @@ pub use tx::Tx;
 pub(crate) use {
     columns::{Columns, Packed},
     database::is_query,
+    mirror::{Given, Listed, Shape},
     rows::{Answer, Held, Keep, Kept},
     tx::{BOUND as TX_BOUND, HELD as TX_HELD},
     values::Value,

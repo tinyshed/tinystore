@@ -7,6 +7,7 @@
   "job bytes": 1048576,
   "progress bytes": 4096,
   "bytes of a call's rows": 67108864,
+  "mirror rows": 100000,
   "event bytes": 262144,
   "append bytes": 4194304,
   "aggregate rows": 10000,

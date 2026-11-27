@@ -92,6 +92,7 @@ from .metrics import (
     Timing,
     exponential_buckets,
 )
+from .mirror import Changed, Diff, Mirror
 from .once import Once
 from .query import Query, RowPage, Table
 from .records import (
@@ -130,6 +131,7 @@ __all__ = [
     "Backup",
     "Bucket",
     "CallCancelledError",
+    "Changed",
     "Changes",
     "Channel",
     "Clock",
@@ -146,6 +148,7 @@ __all__ = [
     "Damage",
     "Database",
     "Dedupe",
+    "Diff",
     "Directory",
     "Done",
     "Entries",
@@ -189,6 +192,7 @@ __all__ = [
     "Message",
     "Metrics",
     "MetricsDamage",
+    "Mirror",
     "Missed",
     "NameCount",
     "NameInfo",

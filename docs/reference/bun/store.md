@@ -718,6 +718,8 @@ const limits: Readonly<{
     progressBytes: Limit
     /** The values one call reads from a database: past them, read a page at a time. */
     rowsBytes: Limit
+    /** The rows of a mirror's list, and those its scope holds. */
+    mirrorRows: Limit
     /** One event, its name, fields and text together. */
     eventBytes: Limit
     /** The events of one append together. */

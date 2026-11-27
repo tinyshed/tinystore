@@ -378,6 +378,47 @@ seconds at most: a walk that takes longer fails ``limit``, and is read
 a page at a time with a table's ``list``, or ordered by its key with a
 table's ``each``, which reads on past it.
 
+### Database.mirror
+
+```python
+@overload
+def mirror[T](
+    table: str,
+    of: type[T],
+    *,
+    key: Sequence[str],
+    gone: str | None = None,
+    compare: Sequence[str] | None = None,
+) -> Mirror[T]: ...
+@overload
+def mirror(
+    table: str,
+    of: None = None,
+    *,
+    key: Sequence[str],
+    gone: str | None = None,
+    compare: Sequence[str] | None = None,
+) -> Mirror[dict[str, Any]]: ...
+def mirror(
+    table: str,
+    of: Any = None,
+    *,
+    key: Sequence[str],
+    gone: str | None = None,
+    compare: Sequence[str] | None = None,
+) -> Mirror[Any]: ...
+```
+
+A table that mirrors another system: its ``replace`` and ``patch`` answer what was added, changed and gone.
+
+``key`` names a row at the source, and a unique index or the table's
+primary key covers it; ``gone`` marks what the source dropped with the
+store's time, unix milliseconds, instead of deleting it; ``compare``
+names the columns whose change makes a row changed, every column the
+rows carry but the key's when not given.
+
+    works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", compare=["grade"])
+
 ### Database.table
 
 ```python

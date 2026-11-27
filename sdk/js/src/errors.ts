@@ -154,6 +154,8 @@ export const limits = Object.freeze({
 	progressBytes: limit('progress bytes', 4 << 10),
 	/** The values one call reads from a database: past them, read a page at a time. */
 	rowsBytes: limit("bytes of a call's rows", 64 << 20),
+	/** The rows of a mirror's list, and those its scope holds. */
+	mirrorRows: limit('mirror rows', 100_000),
 	/** One event, its name, fields and text together. */
 	eventBytes: limit('event bytes', 256 << 10),
 	/** The events of one append together. */

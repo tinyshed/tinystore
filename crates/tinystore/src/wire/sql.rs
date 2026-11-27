@@ -13,15 +13,16 @@ use std::time::{Duration, Instant};
 
 use super::codec::{Cell, Map, Message};
 use super::protocol::{
-    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn, SqlDone,
-    SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
+    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDescribed, SqlDescribedColumn, SqlDiff,
+    SqlDone, SqlMirror, SqlOpen, SqlOrder, SqlQuery, SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen,
+    method,
 };
 use super::{Route, codec, msgpack};
 use crate::engine::SharedFile;
 use crate::limits::{ANSWER_BYTES, Limit};
 use crate::sql::{
-    Answer, Columns, Database, Direction, Done, End, First, Held, Keep, Kept, Key, Migrations, Packed, Part, Rows, Sql,
-    TX_HELD, Taken, Tx, Value, Walk, Walking, Wanted, Write, is_query,
+    Answer, Columns, Database, Direction, Done, End, First, Found, Given, Held, Keep, Kept, Key, Listed, Migrations,
+    Mode, Packed, Part, Rows, Shape, Sql, TX_HELD, Taken, Tx, Value, Walk, Walking, Wanted, Write, is_query,
 };
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, Transaction};
@@ -35,7 +36,7 @@ const TX_BOUND: Duration = if cfg!(test) { Duration::from_millis(300) } else { c
 
 pub(crate) fn route(called: u16) -> Route {
     match called {
-        method::SQL_EXEC | method::SQL_BATCH => Route::Submit,
+        method::SQL_EXEC | method::SQL_BATCH | method::SQL_MIRROR => Route::Submit,
         method::SQL_QUERY | method::SQL_COLUMNS => Route::Download,
         method::SQL_TX => Route::Transaction,
         _ => Route::Worker,
@@ -200,7 +201,61 @@ pub(crate) fn submit(
                 Err(failure) => done(Err(failure)),
             }
         }
+        method::SQL_MIRROR => match SqlMirror::decode(body).and_then(|asked| mirrored(handles, asked)) {
+            Ok((database, asked)) => database.mirror_then(asked, ANSWER_BYTES, move |found| {
+                done(found.map(|found| diff_of(found).encode()).map_err(Failure::from));
+            }),
+            Err(failure) => done(Err(failure)),
+        },
         other => done(Err(Failure::unimplemented(format!("method {other:#06x}")))),
+    }
+}
+
+/// A mirror's call as the core takes it: its database, its table's shape,
+/// its list as checked, and what it compares the list with.
+fn mirrored(handles: &Handles, asked: SqlMirror) -> Result<(Database, (Shape, Given, Mode)), Failure> {
+    let database = handles.database(asked.handle)?;
+    let describe = format!("sql {}: mirror {}", database.name(), asked.table);
+    let shape = Shape { table: asked.table, key: asked.key, gone: asked.gone, compare: asked.compare };
+    let mode = match asked.mode.as_str() {
+        "replace" => {
+            let (columns, values) = (asked.scope.unwrap_or_default(), asked.scope_values.unwrap_or_default());
+            if columns.len() != values.len() {
+                return Err(Failure::invalid(format!(
+                    "{describe}: a scope of {} columns and {} values",
+                    columns.len(),
+                    values.len()
+                )));
+            }
+            let values = values.into_iter().map(value_of).collect::<Result<Vec<_>, _>>()?;
+            Mode::Replace { scope: columns.into_iter().zip(values).collect(), shrink: asked.shrink }
+        }
+        "patch" if asked.scope.is_none() && asked.shrink.is_none() => Mode::Patch,
+        "patch" => return Err(Failure::invalid(format!("{describe}: a patch takes no scope and no shrink"))),
+        other => {
+            return Err(Failure::invalid(format!("{describe}: a mirror's mode {other:?}: it is replace or patch")));
+        }
+    };
+    let rows = asked.rows.rows.into_iter().map(|row| row.into_iter().map(value_of).collect::<Result<Vec<_>, _>>());
+    let listed = Listed { columns: asked.rows.columns, rows: rows.collect::<Result<_, _>>()? };
+    let given = Given::checked(&shape, listed, &mode).map_err(|error| error.within(describe))?;
+    Ok((database, (shape, given, mode)))
+}
+
+/// A mirror's answer as cells.
+fn diff_of(found: Found) -> SqlDiff {
+    let cells = |rows: Vec<Vec<Value>>| -> Vec<Vec<Cell>> {
+        rows.into_iter().map(|row| row.into_iter().map(cell_of).collect()).collect()
+    };
+    let (before, after): (Vec<_>, Vec<_>) = found.changed.into_iter().unzip();
+    SqlDiff {
+        columns: found.columns,
+        added: cells(found.added),
+        before: cells(before),
+        after: cells(after),
+        gone: cells(found.gone),
+        same: found.same,
+        suspect: found.suspect,
     }
 }
 

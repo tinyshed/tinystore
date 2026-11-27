@@ -345,6 +345,68 @@ for (const way of ways) {
 			expect((twice as Error).message).toContain('two columns named ts')
 		})
 
+		// contract: SQL-17, SQL-20
+		test('a mirror answers what was added, changed and gone, and its guard writes nothing', async () => {
+			await app.exec`create table works (course_id integer, id text, title text, grade real, gone_at integer, primary key (course_id, id))`
+			interface Work {
+				course_id: number
+				id: string
+				title: string
+				grade: number | null
+			}
+			const works = app.mirror<Work>('works', {
+				key: ['course_id', 'id'],
+				gone: 'gone_at',
+				compare: ['grade'],
+			})
+			const work = (id: string, grade: number | null, title = 'Essay'): Work => ({
+				course_id: 1,
+				id,
+				title,
+				grade,
+			})
+			const first = await works.replace({ course_id: 1 }, [
+				work('a', 4),
+				work('b', null),
+				work('c', 3),
+			])
+			expect(first).toEqual({
+				added: [work('a', 4), work('b', null), work('c', 3)],
+				changed: [],
+				gone: [],
+				same: 0,
+				suspect: false,
+			})
+
+			const diff = await works.replace({ course_id: 1 }, [
+				work('a', 4, 'Essay (v2)'),
+				work('b', 5),
+				work('d', null),
+			])
+			expect(diff.added).toEqual([work('d', null)])
+			expect(diff.changed).toEqual([{ before: work('b', null), after: work('b', 5) }])
+			expect(diff.gone).toEqual([work('c', 3)])
+			expect([diff.same, diff.suspect]).toEqual([1, false])
+			const marked = await app.scalar<number | null>`select gone_at from works where id = 'c'`
+			expect(typeof marked).toBe('number')
+			expect(await app.scalar<string>`select title from works where id = 'a'`).toBe('Essay')
+
+			const held = await works.replace({ course_id: 1 }, [], { shrink: 0.5 })
+			expect([held.gone.length, held.suspect]).toEqual([3, true])
+			expect(await app.scalar<number>`select count(*) from works where gone_at is null`).toBe(3)
+
+			const patched = await works.patch([work('e', 1)])
+			expect([patched.added, patched.gone]).toEqual([[work('e', 1)], []])
+			const outside = await caught(works.replace({ course_id: 2 }, [work('a', 4)]))
+			expect(outside).toBeInstanceOf(InvalidError)
+			expect((outside as Error).message).toContain(
+				'sql app: mirror works: row (course_id 1, id "a")',
+			)
+			const inside = await caught(app.tx(async () => works.patch([work('f', 1)])))
+			expect(inside).toBeInstanceOf(InvalidError)
+			await app.exec('drop table works')
+		})
+
 		// contract: SQL-16
 		test('describe names the columns of a statement that answers no row, in its order', async () => {
 			const columns =

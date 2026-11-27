@@ -676,6 +676,7 @@ opens the file as it is, `not_found` when the store holds none.
 | `0x0305` | sql.tx       | write | `sql.TxOpen`    | exchange `sql.TxAnswer` for `sql.TxCall`   |
 | `0x0306` | sql.columns  | read  | `sql.Statement` | download `sql.Columns` until `sql.Columns` |
 | `0x0307` | sql.describe | read  | `sql.Statement` | `sql.Described`                            |
+| `0x0308` | sql.mirror   | write | `sql.Mirror`    | `sql.Diff`                                 |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/sql.wire`. A query's rows come in its

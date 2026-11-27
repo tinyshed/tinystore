@@ -34,6 +34,7 @@ import {
 	type Worker,
 } from './jobs.ts'
 import { Bucket, type BucketOptions, bucketOpen, partsOf, type Values, valuesOf } from './kv.ts'
+import { Mirror, type MirrorOptions } from './mirror.ts'
 import { Table, type TableOptions } from './query.ts'
 import {
 	Appending,
@@ -930,6 +931,22 @@ export class Database implements Runner, Home {
 			tableIndexOpen(name, options, await this.handle(connection)),
 		)
 		return new TableIndex<T>(this.via(`index ${name}`), name, open)
+	}
+
+	/**
+	 * A table that mirrors another system: its `replace` takes the source's
+	 * list of a scope and its `patch` a change of some rows, and each answers
+	 * what was added, changed and gone, writing only the difference.
+	 *
+	 *     const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', compare: ['grade'] })
+	 */
+	mirror<T = Row>(table: string, options: MirrorOptions): Mirror<T> {
+		return new Mirror<T>(table, options, async asked => {
+			this.#refuseAround(`mirror ${table}`)
+			return this.#link.run('write', async connection =>
+				connection.session.call(methods['sql.mirror'], asked(await this.handle(connection))),
+			)
+		})
 	}
 
 	/** Drops a table's index this database keeps, its triggers off the table; says whether there was one. */

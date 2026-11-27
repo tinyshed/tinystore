@@ -6,7 +6,7 @@
 
 # A migration as its file has it: the name that numbers it, and its SQL.
 message sql.Migration {
-  1 name: str         # 0001_notes.sql
+  1 name: str             # 0001_notes.sql
   2 sql: str
 }
 
@@ -14,10 +14,10 @@ message sql.Migration {
 # them the file opens as it is. One that backups leave out lies in local/
 # rather than sql/, and a name whose file lies in the other folder is invalid.
 message sql.Open {
-  1 name: str         # [a-z0-9][a-z0-9_-]{0,63}
+  1 name: str             # [a-z0-9][a-z0-9_-]{0,63}
   2 migrations: [sql.Migration]?
-  3 durability: str?  # full or os: how far its commits go before they return; the store's own when absent
-  4 backup: bool?     # false: no backup takes it, nor any node; true when absent
+  3 durability: str?      # full or os: how far its commits go before they return; the store's own when absent
+  4 backup: bool?         # false: no backup takes it, nor any node; true when absent
 }
 
 # A statement's text and the values of its ?s, in order. In a batch it may
@@ -28,7 +28,7 @@ message sql.Open {
 message sql.Text {
   1 text: str
   2 values: [cell]
-  3 method: uint?     # in a batch, jobs.add or records.append: the call in body
+  3 method: uint?         # in a batch, jobs.add or records.append: the call in body
   4 body: bin?
 }
 
@@ -55,7 +55,7 @@ message sql.Query {
   1 handle: uint
   2 text: str
   3 values: [cell]
-  4 want: str         # all, one, scalar or each
+  4 want: str             # all, one, scalar or each
   5 order: [sql.Order]?
 }
 
@@ -74,9 +74,9 @@ message sql.Rows {
 # beside REALs, neither read as the other.
 message sql.Column {
   1 name: str
-  2 integers: bin?    # an int64 a row
-  3 reals: bin?       # a float64 a row
-  4 nulls: bin?       # a bit a row, a byte's lowest first, set where the row holds NULL; absent when none does
+  2 integers: bin?        # an int64 a row
+  3 reals: bin?           # a float64 a row
+  4 nulls: bin?           # a bit a row, a byte's lowest first, set where the row holds NULL; absent when none does
   5 values: [cell]?
 }
 
@@ -84,8 +84,8 @@ message sql.Column {
 # part holds every column, in the statement's order and as the same one of
 # three, for the same rows.
 message sql.Columns {
-  1 rows: uint        # the rows of this part
-  2 total: uint       # the rows of every part
+  1 rows: uint            # the rows of this part
+  2 total: uint           # the rows of every part
   3 columns: [sql.Column]
 }
 
@@ -126,11 +126,11 @@ message sql.TxOpen {
 message sql.TxCall {
   1 text: str
   2 values: [cell]
-  3 want: str         # all, one, scalar or exec; call for a method; nothing in the last
-  4 commit: bool      # in the last: true commits, false rolls back
-  5 method: uint?     # with want call: the method, its request in body
+  3 want: str             # all, one, scalar or exec; call for a method; nothing in the last
+  4 commit: bool          # in the last: true commits, false rolls back
+  5 method: uint?         # with want call: the method, its request in body
   6 body: bin?
-  7 parts: bool       # with want all: the rows may come in several answers, each within the client's credit
+  7 parts: bool           # with want all: the rows may come in several answers, each within the client's credit
 }
 
 # A call's answer: its rows, what it changed, a method's answer, or why it
@@ -141,21 +141,52 @@ message sql.TxAnswer {
   1 rows: sql.Rows?
   2 done: sql.Done?
   3 failure: Failure?
-  4 body: bin?        # what a method answered, as its own answer
-  5 more: bool        # rows of the same call follow in the next answer
+  4 body: bin?            # what a method answered, as its own answer
+  5 more: bool            # rows of the same call follow in the next answer
 }
 
 # A column a statement answers, without its rows: its name, and the type its
 # table declares for it where it is a table's own column, as SQLite keeps it.
 message sql.DescribedColumn {
   1 name: str
-  2 declared: str?    # absent for an expression
+  2 declared: str?        # absent for an expression
 }
 
 # A statement's columns in its order, whether or not it answers a row: it is
 # compiled on a reader and nothing of it runs. One that writes is invalid.
 message sql.Described {
   1 columns: [sql.DescribedColumn]
+}
+
+# A table that mirrors another system, given the source's list: replace
+# makes the scope, the rows whose columns hold its values, what the list
+# lists, and patch writes what the list adds and changes. The table's key,
+# the columns that name a row at the source, is covered by a unique index or
+# its primary key. A row the same as held is not written.
+message sql.Mirror {
+  1 handle: uint
+  2 table: str
+  3 key: [str]
+  4 gone: str?            # the column that marks what the source dropped with the store's time, rather than a delete
+  5 compare: [str]?       # the columns whose change makes a row changed: every column of the rows but the key's when absent
+  6 mode: str             # replace or patch
+  7 scope: [str]?         # replace: the columns of its scope
+  8 scopeValues: [cell]?  # and their values, in their order
+  9 rows: sql.Rows        # the list, one message at most
+  10 shrink: float?       # replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
+}
+
+# What a mirror's call changed, each row by columns: the list's, or the
+# table's when the list names none. A changed row is before as it was held
+# and after as the list gave it, in the same order; suspect wrote nothing.
+message sql.Diff {
+  1 columns: [str]
+  2 added: [[cell]]
+  3 before: [[cell]]
+  4 after: [[cell]]
+  5 gone: [[cell]]
+  6 same: uint
+  7 suspect: bool
 }
 
 read  0x0301 sql.open(sql.Open)          -> Handle
@@ -165,3 +196,4 @@ write 0x0304 sql.batch(sql.Batch)        -> sql.Batched
 write 0x0305 sql.tx(sql.TxOpen)          -> exchange sql.TxAnswer for sql.TxCall
 read  0x0306 sql.columns(sql.Statement)  -> download sql.Columns until sql.Columns
 read  0x0307 sql.describe(sql.Statement) -> sql.Described
+write 0x0308 sql.mirror(sql.Mirror)      -> sql.Diff
