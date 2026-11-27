@@ -65,8 +65,18 @@ impl SharedFile {
     }
 
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")),
-        expect(dead_code, reason = "only kv's, jobs', blobs', search's and records' handles are guests")
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "blobs",
+            feature = "search",
+            feature = "records",
+            feature = "sql"
+        )),
+        expect(
+            dead_code,
+            reason = "named by kv's, jobs', blobs', search's and records' guests and a database's statements"
+        )
     )]
     pub(crate) fn owner(&self) -> &str {
         &self.owner

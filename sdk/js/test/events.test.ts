@@ -8,7 +8,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { ClosedError, InvalidError, type Store, withTrace } from '../src/index.ts'
+import { ClosedError, InvalidError, type Store, sql, withTrace } from '../src/index.ts'
 import { caught, removed, ways } from './ways.ts'
 
 const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
@@ -148,6 +148,39 @@ for (const way of ways) {
 			for (const where of [{ op: [] }, { op: { a: 1 } }, { op: { prefix: '' } }]) {
 				expect(await caught(calls.count({ where }))).toBeInstanceOf(InvalidError)
 			}
+		})
+
+		test('a where keeps to the values a database’s statement gives, read as the query starts', async () => {
+			// contract: REC-22
+			const db = await store.database('school', {
+				migrations: {
+					'0001_teachers.sql': 'create table teachers (id integer primary key) strict',
+				},
+			})
+			await db.exec`insert into teachers (id) values (2)`
+			const events = store.events('used')
+			await events.append([
+				{ name: 'open', fields: { userId: 1 } },
+				{ name: 'open', fields: { userId: 2 } },
+			])
+			const teachers = db.statement`select id from teachers`
+			expect(await events.count({ since: '1d', where: { userId: teachers } })).toBe(1)
+			expect(await events.count({ where: { userId: { not: teachers } } })).toBe(1)
+			const rows = await events.aggregate({
+				by: ['name'],
+				distinct: ['userId'],
+				where: { userId: teachers },
+			})
+			expect(rows.map(row => [row.count, row.distinct.userId])).toEqual([[1, 1]])
+			const above = db.statement('select id from teachers where id > ?', 0)
+			const { events: found } = await events.list({ where: { userId: above } })
+			expect(found.map(event => event.fields.userId)).toEqual([2])
+			expect(await store.events().count({ streams: ['used'], where: { userId: teachers } })).toBe(1)
+			const bare = await caught(events.count({ where: { userId: sql`select id from teachers` } }))
+			expect(bare).toBeInstanceOf(InvalidError)
+			expect((bare as Error).message).toContain('db.statement')
+			const blob = await caught(events.count({ where: { userId: db.statement`select x'07'` } }))
+			expect(blob).toBeInstanceOf(InvalidError)
 		})
 
 		test('largest gives the events of a key’s largest numbers; top reads the message', async () => {

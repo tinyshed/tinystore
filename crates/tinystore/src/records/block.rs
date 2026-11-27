@@ -49,7 +49,7 @@
 
 use std::collections::BTreeSet;
 
-use super::condition::{Matching, among};
+use super::condition::{Among, Matching};
 use super::event::{Fields, Kept, Level, SpanId, TraceId};
 use super::head::{self, Codec, ROW_EVENTS, Row};
 use super::ints::{put_ints, read_ints};
@@ -333,10 +333,11 @@ impl<'b> Opened<'b> {
         if read.len() == times.len() { Ok(read) } else { Err(Error::corrupt(what)) }
     }
 
-    /// Which values of a column, one a time of `times`, are written as `json`.
-    fn equal(&self, column: usize, times: &[i64], decoder: &mut Decoder<'_>, jsons: &[String]) -> Result<Vec<bool>> {
+    /// Which values of a column, one a time of `times`, are written as one
+    /// of `among`.
+    fn equal(&self, column: usize, times: &[i64], decoder: &mut Decoder<'_>, among: &Among) -> Result<Vec<bool>> {
         let mut reader = Reader::new(self.columns[column]);
-        let equal = values_equal(&mut reader, times, decoder, jsons);
+        let equal = values_equal(&mut reader, times, decoder, among);
         reader.finish()?;
         if equal.len() == times.len() { Ok(equal) } else { Err(Error::corrupt("a block's values")) }
     }
@@ -608,7 +609,7 @@ fn kept(schema: &Schema, opened: &Opened<'_>, codec: &mut Codec, wanted: &Wanted
     }
     // a `Not` or a prefix narrows nothing here: the read checks what it keeps whole
     let lists = wanted.filters.iter().filter_map(|(key, matching)| Some((key.as_str(), matching.one_of()?)));
-    let lists: Vec<(&str, &[String])> = lists.collect();
+    let lists: Vec<(&str, &Among)> = lists.collect();
     if !lists.is_empty() {
         let contexts = opened.ints(CONTEXTS, with(HAS_CONTEXT), "a block's contexts")?;
         let mut decoder = Decoder { codec, left: BLOCK_TEXT };
@@ -629,21 +630,16 @@ struct Column<'a, 'b> {
 }
 
 impl Column<'_, '_> {
-    /// Which events hold `key` with one of the values `jsons`, each sorted:
-    /// in a field or in their context, or maybe in fields kept whole, which
-    /// the read checks whole.
+    /// Which events hold `key` with one of the values `among`: in a field or
+    /// in their context, or maybe in fields kept whole, which the read
+    /// checks whole.
     /// A key written twice is held by its last value, as a read gives it.
     ///
     /// A column is a key's place in the shapes that have it, so one column
     /// may hold the last `tag` of one shape and the first of another: its
     /// values are read for every event that has it, and only the events
     /// whose last `tag` it is are found by them.
-    fn holding(
-        &self,
-        contexts: &[i64],
-        (key, jsons): (&str, &[String]),
-        decoder: &mut Decoder<'_>,
-    ) -> Result<Vec<bool>> {
+    fn holding(&self, contexts: &[i64], (key, among): (&str, &Among), decoder: &mut Decoder<'_>) -> Result<Vec<bool>> {
         let mut context_ids = contexts.iter();
         let context =
             |id: Option<&i64>| id.and_then(|id| usize::try_from(*id).ok()).and_then(|id| self.schema.contexts.get(id));
@@ -653,7 +649,7 @@ impl Column<'_, '_> {
             .map(|shape| {
                 let in_context = shape.has(HAS_CONTEXT)
                     && context(context_ids.next())
-                        .is_some_and(|fields| fields.json(key).is_some_and(|json| among(jsons, json)));
+                        .is_some_and(|fields| fields.json(key).is_some_and(|json| among.holds(json)));
                 shape.has(WHOLE_FIELDS) || in_context
             })
             .collect();
@@ -665,7 +661,7 @@ impl Column<'_, '_> {
             let places: Vec<usize> =
                 (0..self.shapes.len()).filter(|place| self.shapes[*place].columns.contains(&column)).collect();
             let at: Vec<i64> = places.iter().map(|place| self.times[*place]).collect();
-            let equal = self.opened.equal(FIXED + column, &at, decoder, jsons)?;
+            let equal = self.opened.equal(FIXED + column, &at, decoder, among)?;
             for (place, equal) in places.into_iter().zip(equal) {
                 holds[place] |= equal && last_column(self.shapes[place]) == Some(column);
             }

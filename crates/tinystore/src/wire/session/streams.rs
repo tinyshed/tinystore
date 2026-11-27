@@ -182,7 +182,9 @@ impl Shared {
     #[cfg(feature = "records")]
     pub(super) fn tail(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
         let (link, read_only) = (self.stream_link(input, stream), self.read_only.load(Ordering::Relaxed));
-        match guarded(|| records::tail(&self.store, &self.records, (stream, body), link, read_only)) {
+        match guarded(|| {
+            records::tail((&self.store, &self.records, &|handle| self.lent(handle)), (stream, body), link, read_only)
+        }) {
             Ok(tailing) => {
                 self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
                 tailing.begin();

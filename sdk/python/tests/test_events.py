@@ -136,6 +136,28 @@ async def test_a_where_list_is_one_of_not_finds_an_absent_key_and_prefix_a_text(
             await calls.count(where=where)
 
 
+# contract: REC-22
+async def test_a_where_keeps_to_the_values_a_databases_statement_gives(store: tinystore.Store) -> None:
+    db = await store.database(
+        "school", migrations={"0001_teachers.sql": "create table teachers (id integer primary key)"}
+    )
+    await db.exec("insert into teachers (id) values (2)")
+    used = store.events("used")
+    await used.append([Event("open", {"userId": 1}), Event("open", {"userId": 2})])
+    teachers = db.statement("select id from teachers")
+    assert await used.count(since="1d", where={"userId": teachers}) == 1
+    assert await used.count(where={"userId": {"not": teachers}}) == 1
+    rows = await used.aggregate(by=["name"], distinct=["userId"], where={"userId": teachers})
+    assert [(row.count, row.distinct["userId"]) for row in rows] == [(1, 1)]
+    above = db.statement("select id from teachers where id > ?", 0)
+    assert [event.fields["userId"] for event in (await used.list(where={"userId": above})).events] == [2]
+    assert await store.events().count(streams=["used"], where={"userId": teachers}) == 1
+    with pytest.raises(tinystore.InvalidError, match=r"db\.statement"):
+        await used.count(where={"userId": tinystore.sql("select id from teachers")})
+    with pytest.raises(tinystore.InvalidError):
+        await used.count(where={"userId": db.statement("select x'07'")})
+
+
 # contract: REC-19
 async def test_largest_gives_the_events_of_a_keys_largest_numbers_and_top_reads_the_message(
     store: tinystore.Store,

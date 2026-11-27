@@ -5236,6 +5236,9 @@
         "prefix": {
           "str": "prefix"
         },
+        "statement": {
+          "uint": "407"
+        },
         "values": {
           "list": [
             {
@@ -5244,7 +5247,7 @@
           ]
         }
       },
-      "hex": "830191a77b2261223a317d02c303a6707265666978",
+      "hex": "840191a77b2261223a317d02c303a670726566697804cd0197",
       "message": "records.Condition",
       "name": "records.Condition with every field"
     },
@@ -5253,6 +5256,32 @@
       "hex": "80",
       "message": "records.Condition",
       "name": "records.Condition with no field"
+    },
+    {
+      "fields": {
+        "database": {
+          "uint": "107"
+        },
+        "text": {
+          "str": "text"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "values"
+            }
+          ]
+        }
+      },
+      "hex": "83016b02a4746578740391a676616c756573",
+      "message": "records.Statement",
+      "name": "records.Statement with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Statement",
+      "name": "records.Statement with no field"
     },
     {
       "fields": {
@@ -5268,6 +5297,9 @@
                 },
                 "prefix": {
                   "str": "prefix"
+                },
+                "statement": {
+                  "uint": "407"
                 },
                 "values": {
                   "list": [
@@ -5308,6 +5340,27 @@
         "since": {
           "uint": "1500"
         },
+        "statements": {
+          "list": [
+            {
+              "fields": {
+                "database": {
+                  "uint": "107"
+                },
+                "text": {
+                  "str": "text"
+                },
+                "values": {
+                  "list": [
+                    {
+                      "str": "values"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
         "streams": {
           "list": [
             {
@@ -5329,7 +5382,7 @@
           }
         }
       },
-      "hex": "8e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a6707265666978",
+      "hex": "8f016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161840191a77b2261223a317d02c303a670726566697804cd01970f9183016b02a4746578740391a676616c756573",
       "message": "records.Query",
       "name": "records.Query with every field"
     },
@@ -5429,6 +5482,9 @@
                     "prefix": {
                       "str": "prefix"
                     },
+                    "statement": {
+                      "uint": "407"
+                    },
                     "values": {
                       "list": [
                         {
@@ -5468,6 +5524,27 @@
             "since": {
               "uint": "1500"
             },
+            "statements": {
+              "list": [
+                {
+                  "fields": {
+                    "database": {
+                      "uint": "107"
+                    },
+                    "text": {
+                      "str": "text"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "values"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
             "streams": {
               "list": [
                 {
@@ -5491,7 +5568,7 @@
           }
         }
       },
-      "hex": "82018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802a36b6579",
+      "hex": "82018f016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161840191a77b2261223a317d02c303a670726566697804cd01970f9183016b02a4746578740391a676616c75657302a36b6579",
       "message": "records.TopAsked",
       "name": "records.TopAsked with every field"
     },
@@ -5567,6 +5644,9 @@
                     "prefix": {
                       "str": "prefix"
                     },
+                    "statement": {
+                      "uint": "407"
+                    },
                     "values": {
                       "list": [
                         {
@@ -5606,6 +5686,27 @@
             "since": {
               "uint": "1500"
             },
+            "statements": {
+              "list": [
+                {
+                  "fields": {
+                    "database": {
+                      "uint": "107"
+                    },
+                    "text": {
+                      "str": "text"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "values"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
             "streams": {
               "list": [
                 {
@@ -5629,7 +5730,7 @@
           }
         }
       },
-      "hex": "82018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802a36b6579",
+      "hex": "82018f016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161840191a77b2261223a317d02c303a670726566697804cd01970f9183016b02a4746578740391a676616c75657302a36b6579",
       "message": "records.LargestAsked",
       "name": "records.LargestAsked with every field"
     },
@@ -5730,6 +5831,9 @@
                     "prefix": {
                       "str": "prefix"
                     },
+                    "statement": {
+                      "uint": "407"
+                    },
                     "values": {
                       "list": [
                         {
@@ -5769,6 +5873,27 @@
             "since": {
               "uint": "1500"
             },
+            "statements": {
+              "list": [
+                {
+                  "fields": {
+                    "database": {
+                      "uint": "107"
+                    },
+                    "text": {
+                      "str": "text"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "values"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
             "streams": {
               "list": [
                 {
@@ -5802,7 +5927,7 @@
           "str": "timeZone"
         }
       },
-      "hex": "88018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802cd05dc0391a262790491a573746174730591a864697374696e637406a863616c656e64617207a874696d655a6f6e6508c3",
+      "hex": "88018f016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161840191a77b2261223a317d02c303a670726566697804cd01970f9183016b02a4746578740391a676616c75657302cd05dc0391a262790491a573746174730591a864697374696e637406a863616c656e64617207a874696d655a6f6e6508c3",
       "message": "records.AggregateAsked",
       "name": "records.AggregateAsked with every field"
     },
@@ -6174,6 +6299,9 @@
                     "prefix": {
                       "str": "prefix"
                     },
+                    "statement": {
+                      "uint": "407"
+                    },
                     "values": {
                       "list": [
                         {
@@ -6213,6 +6341,27 @@
             "since": {
               "uint": "1500"
             },
+            "statements": {
+              "list": [
+                {
+                  "fields": {
+                    "database": {
+                      "uint": "107"
+                    },
+                    "text": {
+                      "str": "text"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "values"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
             "streams": {
               "list": [
                 {
@@ -6236,7 +6385,7 @@
           }
         }
       },
-      "hex": "82018e016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161830191a77b2261223a317d02c303a670726566697802a6707265666978",
+      "hex": "82018f016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da561667465720e81a161840191a77b2261223a317d02c303a670726566697804cd01970f9183016b02a4746578740391a676616c75657302a6707265666978",
       "message": "records.FieldNamesAsked",
       "name": "records.FieldNamesAsked with every field"
     },

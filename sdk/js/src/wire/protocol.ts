@@ -10578,7 +10578,8 @@ export const RecordsEvent = message(
 /**
  * What a key's value must be: one of values, each the JSON it is written
  * as; none of them with not, the key absent too; or a text that starts with
- * prefix.
+ * prefix. A statement of the query's, by its place, stands for the values
+ * its one column gives, read once as the read starts.
  */
 export const RecordsCondition = message(
 	'records.Condition',
@@ -10586,6 +10587,8 @@ export const RecordsCondition = message(
 		values: [1, list(str)],
 		not: [2, bool],
 		prefix: [3, str],
+		/** in place of values: its place among the query's statements */
+		statement: [4, uint],
 	},
 	{
 		write(w, v) {
@@ -10609,12 +10612,18 @@ export const RecordsCondition = message(
 				w.str(v.prefix)
 				n++
 			}
+			if (v.statement !== undefined) {
+				w.field(4)
+				w.uint(v.statement)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $values: string[] | undefined
 			let $not: boolean | undefined
 			let $prefix: string | undefined
+			let $statement: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1: {
@@ -10632,12 +10641,82 @@ export const RecordsCondition = message(
 					case 3:
 						$prefix = r.str()
 						break
+					case 4:
+						$statement = r.uint()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { values: $values, not: $not, prefix: $prefix }
+			return { values: $values, not: $not, prefix: $prefix, statement: $statement }
+		},
+	},
+)
+
+/**
+ * A statement of a database this connection opened, whose one column gives
+ * the values a condition keeps to, as sql.Statement's text and values.
+ */
+export const RecordsStatement = message(
+	'records.Statement',
+	{
+		/** a database's handle */
+		database: [1, uint],
+		text: [2, str],
+		values: [3, list(sqlValue)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.database !== undefined) {
+				w.field(1)
+				w.uint(v.database)
+				n++
+			}
+			if (v.text !== undefined) {
+				w.field(2)
+				w.str(v.text)
+				n++
+			}
+			if (v.values !== undefined) {
+				w.field(3)
+				w.array(v.values.length)
+				for (const item0 of v.values) {
+					sqlValue.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $database: number | undefined
+			let $text: string | undefined
+			let $values: (SqlValue | boolean)[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$database = r.uint()
+						break
+					case 2:
+						$text = r.str()
+						break
+					case 3: {
+						const items0: (SqlValue | boolean)[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(sqlValue.read(r))
+						}
+						r.leave()
+						$values = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { database: $database, text: $text, values: $values }
 		},
 	},
 )
@@ -10669,6 +10748,8 @@ export const RecordsQuery = message(
 		/** a page's next */
 		after: [13, str],
 		conditions: [14, names(RecordsCondition)],
+		/** what a condition's statement names, by its place */
+		statements: [15, list(RecordsStatement)],
 	},
 	{
 		write(w, v) {
@@ -10750,6 +10831,14 @@ export const RecordsQuery = message(
 				writeNames(w, v.conditions, RecordsCondition.write)
 				n++
 			}
+			if (v.statements !== undefined) {
+				w.field(15)
+				w.array(v.statements.length)
+				for (const item0 of v.statements) {
+					RecordsStatement.write(w, item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -10767,6 +10856,7 @@ export const RecordsQuery = message(
 			let $limit: number | undefined
 			let $after: string | undefined
 			let $conditions: Record<string, Read<typeof RecordsCondition.fields>> | undefined
+			let $statements: Read<typeof RecordsStatement.fields>[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -10823,6 +10913,15 @@ export const RecordsQuery = message(
 					case 14:
 						$conditions = readNames(r, RecordsCondition.read)
 						break
+					case 15: {
+						const items0: Read<typeof RecordsStatement.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsStatement.read(r))
+						}
+						r.leave()
+						$statements = items0
+						break
+					}
 					default:
 						r.skip()
 				}
@@ -10843,6 +10942,7 @@ export const RecordsQuery = message(
 				limit: $limit,
 				after: $after,
 				conditions: $conditions,
+				statements: $statements,
 			}
 		},
 	},

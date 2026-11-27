@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, cast, o
 from ._connection import check_name, piece_of
 from ._console import Line, encode_fields
 from ._fields import refuse_unknown
-from ._handles import Home, Opener, Via, handle_on, via_link
+from ._handles import BoundStatement, Home, Opener, Via, handle_on, via_link
 from ._time import Calendar, Duration, ms, spelled_keep
 from ._values import to_json
 from ._wire.protocol import (
@@ -320,7 +320,24 @@ _QUERY_FIELDS = Query.__required_keys__ | Query.__optional_keys__
 """The fields of a query, which a call takes on top of its own."""
 
 
-def _query_of(query: Mapping[str, Any]) -> dict[str, Any]:
+class _Asked(dict[str, Any]):
+    """A query as the wire carries it, and the statements its conditions name by their place.
+
+    Each statement's database is a handle of the connection the query goes on, which ``on`` writes in.
+    """
+
+    bound: list[BoundStatement]
+
+    async def on(self, connection: Connection) -> None:
+        """Writes in the statements, each with its database's handle on ``connection``."""
+        if self.bound:
+            self["statements"] = [
+                {"database": await each.database.handle(connection), "text": each.text, "values": list(each.values)}
+                for each in self.bound
+            ]
+
+
+def _query_of(query: Mapping[str, Any]) -> _Asked:
     """A query as the wire carries it.
 
     A condition given as None reads nothing it was not asked, and a field no query has is refused by name, since one
@@ -330,44 +347,63 @@ def _query_of(query: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in query.items():
         if value is None:
             raise InvalidError(f"a query's {key} given as None: leave it out to read without it")
-    where, conditions = _where_of(query.get("where") or {})
-    return {
-        "since": None if "since" not in query else ms(query["since"], "a query's since"),
-        "from": None if "from_" not in query else _nanos(query["from_"], "a query's from_"),
-        "to": None if "to" not in query else _nanos(query["to"], "a query's to"),
-        "streams": None if "streams" not in query else list(query["streams"]),
-        "names": None if "names" not in query else list(query["names"]),
-        "min_level": None if "min_level" not in query else _level_number(query["min_level"], "min_level"),
-        "trace_id": None if "trace_id" not in query else _id_bytes(query["trace_id"], 16, "trace_id"),
-        "where": where or None,
-        "conditions": conditions or None,
-        "search": query.get("search"),
-        "newest": query.get("newest"),
-        "limit": query.get("limit"),
-        "after": query.get("after"),
-    }
+    bound: list[BoundStatement] = []
+    where, conditions = _where_of(query.get("where") or {}, bound)
+    asked = _Asked(
+        {
+            "since": None if "since" not in query else ms(query["since"], "a query's since"),
+            "from": None if "from_" not in query else _nanos(query["from_"], "a query's from_"),
+            "to": None if "to" not in query else _nanos(query["to"], "a query's to"),
+            "streams": None if "streams" not in query else list(query["streams"]),
+            "names": None if "names" not in query else list(query["names"]),
+            "min_level": None if "min_level" not in query else _level_number(query["min_level"], "min_level"),
+            "trace_id": None if "trace_id" not in query else _id_bytes(query["trace_id"], 16, "trace_id"),
+            "where": where or None,
+            "conditions": conditions or None,
+            "search": query.get("search"),
+            "newest": query.get("newest"),
+            "limit": query.get("limit"),
+            "after": query.get("after"),
+        }
+    )
+    asked.bound = bound
+    return asked
 
 
-def _where_of(given: Mapping[str, Any]) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+def _where_of(
+    given: Mapping[str, Any], bound: list[BoundStatement]
+) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     """A where as the wire carries it: a plain value as its JSON in where, which every server
-    reads, and a list, {"not": …} or {"prefix": …} in conditions, which a server older than them
-    refuses rather than matching nothing."""
+    reads, and a list, {"not": …}, {"prefix": …} or a statement in conditions, which a server older
+    than them refuses rather than matching nothing. A statement goes into bound, which the
+    condition names by its place."""
+    from .sql import Sql  # sql imports records: a piece is named here only to say what to use instead
+
     where: dict[str, str] = {}
     conditions: dict[str, dict[str, Any]] = {}
     for key, value in given.items():
         named = f"a query's where {key!r}"
         if value is None:
             raise InvalidError(f"{named} given as None")
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, BoundStatement):
+            bound.append(value)
+            conditions[key] = {"statement": len(bound) - 1}
+        elif isinstance(value, Sql):
+            why = "a stream belongs to no database, so its statement says whose it is: db.statement(…)"
+            raise InvalidError(f"{named}: {why}")
+        elif isinstance(value, (list, tuple)):
             conditions[key] = {"values": [to_json(item) for item in cast("Sequence[Any]", value)]}
         elif isinstance(value, Mapping):
-            conditions[key] = _condition_of(named, cast("Mapping[str, Any]", value))
+            conditions[key] = _condition_of(named, cast("Mapping[str, Any]", value), bound)
         else:
             where[key] = to_json(value)
     return where, conditions
 
 
-def _condition_of(named: str, condition: Mapping[str, Any]) -> dict[str, Any]:
+def _condition_of(named: str, condition: Mapping[str, Any], bound: list[BoundStatement]) -> dict[str, Any]:
+    if list(condition) == ["not"] and isinstance(condition["not"], BoundStatement):
+        bound.append(condition["not"])
+        return {"statement": len(bound) - 1, "not": True}
     if list(condition) == ["not"]:
         nots = condition["not"]
         listed = list(cast("Sequence[Any]", nots)) if isinstance(nots, (list, tuple)) else [nots]
@@ -433,7 +469,8 @@ class _Reads:
 
     _link: Link
 
-    async def _ask(self, method: str, body: Callable[[int | None], bytes]) -> bytes:
+    async def _ask(self, method: str, body: Callable[[int | None], bytes], asked: _Asked | None = None) -> bytes:
+        """Calls method with what body writes, given the stream's handle, once asked's statements are written in."""
         raise NotImplementedError
 
     async def _opened(self, method: str, body: Callable[[int | None], bytes]) -> Stream:
@@ -442,7 +479,9 @@ class _Reads:
     async def list(self, **query: Unpack[Query]) -> EventPage:
         """One page: EventPage(events, next), its limit of events that match, fewer only on the last, without a next."""
         asked = _query_of(query)
-        page = RecordsPage.decode(await self._ask("records.list", lambda h: RecordsQuery.encode(asked, handle=h)))
+        page = RecordsPage.decode(
+            await self._ask("records.list", lambda h: RecordsQuery.encode(asked, handle=h), asked)
+        )
         return EventPage([_event_of(each) for each in page.get("events", [])], page.get("next"))
 
     async def all(self, **query: Unpack[Query]) -> AsyncIterator[Event]:
@@ -467,14 +506,14 @@ class _Reads:
         """
         asked = _query_of(query)
         return RecordsCount.decode(
-            await self._ask("records.delete", lambda h: RecordsQuery.encode(asked, handle=h))
+            await self._ask("records.delete", lambda h: RecordsQuery.encode(asked, handle=h), asked)
         ).get("count", 0)
 
     async def count(self, **query: Unpack[Counted]) -> int:
         """How many events the query finds."""
         asked = _query_of(query)
         return RecordsCount.decode(
-            await self._ask("records.count", lambda h: RecordsQuery.encode(asked, handle=h))
+            await self._ask("records.count", lambda h: RecordsQuery.encode(asked, handle=h), asked)
         ).get("count", 0)
 
     async def top(self, key: str, /, **query: Unpack[Topped]) -> list[Top]:
@@ -483,7 +522,9 @@ class _Reads:
         The key is a field's or a context's, or stream, name, level or message.
         """
         asked = _query_of(query)
-        answer = await self._ask("records.top", lambda h: RecordsTopAsked.encode(query={**asked, "handle": h}, key=key))
+        answer = await self._ask(
+            "records.top", lambda h: RecordsTopAsked.encode(query={**asked, "handle": h}, key=key), asked
+        )
         return [
             Top(json.loads(each.get("value", "null")), each.get("count", 0))
             for each in RecordsTops.decode(answer).get("values", [])
@@ -497,7 +538,7 @@ class _Reads:
         """
         asked = _query_of(query)
         answer = await self._ask(
-            "records.largest", lambda h: RecordsLargestAsked.encode(query={**asked, "handle": h}, key=key)
+            "records.largest", lambda h: RecordsLargestAsked.encode(query={**asked, "handle": h}, key=key), asked
         )
         return [_event_of(event) for event in RecordsEvents.decode(answer).get("events", [])]
 
@@ -520,6 +561,7 @@ class _Reads:
                 distinct=None if distinct is None else list(distinct),
                 fill=fill,
             ),
+            asked,
         )
         return [
             Row(
@@ -547,7 +589,9 @@ class _Reads:
         prefix = query.pop("prefix", None)
         asked = _query_of(query)
         answer = await self._ask(
-            "records.fieldNames", lambda h: RecordsFieldNamesAsked.encode(query={**asked, "handle": h}, prefix=prefix)
+            "records.fieldNames",
+            lambda h: RecordsFieldNamesAsked.encode(query={**asked, "handle": h}, prefix=prefix),
+            asked,
         )
         return list(RecordsNames.decode(answer).get("names", []))
 
@@ -559,6 +603,9 @@ class _Reads:
         the store closes.
         """
         asked = _query_of(query)
+        if asked.bound:
+            why = "a statement is read once, as a query starts, and a tail lives on"
+            raise InvalidError(f"a tail's where takes no statement: {why}")
         stream = await self._opened("records.tail", lambda h: RecordsQuery.encode(asked, handle=h))
         unfollow = self._link.follow(stream)
         try:
@@ -719,8 +766,17 @@ class Events(_Reads):
 
         return Lines(begin)
 
-    async def _ask(self, method: str, body: Callable[[int | None], bytes]) -> bytes:
-        return await self._call(method, body, "read")
+    async def _ask(self, method: str, body: Callable[[int | None], bytes], asked: _Asked | None = None) -> bytes:
+        if asked is None or not asked.bound:
+            return await self._call(method, body, "read")
+
+        # the databases' handles are the connection's the call goes on, opened before it
+        async def attempt(connection: Connection) -> bytes:
+            await asked.on(connection)
+            handle = await handle_on(connection, methods["records.open"], self._opener)
+            return await connection.session.call(methods[method], body(handle))
+
+        return await self._link.run("read", attempt)
 
     async def _opened(self, method: str, body: Callable[[int | None], bytes]) -> Stream:
         async def attempt(connection: Connection) -> Stream:
@@ -882,8 +938,13 @@ class AllEvents(_Reads):
         )
         await self._link.run("write", lambda c: c.session.call(methods["records.drop"], body))
 
-    async def _ask(self, method: str, body: Callable[[int | None], bytes]) -> bytes:
-        return await self._link.run("read", lambda c: c.session.call(methods[method], body(None)))
+    async def _ask(self, method: str, body: Callable[[int | None], bytes], asked: _Asked | None = None) -> bytes:
+        async def attempt(connection: Connection) -> bytes:
+            if asked is not None:
+                await asked.on(connection)
+            return await connection.session.call(methods[method], body(None))
+
+        return await self._link.run("read", attempt)
 
     async def _opened(self, method: str, body: Callable[[int | None], bytes]) -> Stream:
         return await self._link.run("read", lambda c: _stream_of(c, methods[method], body(None), True))

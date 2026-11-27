@@ -161,7 +161,7 @@ pub struct Condition(_)
 
 What a key's value must be for a read to find an event: one of some JSON
 values, none of them, or a text that starts with a prefix. A value, a
-`Not` or a `Prefix` converts into one.
+`Not`, a `Prefix` or a statement of a database converts into one.
 
 ## Aggregate
 
@@ -1175,6 +1175,23 @@ such key; [`Prefix`](crate::Prefix), a text that starts with it. A key
 written twice is found by its last value, the one `Fields::get`
 reads. An empty list or another object is refused, `invalid`.
 
+A statement of a database, `Database::statement`, is a list of the
+values its one column gives, read once when the query starts, on a
+reader of its database, 100,000 rows at most: an integer `7` finds
+`7`, a text `'7'` finds `"7"` and not `7`, a real `7.0` finds `7.0`
+and not `7`, a null finds nothing, and a blob is `invalid`. It is not
+read in one moment with the events, since they are two files; a page
+asked later, by `after`, reads it again. A tail refuses one.
+
+```rust
+let db = store.database("app").open()?;
+let teachers = db.statement(tinystore::sql!("select id from teachers"));
+let day = std::time::Duration::from_secs(24 * 60 * 60);
+let used = store.events("activity").open()?.list().since(day).filter("userId", &teachers).count()?;
+```
+
+`Database::statement`: crate::sql::Database::statement
+
 ### List.search
 
 ```rust
@@ -1217,6 +1234,9 @@ let store = tinystore::Store::open("data", Default::default())?;
 let events = store.all_events()?;
 let deleted = events.list().streams(["activity", "client-errors"]).filter("userId", &97516).delete()?;
 ```
+
+A statement in its `where` is read once, as the delete starts, and its
+values hold for every segment it changes.
 
 ### List.limit
 
@@ -1280,7 +1300,8 @@ batch as they come: a tail takes no range, order, limit or after.
 pub fn all(self) -> All
 ```
 
-Every event of the answer, a page at a time.
+Every event of the answer, a page at a time; a statement in its
+`where` is read once, as the first page is.
 
 ## PAGE_EVENTS
 

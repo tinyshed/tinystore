@@ -112,6 +112,27 @@ impl Fixture {
     }
 }
 
+/// Runs each read of a timing `passes` times, in turns, and prints the
+/// median of what each took with what it found, the same every pass.
+#[cfg_attr(not(feature = "sql"), expect(dead_code, reason = "a statement's timing needs a database"))]
+pub(crate) fn timed_in_turns(passes: usize, reads: &[(&str, &dyn Fn() -> u64)]) {
+    let mut taken: Vec<Vec<f64>> = vec![Vec::new(); reads.len()];
+    let mut found = vec![None; reads.len()];
+    for _ in 0..passes {
+        for (n, (name, read)) in reads.iter().enumerate() {
+            let started = std::time::Instant::now();
+            let count = read();
+            taken[n].push(started.elapsed().as_secs_f64() * 1000.0);
+            assert!(found[n].is_none_or(|before| before == count), "{name}");
+            found[n] = Some(count);
+        }
+    }
+    for (((name, _), mut passes), found) in reads.iter().zip(taken).zip(found) {
+        passes.sort_by(f64::total_cmp);
+        println!("{name:<52} {:>9.1} ms  {}", passes[passes.len() / 2], found.unwrap_or_default());
+    }
+}
+
 /// The names of events, in their order.
 pub(crate) fn names(events: &[Event]) -> Vec<&str> {
     events.iter().map(|event| event.name.as_str()).collect()

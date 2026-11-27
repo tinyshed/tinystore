@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(feature = "search")]
+#[cfg(any(feature = "search", feature = "records"))]
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, Statement, params_from_iter};
 
@@ -111,11 +111,12 @@ fn answered<A: Answer>(
 }
 
 /// The values of the one column `statement` gives, for a table's index's
-/// `where`, on the connection of the search's snapshot: `most` and one more
-/// at most, so that the search can say its bound was passed. It runs as a
+/// `where`, on the connection of the search's snapshot, or a stream's, on a
+/// reader of the database: `most` and one more at most, so that the read can
+/// say its bound was passed. It runs as a
 /// read of the database runs, under the authorizer; one that writes, or
 /// gives other than one column, is `invalid`.
-#[cfg(feature = "search")]
+#[cfg(any(feature = "search", feature = "records"))]
 pub(crate) fn column_on(connection: &Connection, statement: &Sql, most: usize) -> Result<Vec<SqlValue>> {
     given(statement.text(), || {
         let mut prepared = connection.prepare_cached(statement.text()).map_err(|error| failure("its text", error))?;

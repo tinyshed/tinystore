@@ -108,6 +108,21 @@ class Sql {
 A piece of SQL and the values of its ?s, which are always values and never
 SQL. `sql` makes one; a call, a batch and a table's query take it.
 
+## BoundStatement
+
+```ts
+class BoundStatement {
+    readonly database: Home
+    readonly text: string
+    readonly values: readonly SqlArg[]
+}
+```
+
+A statement bound to the database that runs it, from `db.statement`: what
+a stream's `where` keeps a key to, as SQL's `in (select …)` does. A stream
+lives in records.db and belongs to no database, so the statement says
+whose it is. Nothing runs until a query reads it.
+
 ## SqlTag
 
 ```ts
@@ -169,6 +184,19 @@ keep(method: number, bytes: Uint8Array, make: (connection: Connection) => Promis
 ```ts
 via(what: string): Via
 ```
+
+### Database.statement
+
+```ts
+statement(...given: Statement): BoundStatement
+```
+
+A statement bound to this database, for a stream's `where`, which keeps
+a key to the values its one column gives: nothing runs until a query
+reads it, once as the query starts, on a reader of this file.
+
+    const teachers = db.statement`select id from teachers`
+    await events.count({ since: '1d', where: { userId: teachers } })
 
 ### Database.bucket
 

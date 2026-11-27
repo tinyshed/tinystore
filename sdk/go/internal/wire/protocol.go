@@ -618,6 +618,8 @@ func NewMessage(name string) Message {
 		return &RecordsEvent{}
 	case "records.Condition":
 		return &RecordsCondition{}
+	case "records.Statement":
+		return &RecordsStatement{}
 	case "records.Query":
 		return &RecordsQuery{}
 	case "records.Page":
@@ -11404,11 +11406,14 @@ func (m RecordsEvent) IsZero() bool {
 //
 // What a key's value must be: one of values, each the JSON it is written
 // as; none of them with not, the key absent too; or a text that starts with
-// prefix.
+// prefix. A statement of the query's, by its place, stands for the values
+// its one column gives, read once as the read starts.
 type RecordsCondition struct {
 	Values []string `wire:"1,values"`
 	Not    bool     `wire:"2,not"`
 	Prefix *string  `wire:"3,prefix"`
+	// in place of values: its place among the query's statements
+	Statement *uint64 `wire:"4,statement"`
 }
 
 func (m RecordsCondition) Write(w *Writer) {
@@ -11432,6 +11437,11 @@ func (m RecordsCondition) Write(w *Writer) {
 		w.Str(*m.Prefix)
 		n++
 	}
+	if m.Statement != nil {
+		w.Uint(4)
+		w.Uint(*m.Statement)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11453,6 +11463,9 @@ func (m *RecordsCondition) Read(r *Reader) {
 		case 3:
 			v := r.Str()
 			m.Prefix = &v
+		case 4:
+			v := r.Uint()
+			m.Statement = &v
 		default:
 			r.Skip()
 		}
@@ -11464,7 +11477,74 @@ func (m *RecordsCondition) Read(r *Reader) {
 func (m RecordsCondition) IsZero() bool {
 	return len(m.Values) == 0 &&
 		!m.Not &&
-		m.Prefix == nil
+		m.Prefix == nil &&
+		m.Statement == nil
+}
+
+// RecordsStatement is the schema's records.Statement.
+//
+// A statement of a database this connection opened, whose one column gives
+// the values a condition keeps to, as sql.Statement's text and values.
+type RecordsStatement struct {
+	// a database's handle
+	Database uint64 `wire:"1,database"`
+	Text     string `wire:"2,text"`
+	Values   []Cell `wire:"3,values"`
+}
+
+func (m RecordsStatement) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Database != 0 {
+		w.Uint(1)
+		w.Uint(m.Database)
+		n++
+	}
+	if m.Text != "" {
+		w.Uint(2)
+		w.Str(m.Text)
+		n++
+	}
+	if len(m.Values) > 0 {
+		w.Uint(3)
+		w.Array(len(m.Values))
+		for _, item0 := range m.Values {
+			w.Cell(item0)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsStatement) Read(r *Reader) {
+	*m = RecordsStatement{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Database = r.Uint()
+		case 2:
+			m.Text = r.Str()
+		case 3:
+			v := []Cell{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Cell()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Values = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsStatement writes as no field at all.
+func (m RecordsStatement) IsZero() bool {
+	return m.Database == 0 &&
+		m.Text == "" &&
+		len(m.Values) == 0
 }
 
 // RecordsQuery is the schema's records.Query.
@@ -11492,6 +11572,8 @@ type RecordsQuery struct {
 	// a page's next
 	After      *string                     `wire:"13,after"`
 	Conditions map[string]RecordsCondition `wire:"14,conditions"`
+	// what a condition's statement names, by its place
+	Statements []RecordsStatement `wire:"15,statements"`
 }
 
 func (m RecordsQuery) Write(w *Writer) {
@@ -11581,6 +11663,14 @@ func (m RecordsQuery) Write(w *Writer) {
 		}
 		n++
 	}
+	if len(m.Statements) > 0 {
+		w.Uint(15)
+		w.Array(len(m.Statements))
+		for _, item0 := range m.Statements {
+			item0.Write(w)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11655,6 +11745,15 @@ func (m *RecordsQuery) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Conditions = v
+		case 15:
+			v := []RecordsStatement{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 RecordsStatement
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Statements = v
 		default:
 			r.Skip()
 		}
@@ -11677,7 +11776,8 @@ func (m RecordsQuery) IsZero() bool {
 		!m.Newest &&
 		m.Limit == nil &&
 		m.After == nil &&
-		len(m.Conditions) == 0
+		len(m.Conditions) == 0 &&
+		len(m.Statements) == 0
 }
 
 // RecordsPage is the schema's records.Page.

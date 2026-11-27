@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast, overload
 
 from ._connection import Durability, check_durability, check_name, download, of_this_release
-from ._handles import Opener, Via, handle_on, via_link
+from ._handles import BoundStatement, Opener, Via, handle_on, via_link
 from ._rows import SqlArg, SqlValue, cell_of, check_columns, named_values, reader, row_of, value_reader
 from ._session import ConnectionLostError
 from ._values import to_json, values_of
@@ -699,6 +699,17 @@ class Database:
 
     async def handle(self, connection: Connection) -> int:
         return await handle_on(connection, methods["sql.open"], self._opener)
+
+    def statement(self, statement: Statement, /, *values: Any) -> BoundStatement:
+        """A statement bound to this database, for a stream's where: it keeps a key to its one column's values.
+
+        Nothing runs until a query reads it, once as the query starts, on a reader of this file.
+
+            teachers = db.statement("select id from teachers")
+            await events.count(since="1d", where={"userId": teachers})
+        """
+        piece = statement_of(statement, values)
+        return BoundStatement(self, piece.text, piece.values)
 
     def keep(self, method: int, body: bytes, make: Callable[[Connection], Awaitable[bytes]]) -> Opener:
         kept = self._guests.get((method, body))

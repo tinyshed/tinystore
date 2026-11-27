@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from typing import TYPE_CHECKING, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ._session import ConnectionLostError
 from ._wire.protocol import Handle
@@ -50,6 +51,19 @@ class Home(Protocol):
         wait for the writer the transaction holds.
         """
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class BoundStatement:
+    """A statement bound to the database that runs it, from ``db.statement``.
+
+    What a stream's where keeps a key to, as SQL's ``in (select …)`` does. A stream lives in records.db and belongs to
+    no database, so the statement says whose it is. Nothing runs until a query reads it.
+    """
+
+    database: Home
+    text: str
+    values: tuple[Any, ...] = ()
 
 
 class Via(Protocol):

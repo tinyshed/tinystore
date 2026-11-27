@@ -113,6 +113,43 @@ impl Sql {
     }
 }
 
+/// A statement bound to the database that runs it, made by
+/// [`Database::statement`](super::Database::statement): what a stream's
+/// `where` keeps a key to, as SQL's `in (select …)` does. A stream lives in
+/// records.db and belongs to no database, so the statement says whose it is.
+/// Nothing runs until a query reads it.
+#[derive(Clone)]
+pub struct BoundStatement {
+    file: std::sync::Arc<crate::engine::SharedFile>,
+    sql: Sql,
+}
+
+impl std::fmt::Debug for BoundStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.describe())
+    }
+}
+
+impl BoundStatement {
+    pub(crate) fn in_file(file: std::sync::Arc<crate::engine::SharedFile>, sql: Sql) -> BoundStatement {
+        BoundStatement { file, sql }
+    }
+
+    /// The statement as an error names it, with its database: `sql app:
+    /// statement "select id from teachers"`.
+    pub(crate) fn describe(&self) -> String {
+        format!("{}: {}", self.file.owner(), self.sql.describe())
+    }
+
+    /// The values of its one column, `most` and one more at most, on a
+    /// reader of its database, as a read of the database runs it: one that
+    /// writes, or gives other than one column, is `invalid`.
+    #[cfg(feature = "records")]
+    pub(crate) fn read_column(&self, most: usize) -> Result<Vec<rusqlite::types::Value>> {
+        self.file.file().read(|connection| super::run::column_on(connection, &self.sql, most))
+    }
+}
+
 impl From<&str> for Sql {
     fn from(text: &str) -> Sql {
         Sql::new(text)

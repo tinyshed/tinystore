@@ -12,7 +12,7 @@ use super::engine::{Base, Databases, Opening, folder_of};
 use super::migrations::Migrations;
 use super::rows::{Answer, Held, Rows};
 use super::run::{self, Read, Wanted};
-use super::statement::Sql;
+use super::statement::{BoundStatement, Sql};
 use super::tx::Tx;
 #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
 use crate::engine::SharedFile;
@@ -246,6 +246,24 @@ impl Database {
         let statement = statement.into();
         let described = self.base.file().read(|connection| describe::columns_on(connection, &statement));
         described.map_err(|error| self.base.failed(&statement, error))
+    }
+
+    /// A statement bound to this database, for a stream's `where`, which
+    /// keeps a key to the values its one column gives: nothing runs until a
+    /// query reads it, once as the query starts, on a reader of this file.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let db = store.database("app").open()?;
+    /// let teachers = db.statement("select id from teachers");
+    /// let day = std::time::Duration::from_secs(24 * 60 * 60);
+    /// let used = store.events("activity").open()?.list().since(day).filter("userId", &teachers).count()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn statement(&self, statement: impl Into<Sql>) -> BoundStatement {
+        BoundStatement::in_file(Arc::clone(&self.base.shared), statement.into())
     }
 
     /// Runs a write once it is durable. Writes from many callers share a

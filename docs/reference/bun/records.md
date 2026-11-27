@@ -111,7 +111,11 @@ interface Query {
      * each key, in fields or in context, with this value by the JSON it was
      * written as; one of a list, `[7, 12]`; none of them with `{ not }`, the
      * key absent too; or a text that starts with `{ prefix }`. A list or an
-     * object as the value itself goes inside a list: `[['a', 'b']]`.
+     * object as the value itself goes inside a list: `[['a', 'b']]`. A
+     * statement of a database, `` db.statement`select id from teachers` ``,
+     * is the list of the values its one column gives, read once as the query
+     * starts, on its database: not in one moment with the events, and again
+     * for a page asked after.
      */
     where?: Record<string, unknown>
     /** this text in the message, the name or a value, its case ignored */

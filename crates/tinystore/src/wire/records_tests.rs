@@ -139,7 +139,7 @@ fn where_finds_a_value_itself_and_conditions_a_list_none_of_one_or_a_prefix() {
     let listed = |values: &[&str], not: bool| RecordsCondition {
         values: values.iter().map(|value| value.to_string()).collect(),
         not,
-        prefix: None,
+        ..RecordsCondition::default()
     };
     // where keeps the meaning an older client gave it: the list itself
     assert_eq!(count(&[("op", r#"["review.list","drafts.get"]"#)], &[]).unwrap(), 1);
@@ -404,4 +404,49 @@ fn what_no_longer_reads_is_listed_and_dropped_and_what_still_reads_is_refused() 
     client.call::<Empty>(method::RECORDS_DROP, damage).unwrap();
     let page: RecordsPage = client.call(method::RECORDS_LIST, &RecordsQuery::default()).unwrap();
     assert!(page.events.is_empty());
+}
+
+// contract: REC-22
+#[cfg(feature = "sql")]
+#[test]
+fn a_condition_keeps_to_the_values_a_statement_of_a_database_of_this_connection_gives() {
+    use crate::wire::codec::Cell;
+    use crate::wire::protocol::{RecordsStatement, SqlDone, SqlMigration, SqlOpen, SqlStatement};
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let teachers = "create table teachers (id integer primary key) strict";
+    let migrations = Some(vec![SqlMigration { name: "0001_teachers.sql".to_owned(), sql: teachers.to_owned() }]);
+    let open_app = SqlOpen { name: "app".to_owned(), migrations, durability: None, backup: None };
+    let database = client.call::<Handle>(method::SQL_OPEN, &open_app).unwrap().handle;
+    let insert = SqlStatement { handle: database, text: "insert into teachers values (2)".to_owned(), values: vec![] };
+    client.call::<SqlDone>(method::SQL_EXEC, &insert).unwrap();
+    let activity = open(&mut client, "activity");
+    append(&mut client, activity, vec![event("used", r#"{"userId":1}"#), event("used", r#"{"userId":2}"#)]);
+    let statement = |database| RecordsStatement {
+        database,
+        text: "select id from teachers where id > ?".to_owned(),
+        values: vec![Cell::Int(0)],
+    };
+    let kept = |not| RecordsCondition { statement: Some(0), not, ..RecordsCondition::default() };
+    let query = |database, not| RecordsQuery {
+        conditions: [("userId".to_owned(), kept(not))].into(),
+        statements: vec![statement(database)],
+        ..RecordsQuery::default()
+    };
+    assert_eq!(client.call::<RecordsCount>(method::RECORDS_COUNT, &query(database, false)).unwrap().count, 1);
+    assert_eq!(client.call::<RecordsCount>(method::RECORDS_COUNT, &query(database, true)).unwrap().count, 1);
+    let page: RecordsPage = client.call(method::RECORDS_LIST, &query(database, false)).unwrap();
+    assert_eq!(page.events[0].fields.as_deref(), Some(r#"{"userId":2}"#));
+    // a handle no database of this connection has, a statement the query does not hold, one beside values
+    let refused = client.call::<RecordsCount>(method::RECORDS_COUNT, &query(database + 100, false)).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+    let unheld = RecordsQuery { statements: Vec::new(), ..query(database, false) };
+    let refused = client.call::<RecordsCount>(method::RECORDS_COUNT, &unheld).unwrap_err();
+    assert!(refused.message.contains("statement 0, which the query does not hold"), "{}", refused.message);
+    let beside = RecordsCondition { values: vec!["1".to_owned()], ..kept(false) };
+    let both = RecordsQuery { conditions: [("userId".to_owned(), beside)].into(), ..query(database, false) };
+    let refused = client.call::<RecordsCount>(method::RECORDS_COUNT, &both).unwrap_err();
+    assert!(refused.message.contains("a statement in place of values"), "{}", refused.message);
+    let tailed = client.call::<Empty>(method::RECORDS_TAIL, &query(database, false)).unwrap_err();
+    assert!(tailed.message.contains("a tail's where takes no statement"), "{}", tailed.message);
 }

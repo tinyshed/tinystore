@@ -21,6 +21,7 @@
 //! they come back holding fewer events than they want, as a search for a
 //! rare word does: see `ahead`.
 
+use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -49,6 +50,12 @@ const MOST_EVENTS: usize = 10_000;
 /// The rows and the bytes one window fetches before it ends early.
 const FETCH_ROWS: usize = 1024;
 const FETCH_BYTES: usize = 16 << 20;
+/// The values of a list a block's filter is asked of at most. A filter says
+/// maybe of one value in a hundred it does not hold, so of a list of a
+/// hundred it says maybe of most blocks: past it, asking costs a hash a value
+/// a block and passes almost none, and a statement's 100,000 values would
+/// cost far more than the blocks they could save.
+const BLOOM_VALUES: usize = 100;
 /// What a read reserves for each event its rows hold, beside their bytes.
 pub(super) const EVENT_HELD: u64 = 1 << 10;
 use crate::memory::PATIENCE;
@@ -91,6 +98,29 @@ impl Query {
         let holds = |(key, matching): &(String, Matching)| matching.finds(key, &event.fields, &event.context);
         let said = self.search.as_ref().is_none_or(|text| says(event, text));
         named && grave && traced && self.filters.iter().all(holds) && said
+    }
+
+    /// The query with the statement of each `where` that names one read into
+    /// the list of its values, now, on a reader of its database: once a
+    /// query, as a page, a count or a delete starts. The statement is no
+    /// part of the moment of records.db the events are read from, since the
+    /// store promises no moment across two files.
+    pub(super) fn started(&self) -> Result<Cow<'_, Query>> {
+        if !self.unread() {
+            return Ok(Cow::Borrowed(self));
+        }
+        let mut started = self.clone();
+        for (key, matching) in &mut started.filters {
+            if let Matching::Rows { rows, not } = matching {
+                *matching = rows.read(key, *not)?;
+            }
+        }
+        Ok(Cow::Owned(started))
+    }
+
+    /// Whether a statement of a `where` waits to be read.
+    fn unread(&self) -> bool {
+        self.filters.iter().any(|(_, matching)| matches!(matching, Matching::Rows { .. }))
     }
 
     /// The same read over the range `after` writes, as a page's `next` does.
@@ -219,6 +249,27 @@ impl List {
     /// such key; [`Prefix`](crate::Prefix), a text that starts with it. A key
     /// written twice is found by its last value, the one [`Fields::get`]
     /// reads. An empty list or another object is refused, `invalid`.
+    ///
+    /// A statement of a database, [`Database::statement`], is a list of the
+    /// values its one column gives, read once when the query starts, on a
+    /// reader of its database, 100,000 rows at most: an integer `7` finds
+    /// `7`, a text `'7'` finds `"7"` and not `7`, a real `7.0` finds `7.0`
+    /// and not `7`, a null finds nothing, and a blob is `invalid`. It is not
+    /// read in one moment with the events, since they are two files; a page
+    /// asked later, by `after`, reads it again. A tail refuses one.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let db = store.database("app").open()?;
+    /// let teachers = db.statement(tinystore::sql!("select id from teachers"));
+    /// let day = std::time::Duration::from_secs(24 * 60 * 60);
+    /// let used = store.events("activity").open()?.list().since(day).filter("userId", &teachers).count()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`Database::statement`]: crate::sql::Database::statement
     pub fn filter(mut self, key: &str, condition: impl Into<Condition>) -> Self {
         match condition.into().checked(key) {
             Ok(matching) => self.query.filters.push((key.to_owned(), matching)),
@@ -262,8 +313,12 @@ impl List {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// A statement in its `where` is read once, as the delete starts, and its
+    /// values hold for every segment it changes.
     pub fn delete(&self) -> Result<u64> {
-        self.records.delete(self.stream.as_ref(), &self.query).map_err(|error| self.within(error))
+        let deleted = self.query.started().and_then(|query| self.records.delete(self.stream.as_ref(), &query));
+        deleted.map_err(|error| self.within(error))
     }
 
     /// The events of a page: 1000, and 10,000 at most.
@@ -284,7 +339,8 @@ impl List {
     /// It reads on past the events that match nothing, several windows at
     /// once as `all` does, each from a moment of the file of its own.
     pub fn page(&self) -> Result<Page> {
-        self.records.page(self.stream.as_ref(), &self.query).map_err(|error| self.within(error))
+        let page = self.query.started().and_then(|query| self.records.page(self.stream.as_ref(), &query));
+        page.map_err(|error| self.within(error))
     }
 
     /// The keys the events of the read's range hold, in their fields and
@@ -363,6 +419,11 @@ impl List {
         if let Some(refused) = &query.refused {
             return Err(self.within(Error::invalid(refused.clone())));
         }
+        if query.unread() {
+            let why =
+                "a tail's where takes no statement: a statement is read once, as a query starts, and a tail lives on";
+            return Err(self.within(Error::invalid(why)));
+        }
         let streams = match &self.stream {
             Some(_) if !query.streams.is_empty() => {
                 let why = "streams, which a read of every stream takes: a stream reads its own";
@@ -376,9 +437,10 @@ impl List {
         Ok(Tail::open(&self.records, streams, Box::new(move |event: &Kept| query.keeps(event))))
     }
 
-    /// Every event of the answer, a page at a time.
+    /// Every event of the answer, a page at a time; a statement in its
+    /// `where` is read once, as the first page is.
     pub fn all(self) -> All {
-        All { list: self, page: Vec::new().into_iter(), more: true, wide: 1 }
+        All { list: self, page: Vec::new().into_iter(), more: true, wide: 1, started: false }
     }
 
     /// The pages from where the read stands as `all` reads them, `wide`
@@ -399,6 +461,20 @@ pub struct All {
     more: bool,
     /// The pages the next read begins with at once.
     wide: usize,
+    /// Whether the statements of its `where` were read.
+    started: bool,
+}
+
+impl All {
+    /// Reads the statements of the `where` into their lists, once.
+    fn start(&mut self) -> Result<()> {
+        if !std::mem::replace(&mut self.started, true)
+            && let Cow::Owned(query) = self.list.query.started()?
+        {
+            self.list.query = query;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "async")]
@@ -426,6 +502,10 @@ impl Iterator for All {
             }
             if !self.more {
                 return None;
+            }
+            if let Err(error) = self.start() {
+                self.more = false;
+                return Some(Err(self.list.within(error)));
             }
             let (list, wanted) = (&self.list, self.list.query.page_events());
             match list.records.read_ahead(list.stream.as_ref(), &list.query, self.wide, wanted) {
@@ -751,6 +831,9 @@ impl Records {
     /// so that the edge lies inside the range and the next window begins past
     /// this one.
     fn fetch(&self, asked: &Asked, query: &Query) -> Result<(Fetched, Option<i64>)> {
+        if query.unread() {
+            return Err(Error::internal("records: a read of a where whose statement was not read as it started"));
+        }
         self.file.read(|connection| {
             let mut passing = Passing { query, connection, segments: HashMap::new() };
             let (mut taken, mut events, mut bytes) = (Vec::new(), 0, 0);
@@ -816,9 +899,10 @@ impl Passing<'_> {
         {
             return Ok(false);
         }
-        for (key, values) in query.filters.iter().filter_map(|(key, matching)| Some((key, matching.one_of()?))) {
+        let lists = query.filters.iter().filter_map(|(key, matching)| Some((key, matching.one_of()?)));
+        for (key, values) in lists.filter(|(_, values)| values.len() <= BLOOM_VALUES) {
             let bloom = self.bloom(FIELD_BLOOM, params![block.id, key])?;
-            let passed = |bloom: Vec<u8>| !values.iter().any(|json| may_hold(&bloom, json.as_bytes()));
+            let passed = |bloom: Vec<u8>| !values.jsons().any(|json| may_hold(&bloom, json));
             if bloom.is_some_and(passed) && !self.has(block.segment, CONTEXT_KEY, key)? {
                 return Ok(false);
             }

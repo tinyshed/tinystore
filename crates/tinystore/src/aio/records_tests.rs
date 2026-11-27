@@ -477,3 +477,21 @@ async fn a_databases_stream_appends_with_an_awaited_transaction_and_batch_or_not
     let read = fixture.store.events("audit").open().unwrap().list().page().unwrap().events;
     assert_eq!(names(&read), ["role.changed", "role.seen"], "in the stream when each returned");
 }
+
+// contract: REC-22
+#[cfg(feature = "sql")]
+#[tokio::test]
+async fn an_awaited_read_keeps_to_the_values_a_statement_of_a_database_gives() {
+    let fixture = fixture();
+    let store = awaited(&fixture);
+    let db = store.database("app").open().unwrap();
+    db.exec("create table teachers (id integer primary key)").await.unwrap();
+    db.exec("insert into teachers (id) values (2)").await.unwrap();
+    let activity = store.events("activity").open().unwrap();
+    for user in [1, 2] {
+        activity.append("used", &json!({ "userId": user })).await.unwrap();
+    }
+    let teachers = db.statement("select id from teachers");
+    assert_eq!(spawnable(activity.list().filter("userId", &teachers).count()).await.unwrap(), 1);
+    assert_eq!(activity.list().filter("userId", crate::Not(teachers)).page().await.unwrap().events.len(), 1);
+}

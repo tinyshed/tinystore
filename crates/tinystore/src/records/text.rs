@@ -148,16 +148,15 @@ pub(super) fn read_bytes(
     read_column(reader, count, decoder, (keep, |value: &[u8]| Some(value.to_vec())))
 }
 
-/// Which of a column's `count` texts are one of `targets`, which are sorted:
-/// a dictionary's distinct values are compared once, and none is copied to
-/// be compared.
+/// Which of a column's `count` texts are one of `targets`: a dictionary's
+/// distinct values are looked up once, and none is copied to be looked up.
 pub(super) fn texts_equal(
     reader: &mut Reader<'_>,
     count: usize,
     decoder: &mut Decoder<'_>,
-    targets: &[&str],
+    targets: &std::collections::HashSet<Box<[u8]>>,
 ) -> Vec<bool> {
-    let among = |value: &[u8]| Some(targets.binary_search_by(|target| target.as_bytes().cmp(value)).is_ok());
+    let among = |value: &[u8]| Some(targets.contains(value));
     read_column(reader, count, decoder, (None, among))
 }
 
