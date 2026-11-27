@@ -63,7 +63,7 @@ contains. With npm, pnpm or Yarn, install it as `npm install @tinyshed/tinystore
 |--------------------------------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------|
 | [SQL](https://github.com/tinyshed/tinystore/blob/main/docs/guides/sql/README.md)           | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
 | [KV](https://github.com/tinyshed/tinystore/blob/main/docs/guides/kv/README.md)             | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
-| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/guides/jobs/README.md)         | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
+| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/guides/jobs/README.md)         | Background work   | Work that runs at its time: retries, steps, schedules, gathers, limits. |
 | [Blobs](https://github.com/tinyshed/tinystore/blob/main/docs/guides/blobs/README.md)       | Files             | Files by path, written whole or not at all, checked when read.          |
 | [Search](https://github.com/tinyshed/tinystore/blob/main/docs/guides/search/README.md)     | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
 | [Channels](https://github.com/tinyshed/tinystore/blob/main/docs/guides/channels/README.md) | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
