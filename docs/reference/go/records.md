@@ -222,7 +222,7 @@ Condition is what a key's value must be beside a value of its own: one of a list
 func Not(values ...any) Condition
 ```
 
-Not is a value equal to none of these, or the key absent.
+Not is a value equal to none of these, or the key absent; a statement of a database alone, Not(db.Statement(…)), is none of the values it gives.
 
 ### OneOf
 

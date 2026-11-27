@@ -73,6 +73,19 @@ def label() -> str: ...
 async def handle(connection: Connection) -> int: ...
 ```
 
+### Database.statement
+
+```python
+def statement(statement: Statement, /, *values: Any) -> BoundStatement: ...
+```
+
+A statement bound to this database, for a stream's where: it keeps a key to its one column's values.
+
+Nothing runs until a query reads it, once as the query starts, on a reader of this file.
+
+    teachers = db.statement("select id from teachers")
+    await events.count(since="1d", where={"userId": teachers})
+
 ### Database.keep
 
 ```python

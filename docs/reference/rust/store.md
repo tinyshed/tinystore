@@ -1071,7 +1071,7 @@ The values the lists of one search's conditions hold together.
 pub const FILTER_ROWS: Limit
 ```
 
-The rows a statement of a table's index's `where` gives.
+The rows a statement of a `where` gives: a table's index's, or a stream's.
 
 ## FILTER_TEXT
 

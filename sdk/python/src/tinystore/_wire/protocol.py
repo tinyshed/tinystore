@@ -8604,6 +8604,10 @@ def _write_records_condition(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(3)
         w.str(x)
         n += 1
+    if (x := v.get("statement")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8620,6 +8624,8 @@ def _read_records_condition(r: Reader) -> dict[str, Any]:
                 read["not"] = r.bool()
             case 3:
                 read["prefix"] = r.str()
+            case 4:
+                read["statement"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -8628,16 +8634,73 @@ def _read_records_condition(r: Reader) -> dict[str, Any]:
 
 # What a key's value must be: one of values, each the JSON it is written
 # as; none of them with not, the key absent too; or a text that starts with
-# prefix.
+# prefix. A statement of the query's, by its place, stands for the values
+# its one column gives, read once as the read starts.
 RecordsCondition = Message(
     "records.Condition",
     {
         "values": (1, list_(str_)),
         "not": (2, bool_),
         "prefix": (3, str_),
+        # in place of values: its place among the query's statements
+        "statement": (4, uint),
     },
     _write_records_condition,
     _read_records_condition,
+)
+
+
+def _write_records_statement(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("database")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("text")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("values")) is not None:
+        w.uint(3)
+        w.array(len(x))
+        for item0 in x:
+            sql_value.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_statement(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["database"] = r.uint()
+            case 2:
+                read["text"] = r.str()
+            case 3:
+                items0 = [sql_value.read(r) for _ in range(r.array())]
+                r.leave()
+                read["values"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A statement of a database this connection opened, whose one column gives
+# the values a condition keeps to, as sql.Statement's text and values.
+RecordsStatement = Message(
+    "records.Statement",
+    {
+        # a database's handle
+        "database": (1, uint),
+        "text": (2, str_),
+        "values": (3, list_(sql_value)),
+    },
+    _write_records_statement,
+    _read_records_statement,
 )
 
 
@@ -8710,6 +8773,12 @@ def _write_records_query(w: Writer, v: Mapping[str, Any]) -> None:
             w.str(name0)
             RecordsCondition.write(w, x[name0])
         n += 1
+    if (x := v.get("statements")) is not None:
+        w.uint(15)
+        w.array(len(x))
+        for item0 in x:
+            RecordsStatement.write(w, item0)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8762,6 +8831,10 @@ def _read_records_query(r: Reader) -> dict[str, Any]:
                     named0[name0] = RecordsCondition.read(r)
                 r.leave()
                 read["conditions"] = named0
+            case 15:
+                items0 = [RecordsStatement.read(r) for _ in range(r.array())]
+                r.leave()
+                read["statements"] = items0
             case _:
                 r.skip()
     r.leave()
@@ -8793,6 +8866,8 @@ RecordsQuery = Message(
         # a page's next
         "after": (13, str_),
         "conditions": (14, names(RecordsCondition)),
+        # what a condition's statement names, by its place
+        "statements": (15, list_(RecordsStatement)),
     },
     _write_records_query,
     _read_records_query,
@@ -13385,6 +13460,7 @@ messages: dict[str, Message] = {
     "records.Appended": RecordsAppended,
     "records.Event": RecordsEvent,
     "records.Condition": RecordsCondition,
+    "records.Statement": RecordsStatement,
     "records.Query": RecordsQuery,
     "records.Page": RecordsPage,
     "records.Count": RecordsCount,

@@ -54,7 +54,7 @@ pub use mirror::{Changed, Diff, Guarded, Mirror, MirrorBuilder, TxMirror};
 pub(crate) use mirror::{Found, Mode};
 pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};
 pub use query::{Direction, Expecting, Page, Query, Table, Upsert};
-pub use statement::Sql;
+pub use statement::{BoundStatement, Sql};
 pub use tx::Tx;
 
 // What the wire takes of sql: its answers by rows and by columns, and their values.

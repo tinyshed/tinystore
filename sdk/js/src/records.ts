@@ -19,6 +19,7 @@ import {
 	newStoreLogger,
 } from './logger.ts'
 import type { Stream } from './session.ts'
+import { BoundStatement, reachOf, Sql } from './sql.ts'
 import { type Calendar, type Duration, type DurationText, keepSpelled, ms } from './time.ts'
 import { currentTrace, type Trace } from './trace.ts'
 import {
@@ -127,7 +128,11 @@ export interface Query {
 	 * each key, in fields or in context, with this value by the JSON it was
 	 * written as; one of a list, `[7, 12]`; none of them with `{ not }`, the
 	 * key absent too; or a text that starts with `{ prefix }`. A list or an
-	 * object as the value itself goes inside a list: `[['a', 'b']]`.
+	 * object as the value itself goes inside a list: `[['a', 'b']]`. A
+	 * statement of a database, `` db.statement`select id from teachers` ``,
+	 * is the list of the values its one column gives, read once as the query
+	 * starts, on its database: not in one moment with the events, and again
+	 * for a page asked after.
 	 */
 	where?: Record<string, unknown>
 	/** this text in the message, the name or a value, its case ignored */
@@ -282,9 +287,14 @@ const levelNames: readonly EventLevel[] = ['trace', 'debug', 'info', 'warn', 'er
 
 /** What every read takes: a stream's handle, or every stream without one. */
 abstract class Reads {
+	/**
+	 * Calls `method` with what `body` writes, given the stream's handle and,
+	 * for each of `databases`, its handle on the connection the call goes on.
+	 */
 	protected abstract ask(
 		method: Method,
-		body: (handle: number | undefined) => Uint8Array,
+		body: (handle: number | undefined, databases: readonly number[]) => Uint8Array,
+		databases?: readonly Home[],
 	): Promise<Uint8Array>
 
 	protected abstract opened(
@@ -301,8 +311,10 @@ abstract class Reads {
 	 */
 	async list(query?: Query): Promise<Page> {
 		const asked = queryOf(query)
-		const answer = await this.ask('records.list', handle =>
-			RecordsQuery.encode({ ...asked, handle }),
+		const answer = await this.ask(
+			'records.list',
+			(handle, databases) => RecordsQuery.encode(queryOn(asked, handle, databases)),
+			databasesOf(asked),
 		)
 		const page = RecordsPage.decode(answer)
 		const events = (page.events ?? []).map(eventOf)
@@ -335,8 +347,10 @@ abstract class Reads {
 	 */
 	async delete(query: Deleted): Promise<number> {
 		const asked = queryOf(query)
-		const answer = await this.ask('records.delete', handle =>
-			RecordsQuery.encode({ ...asked, handle }),
+		const answer = await this.ask(
+			'records.delete',
+			(handle, databases) => RecordsQuery.encode(queryOn(asked, handle, databases)),
+			databasesOf(asked),
 		)
 		return RecordsCount.decode(answer).count ?? 0
 	}
@@ -344,8 +358,10 @@ abstract class Reads {
 	/** How many events the query finds. */
 	async count(query?: Counted): Promise<number> {
 		const asked = queryOf(query)
-		const answer = await this.ask('records.count', handle =>
-			RecordsQuery.encode({ ...asked, handle }),
+		const answer = await this.ask(
+			'records.count',
+			(handle, databases) => RecordsQuery.encode(queryOn(asked, handle, databases)),
+			databasesOf(asked),
 		)
 		return RecordsCount.decode(answer).count ?? 0
 	}
@@ -357,8 +373,11 @@ abstract class Reads {
 	 */
 	async top(key: string, query?: Counted & { limit?: number }): Promise<Top[]> {
 		const asked = queryOf(query)
-		const answer = await this.ask('records.top', handle =>
-			RecordsTopAsked.encode({ query: { ...asked, handle }, key }),
+		const answer = await this.ask(
+			'records.top',
+			(handle, databases) =>
+				RecordsTopAsked.encode({ query: queryOn(asked, handle, databases), key }),
+			databasesOf(asked),
 		)
 		return (RecordsTops.decode(answer).values ?? []).map(top => ({
 			value: parseJson(top.value ?? 'null'),
@@ -374,8 +393,11 @@ abstract class Reads {
 	 */
 	async largest(key: string, query?: Counted & { limit?: number }): Promise<Event[]> {
 		const asked = queryOf(query)
-		const answer = await this.ask('records.largest', handle =>
-			RecordsLargestAsked.encode({ query: { ...asked, handle }, key }),
+		const answer = await this.ask(
+			'records.largest',
+			(handle, databases) =>
+				RecordsLargestAsked.encode({ query: queryOn(asked, handle, databases), key }),
+			databasesOf(asked),
 		)
 		return (RecordsEvents.decode(answer).events ?? []).map(eventOf)
 	}
@@ -384,17 +406,20 @@ abstract class Reads {
 	async aggregate(query: Aggregate = {}): Promise<Row[]> {
 		const { every, calendar, timeZone, by, stats, distinct, fill, ...counted } = query
 		const asked = queryOf(counted)
-		const answer = await this.ask('records.aggregate', handle =>
-			RecordsAggregateAsked.encode({
-				query: { ...asked, handle },
-				every: every === undefined ? undefined : ms(every),
-				calendar,
-				timeZone,
-				by: by === undefined ? undefined : [...by],
-				stats: stats === undefined ? undefined : [...stats],
-				distinct: distinct === undefined ? undefined : [...distinct],
-				fill,
-			}),
+		const answer = await this.ask(
+			'records.aggregate',
+			(handle, databases) =>
+				RecordsAggregateAsked.encode({
+					query: queryOn(asked, handle, databases),
+					every: every === undefined ? undefined : ms(every),
+					calendar,
+					timeZone,
+					by: by === undefined ? undefined : [...by],
+					stats: stats === undefined ? undefined : [...stats],
+					distinct: distinct === undefined ? undefined : [...distinct],
+					fill,
+				}),
+			databasesOf(asked),
 		)
 		return (RecordsRows.decode(answer).rows ?? []).map(row => ({
 			at: dateOf(row.at ?? 0n),
@@ -418,8 +443,11 @@ abstract class Reads {
 	): Promise<string[]> {
 		const { prefix, ...rest } = query ?? {}
 		const asked = queryOf(rest)
-		const answer = await this.ask('records.fieldNames', handle =>
-			RecordsFieldNamesAsked.encode({ query: { ...asked, handle }, prefix }),
+		const answer = await this.ask(
+			'records.fieldNames',
+			(handle, databases) =>
+				RecordsFieldNamesAsked.encode({ query: queryOn(asked, handle, databases), prefix }),
+			databasesOf(asked),
 		)
 		return RecordsNames.decode(answer).names ?? []
 	}
@@ -432,8 +460,13 @@ abstract class Reads {
 	 */
 	async *tail(query?: TailQuery): AsyncGenerator<TailBatch> {
 		const asked = queryOf(query)
+		if (asked.bound.length > 0) {
+			throw new InvalidError(
+				"a tail's where takes no statement: a statement is read once, as a query starts, and a tail lives on",
+			)
+		}
 		const stream = await this.opened('records.tail', handle =>
-			RecordsQuery.encode({ ...asked, handle }),
+			RecordsQuery.encode(queryOn(asked, handle, [])),
 		)
 		const unfollow = this.follow(stream)
 		try {
@@ -572,9 +605,22 @@ export class Events extends Reads {
 
 	protected ask(
 		method: Method,
-		body: (handle: number | undefined) => Uint8Array,
+		body: (handle: number | undefined, databases: readonly number[]) => Uint8Array,
+		databases: readonly Home[] = [],
 	): Promise<Uint8Array> {
-		return this.#call(method, body, 'read')
+		if (databases.length === 0) {
+			return this.#call(method, handle => body(handle, []), 'read')
+		}
+		refuseStatements(this.#link, databases)
+		if (this.#home !== undefined) {
+			reachOf(this.#home)?.refuseAround(`events ${this.stream}`)
+		}
+		// the databases' handles are the connection's the call goes on, opened before it
+		return this.#link.run('read', async connection => {
+			const opened = await Promise.all(databases.map(database => database.handle(connection)))
+			const handle = await handleOn(connection, methods['records.open'], this.#open)
+			return connection.session.call(methods[method], body(handle, opened))
+		})
 	}
 
 	protected opened(
@@ -749,11 +795,14 @@ export class AllEvents extends Reads {
 
 	protected ask(
 		method: Method,
-		body: (handle: number | undefined) => Uint8Array,
+		body: (handle: number | undefined, databases: readonly number[]) => Uint8Array,
+		databases: readonly Home[] = [],
 	): Promise<Uint8Array> {
-		return this.#link.run('read', connection =>
-			connection.session.call(methods[method], body(undefined)),
-		)
+		refuseStatements(this.#link, databases)
+		return this.#link.run('read', async connection => {
+			const opened = await Promise.all(databases.map(database => database.handle(connection)))
+			return connection.session.call(methods[method], body(undefined, opened))
+		})
 	}
 
 	/**
@@ -1070,7 +1119,7 @@ const queryFields: readonly string[] = [
  * nothing it was not asked, and a field no query has is refused by name,
  * since one left out would read every event.
  */
-function queryOf(query: Query | undefined): Parameters<typeof RecordsQuery.encode>[0] {
+function queryOf(query: Query | undefined): Asked {
 	const q = query ?? {}
 	refuseUnknown('records query', q, queryFields)
 	for (const [key, value] of Object.entries(q)) {
@@ -1078,8 +1127,9 @@ function queryOf(query: Query | undefined): Parameters<typeof RecordsQuery.encod
 			throw new InvalidError(`a query's ${key} given as undefined: leave it out to read without it`)
 		}
 	}
-	const { where, conditions } = whereOf(q.where)
-	return {
+	const bound: BoundStatement[] = []
+	const { where, conditions } = whereOf(q.where, bound)
+	const asked: WireQuery = {
 		since: q.since === undefined ? undefined : ms(q.since),
 		from: q.from === undefined ? undefined : nanosOf(q.from),
 		to: q.to === undefined ? undefined : nanosOf(q.to),
@@ -1094,16 +1144,71 @@ function queryOf(query: Query | undefined): Parameters<typeof RecordsQuery.encod
 		limit: q.limit,
 		after: q.after,
 	}
+	return { asked, bound }
 }
 
-type WireCondition = { values?: string[]; not?: boolean; prefix?: string }
+type WireQuery = Parameters<typeof RecordsQuery.encode>[0]
+
+/**
+ * Refuses a statement of another store's database: its database's handle
+ * would be opened on this store's connection, and read this store's file of
+ * the same name.
+ */
+function refuseStatements(link: Link, databases: readonly Home[]): void {
+	for (const database of databases) {
+		if (reachOf(database)?.link !== link) {
+			throw new InvalidError(
+				`${database.label}: a statement of another store's database, in a query of this one`,
+			)
+		}
+	}
+}
+
+/** The database of each statement a query names, in their order. */
+function databasesOf({ bound }: Asked): readonly Home[] {
+	return bound.map(statement => statement.database)
+}
+
+/**
+ * A query as the wire carries it, but for its handle and its statements'
+ * databases, which are handles of the connection it goes on: `bound` are
+ * the statements its conditions name by their place.
+ */
+interface Asked {
+	asked: WireQuery
+	bound: BoundStatement[]
+}
+
+/** A query with its handle and its statements, each with its database's handle on the connection. */
+function queryOn(
+	{ asked, bound }: Asked,
+	handle: number | undefined,
+	databases: readonly number[],
+): WireQuery {
+	if (bound.length === 0) {
+		return { ...asked, handle }
+	}
+	const statements = bound.map((statement, at) => ({
+		database: databases[at] ?? 0,
+		text: statement.text,
+		values: [...statement.values],
+	}))
+	return { ...asked, handle, statements }
+}
+
+type WireCondition = { values?: string[]; not?: boolean; prefix?: string; statement?: number }
 
 /**
  * A where as the wire carries it: a plain value as its JSON in `where`, which
- * every server reads, and a list, `{ not }` or `{ prefix }` in `conditions`,
- * which a server older than them refuses rather than matching nothing.
+ * every server reads, and a list, `{ not }`, `{ prefix }` or a statement in
+ * `conditions`, which a server older than them refuses rather than matching
+ * nothing. A statement goes into `bound`, which the condition names by its
+ * place.
  */
-function whereOf(given: Record<string, unknown> | undefined): {
+function whereOf(
+	given: Record<string, unknown> | undefined,
+	bound: BoundStatement[],
+): {
 	where?: Record<string, string> | undefined
 	conditions?: Record<string, WireCondition> | undefined
 } {
@@ -1116,8 +1221,14 @@ function whereOf(given: Record<string, unknown> | undefined): {
 		}
 		if (Array.isArray(value)) {
 			conditions[key] = { values: value.map(item => jsonOf(item)) }
+		} else if (value instanceof BoundStatement) {
+			conditions[key] = { statement: bound.push(value) - 1 }
+		} else if (value instanceof Sql) {
+			throw new InvalidError(
+				`${named}: a stream belongs to no database, so its statement says whose it is: db.statement\`…\``,
+			)
 		} else if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
-			conditions[key] = conditionOf(named, value as Record<string, unknown>)
+			conditions[key] = conditionOf(named, value as Record<string, unknown>, bound)
 		} else {
 			where[key] = jsonOf(value)
 		}
@@ -1128,8 +1239,15 @@ function whereOf(given: Record<string, unknown> | undefined): {
 	}
 }
 
-function conditionOf(named: string, condition: Record<string, unknown>): WireCondition {
+function conditionOf(
+	named: string,
+	condition: Record<string, unknown>,
+	bound: BoundStatement[],
+): WireCondition {
 	const keys = Object.keys(condition)
+	if (keys.length === 1 && keys[0] === 'not' && condition.not instanceof BoundStatement) {
+		return { statement: bound.push(condition.not) - 1, not: true }
+	}
 	if (keys.length === 1 && keys[0] === 'not') {
 		const not = condition.not
 		return { values: (Array.isArray(not) ? not : [not]).map(item => jsonOf(item)), not: true }

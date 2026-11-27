@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::codec::{self, Map, Message, Row};
-#[cfg(any(feature = "search", feature = "sql"))]
+#[cfg(any(feature = "records", feature = "search", feature = "sql"))]
 use super::codec::Cell;
 use super::msgpack::Reader;
 
@@ -10015,13 +10015,16 @@ impl Message for RecordsEvent {
 
 /// What a key's value must be: one of values, each the JSON it is written
 /// as; none of them with not, the key absent too; or a text that starts with
-/// prefix.
+/// prefix. A statement of the query's, by its place, stands for the values
+/// its one column gives, read once as the read starts.
 #[cfg(feature = "records")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RecordsCondition {
     pub(crate) values: Vec<String>,
     pub(crate) not: bool,
     pub(crate) prefix: Option<String>,
+    /// In place of values: its place among the query's statements.
+    pub(crate) statement: Option<u64>,
 }
 
 #[cfg(feature = "records")]
@@ -10036,6 +10039,7 @@ impl Message for RecordsCondition {
                 1 => message.values = codec::list(r, "values", codec::str)?,
                 2 => message.not = codec::bool(r, "not")?,
                 3 => message.prefix = Some(codec::str(r, "prefix")?),
+                4 => message.statement = Some(codec::uint(r, "statement")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10056,6 +10060,10 @@ impl Message for RecordsCondition {
             map.field(out, 3);
             codec::write_str(out, prefix);
         }
+        if let Some(statement) = &self.statement {
+            map.field(out, 4);
+            codec::write_uint(out, statement);
+        }
         map.close(out);
     }
 
@@ -10064,12 +10072,74 @@ impl Message for RecordsCondition {
             + 1 + codec::list_size(&self.values, |item| 5 + item.len())
             + 2
             + self.prefix.as_ref().map_or(0, |prefix| 1 + 5 + prefix.len())
+            + self.statement.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
         self.values.is_empty()
             && !self.not
             && self.prefix.is_none()
+            && self.statement.is_none()
+    }
+}
+
+/// A statement of a database this connection opened, whose one column gives
+/// the values a condition keeps to, as sql.Statement's text and values.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsStatement {
+    /// A database's handle.
+    pub(crate) database: u64,
+    pub(crate) text: String,
+    pub(crate) values: Vec<Cell>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsStatement {
+    const NAME: &'static str = "records.Statement";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.database = codec::uint(r, "database")?,
+                2 => message.text = codec::str(r, "text")?,
+                3 => message.values = codec::list(r, "values", codec::cell)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.database != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.database);
+        }
+        if !self.text.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.text);
+        }
+        if !self.values.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.values, codec::write_cell);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.text.len()
+            + 1 + codec::list_size(&self.values, codec::cell_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.database == 0
+            && self.text.is_empty()
+            && self.values.is_empty()
     }
 }
 
@@ -10100,6 +10170,8 @@ pub(crate) struct RecordsQuery {
     /// A page's next.
     pub(crate) after: Option<String>,
     pub(crate) conditions: BTreeMap<String, RecordsCondition>,
+    /// What a condition's statement names, by its place.
+    pub(crate) statements: Vec<RecordsStatement>,
 }
 
 #[cfg(feature = "records")]
@@ -10125,6 +10197,7 @@ impl Message for RecordsQuery {
                 12 => message.limit = Some(codec::uint(r, "limit")?),
                 13 => message.after = Some(codec::str(r, "after")?),
                 14 => message.conditions = codec::names(r, "conditions", codec::message::<RecordsCondition>)?,
+                15 => message.statements = codec::list(r, "statements", codec::message::<RecordsStatement>)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10189,6 +10262,10 @@ impl Message for RecordsQuery {
             map.field(out, 14);
             codec::write_names(out, &self.conditions, codec::write_message);
         }
+        if !self.statements.is_empty() {
+            map.field(out, 15);
+            codec::write_list(out, &self.statements, codec::write_message);
+        }
         map.close(out);
     }
 
@@ -10208,6 +10285,7 @@ impl Message for RecordsQuery {
             + self.limit.map_or(0, |_| 10)
             + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
             + 1 + codec::names_size(&self.conditions, codec::message_size)
+            + 1 + codec::list_size(&self.statements, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -10225,6 +10303,7 @@ impl Message for RecordsQuery {
             && self.limit.is_none()
             && self.after.is_none()
             && self.conditions.is_empty()
+            && self.statements.is_empty()
     }
 }
 
@@ -15929,6 +16008,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.Event" => RecordsEvent::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Condition" => RecordsCondition::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Statement" => RecordsStatement::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Query" => RecordsQuery::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]

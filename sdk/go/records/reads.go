@@ -13,6 +13,7 @@ import (
 	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/wire"
+	"tinyshed.org/tinystore/sqldb"
 )
 
 // Query is what a read finds: every condition given holds, and a condition
@@ -64,8 +65,10 @@ type Query struct {
 	Prefix string
 }
 
-// asked is the query as the wire carries it, of a stream's handle or every stream's.
-func (q Query) asked(handle *uint64) (wire.RecordsQuery, error) {
+// asked is the query as the wire carries it, of a stream's handle or every
+// stream's, and the statements its conditions name by their place, whose
+// databases' handles are the connection's it goes on: see on.
+func (q Query) asked(handle *uint64) (wire.RecordsQuery, []sqldb.BoundStatement, error) {
 	out := wire.RecordsQuery{
 		Handle: handle, Streams: q.Streams, Names: q.Names, Newest: q.Newest,
 		Search: given(q.Search), After: given(q.After),
@@ -73,7 +76,7 @@ func (q Query) asked(handle *uint64) (wire.RecordsQuery, error) {
 	if q.Since != 0 {
 		ms, err := core.Millis(q.Since, "a query's since")
 		if err != nil {
-			return out, err
+			return out, nil, err
 		}
 		out.Since = &ms
 	}
@@ -92,39 +95,56 @@ func (q Query) asked(handle *uint64) (wire.RecordsQuery, error) {
 	if q.TraceID != "" {
 		trace, err := readTraceID(q.TraceID, "a query's trace id")
 		if err != nil {
-			return out, err
+			return out, nil, err
 		}
 		id := trace[:]
 		out.TraceId = &id
 	}
 	if q.Limit < 0 {
-		return out, core.Errorf(core.Invalid, "a query's limit of %d", q.Limit)
+		return out, nil, core.Errorf(core.Invalid, "a query's limit of %d", q.Limit)
 	}
 	if q.Limit > 0 {
 		limit := uint64(q.Limit)
 		out.Limit = &limit
 	}
+	bound := []sqldb.BoundStatement{}
 	var err error
-	out.Where, out.Conditions, err = q.where()
-	return out, err
+	out.Where, out.Conditions, err = q.where(&bound)
+	return out, bound, err
 }
 
 // where is the query's Where as the wire carries it: a plain value as its
-// JSON in where, which every server reads, and a list or a Condition in
-// conditions, which a server older than them refuses rather than matching
-// nothing. A nil finds nothing it was not asked, so it is refused.
-func (q Query) where() (map[string]string, map[string]wire.RecordsCondition, error) {
+// JSON in where, which every server reads, and a list, a Condition or a
+// statement in conditions, which a server older than them refuses rather
+// than matching nothing. A statement goes into bound, which its condition
+// names by its place. A nil finds nothing it was not asked, so it is refused.
+func (q Query) where(bound *[]sqldb.BoundStatement) (map[string]string, map[string]wire.RecordsCondition, error) {
 	where, conditions := map[string]string{}, map[string]wire.RecordsCondition{}
 	for key, value := range q.Where {
 		if value == nil {
 			return nil, nil, core.Errorf(core.Invalid, "a query's where %q given as nil: leave it out to read without it", key)
 		}
-		if condition, ok := value.(Condition); ok {
-			if condition.err != nil {
-				return nil, nil, core.Wrap(core.Invalid, condition.err, "a query's where %q", key)
+		switch v := value.(type) {
+		case Condition:
+			if v.err != nil {
+				return nil, nil, core.Wrap(core.Invalid, v.err, "a query's where %q", key)
 			}
-			conditions[key] = condition.wire
+			condition := v.wire
+			if v.statement != nil {
+				place := uint64(len(*bound))
+				*bound = append(*bound, *v.statement)
+				condition.Statement = &place
+			}
+			conditions[key] = condition
 			continue
+		case sqldb.BoundStatement:
+			place := uint64(len(*bound))
+			*bound = append(*bound, v)
+			conditions[key] = wire.RecordsCondition{Statement: &place}
+			continue
+		case sqldb.Piece:
+			return nil, nil, core.Errorf(core.Invalid,
+				"a query's where %q: a stream belongs to no database, so its statement says whose it is: db.Statement(…)", key)
 		}
 		spelled, items, err := valuesOf(value)
 		switch {
@@ -171,6 +191,8 @@ func valuesOf(value any) (string, []string, error) {
 type Condition struct {
 	wire wire.RecordsCondition
 	err  error
+	// statement is the one whose values Not keeps from, in place of a list
+	statement *sqldb.BoundStatement
 }
 
 // OneOf is a value equal to one of these, each by the JSON it is written
@@ -180,8 +202,14 @@ func OneOf(values ...any) Condition {
 	return Condition{wire: wire.RecordsCondition{Values: items}, err: err}
 }
 
-// Not is a value equal to none of these, or the key absent.
+// Not is a value equal to none of these, or the key absent; a statement of
+// a database alone, Not(db.Statement(…)), is none of the values it gives.
 func Not(values ...any) Condition {
+	if len(values) == 1 {
+		if statement, ok := values[0].(sqldb.BoundStatement); ok {
+			return Condition{wire: wire.RecordsCondition{Not: true}, statement: &statement}
+		}
+	}
 	items, err := listed(values)
 	return Condition{wire: wire.RecordsCondition{Values: items, Not: true}, err: err}
 }
@@ -221,14 +249,66 @@ type reads struct {
 	opener *core.Opener
 }
 
-// ask calls a read's method, its body made for the stream's handle on the connection.
-func (r reads) ask(ctx context.Context, method uint16, body func(handle *uint64) []byte) ([]byte, error) {
-	if r.opener == nil {
-		return r.store.Link.Call(ctx, core.Reading, method, body(nil))
+// ask calls a read's method of q, its body made from the query as the wire
+// carries it on the connection the call goes on: see on.
+func (r reads) ask(ctx context.Context, method uint16, q Query, body func(asked wire.RecordsQuery) []byte) ([]byte, error) {
+	asked, bound, err := q.asked(nil)
+	if err != nil {
+		return nil, err
 	}
-	return core.ViaLink{Link: r.store.Link}.Call(ctx, r.opener, method, func(handle uint64) []byte {
-		return body(&handle)
-	}, core.Reading)
+	if err := r.refuseOthers(bound); err != nil {
+		return nil, err
+	}
+	var answer []byte
+	err = r.store.Link.Run(ctx, core.Reading, func(c *core.Connection) error {
+		on, err := r.on(ctx, c, asked, bound)
+		if err != nil {
+			return err
+		}
+		answer, err = c.Session.Call(ctx, method, body(on))
+		return err
+	})
+	return answer, err
+}
+
+// refuseOthers refuses a statement of another store's database: its
+// database's handle would be opened on this store's connection, and read
+// this store's file of the same name.
+func (r reads) refuseOthers(bound []sqldb.BoundStatement) error {
+	for _, statement := range bound {
+		db, _, _, err := sqldb.CoreBound(statement)
+		if err != nil {
+			return err
+		}
+		if home, ok := db.(core.Home); !ok || home.CoreHome().Store != r.store {
+			return core.Errorf(core.Invalid, "%s: a statement of another store's database, in a query of this one", db.Describe())
+		}
+	}
+	return nil
+}
+
+// on is a query as it goes on a connection: with the stream's handle there,
+// and each statement with its database's.
+func (r reads) on(ctx context.Context, c *core.Connection, asked wire.RecordsQuery, bound []sqldb.BoundStatement) (wire.RecordsQuery, error) {
+	if r.opener != nil {
+		handle, err := core.HandleOn(ctx, c, r.opener)
+		if err != nil {
+			return asked, err
+		}
+		asked.Handle = &handle
+	}
+	for _, statement := range bound {
+		db, text, values, err := sqldb.CoreBound(statement)
+		if err != nil {
+			return asked, err
+		}
+		handle, err := db.Handle(ctx, c)
+		if err != nil {
+			return asked, err
+		}
+		asked.Statements = append(asked.Statements, wire.RecordsStatement{Database: handle, Text: text, Values: values})
+	}
+	return asked, nil
 }
 
 func (r reads) list(ctx context.Context, q Query) (Page, error) {
@@ -245,15 +325,7 @@ func (r reads) list(ctx context.Context, q Query) (Page, error) {
 
 // query asks a method of a query alone and decodes its answer into m.
 func (r reads) query(ctx context.Context, method uint16, q Query, m wire.Message) error {
-	var failed error
-	answer, err := r.ask(ctx, method, func(handle *uint64) []byte {
-		asked, err := q.asked(handle)
-		failed = err
-		return wire.Encode(&asked)
-	})
-	if failed != nil {
-		return failed
-	}
+	answer, err := r.ask(ctx, method, q, func(asked wire.RecordsQuery) []byte { return wire.Encode(&asked) })
 	if err != nil {
 		return err
 	}
@@ -295,11 +367,7 @@ func (r reads) delete(ctx context.Context, q Query) (int, error) {
 }
 
 func (r reads) top(ctx context.Context, key string, q Query) ([]Top, error) {
-	if _, err := q.asked(nil); err != nil {
-		return nil, err
-	}
-	answer, err := r.ask(ctx, wire.MethodRecordsTop, func(handle *uint64) []byte {
-		asked, _ := q.asked(handle)
+	answer, err := r.ask(ctx, wire.MethodRecordsTop, q, func(asked wire.RecordsQuery) []byte {
 		return wire.Encode(&wire.RecordsTopAsked{Query: asked, Key: key})
 	})
 	if err != nil {
@@ -320,11 +388,7 @@ func (r reads) top(ctx context.Context, key string, q Query) ([]Top, error) {
 }
 
 func (r reads) largest(ctx context.Context, key string, q Query) ([]Event, error) {
-	if _, err := q.asked(nil); err != nil {
-		return nil, err
-	}
-	answer, err := r.ask(ctx, wire.MethodRecordsLargest, func(handle *uint64) []byte {
-		asked, _ := q.asked(handle)
+	answer, err := r.ask(ctx, wire.MethodRecordsLargest, q, func(asked wire.RecordsQuery) []byte {
 		return wire.Encode(&wire.RecordsLargestAsked{Query: asked, Key: key})
 	})
 	if err != nil {
@@ -338,9 +402,6 @@ func (r reads) largest(ctx context.Context, key string, q Query) ([]Event, error
 }
 
 func (r reads) aggregate(ctx context.Context, q Query) ([]Row, error) {
-	if _, err := q.asked(nil); err != nil {
-		return nil, err
-	}
 	var every *uint64
 	if q.Every != 0 {
 		ms, err := core.Millis(q.Every, "an aggregate's every")
@@ -349,8 +410,7 @@ func (r reads) aggregate(ctx context.Context, q Query) ([]Row, error) {
 		}
 		every = &ms
 	}
-	answer, err := r.ask(ctx, wire.MethodRecordsAggregate, func(handle *uint64) []byte {
-		asked, _ := q.asked(handle)
+	answer, err := r.ask(ctx, wire.MethodRecordsAggregate, q, func(asked wire.RecordsQuery) []byte {
 		message := wire.RecordsAggregateAsked{Query: asked, Every: every, By: q.By, Stats: q.Stats, Distinct: q.Distinct, Fill: q.Fill}
 		message.Calendar, message.TimeZone = core.CalendarOf(string(q.Calendar), q.TimeZone)
 		return wire.Encode(&message)
@@ -406,11 +466,7 @@ func valueOf(spelled string) (any, error) {
 }
 
 func (r reads) fieldNames(ctx context.Context, q Query) ([]string, error) {
-	if _, err := q.asked(nil); err != nil {
-		return nil, err
-	}
-	answer, err := r.ask(ctx, wire.MethodRecordsFieldNames, func(handle *uint64) []byte {
-		asked, _ := q.asked(handle)
+	answer, err := r.ask(ctx, wire.MethodRecordsFieldNames, q, func(asked wire.RecordsQuery) []byte {
 		return wire.Encode(&wire.RecordsFieldNamesAsked{Query: asked, Prefix: given(q.Prefix)})
 	})
 	if err != nil {
@@ -425,7 +481,11 @@ func (r reads) fieldNames(ctx context.Context, q Query) ([]string, error) {
 // the caller stops, ctx is done or the store closes.
 func (r reads) tail(ctx context.Context, q Query) iter.Seq2[TailBatch, error] {
 	return func(yield func(TailBatch, error) bool) {
-		if _, err := q.asked(nil); err != nil {
+		if _, bound, err := q.asked(nil); err != nil || len(bound) > 0 {
+			if err == nil {
+				err = core.Errorf(core.Invalid,
+					"a tail's where takes no statement: a statement is read once, as a query starts, and a tail lives on")
+			}
 			yield(TailBatch{}, err)
 			return
 		}
@@ -439,7 +499,7 @@ func (r reads) tail(ctx context.Context, q Query) iter.Seq2[TailBatch, error] {
 				}
 				handle = &opened
 			}
-			asked, _ := q.asked(handle)
+			asked, _, _ := q.asked(handle)
 			var err error
 			stream, err = opened(ctx, c, wire.MethodRecordsTail, wire.Encode(&asked), true)
 			return err

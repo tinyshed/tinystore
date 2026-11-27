@@ -115,7 +115,9 @@ as, a number as a number.
   key written twice, as another program's line may write it, is found by
   its last value, the one the event reads back with.
 - A list in `where` means any of its values, `{ not }` none of them, and
-  `{ prefix }` a text that starts with it: [A where](#a-where).
+  `{ prefix }` a text that starts with it: [A where](#a-where). A database's
+  statement means the values its one column gives: [A where kept to a
+  database's statement](#a-where-kept-to-a-databases-statement).
 - `search` finds a phrase in the message, the name, and a value at any depth.
   It does not look at keys; `fieldNames` lists those.
 - A condition given as `undefined` is `invalid`, never left out: a trace id
@@ -187,6 +189,75 @@ api.list().since(day).filter("tags", &[["a", "b"]]).page()?; // the list ["a", "
 > found only an event whose `op` was that list. Write `{ op: [['a', 'b']] }`
 > for that. A server of a release before conditions refuses a list,
 > `{ not }` and `{ prefix }` as `unimplemented`, rather than match nothing.
+
+## A where kept to a database's statement
+
+What teachers use: the events of the people whose id is in the teachers'
+table, counted by the store rather than gathered for everybody and kept to
+the teachers in the program.
+
+```ts
+const teachers = db.statement`select id from teachers` // bound to its database; nothing runs yet
+await events.count({ since: '1d', where: { userId: teachers } })
+await events.aggregate({ since: '7d', by: ['name'], distinct: ['userId'], where: { userId: teachers } })
+await events.list({ since: '1d', where: { userId: { not: teachers } } })
+```
+
+```python
+teachers = db.statement("select id from teachers")  # bound to its database; nothing runs yet
+await events.count(since="1d", where={"userId": teachers})
+await events.aggregate(since="7d", by=["name"], distinct=["userId"], where={"userId": teachers})
+await events.list(since="1d", where={"userId": {"not": teachers}})
+```
+
+```go
+teachers := db.Statement("select id from teachers") // bound to its database; nothing runs yet
+events.Count(ctx, records.Query{Since: 24 * time.Hour, Where: records.Where{"userId": teachers}})
+events.Aggregate(ctx, records.Query{Since: 7 * 24 * time.Hour, By: []string{"name"}, Distinct: []string{"userId"},
+	Where: records.Where{"userId": teachers}})
+events.List(ctx, records.Query{Since: 24 * time.Hour, Where: records.Where{"userId": records.Not(teachers)}})
+```
+
+```rust
+let (teachers, day) = (db.statement("select id from teachers"), Duration::from_hours(24)); // nothing runs yet
+events.list().since(day).filter("userId", &teachers).count()?;
+events.list().since(day * 7).filter("userId", &teachers).aggregate(&Aggregate::new().by(["name"]).distinct(["userId"]))?;
+events.list().since(day).filter("userId", Not(&teachers)).page()?;
+```
+
+- The statement is read once, as the query starts, on a reader of its
+  database, and its one column's values are the list a key keeps to;
+  `{ not }` keeps to none of them, or no such key. A page asked later with
+  `after` reads it again.
+- It is not read in one moment with the events: they lie in records.db and
+  the rows in the database's file, and the store promises no moment across
+  two files.
+- Its values match as a list's do, by the JSON an event's value was written
+  as:
+
+  | The statement gives | Finds                             |
+  |---------------------|-----------------------------------|
+  | the integer `7`     | `7`                               |
+  | `1` or `0`          | also `true` or `false`            |
+  | the text `'7'`      | `"7"`, and never `7`              |
+  | the real `7.0`      | `7.0`, and not `7`; `0.5` `0.5`   |
+  | `null`              | nothing                           |
+  | a blob              | refused, `invalid`: select a text |
+
+- It gives 100,000 rows at most, each value 4 KiB at most as JSON, as a
+  list's; past them the query is `limit`, and so is a set of values the
+  store's memory cannot hold while the query runs. A statement that writes,
+  or gives other than one column, is `invalid`.
+- `count`, `list`, `top`, `largest`, `aggregate` and `delete` take one, and a
+  delete reads it once, as it starts, for every segment it changes. A tail
+  lives on and refuses one, `invalid`.
+- A stream lives in records.db and belongs to no database, so a statement
+  says whose it is: a bare `` sql`…` `` in a stream's `where` is `invalid`,
+  where a table's index takes one, since an index lives in its database. A
+  statement of another store's database is `invalid` too.
+- A statement of more than 100 values passes no block by its filter, which
+  says maybe of one value in a hundred it does not hold; the read still
+  looks a value up by its hash, once an event.
 
 ## Pages
 

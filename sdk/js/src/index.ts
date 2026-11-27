@@ -238,6 +238,7 @@ export {
 	type WhereValue,
 } from './search.ts'
 export {
+	BoundStatement,
 	type Column,
 	type Columns,
 	type Database,

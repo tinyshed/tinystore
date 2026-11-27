@@ -133,6 +133,13 @@ impl Database {
         &self.db
     }
 
+    /// A statement bound to this database, for a stream's `where`, as
+    /// [`sql::Database::statement`] binds one: nothing runs until a query
+    /// reads it, as it starts on the store's pool.
+    pub fn statement(&self, statement: impl Into<Sql>) -> sql::BoundStatement {
+        self.db.statement(statement)
+    }
+
     #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "records"))]
     pub(crate) fn pool(&self) -> &Arc<Pool> {
         &self.pool

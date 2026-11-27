@@ -11,16 +11,21 @@ import asyncio
 import io
 import json
 import logging
+import tempfile
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 import tinystore
 from tinystore import Event
+from ways import removed
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from ways import Way
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 SPAN_ID = "00f067aa0ba902b7"
@@ -134,6 +139,57 @@ async def test_a_where_list_is_one_of_not_finds_an_absent_key_and_prefix_a_text(
     for where in wrong:
         with pytest.raises(tinystore.InvalidError):
             await calls.count(where=where)
+
+
+# contract: REC-22
+async def test_a_where_keeps_to_the_values_a_databases_statement_gives(store: tinystore.Store) -> None:
+    db = await store.database(
+        "school", migrations={"0001_teachers.sql": "create table teachers (id integer primary key)"}
+    )
+    await db.exec("insert into teachers (id) values (2)")
+    used = store.events("used")
+    await used.append([Event("open", {"userId": 1}), Event("open", {"userId": 2})])
+    teachers = db.statement("select id from teachers")
+    assert await used.count(since="1d", where={"userId": teachers}) == 1
+    assert await used.count(where={"userId": {"not": teachers}}) == 1
+    rows = await used.aggregate(by=["name"], distinct=["userId"], where={"userId": teachers})
+    assert [(row.count, row.distinct["userId"]) for row in rows] == [(1, 1)]
+    above = db.statement("select id from teachers where id > ?", 0)
+    assert [event.fields["userId"] for event in (await used.list(where={"userId": above})).events] == [2]
+    assert await store.events().count(streams=["used"], where={"userId": teachers}) == 1
+    with pytest.raises(tinystore.InvalidError, match=r"db\.statement"):
+        await used.count(where={"userId": tinystore.sql("select id from teachers")})
+    with pytest.raises(tinystore.InvalidError):
+        await used.count(where={"userId": db.statement("select x'07'")})
+
+
+# contract: REC-22
+async def test_a_statement_of_another_stores_database_is_refused_and_one_around_the_streams_transaction(
+    way: Way, store: tinystore.Store
+) -> None:
+    migrations = {"0001_teachers.sql": "create table teachers (id integer primary key)"}
+    elsewhere = Path(tempfile.mkdtemp(prefix="tinystore-py-other-"))
+    other = await way.open(elsewhere)
+    try:
+        theirs = await other.database("school", migrations=migrations)
+        their_teachers = theirs.statement("select id from teachers")
+        for reads in (store.events("used"), store.events()):
+            with pytest.raises(tinystore.InvalidError, match="a statement of another store's database"):
+                await reads.count(where={"userId": their_teachers})
+    finally:
+        await other.close()
+        await way.leave(elsewhere)
+        await removed(elsewhere)
+    db = await store.database("school", migrations=migrations)
+    audit = db.events("audit")
+    teachers = db.statement("select id from teachers")
+    assert await audit.count(where={"userId": teachers}) == 0
+
+    async def around(_tx: tinystore.SqlTx) -> int:
+        return await audit.count(where={"userId": teachers})
+
+    with pytest.raises(tinystore.InvalidError, match="made around the database's transaction"):
+        await db.tx(around)
 
 
 # contract: REC-19

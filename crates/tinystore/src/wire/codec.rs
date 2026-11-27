@@ -63,7 +63,7 @@ pub(crate) enum Row {
 
 /// A value as SQLite keeps it, as it travels: nothing, an integer, a float,
 /// text or bytes. A bool from a client is the integer SQLite keeps for it.
-#[cfg(any(feature = "sql", feature = "search"))]
+#[cfg(any(feature = "sql", feature = "search", feature = "records"))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum Cell {
     #[default]
@@ -256,7 +256,7 @@ pub(crate) fn row(r: &mut Reader<'_>, name: &str) -> Result<Row, Failure> {
     }
 }
 
-#[cfg(any(feature = "sql", feature = "search"))]
+#[cfg(any(feature = "sql", feature = "search", feature = "records"))]
 pub(crate) fn cell(r: &mut Reader<'_>, name: &str) -> Result<Cell, Failure> {
     match r.next()? {
         Token::Nil => Ok(Cell::Nil),
@@ -381,7 +381,7 @@ pub(crate) fn write_row(out: &mut Vec<u8>, row: &Row) {
     }
 }
 
-#[cfg(any(feature = "sql", feature = "search"))]
+#[cfg(any(feature = "sql", feature = "search", feature = "records"))]
 pub(crate) fn write_cell(out: &mut Vec<u8>, cell: &Cell) {
     match cell {
         Cell::Nil => msgpack::write_nil(out),
@@ -423,7 +423,7 @@ pub(crate) fn row_size(row: &Row) -> usize {
 
 /// The most bytes a cell writes as: a head of five and its text or bytes, or
 /// a number's nine.
-#[cfg(any(feature = "sql", feature = "search"))]
+#[cfg(any(feature = "sql", feature = "search", feature = "records"))]
 pub(crate) fn cell_size(cell: &Cell) -> usize {
     match cell {
         Cell::Str(text) => 5 + text.len(),
@@ -457,7 +457,7 @@ pub(crate) fn row_is_zero(row: &Row) -> bool {
 
 /// Whether a cell writes as a zero value of the profile: nil, the integer 0,
 /// a float whose bits are all 0, no text or no bytes.
-#[cfg(any(feature = "sql", feature = "search"))]
+#[cfg(any(feature = "sql", feature = "search", feature = "records"))]
 #[expect(dead_code, reason = "a field that is not optional holds a cell with it, and cells are in lists yet")]
 pub(crate) fn cell_is_zero(cell: &Cell) -> bool {
     match cell {

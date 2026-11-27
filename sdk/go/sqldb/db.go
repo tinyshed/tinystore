@@ -620,6 +620,36 @@ func columnsOf(parts [][]byte) ([]string, [][]any, error) {
 	return names, columns, checkColumns(names)
 }
 
+// BoundStatement is a statement bound to the database that runs it, from
+// DB.Statement: what a stream's Where keeps a key to, as SQL's in (select …)
+// does. A stream lives in records.db and belongs to no database, so the
+// statement says whose it is. Nothing runs until a query reads it.
+type BoundStatement struct {
+	db    *DB
+	piece Piece
+}
+
+// Statement is a statement bound to this database, for a stream's Where,
+// which keeps a key to the values its one column gives: nothing runs until
+// a query reads it, once as the query starts, on a reader of this file.
+//
+//	teachers := db.Statement("select id from teachers")
+//	n, err := events.Count(ctx, records.Query{Since: 24 * time.Hour, Where: records.Where{"userId": teachers}})
+func (db *DB) Statement(text string, args ...any) BoundStatement {
+	return BoundStatement{db: db, piece: statementOf(text, args)}
+}
+
+// CoreBound is a bound statement's database, text and values, or why it
+// could not be made, as this module's packages send it: a stream's Where; a
+// program has no use for it.
+func CoreBound(s BoundStatement) (db core.Database, text string, values []any, err error) {
+	if s.db == nil {
+		return nil, "", nil, core.Errorf(core.Invalid, "a statement of no database: make it with db.Statement")
+	}
+	text, values, err = CoreStatement(s.piece)
+	return s.db, text, values, err
+}
+
 // Exec runs a write once it is durable; writes from many callers share a
 // commit, each failing alone.
 func (db *DB) Exec(ctx context.Context, text string, args ...any) (Result, error) {

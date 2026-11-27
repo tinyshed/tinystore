@@ -166,6 +166,42 @@ impl crate::search::Values for &crate::sql::Sql {
     }
 }
 
+/// A statement of a database as a stream's `where` holds it, as SQL's `in
+/// (select …)` does: `filter("userId", db.statement(sql!("select id from
+/// teachers")))`, read once as the query starts, on a reader of its database.
+#[cfg(feature = "records")]
+impl From<crate::sql::BoundStatement> for crate::records::Condition {
+    fn from(statement: crate::sql::BoundStatement) -> crate::records::Condition {
+        let described = statement.describe();
+        let read = move |most: usize| statement.read_column(most);
+        crate::records::Condition::rows(described, std::sync::Arc::new(read), false)
+    }
+}
+
+#[cfg(feature = "records")]
+impl From<&crate::sql::BoundStatement> for crate::records::Condition {
+    fn from(statement: &crate::sql::BoundStatement) -> crate::records::Condition {
+        statement.clone().into()
+    }
+}
+
+/// None of the values a statement gives, or the key absent.
+#[cfg(feature = "records")]
+impl From<crate::Not<crate::sql::BoundStatement>> for crate::records::Condition {
+    fn from(crate::Not(statement): crate::Not<crate::sql::BoundStatement>) -> crate::records::Condition {
+        let described = statement.describe();
+        let read = move |most: usize| statement.read_column(most);
+        crate::records::Condition::rows(described, std::sync::Arc::new(read), true)
+    }
+}
+
+#[cfg(feature = "records")]
+impl From<crate::Not<&crate::sql::BoundStatement>> for crate::records::Condition {
+    fn from(crate::Not(statement): crate::Not<&crate::sql::BoundStatement>) -> crate::records::Condition {
+        crate::Not(statement.clone()).into()
+    }
+}
+
 #[cfg(feature = "records")]
 impl Database {
     /// The store's stream of events `stream`, opened through this database:

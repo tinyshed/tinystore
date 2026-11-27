@@ -9,6 +9,7 @@
 
 from . import bounds
 from ._console import colors
+from ._handles import BoundStatement
 from .backup import Backup
 from .blobs import FileBytes, FileInfo, FilePage, Files, Fill, StoredFile, Trim, Upload, Usage, WhenFull
 from .channels import Channel, Message, Missed, Subscription, TxChannel
@@ -150,6 +151,7 @@ __all__ = [
     "Appending",
     "Backoff",
     "Backup",
+    "BoundStatement",
     "Breaker",
     "Bucket",
     "CallCancelledError",

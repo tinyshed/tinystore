@@ -19,9 +19,9 @@ use super::protocol::{
     Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCondition,
     RecordsCount, RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsEvents, RecordsFieldInfo,
     RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsLargestAsked, RecordsNameCount, RecordsNames, RecordsNewEvent,
-    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats,
-    RecordsStream, RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops,
-    method,
+    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStatement,
+    RecordsStats, RecordsStream, RecordsStreamFields, RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked,
+    RecordsTops, method,
 };
 use super::{Lent, Link, Route};
 use crate::records::{
@@ -138,7 +138,7 @@ pub(crate) fn call(
     (called, body): (u16, &[u8]),
     read_only: bool,
 ) -> Answered {
-    let reading = Reading { store, handles, read_only };
+    let reading = Reading { store, handles, lent, read_only };
     match called {
         method::RECORDS_OPEN => open(store, handles, lent, RecordsOpen::decode(body)?, read_only),
         method::RECORDS_APPEND => append(handles, RecordsAppend::decode(body)?),
@@ -163,6 +163,10 @@ pub(crate) fn call(
 struct Reading<'a> {
     store: &'a Store,
     handles: &'a Handles,
+    /// The file of a database this connection opened, by its handle, whose
+    /// statement a query's condition names.
+    #[cfg_attr(not(feature = "sql"), expect(dead_code, reason = "only a database's statement is found through it"))]
+    lent: Lent<'a>,
     read_only: bool,
 }
 
@@ -430,8 +434,9 @@ fn query(reading: &Reading<'_>, asked: &RecordsQuery) -> Result<List, Failure> {
         }
         list = list.filter(key, Condition::exactly(json.clone()));
     }
+    let statements = statements(reading, &asked.statements)?;
     for (key, condition) in &asked.conditions {
-        list = list.filter(key, condition_of(key, condition)?);
+        list = list.filter(key, condition_of(key, condition, &statements)?);
     }
     if let Some(text) = &asked.search {
         list = list.search(text);
@@ -448,17 +453,48 @@ fn query(reading: &Reading<'_>, asked: &RecordsQuery) -> Result<List, Failure> {
     Ok(list)
 }
 
-/// A condition as the client sent it: a list, none of a list with `not`, or
-/// a prefix alone.
-fn condition_of(key: &str, condition: &RecordsCondition) -> Result<Condition, Failure> {
+/// A condition as the client sent it: a list, none of a list with `not`, a
+/// prefix alone, or a statement of the query's in place of a list, each of
+/// `statements` as it keeps to its values and as `not` keeps from them.
+fn condition_of(key: &str, condition: &RecordsCondition, statements: &[[Condition; 2]]) -> Result<Condition, Failure> {
     match condition {
-        RecordsCondition { values, not: false, prefix: Some(prefix) } if values.is_empty() => {
+        RecordsCondition { statement: Some(_), values, prefix, .. } if !values.is_empty() || prefix.is_some() => {
+            Err(Failure::invalid(format!("where {key:?}: a statement in place of values, without values or a prefix")))
+        }
+        RecordsCondition { statement: Some(place), not, .. } => {
+            let named = usize::try_from(*place).ok().and_then(|place| statements.get(place));
+            let refused =
+                || Failure::invalid(format!("where {key:?}: statement {place}, which the query does not hold"));
+            Ok(named.ok_or_else(refused)?[usize::from(*not)].clone())
+        }
+        RecordsCondition { values, not: false, prefix: Some(prefix), .. } if values.is_empty() => {
             Ok(Condition::prefix(prefix.clone()))
         }
         RecordsCondition { prefix: Some(_), .. } => {
             Err(Failure::invalid(format!("where {key:?}: a prefix alone, without values or not")))
         }
         RecordsCondition { values, not, .. } => Ok(Condition::listed(values.clone(), *not)),
+    }
+}
+
+/// The statements of a query, each bound to the database of this
+/// connection its handle names, as a condition keeps to it and keeps from
+/// it with `not`.
+#[cfg(feature = "sql")]
+fn statements(reading: &Reading<'_>, asked: &[RecordsStatement]) -> Result<Vec<[Condition; 2]>, Failure> {
+    let bound = |asked: &RecordsStatement| {
+        let sql = super::sql::statement(asked.text.clone(), asked.values.clone())?;
+        let statement = crate::sql::BoundStatement::in_file((reading.lent)(asked.database)?, sql);
+        Ok([Condition::from(&statement), Condition::from(crate::Not(statement))])
+    };
+    asked.iter().map(bound).collect()
+}
+
+#[cfg(not(feature = "sql"))]
+fn statements(_: &Reading<'_>, asked: &[RecordsStatement]) -> Result<Vec<[Condition; 2]>, Failure> {
+    match asked {
+        [] => Ok(Vec::new()),
+        _ => Err(Failure::invalid("a where by a statement is a database's, and this server keeps no databases")),
     }
 }
 
@@ -528,15 +564,15 @@ fn time_of(nanos: i64) -> SystemTime {
 
 /// Starts the tail a `records.tail` asks for, on stream `number`; a read
 /// connection's is `read_only`. It sends nothing until [`Tailing::begin`],
-/// once the stream's RESPONSE went out.
+/// once the stream's RESPONSE went out. A database's handle in its query is
+/// found through `lent`, for the tail to refuse a statement as the core does.
 pub(crate) fn tail(
-    store: &Store,
-    handles: &Handles,
+    (store, handles, lent): (&Store, &Handles, Lent<'_>),
     (number, body): (u32, &[u8]),
     link: Link,
     read_only: bool,
 ) -> Result<Arc<Tailing>, Failure> {
-    let reading = Reading { store, handles, read_only };
+    let reading = Reading { store, handles, lent, read_only };
     let tail = query(&reading, &RecordsQuery::decode(body)?)?.tail()?;
     let state = TailState { credit: link.credit, ..TailState::default() };
     let tailing = Arc::new_cyclic(|me: &Weak<Tailing>| {

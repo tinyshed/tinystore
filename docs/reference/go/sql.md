@@ -18,6 +18,14 @@ func Columns[T any](ctx context.Context, db *DB, text string, args ...any) (T, e
 
 Columns is what All gives, by its columns: T is a struct whose fields are slices, one a column, by the column's name; a nil pointer where a row holds NULL. For rows by the thousand, a chart's points: they come faster, and nobody turns rows into columns after.
 
+## CoreBound
+
+```go
+func CoreBound(s BoundStatement) (db core.Database, text string, values []any, err error)
+```
+
+CoreBound is a bound statement's database, text and values, or why it could not be made, as this module's packages send it: a stream's Where; a program has no use for it.
+
 ## CoreStatement
 
 ```go
@@ -57,6 +65,16 @@ func Scalar[T any](ctx context.Context, r Runner, text string, args ...any) (T, 
 ```
 
 Scalar is the one value of the one row a statement gives, as count(\*) does; T's zero for NULL.
+
+## BoundStatement
+
+```go
+type BoundStatement struct {
+	// contains filtered or unexported fields
+}
+```
+
+BoundStatement is a statement bound to the database that runs it, from DB.Statement: what a stream's Where keeps a key to, as SQL's in (select …) does. A stream lives in records.db and belongs to no database, so the statement says whose it is. Nothing runs until a query reads it.
 
 ## Changed
 
@@ -175,6 +193,17 @@ func (db *DB) Name() string
 ```
 
 Name is the database's name.
+
+### DB.Statement
+
+```go
+func (db *DB) Statement(text string, args ...any) BoundStatement
+```
+
+Statement is a statement bound to this database, for a stream's Where, which keeps a key to the values its one column gives: nothing runs until a query reads it, once as the query starts, on a reader of this file.
+
+	teachers := db.Statement("select id from teachers")
+	n, err := events.Count(ctx, records.Query{Since: 24 * time.Hour, Where: records.Where{"userId": teachers}})
 
 ### DB.Tx
 

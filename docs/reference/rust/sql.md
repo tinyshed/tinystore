@@ -250,6 +250,23 @@ let columns = db.describe("select id, title, length(title) as size from notes wh
 // id: Some("TEXT"), title: Some("TEXT"), size: None
 ```
 
+### Database.statement
+
+```rust
+pub fn statement(&self, statement: impl Into<Sql>) -> BoundStatement
+```
+
+A statement bound to this database, for a stream's `where`, which
+keeps a key to the values its one column gives: nothing runs until a
+query reads it, once as the query starts, on a reader of this file.
+
+```rust
+let db = store.database("app").open()?;
+let teachers = db.statement("select id from teachers");
+let day = std::time::Duration::from_secs(24 * 60 * 60);
+let used = store.events("activity").open()?.list().since(day).filter("userId", &teachers).count()?;
+```
+
 ### Database.exec
 
 ```rust
@@ -1141,6 +1158,18 @@ pub fn only_if(self, condition: impl Into<Sql>) -> Upsert
 The condition the row that holds the key must meet, its owner's, or
 it stays as it is.
 
+## BoundStatement
+
+```rust
+pub struct BoundStatement { /* private fields */ }
+```
+
+A statement bound to the database that runs it, made by
+[`Database::statement`](super::Database::statement): what a stream's
+`where` keeps a key to, as SQL's `in (select …)` does. A stream lives in
+records.db and belongs to no database, so the statement says whose it is.
+Nothing runs until a query reads it.
+
 ## Sql
 
 ```rust
@@ -1330,6 +1359,16 @@ pub fn blocking(&self) -> &Database
 ```
 
 The same database, for its blocking calls.
+
+### aio::sql::Database.statement
+
+```rust
+pub fn statement(&self, statement: impl Into<Sql>) -> BoundStatement
+```
+
+A statement bound to this database, for a stream's `where`, as
+`sql::Database::statement` binds one: nothing runs until a query
+reads it, as it starts on the store's pool.
 
 ### aio::sql::Database.all
 

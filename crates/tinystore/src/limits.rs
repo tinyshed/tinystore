@@ -149,8 +149,8 @@ pub const FILTER_CONDITIONS: Limit = Limit { name: "filter conditions", bound: 8
 /// The values the lists of one search's conditions hold together.
 #[cfg(feature = "search")]
 pub const FILTER_VALUES: Limit = Limit { name: "filter values", bound: 100 };
-/// The rows a statement of a table's index's `where` gives.
-#[cfg(feature = "search")]
+/// The rows a statement of a `where` gives: a table's index's, or a stream's.
+#[cfg(any(feature = "search", feature = "records"))]
 pub const FILTER_ROWS: Limit = Limit { name: "filter rows", bound: 100_000 };
 /// A text a filter keeps or asks for, in bytes.
 #[cfg(feature = "search")]

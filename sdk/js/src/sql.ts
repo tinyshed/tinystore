@@ -148,6 +148,39 @@ export class Sql {
 	}
 }
 
+/**
+ * A statement bound to the database that runs it, from `db.statement`: what
+ * a stream's `where` keeps a key to, as SQL's `in (select …)` does. A stream
+ * lives in records.db and belongs to no database, so the statement says
+ * whose it is. Nothing runs until a query reads it.
+ */
+export class BoundStatement {
+	readonly database: Home
+	readonly text: string
+	readonly values: readonly SqlArg[]
+
+	/** Bound statements come from `db.statement`. */
+	constructor(database: Home, piece: Sql) {
+		this.database = database
+		this.text = piece.text
+		this.values = piece.values
+	}
+}
+
+/**
+ * What a stream's read asks of a database it names: the store's link it is
+ * on, so that a statement of another store's database is refused, and the
+ * guard around its transaction, which a stream opened from it keeps.
+ */
+const reaches = new WeakMap<Home, { link: Link; refuseAround: (what: string) => void }>()
+
+/** How a database of this module is reached; none for a home made elsewhere. */
+export function reachOf(
+	home: Home,
+): { link: Link; refuseAround: (what: string) => void } | undefined {
+	return reaches.get(home)
+}
+
 /** Whether text is one group in parentheses, or a bare 0 or 1, which may stand beside others as it is. */
 export function grouped(text: string): boolean {
 	if (!text.startsWith('(') || !text.endsWith(')')) {
@@ -802,6 +835,7 @@ export class Database implements Runner, Home {
 		this.name = name
 		this.label = `sql ${name}`
 		this.#open = open
+		reaches.set(this, { link, refuseAround: what => this.#refuseAround(what) })
 	}
 
 	handle(connection: Connection): Promise<number> {
@@ -848,6 +882,18 @@ export class Database implements Runner, Home {
 				`${this.label}: ${what}: made around the database's transaction from inside it, where it would wait for the writer the transaction holds: make it through the transaction, as tx.exec or tx.with(queue).add`,
 			)
 		}
+	}
+
+	/**
+	 * A statement bound to this database, for a stream's `where`, which keeps
+	 * a key to the values its one column gives: nothing runs until a query
+	 * reads it, once as the query starts, on a reader of this file.
+	 *
+	 *     const teachers = db.statement`select id from teachers`
+	 *     await events.count({ since: '1d', where: { userId: teachers } })
+	 */
+	statement(...given: Statement): BoundStatement {
+		return new BoundStatement(this, statementOf(given))
 	}
 
 	/**

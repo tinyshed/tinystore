@@ -20,6 +20,7 @@ import (
 	"tinyshed.org/tinystore/console"
 	"tinyshed.org/tinystore/internal/ways"
 	"tinyshed.org/tinystore/records"
+	"tinyshed.org/tinystore/sqldb"
 )
 
 const (
@@ -230,6 +231,71 @@ func TestAWhereListIsOneOfNotFindsAnAbsentKeyAndPrefixAText(t *testing.T) {
 		for _, where := range []records.Where{{"op": []string{}}, {"op": map[string]int{"a": 1}}, {"op": records.Prefix("")}} {
 			_, err := calls.Count(ctx, records.Query{Where: where})
 			is(t, err, tinystore.ErrInvalid)
+		}
+	})
+}
+
+// contract: REC-22
+func TestAWhereKeepsToTheValuesADatabasesStatementGives(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := ways.Must(sqldb.Open(ctx, store, "school", sqldb.MigrationFiles(map[string]string{
+			"0001_teachers.sql": "create table teachers (id integer primary key)",
+		})))
+		ways.Must(db.Exec(ctx, "insert into teachers (id) values (2)"))
+		used := ways.Must(records.OpenEvents(store, "used"))
+		ways.Must(used.AppendMany(ctx, []records.Event{
+			{Name: "open", Fields: records.Fields{"userId": 1}},
+			{Name: "open", Fields: records.Fields{"userId": 2}},
+		}))
+		teachers := db.Statement("select id from teachers")
+		count := func(where records.Where) int {
+			return ways.Must(used.Count(ctx, records.Query{Since: 24 * time.Hour, Where: where}))
+		}
+		if kept, others := count(records.Where{"userId": teachers}), count(records.Where{"userId": records.Not(teachers)}); kept != 1 || others != 1 {
+			t.Fatalf("teachers %d, others %d", kept, others)
+		}
+		rows := ways.Must(used.Aggregate(ctx, records.Query{By: []string{"name"}, Distinct: []string{"userId"}, Where: records.Where{"userId": teachers}}))
+		if len(rows) != 1 || rows[0].Count != 1 || rows[0].Distinct["userId"] != 1 {
+			t.Fatalf("%+v", rows)
+		}
+		above := db.Statement("select id from teachers where id > ?", 0)
+		page := ways.Must(used.List(ctx, records.Query{Where: records.Where{"userId": above}}))
+		if len(page.Events) != 1 || fields(t, page.Events[0].Fields)["userId"].(json.Number).String() != "2" {
+			t.Fatalf("%+v", page.Events)
+		}
+		every := ways.Must(records.OpenAllEvents(store))
+		if n := ways.Must(every.Count(ctx, records.Query{Streams: []string{"used"}, Where: records.Where{"userId": teachers}})); n != 1 {
+			t.Fatalf("every stream's count %d", n)
+		}
+		_, err := used.Count(ctx, records.Query{Where: records.Where{"userId": sqldb.SQL("select id from teachers")}})
+		if is(t, err, tinystore.ErrInvalid); !strings.Contains(err.Error(), "db.Statement") {
+			t.Fatal(err)
+		}
+		_, err = used.Count(ctx, records.Query{Where: records.Where{"userId": db.Statement("select x'07'")}})
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
+// contract: REC-22
+func TestAStatementOfAnotherStoresDatabaseIsRefused(t *testing.T) {
+	ways.EachWay(t, func(t *testing.T, way ways.Way) {
+		ctx := context.Background()
+		store, other := ways.Open(t, way), ways.Open(t, way)
+		theirs := ways.Must(sqldb.Open(ctx, other, "school", sqldb.MigrationFiles(map[string]string{
+			"0001_teachers.sql": "create table teachers (id integer primary key)",
+		})))
+		where := records.Where{"userId": theirs.Statement("select id from teachers")}
+		used := ways.Must(records.OpenEvents(store, "used"))
+		every := ways.Must(records.OpenAllEvents(store))
+		for _, count := range []func() (int, error){
+			func() (int, error) { return used.Count(ctx, records.Query{Where: where}) },
+			func() (int, error) { return every.Count(ctx, records.Query{Where: where}) },
+		} {
+			_, err := count()
+			if is(t, err, tinystore.ErrInvalid); !strings.Contains(err.Error(), "a statement of another store's database") {
+				t.Fatal(err)
+			}
 		}
 	})
 }
