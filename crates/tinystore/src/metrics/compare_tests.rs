@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 use super::*;
 use crate::ErrorKind;
 use crate::metrics::fixture::{DAY, Fixture, HOUR, MINUTE, SECOND, fixture};
-use crate::metrics::{Series, maintain};
+use crate::metrics::{AggregatePage, Series, Value, maintain};
 
 const WINDOW: Duration = Duration::from_mins(15);
 const WEEK: Duration = Duration::from_hours(7 * 24);
@@ -173,47 +173,81 @@ fn the_windows_are_the_same_hours_of_each_day_or_every_one_before() {
     );
 }
 
-/// The program's old way against `compare`, on one sample a second for a
-/// week of ten series: one aggregate of the week by 15 minutes and one of
-/// now, against one compare. Run with `--release -- --ignored --nocapture`.
+/// The program's old way against `compare`, on ten gauges of one sample
+/// every ten seconds for a week and a window, 605,700 samples, which one
+/// query decodes within its 1,048,576: one aggregate of the week by 15
+/// minutes and one of the newest window, the median of the same quarter
+/// hour of each day taken by the program, against one compare. Both are
+/// timed in turns, the median of several passes, once they agree. Run with
+/// `--release -- --ignored --nocapture`.
 #[test]
 #[ignore = "a timing, run by hand"]
 fn compare_against_the_week_bucketed() {
     let f = fixture();
-    let now = f.now();
-    let seconds = 7 * 24 * 3600_u32;
-    for chunk in (0..seconds).collect::<Vec<_>>().chunks(3600) {
-        let series: Vec<Series> = (0..10)
+    ingest_a_week_every_ten_seconds(&f);
+    let compared = || compare(&f, Op::Percentile(50.0), WINDOW).against(WEEK).same_hour().run().unwrap();
+    let expected = compared();
+    assert_eq!((expected.windows, expected.samples), (7, 900), "{expected:?}");
+    assert_eq!(the_old_way(&f), (expected.value, expected.usual), "both ways give the same usual");
+    let passes = 7;
+    let mut taken = [Vec::new(), Vec::new()];
+    for pass in 0..passes {
+        for turn in [pass % 2, 1 - pass % 2] {
+            let started = std::time::Instant::now();
+            if turn == 0 {
+                compared();
+            } else {
+                the_old_way(&f);
+            }
+            taken[turn].push(started.elapsed());
+        }
+    }
+    let [compared, bucketed] = taken.map(|mut taken| {
+        taken.sort();
+        (taken[passes / 2], taken[0], taken[passes - 1])
+    });
+    println!("compare p50 15m against 7d same hour: {:?} ({:?} to {:?})", compared.0, compared.1, compared.2);
+    println!("a week by 15m and the newest window: {:?} ({:?} to {:?})", bucketed.0, bucketed.1, bucketed.2);
+    println!("the median of {passes} passes each, in turns");
+}
+
+/// Ten gauges of one sample every ten seconds from a week and a window ago
+/// to the clock, ingested six hours at a time and packed between, since a
+/// series' head holds 16,384 samples unpacked at most.
+fn ingest_a_week_every_ten_seconds(f: &Fixture) {
+    let step = 10 * SECOND;
+    let count = u32::try_from((WEEK + WINDOW).as_secs() / 10).unwrap();
+    let first = f.now() - step * count;
+    let chunk = 6 * 360_u32;
+    for start in (0..count).step_by(chunk as usize) {
+        let ticks = start..count.min(start + chunk);
+        let series: Vec<Series> = (0..10_u32)
             .map(|n| {
-                let mut one = Series::gauge("call_ms").label("n", n);
-                one.extend(chunk.iter().map(|s| (now - SECOND * (seconds - s), f64::from(s % 997))));
+                let mut one = Series::gauge("call_ms").label("source", "server").label("n", n);
+                one.extend(ticks.clone().map(|at| (first + step * at, f64::from((at * 37 + n * 11) % 997))));
                 one
             })
             .collect();
         f.metrics().ingest(&series).unwrap();
+        maintain(&f.store).unwrap();
     }
-    maintain(&f.store).unwrap();
-    let passes = 7;
-    let time = |run: &dyn Fn()| {
-        let mut taken: Vec<Duration> = (0..passes)
-            .map(|_| {
-                let started = std::time::Instant::now();
-                run();
-                started.elapsed()
-            })
-            .collect();
-        taken.sort();
-        taken[passes / 2]
+}
+
+/// The p50 of the newest window and the median of the same window of each
+/// of the seven days before, as a program without `compare` takes them.
+fn the_old_way(f: &Fixture) -> (Option<f64>, Option<f64>) {
+    let query = || f.metrics().query().name("call_ms").filter("source", "server");
+    let exact = |page: &AggregatePage, at: SystemTime| {
+        let buckets = page.groups.iter().flat_map(|group| &group.buckets);
+        buckets.filter(|bucket| bucket.at == at).find_map(|bucket| match bucket.value {
+            Value::Exact(value) => Some(value),
+            Value::Between { .. } | Value::Empty => None,
+        })
     };
-    let query = || f.metrics().query().name("call_ms");
-    let compared = time(&|| {
-        query().compare(Op::Percentile(50.0), WINDOW).against(WEEK).same_hour().run().unwrap();
-    });
-    let bucketed = time(&|| {
-        query().since(WEEK + WINDOW).every(WINDOW).aggregate(Op::Percentile(50.0)).unwrap();
-        query().since(WINDOW).aggregate(Op::Percentile(50.0)).unwrap();
-    });
-    println!(
-        "compare p50 15m against 7d same hour: {compared:?}; a week by 15m and now: {bucketed:?}; median of {passes}"
-    );
+    let now = f.now();
+    let week = query().since(WEEK + WINDOW).every(WINDOW).aggregate(Op::Percentile(50.0)).unwrap();
+    let newest = query().since(WINDOW).aggregate(Op::Percentile(50.0)).unwrap();
+    let mut days: Vec<f64> = (1..=7_u32).filter_map(|day| exact(&week, now - DAY * day - WINDOW)).collect();
+    days.sort_by(f64::total_cmp);
+    (exact(&newest, now - WINDOW), days.get(days.len() / 2).copied())
 }
