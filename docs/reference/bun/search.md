@@ -84,7 +84,7 @@ type Where = Readonly<Record<string, WhereValue>> | Group
 What a search keeps its hits to, as sqldb's `where` reads an object: each
 field equal to its value, one of a list, within a range, or `null` for
 none, every field named passing; `search.or` and `search.and` group them.
-A search's where holds 8 conditions and 100 values in its lists at most.
+A search's where holds 8 conditions and 1000 values in its lists at most.
 A statement's rows, read in the search's snapshot, count toward no bound
 on values: 100,000 at most, and on the table's key no filter is needed.
 

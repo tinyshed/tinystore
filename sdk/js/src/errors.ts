@@ -205,7 +205,7 @@ export const limits = Object.freeze({
 	/** The conditions of one search's filter. */
 	filterConditions: limit('filter conditions', 8),
 	/** The values the lists of one search's conditions hold together. */
-	filterValues: limit('filter values', 100),
+	filterValues: limit('filter values', 1000),
 	/** The rows a statement of a table's index's `where` gives. */
 	filterRows: limit('filter rows', 100_000),
 	/** A text a filter keeps or asks for, in bytes. */

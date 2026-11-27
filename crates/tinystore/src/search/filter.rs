@@ -113,7 +113,7 @@ pub fn eq<T: Serialize + ?Sized>(path: &str, value: &T) -> Condition {
 }
 
 /// A filter holding one of `values`, as SQL's `in (…)`; an empty list passes
-/// nothing. A search's filter holds 8 conditions and 100 values in its lists
+/// nothing. A search's filter holds 8 conditions and 1000 values in its lists
 /// at most.
 ///
 /// For a table's index, `values` may be a statement of its database that

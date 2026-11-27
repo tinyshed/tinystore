@@ -86,7 +86,7 @@ of repeating them.
 | a vector           | 4,096 dimensions                                                                            |
 | `limit` + `offset` | 1,000; `limit` is 10; a `total` exact to 10,000                                             |
 | a field's weight   | above 0, at most 1,000                                                                      |
-| a filter           | 8 conditions, 100 values; a statement's rows, 100,000                                       |
+| a filter           | 8 conditions, 1,000 values; a statement's rows, 100,000                                     |
 | `vectorWeight`     | 0.5                                                                                         |
 | a table's index    | the rows of one search's hits, 64 MiB together, as one `all`                                |
 | `store.search`     | 1 to 32 indexes; a group's `limit` + `offset` 1,000, `limit` 10; `boost` above 0, default 1 |
@@ -258,13 +258,12 @@ Each constant has the name below in its language's case:
 | `SEARCH_HITS`        | `search hits`            | 1,000     | `offset` and `limit` of one search together                     |
 | `SEARCH_TEXT`        | `search text`            | 1 KiB     | a search's text                                                 |
 | `FILTER_CONDITIONS`  | `filter conditions`      | 8         | the conditions of one search's filter                           |
-| `FILTER_VALUES`      | `filter values`          | 100       | the values in the lists of one search's conditions              |
+| `FILTER_VALUES`      | `filter values`          | 1,000     | the values in the lists of one search's conditions              |
 | `FILTER_ROWS`        | `filter rows`            | 100,000   | the rows a statement of a table's index's `where` gives         |
 | `FILTER_TEXT`        | `filter text`            | 256 bytes | a text that a filter keeps or asks for                          |
 | `VECTOR_DIMENSIONS`  | `vector dimensions`      | 4,096     | a vector                                                        |
 | `REQUEST_BYTES`      | `request bytes`          | 64 MiB    | one request from an SDK; 2 MiB to a server of 0.13              |
 | `ANSWER_BYTES`       | `answer bytes`           | 64 MiB    | one answer to an SDK; 2 MiB from a server of 0.13               |
-
 A bound that the store's options set is named the same way, but it has no
 constant: `store memory` and `store memory, now` for the memory budget,
 `series in a store` for `maxSeries`, `waiting jobs` for a queue's

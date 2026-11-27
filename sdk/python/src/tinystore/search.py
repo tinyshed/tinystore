@@ -199,7 +199,7 @@ Where = Mapping[str, Any] | Group
 
 Each field equal to its value, one of a list, within a range, ``{"gte": 10,
 "lt": 100}``, or None for none, every field named passing; or_ and and_ group them.
-A search's where holds 8 conditions and 100 values in its lists at most. For
+A search's where holds 8 conditions and 1000 values in its lists at most. For
 a table's index, a value may be a statement of its database, ``sql("select
 user_id from members where course_id = ?", course)``: one of the values its
 rows give, read in the search's snapshot, 100,000 at most, counting toward

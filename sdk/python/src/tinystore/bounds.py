@@ -98,7 +98,7 @@ SEARCH_TEXT = Limit("search text", 1 << 10)
 """A search's text, in bytes."""
 FILTER_CONDITIONS = Limit("filter conditions", 8)
 """The conditions of one search's filter."""
-FILTER_VALUES = Limit("filter values", 100)
+FILTER_VALUES = Limit("filter values", 1000)
 """The values the lists of one search's conditions hold together."""
 FILTER_ROWS = Limit("filter rows", 100_000)
 """The rows a statement of a table's index's where gives."""

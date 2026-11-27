@@ -93,7 +93,7 @@ var (
 	// FilterConditions is the conditions of one search's filter.
 	FilterConditions = Limit{"filter conditions", 8}
 	// FilterValues is the values the lists of one search's conditions hold together.
-	FilterValues = Limit{"filter values", 100}
+	FilterValues = Limit{"filter values", 1000}
 	// FilterRows is the rows a statement of a table's index's Where gives.
 	FilterRows = Limit{"filter rows", 100_000}
 	// FilterText is a text a filter keeps or asks for, in bytes.

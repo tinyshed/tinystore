@@ -94,7 +94,7 @@ fn a_union_and_an_intersection_keep_their_documents_in_order() {
 fn a_filter_counts_the_conditions_inside_or_and_and() {
     let many = (0..9).map(|n| eq("c", &n));
     assert_eq!(asked(&[or(many)]).unwrap_err().kind(), crate::ErrorKind::Limit);
-    let values: Vec<i64> = (0..101).collect();
+    let values: Vec<i64> = (0..1001).collect();
     assert_eq!(asked(&[is_in("c", &values)]).unwrap_err().kind(), crate::ErrorKind::Limit);
     assert!(asked(&[and([eq("a", &1), range("b", 1..5)]), or([])]).is_ok());
 }

@@ -624,7 +624,7 @@ Vectors is a vector the program's model gives each document, of these Dimensions
 type Where map[string]any
 ```
 
-Where keeps a search's hits to the documents whose filters pass, as sqldb's where reads a map: each field equal to its value, one of a slice, within a Range, or nil for none, every field named passing. Or and And group them. A search's Where holds 8 conditions and 100 values in its slices at most. For a table's index, a value may be a statement of its database, sqldb.SQL("select user\_id from members where course\_id = ?", id): one of the values its rows give, read in the search's snapshot, 100,000 at most, counting toward no bound on values; on the table's key no filter is needed.
+Where keeps a search's hits to the documents whose filters pass, as sqldb's where reads a map: each field equal to its value, one of a slice, within a Range, or nil for none, every field named passing. Or and And group them. A search's Where holds 8 conditions and 1000 values in its slices at most. For a table's index, a value may be a statement of its database, sqldb.SQL("select user\_id from members where course\_id = ?", id): one of the values its rows give, read in the search's snapshot, 100,000 at most, counting toward no bound on values; on the table's key no filter is needed.
 
 	search.Where{"category": []string{"shoes", "boots"}, "price": search.Range{Gte: 10, Lt: 100}}
 

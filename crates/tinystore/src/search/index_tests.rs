@@ -1911,11 +1911,11 @@ fn a_filter_keeps_a_search_to_its_documents_and_names_what_it_cannot_read() {
     assert_eq!(kind(eq("price", &serde_json::json!({ "a": 1 }))), ErrorKind::Invalid, "an object is no value");
     assert_eq!(kind(or((0..9).map(|n| eq("price", &n)))), ErrorKind::Limit);
     let said = |condition| shop.search("red").filter(condition).run().map(drop).unwrap_err().to_string();
-    let values: Vec<i64> = (0..101).collect();
-    assert!(said(is_in("price", &values)).ends_with("a filter of 101 values, past 100: limit"));
+    let values: Vec<i64> = (0..1001).collect();
+    assert!(said(is_in("price", &values)).ends_with("a filter of 1001 values, past 1000: limit"));
     assert!(said(or((0..9).map(|n| eq("price", &n)))).ends_with("a filter of 9 conditions, past 8: limit"));
-    let many: Vec<i64> = (0..100).collect();
-    assert_eq!(found(is_in("price", &many)), "a", "a list of 100 values joins each value's documents once");
+    let many: Vec<i64> = (0..1000).collect();
+    assert_eq!(found(is_in("price", &many)), "a,b", "a list of 1000 values joins each value's documents once");
     let refused = shop.id("d").without_vector().set(&Article { tags: vec!["x".repeat(300)], ..article("", "") });
     assert_eq!(refused.unwrap_err().kind(), ErrorKind::Limit);
 }

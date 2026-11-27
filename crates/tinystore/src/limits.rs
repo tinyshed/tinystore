@@ -162,7 +162,7 @@ pub const SEARCH_TEXT: Limit = Limit { name: "search text", bound: 1 << 10 };
 pub const FILTER_CONDITIONS: Limit = Limit { name: "filter conditions", bound: 8 };
 /// The values the lists of one search's conditions hold together.
 #[cfg(feature = "search")]
-pub const FILTER_VALUES: Limit = Limit { name: "filter values", bound: 100 };
+pub const FILTER_VALUES: Limit = Limit { name: "filter values", bound: 1000 };
 /// The rows a statement of a `where` gives: a table's index's, or a stream's.
 #[cfg(any(feature = "search", feature = "records"))]
 pub const FILTER_ROWS: Limit = Limit { name: "filter rows", bound: 100_000 };

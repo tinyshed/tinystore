@@ -132,7 +132,7 @@ as a list answers (contract SRCH-17), with no list to send:
   keys. On any other column, the column is one of the index's `filters`.
 - A `null` row passes nothing, and no rows pass nothing.
 - Up to 100,000 rows. Past that the search fails with a limit error, never
-  a shorter set. Its rows don't count toward the 100 values of a `where`.
+  a shorter set. Its rows don't count toward the 1000 values of a `where`.
 - An index of documents has no tables, so it refuses a statement as
   `invalid`.
 
