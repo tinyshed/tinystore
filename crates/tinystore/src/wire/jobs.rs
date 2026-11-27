@@ -17,9 +17,9 @@ use serde_json::value::RawValue;
 
 use super::codec::Message;
 use super::protocol::{
-    Empty, Failure, Handle, JobsAnswer, JobsCalendar, JobsCall, JobsChanged, JobsCounts, JobsHeld, JobsId, JobsJob,
-    JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork,
-    method,
+    Empty, Failure, Handle, JobsAnswer, JobsCalendar, JobsCall, JobsChanged, JobsCounts, JobsGather, JobsGathered,
+    JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx,
+    JobsTxResults, JobsWork, method,
 };
 use super::{Lent, Route};
 #[cfg(feature = "sql")]
@@ -27,9 +27,9 @@ use crate::TxHandle;
 use crate::clock::from_unix_millis;
 use crate::engine::Home;
 use crate::jobs::{
-    Answers, Change, Concurrency, Counts, Dedupe, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue,
-    QueueBuilder, Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded, kept, read_value,
-    run_now_then, start_remote,
+    Answers, Change, Concurrency, Counts, Dedupe, Ended, Filter, Gather, Gathered, Hand, Hears, How, Job, JobCall,
+    Lease, Queue, QueueBuilder, Remote, RemoteWork, Report, Row, Seen, State, Subscription, Which, keep_encoded, kept,
+    read_value, run_now_then, start_remote,
 };
 use crate::limits::{ANSWER_BYTES, Limit, PROGRESS_BYTES};
 use crate::{Calendar, Error, ErrorKind, Store, Transaction, unix_millis};
@@ -68,6 +68,7 @@ pub(crate) fn route(called: u16) -> Route {
         | method::JOBS_SET
         | method::JOBS_UPDATE
         | method::JOBS_UPSERT
+        | method::JOBS_GATHER
         | method::JOBS_CANCEL
         | method::JOBS_RUN_NOW => Route::Submit,
         _ => Route::Worker,
@@ -152,6 +153,9 @@ pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnO
             Err(failure) => done(Err(failure)),
         };
     }
+    if called == method::JOBS_GATHER {
+        return gather_then(handles, body, done);
+    }
     let change = match called {
         method::JOBS_ADD => Change::Add,
         method::JOBS_SET => Change::Set,
@@ -191,6 +195,10 @@ pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body
             )?;
             Ok(if called == method::JOBS_SET { Empty {}.encode() } else { JobsChanged { changed }.encode() })
         }
+        method::JOBS_GATHER => {
+            let (call, gather) = gather_of(JobsGather::decode(body)?)?;
+            Ok(gathered_of(on_job(handles, call, Some(tx), |job, value| job.gather(&value, gather))?).encode())
+        }
         method::JOBS_CANCEL => {
             let id = JobsId::decode(body)?;
             let changed = handles.opened(id.handle)?.queue.cancel_in(&which_of(&id)?, Some(tx))?;
@@ -203,6 +211,35 @@ pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body
         }
         other => Err(Failure::invalid(format!("method {other:#06x} is not a queue's call inside a transaction"))),
     }
+}
+
+/// Queues a gather and returns; `done` gets what it did on the thread that
+/// commits it.
+fn gather_then(handles: &Handles, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    let mut done = Some(done);
+    let queued = JobsGather::decode(body).and_then(gather_of).and_then(|(call, gather)| {
+        on_job(handles, call, None, |job, value| {
+            let done = done.take().expect("a gather is queued once");
+            job.gathering(&value, gather).submit(move |gathered| {
+                done(gathered.map(|gathered| gathered_of(gathered).encode()).map_err(Failure::from));
+            });
+            Ok(())
+        })
+    });
+    if let (Err(failure), Some(done)) = (queued, done) {
+        done(Err(failure));
+    }
+}
+
+/// A gather's call and how it gathers, as its message gives them.
+fn gather_of(asked: JobsGather) -> Result<(JobsCall, Gather), Failure> {
+    let call = asked.call.ok_or_else(|| Failure::invalid("a gather takes its call: the id and the list"))?;
+    let gather = Gather::settle(span(asked.settle));
+    Ok((call, asked.max.map_or(gather, |max| gather.max(span(max)))))
+}
+
+fn gathered_of(gathered: Gathered) -> JobsGathered {
+    JobsGathered { added: gathered.added, count: gathered.count, at: unix_millis(gathered.at) }
 }
 
 /// A job's add that a database's batch carries, for a queue kept in its

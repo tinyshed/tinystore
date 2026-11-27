@@ -5,9 +5,9 @@ use crate::pipe::{Connect, Pipe};
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, JobsAnswer, JobsCalendar, JobsCall, JobsChanged, JobsCounts, JobsHeld, JobsId, JobsJob,
-    JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork,
-    method,
+    Empty, Handle, Hello, JobsAnswer, JobsCalendar, JobsCall, JobsChanged, JobsCounts, JobsGather, JobsGathered,
+    JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp, JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx,
+    JobsTxResults, JobsWork, method,
 };
 use crate::{Options, Store};
 
@@ -562,6 +562,26 @@ fn a_client_upserts_a_job_alone_and_in_a_transaction() {
     let nameless = JobsCall { id: None, ..poll };
     let refused = client.call::<JobsChanged>(method::JOBS_UPSERT, &nameless).unwrap_err();
     assert_eq!(refused.code, "invalid", "{}", refused.message);
+}
+
+// contract: JOB-22
+#[test]
+fn a_client_gathers_items_into_one_job_each_kept_as_it_came_and_a_value_no_list_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "notify-batch");
+    let gather =
+        |value: &str| JobsGather { call: Some(job(handle, "grades:7", value)), settle: 300_000, max: Some(3_600_000) };
+    let first: JobsGathered = client.call(method::JOBS_GATHER, &gather(r#"[{"course":1}]"#)).unwrap();
+    let second: JobsGathered = client.call(method::JOBS_GATHER, &gather("[2.50]")).unwrap();
+    assert_eq!((first.added, first.count, second.added, second.count), (true, 1, false, 2));
+    let kept = get(&mut client, handle, "grades:7");
+    assert_eq!((kept.value.as_deref(), kept.at), (Some(r#"[{"course":1},2.50]"#), Some(second.at)));
+    let refused = client.call::<JobsGathered>(method::JOBS_GATHER, &gather(r#"{"course":3}"#)).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+    assert!(refused.message.contains("grades:7"), "{}", refused.message);
+    let callless = JobsGather { call: None, ..gather("[]") };
+    assert_eq!(client.call::<JobsGathered>(method::JOBS_GATHER, &callless).unwrap_err().code, "invalid");
 }
 
 // contract: JOB-19

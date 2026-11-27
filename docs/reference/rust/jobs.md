@@ -202,6 +202,26 @@ added or changed anything: a job that already was so is not written,
 so it is cheap to call on every request. A done job its dedupe holds
 is left alone, `false`, as `add` leaves it.
 
+### JobCall.gather
+
+```rust
+pub fn gather(self, items: &V, gather: Gather) -> Result<Gathered>
+```
+
+Gathers `items`, a JSON list, into the id's job: a job scheduled or
+waiting takes them after its own, in the order they came, and is due
+`settle` after this gather, never later than `max` after the gather
+that started it. With no job there, it adds one of these items; a
+running one runs on with what it read, and the items gathered
+meanwhile are its next run's alone once it ends well, at their settle
+time, follow its own in its retry, and are a job of their own under
+the id once it fails for good. `count` is what the next run takes. A done job
+its dedupe holds keeps the id, and the gather adds nothing, `count` 0,
+as `add` would; a failed one gives the id up, as to `add`. A job that
+repeats, or a value that is not a list there or here, is `invalid`; a
+list past a job's bound a `limit`. A gather needs an id, and its time
+is its settle's: `at`, `delay` and a repeat are refused beside it.
+
 ### JobCall.update
 
 ```rust
@@ -232,6 +252,45 @@ pub fn calendar(unit: Calendar, zone: &str) -> Dedupe
 
 Until the end of the local `unit` the job was done in, in `zone`, an
 IANA name, `"UTC"` among them.
+
+## Gather
+
+```rust
+pub struct Gather { /* private fields */ }
+```
+
+How a gather waits: `settle` after the last item, and never past `max`
+after the first; `Gather::settle(5 * MINUTE).max(HOUR)`.
+
+### Gather.settle
+
+```rust
+pub fn settle(span: Duration) -> Gather
+```
+
+The job runs `span` after the last gather under its id.
+
+### Gather.max
+
+```rust
+pub fn max(self, span: Duration) -> Gather
+```
+
+The job runs at the latest `span` after the gather that started it,
+however many follow.
+
+## Gathered
+
+```rust
+pub struct Gathered {
+    pub added: bool,
+    pub count: u64,
+    pub at: SystemTime,
+}
+```
+
+What a gather did: whether it started the job, how many items the job
+holds now, and when it is due.
 
 ## Maintenance
 
@@ -386,6 +445,16 @@ pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
 Adds the job under `id` with this value, or brings the one there to
 it, its time, attempts and steps as they were, and says whether it
 added or changed anything; see `JobCall::upsert`.
+
+### Queue.gather
+
+```rust
+pub fn gather(&self, id: impl AsRef<str>, items: &V, gather: Gather) -> Result<Gathered>
+```
+
+Gathers `items`, a list, into the job under `id`, which runs `settle`
+after the last gather and never later than `max` after the first; see
+`JobCall::gather`.
 
 ### Queue.cancel
 
@@ -1087,6 +1156,15 @@ pub fn update(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
 pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> Result<bool>
 ```
 
+### TxQueue.gather
+
+```rust
+pub fn gather(&self, id: impl AsRef<str>, items: &V, gather: Gather) -> Result<Gathered>
+```
+
+Gathers items into the job under `id`, as `Queue::gather` does, once
+the transaction commits.
+
 ### TxQueue.cancel
 
 ```rust
@@ -1340,6 +1418,19 @@ Adds the job when its id is free, or brings the one there to this
 call, and says whether it added or changed anything; see
 `jobs::JobCall::upsert`.
 
+### aio::jobs::JobCall.gather
+
+```rust
+pub fn gather(
+    self,
+    items: &V,
+    gather: Gather,
+) -> impl Future<Output = Result<Gathered>> + Send + 'static
+```
+
+Gathers `items` into the id's job, and says what it did; see
+`jobs::JobCall::gather`. Checked now, queued at the first poll.
+
 ### aio::jobs::JobCall.adding
 
 ```rust
@@ -1417,6 +1508,21 @@ pub fn upsert(
 
 Adds the job under `id`, or brings the one there to this value, its
 time, attempts and steps as they were; see `JobCall::upsert`.
+
+### aio::jobs::Queue.gather
+
+```rust
+pub fn gather(
+    &self,
+    id: impl AsRef<str>,
+    items: &V,
+    gather: Gather,
+) -> impl Future<Output = Result<Gathered>> + Send + 'static
+```
+
+Gathers `items`, a list, into the job under `id`, which runs `settle`
+after the last gather and never later than `max` after the first; see
+`jobs::JobCall::gather`.
 
 ### aio::jobs::Queue.cancel
 

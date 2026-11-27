@@ -47,7 +47,7 @@ from ._wire.protocol import (
 from .blobs import Files, FilesOptions, Size, WhenFull, files_open
 from .channels import Channel, TxChannel
 from .errors import InvalidError, OutcomeUnknownError, error_of
-from .jobs import Adding, Backoff, Concurrency, Dedupe, Job, Queue, QueueOptions, adding_in, open_queue
+from .jobs import Adding, Backoff, Concurrency, Dedupe, Gathered, Job, Queue, QueueOptions, Quiet, adding_in, open_queue
 from .kv import Bucket, Parts, bucket_open
 from .records import Appending, Events, TxEvents, appending_in, events_open
 from .search import Fields, Hybrid, KeyboardLayout, TableIndex, Vectors, drop_index, index_open
@@ -1318,6 +1318,10 @@ class TxQueue[T]:
 
     async def update(self, id: str, value: T, **options: Any) -> bool:
         return await self._queue.update(id, value, **options)
+
+    async def gather(self, id: str, items: T, **options: Any) -> Gathered:
+        """Gathers items into the job under id, as queue.gather does, with the transaction."""
+        return await self._queue.gather(id, items, **options)
 
     async def cancel(self, job: Job[T] | str) -> bool:
         return await self._queue.cancel(job)

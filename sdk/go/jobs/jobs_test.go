@@ -540,6 +540,29 @@ func TestAWorkerRunsAsManyHandlersAtOnceAsItsConcurrencySays(t *testing.T) {
 	})
 }
 
+// contract: JOB-22, JOB-23
+func TestGatherAppendsWhatArrivesUnderOneIDToOneJobDueSettleAfterTheLast(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		batch := ways.Must(jobs.OpenQueue[[]int](store, "notify-batch"))
+		first := ways.Must(batch.Gather(ctx, "grades:7", []int{1}, jobs.Settle(5*time.Minute).Max(time.Hour)))
+		time.Sleep(20 * time.Millisecond)
+		second := ways.Must(batch.Gather(ctx, "grades:7", []int{2}, jobs.Settle(5*time.Minute).Max(time.Hour)))
+		if !first.Added || first.Count != 1 || second.Added || second.Count != 2 || !second.At.After(first.At) || second.At.Location() != time.UTC {
+			t.Fatalf("gathered %+v then %+v", first, second)
+		}
+		job, _ := ways.Must2(batch.Get(ctx, "grades:7"))
+		if len(job.Value) != 2 || job.Value[0] != 1 || job.Value[1] != 2 || !job.At.Equal(second.At) {
+			t.Fatalf("one job of both %+v", job)
+		}
+		one := ways.Must(jobs.OpenQueue[int](store, "notify-one"))
+		ways.Must(one.Add(ctx, 1, jobs.ID("one")))
+		if _, err := one.Gather(ctx, "one", 2, jobs.Settle(time.Minute)); !errors.Is(err, tinystore.ErrInvalid) {
+			t.Fatalf("a value no list: %v", err)
+		}
+	})
+}
+
 // contract: JOB-17
 func TestUpsertAddsAJobOrBringsTheOneThereToTheCallAndKeepsItsTime(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {

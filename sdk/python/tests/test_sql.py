@@ -620,6 +620,28 @@ async def test_a_bucket_and_a_queue_opened_from_the_database_commit_with_its_row
     assert not await store.bucket("sessions").has("t-1")
 
 
+# contract: JOB-22
+async def test_a_gather_into_the_databases_queue_commits_with_its_rows(app: tinystore.Database) -> None:
+    batch = app.queue("notify-batch", list[int])
+
+    async def declined(tx: tinystore.SqlTx) -> None:
+        gathered = await tx.with_(batch).gather("grades:7", [1], settle="5m")
+        assert gathered.added and gathered.count == 1
+        raise RuntimeError("declined")
+
+    with pytest.raises(RuntimeError, match="declined"):
+        await app.tx(declined)
+    assert await batch.get("grades:7") is None
+
+    async def placed(tx: tinystore.SqlTx) -> None:
+        await tx.with_(batch).gather("grades:7", [2], settle="5m")
+        assert (await tx.with_(batch).gather("grades:7", [3], settle="5m")).count == 2
+
+    await app.tx(placed)
+    job = await batch.get("grades:7")
+    assert job is not None and job.value == [2, 3]
+
+
 # contract: KV-14
 async def test_an_update_of_a_bucket_the_database_keeps_keeps_both_changes_and_runs_inside_its_transaction(
     app: tinystore.Database,

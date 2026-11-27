@@ -287,6 +287,79 @@ func (q *Queue[T]) Upsert(ctx context.Context, id string, value T, opts ...SetOp
 	return q.changed(ctx, wire.MethodJobsUpsert, value, o)
 }
 
+// Settling is how a gather waits: Settle after the last gather under an id,
+// and, with Max, never later than that after the gather that started it.
+type Settling struct {
+	settle time.Duration
+	max    *time.Duration
+}
+
+// Settle makes a gathered job run d after the last gather under its id.
+func Settle(d time.Duration) Settling { return Settling{settle: d} }
+
+// Max makes a gathered job run at the latest d after the gather that started it.
+func (s Settling) Max(d time.Duration) Settling { s.max = &d; return s }
+
+// Gathered is what a gather did: whether it started the job, how many items
+// the job holds now, and when it is due. Count is 0 when a done job its
+// dedupe holds keeps the id, and nothing was gathered.
+type Gathered struct {
+	Added bool
+	Count int
+	At    time.Time
+}
+
+// Gather appends items, a slice, to the list of the job under id: a job
+// scheduled or waiting takes them after its own, in the order they came, and
+// is due Settle after this gather, never later than Max after the gather that
+// started it. With no job there it adds one of these items; a running one
+// runs on with what it read, and its next run takes only what is gathered
+// meanwhile, at its settle time, once it ends well; a retry takes both, and a
+// failure for good leaves the gathered ones a job of their own. A done job its
+// dedupe holds keeps the id; a failed one gives it up, as to Add. A value that is no list, there or here,
+// a job that repeats, or At, Delay or a repeat among opts is an Invalid
+// error. It answers what it did, which the store's transaction knows only at
+// its commit: inside one it is refused.
+//
+//	gathered, err := batch.Gather(ctx, "grades:7", []Notice{{Course: 1}}, jobs.Settle(5*time.Minute).Max(time.Hour))
+func (q *Queue[T]) Gather(ctx context.Context, id string, items T, settling Settling, opts ...SetOption) (Gathered, error) {
+	if q.err != nil {
+		return Gathered{}, q.err
+	}
+	if q.tx != nil {
+		return Gathered{}, core.Errorf(core.Invalid, "%s: a gather answers what it did: gather outside the transaction", q.describe)
+	}
+	o := jobOptions{id: &id}
+	for _, opt := range opts {
+		opt.set(&o)
+	}
+	call, err := q.callOf(items, o)
+	if err != nil {
+		return Gathered{}, err
+	}
+	asked := wire.JobsGather{Call: &call}
+	if asked.Settle, err = core.Millis(settling.settle, "a gather's settle"); err != nil {
+		return Gathered{}, err
+	}
+	if asked.Max, err = millis(settling.max, "a gather's max"); err != nil {
+		return Gathered{}, err
+	}
+	answer, err := q.call(ctx, wire.MethodJobsGather, func(handle uint64) []byte {
+		c, g := call, asked
+		c.Handle = handle
+		g.Call = &c
+		return wire.Encode(&g)
+	}, core.Writing)
+	if err != nil {
+		return Gathered{}, err
+	}
+	var gathered wire.JobsGathered
+	if err := decode(answer, &gathered); err != nil {
+		return Gathered{}, err
+	}
+	return Gathered{Added: gathered.Added, Count: int(gathered.Count), At: core.Moment(gathered.At)}, nil
+}
+
 func (q *Queue[T]) changed(ctx context.Context, method uint16, value T, o jobOptions) (bool, error) {
 	call, err := q.callOf(value, o)
 	if err != nil {

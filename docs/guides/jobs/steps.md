@@ -60,7 +60,9 @@ let worker = agents.work(|question: Question, run| -> Result<(), AppError> {
   `tool:2`.
 - A job that ends, done, failed or cancelled, takes its steps with it, and a
   repeat's next time starts without them. A job that a `set` or an `update`
-  gives a new value while it waits for a retry loses them too.
+  gives a new value while it waits for a retry loses them too, and so does
+  a run whose list a [gather](gather.md) grew while it ran: its retry runs
+  its steps again on the whole list.
 - Go's is `jobs.Step(ctx, run, name, fn)`, a function, because the answer's
   type is the step's.
 

@@ -4065,6 +4065,130 @@ impl Message for JobsChanged {
     }
 }
 
+/// A gather: the call's value, a JSON list, appended to the list of the job
+/// under its id, which runs settle after the last gather and never later
+/// than max after the gather that started it.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsGather {
+    /// Its id, its list, its group and options; no at, delay or repeat.
+    pub(crate) call: Option<JobsCall>,
+    /// Milliseconds.
+    pub(crate) settle: u64,
+    /// Milliseconds.
+    pub(crate) max: Option<u64>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsGather {
+    const NAME: &'static str = "jobs.Gather";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.call = Some(JobsCall::read(r)?),
+                2 => message.settle = codec::uint(r, "settle")?,
+                3 => message.max = Some(codec::uint(r, "max")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(call) = &self.call {
+            map.field(out, 1);
+            codec::write_message(out, call);
+        }
+        if self.settle != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.settle);
+        }
+        if let Some(max) = &self.max {
+            map.field(out, 3);
+            codec::write_uint(out, max);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.call.as_ref().map_or(0, |call| 1 + call.size())
+            + 10
+            + self.max.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.call.is_none()
+            && self.settle == 0
+            && self.max.is_none()
+    }
+}
+
+/// What a gather did: whether it started the job, the items the job holds
+/// now, and when it is due; a done job its dedupe holds gathers nothing,
+/// count 0.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsGathered {
+    pub(crate) added: bool,
+    pub(crate) count: u64,
+    /// Unix milliseconds.
+    pub(crate) at: i64,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsGathered {
+    const NAME: &'static str = "jobs.Gathered";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.added = codec::bool(r, "added")?,
+                2 => message.count = codec::uint(r, "count")?,
+                3 => message.at = codec::int(r, "at")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.added {
+            map.field(out, 1);
+            codec::write_bool(out, &self.added);
+        }
+        if self.count != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.count);
+        }
+        if self.at != 0 {
+            map.field(out, 3);
+            codec::write_int(out, &self.at);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.added
+            && self.count == 0
+            && self.at == 0
+    }
+}
+
 /// A job as its queue holds it.
 #[cfg(feature = "jobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -14387,6 +14511,9 @@ pub(crate) mod method {
     /// were: a schedule's handle alone.
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_RUN_NOW: u16 = 0x0210;
+    /// Gathers what arrives under one id into one job: see jobs.Gather.
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_GATHER: u16 = 0x0211;
     #[cfg(feature = "kv")]
     pub(crate) const KV_BUCKET_OPEN: u16 = 0x0101;
     #[cfg(feature = "kv")]
@@ -14673,6 +14800,8 @@ pub(crate) mod method {
             JOBS_UPSERT => Some(Access::Write),
             #[cfg(feature = "jobs")]
             JOBS_RUN_NOW => Some(Access::Write),
+            #[cfg(feature = "jobs")]
+            JOBS_GATHER => Some(Access::Write),
             #[cfg(feature = "kv")]
             KV_BUCKET_OPEN => Some(Access::Read),
             #[cfg(feature = "kv")]
@@ -14940,6 +15069,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("jobs.upsert", 0x020f, "call"),
     #[cfg(feature = "jobs")]
     ("jobs.runNow", 0x0210, "call"),
+    #[cfg(feature = "jobs")]
+    ("jobs.gather", 0x0211, "call"),
     #[cfg(feature = "kv")]
     ("kv.bucket.open", 0x0101, "call"),
     #[cfg(feature = "kv")]
@@ -15229,6 +15360,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "jobs.Id" => JobsId::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
         "jobs.Changed" => JobsChanged::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "jobs")]
+        "jobs.Gather" => JobsGather::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "jobs")]
+        "jobs.Gathered" => JobsGathered::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
         "jobs.Job" => JobsJob::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]

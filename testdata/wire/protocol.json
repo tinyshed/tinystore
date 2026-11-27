@@ -1986,6 +1986,100 @@
     },
     {
       "fields": {
+        "call": {
+          "fields": {
+            "at": {
+              "int": "1790000000000"
+            },
+            "cron": {
+              "str": "cron"
+            },
+            "dedupe": {
+              "uint": "1500"
+            },
+            "dedupeCalendar": {
+              "fields": {
+                "calendar": {
+                  "str": "calendar"
+                },
+                "timeZone": {
+                  "str": "timeZone"
+                }
+              }
+            },
+            "delay": {
+              "uint": "1500"
+            },
+            "every": {
+              "uint": "1500"
+            },
+            "expiresAt": {
+              "int": "1790000000000"
+            },
+            "group": {
+              "str": "group"
+            },
+            "handle": {
+              "uint": "107"
+            },
+            "id": {
+              "str": "id"
+            },
+            "keep": {
+              "uint": "1500"
+            },
+            "timeZone": {
+              "str": "timeZone"
+            },
+            "ttl": {
+              "uint": "1500"
+            },
+            "value": {
+              "str": "{\"a\":1}"
+            }
+          }
+        },
+        "max": {
+          "uint": "1500"
+        },
+        "settle": {
+          "uint": "1500"
+        }
+      },
+      "hex": "83018e016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650acd05dc0b8201a863616c656e64617202a874696d655a6f6e650ccd05dc0dcf000001a0c4506c000ecd05dc02cd05dc03cd05dc",
+      "message": "jobs.Gather",
+      "name": "jobs.Gather with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Gather",
+      "name": "jobs.Gather with no field"
+    },
+    {
+      "fields": {
+        "added": {
+          "bool": true
+        },
+        "at": {
+          "int": "1790000000000"
+        },
+        "count": {
+          "uint": "207"
+        }
+      },
+      "hex": "8301c302cccf03cf000001a0c4506c00",
+      "message": "jobs.Gathered",
+      "name": "jobs.Gathered with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Gathered",
+      "name": "jobs.Gathered with no field"
+    },
+    {
+      "fields": {
         "ahead": {
           "uint": "707"
         },
@@ -7845,6 +7939,7 @@
     "jobs.add": 515,
     "jobs.cancel": 518,
     "jobs.counts": 526,
+    "jobs.gather": 529,
     "jobs.get": 519,
     "jobs.keep": 523,
     "jobs.list": 520,

@@ -91,6 +91,10 @@ export const methods = {
 	 * were: a schedule's handle alone.
 	 */
 	'jobs.runNow': 0x0210,
+	/**
+	 * Gathers what arrives under one id into one job: see jobs.Gather.
+	 */
+	'jobs.gather': 0x0211,
 	'kv.bucket.open': 0x0101,
 	'kv.get': 0x0102,
 	'kv.has': 0x0103,
@@ -4280,6 +4284,123 @@ export const JobsChanged = message(
 			}
 			r.leave()
 			return { changed: $changed }
+		},
+	},
+)
+
+/**
+ * A gather: the call's value, a JSON list, appended to the list of the job
+ * under its id, which runs settle after the last gather and never later
+ * than max after the gather that started it.
+ */
+export const JobsGather = message(
+	'jobs.Gather',
+	{
+		/** its id, its list, its group and options; no at, delay or repeat */
+		call: [1, JobsCall],
+		settle: [2, uint],
+		max: [3, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.call !== undefined) {
+				w.field(1)
+				JobsCall.write(w, v.call)
+				n++
+			}
+			if (v.settle !== undefined) {
+				w.field(2)
+				w.uint(v.settle)
+				n++
+			}
+			if (v.max !== undefined) {
+				w.field(3)
+				w.uint(v.max)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $call: Read<typeof JobsCall.fields> | undefined
+			let $settle: number | undefined
+			let $max: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$call = JobsCall.read(r)
+						break
+					case 2:
+						$settle = r.uint()
+						break
+					case 3:
+						$max = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { call: $call, settle: $settle, max: $max }
+		},
+	},
+)
+
+/**
+ * What a gather did: whether it started the job, the items the job holds
+ * now, and when it is due; a done job its dedupe holds gathers nothing,
+ * count 0.
+ */
+export const JobsGathered = message(
+	'jobs.Gathered',
+	{
+		added: [1, bool],
+		count: [2, uint],
+		at: [3, int],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.added !== undefined) {
+				w.field(1)
+				w.bool(v.added)
+				n++
+			}
+			if (v.count !== undefined) {
+				w.field(2)
+				w.uint(v.count)
+				n++
+			}
+			if (v.at !== undefined) {
+				w.field(3)
+				w.int(v.at)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $added: boolean | undefined
+			let $count: number | undefined
+			let $at: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$added = r.bool()
+						break
+					case 2:
+						$count = r.uint()
+						break
+					case 3:
+						$at = r.int()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { added: $added, count: $count, at: $at }
 		},
 	},
 )

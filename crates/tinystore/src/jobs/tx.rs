@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::call::{Asked, JobCall};
+use super::gather::{Gather, Gathered};
 use super::queue::Queue;
 use super::read::{self, Job, JobRef};
 use crate::transaction::sealed::Sealed;
@@ -55,6 +56,12 @@ where
 
     pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> Result<bool> {
         self.queue.upsert_asked(Asked::with_id(id.as_ref()), value, Some(self.tx))
+    }
+
+    /// Gathers items into the job under `id`, as [`Queue::gather`] does, once
+    /// the transaction commits.
+    pub fn gather(&self, id: impl AsRef<str>, items: &V, gather: Gather) -> Result<Gathered> {
+        self.queue.gather_asked(Asked::with_id(id.as_ref()), items, gather, Some(self.tx))
     }
 
     /// Takes the job under an id, or a job a page gave, as [`Queue::cancel`]

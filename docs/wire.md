@@ -646,6 +646,7 @@ its name; every other call carries it.
 | `0x020e` | jobs.counts        | read  | `Handle`            | `jobs.Counts`                          |
 | `0x020f` | jobs.upsert        | write | `jobs.Call`         | `jobs.Changed`                         |
 | `0x0210` | jobs.runNow        | write | `Handle`            | `Empty`                                |
+| `0x0211` | jobs.gather        | write | `jobs.Gather`       | `jobs.Gathered`                        |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/jobs.wire`. A `jobs.work` stream hands the

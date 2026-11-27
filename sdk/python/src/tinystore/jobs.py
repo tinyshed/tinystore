@@ -38,6 +38,8 @@ from ._wire.protocol import (
     JobsCall,
     JobsChanged,
     JobsCounts,
+    JobsGather,
+    JobsGathered,
     JobsHeld,
     JobsId,
     JobsJob,
@@ -490,6 +492,18 @@ def job_fields(
 
 
 @dataclass(frozen=True, slots=True)
+class Gathered:
+    """What a gather did: whether it started the job, the items it holds now, and when it is due.
+
+    ``count`` is 0 when a done job its dedupe holds keeps the id, and nothing was gathered.
+    """
+
+    added: bool
+    count: int
+    at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class Dedupe:
     """Holds a done job's id until the local day, week or month it was done in ends, in its zone.
 
@@ -706,6 +720,46 @@ class Queue[T]:
         )
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.upsert", fields)
+
+    async def gather(
+        self,
+        id: str,
+        items: T,
+        *,
+        settle: Duration,
+        max: Duration | None = None,
+        group: str | None = None,
+        dedupe: Duration | Dedupe | None = None,
+        keep: Duration | None = None,
+        ttl: Duration | None = None,
+        expires_at: datetime | None = None,
+    ) -> Gathered:
+        """Gathers items, a list, into the job under id, which runs settle after the last gather.
+
+        A job scheduled or waiting takes them after its own, in the order they
+        came, and is due settle after this gather, never later than max after
+        the gather that started it. With no job there it adds one of these
+        items; a running one runs on with what it read, and its next run takes
+        only what is gathered meanwhile, at its settle time, once it ends well; a
+        retry takes both, and a failure for good leaves the gathered ones a job of
+        their own. A done job its dedupe holds keeps the id, count 0; a failed one
+        gives it up, as to
+        add. A value that is no list, there or here, or a job that repeats, is
+        InvalidError::
+
+            batch = store.queue("notify-batch", list[Notice])
+            gathered = await batch.gather("grades:7", [Notice(course=1)], settle="5m", max="1h")
+        """
+        own = job_fields(group=group, dedupe=dedupe, keep=keep, ttl=ttl, expires_at=expires_at)
+        call = {**own, "id": id, "value": self._source.encode(items)}
+        asked = {"settle": ms(settle, "a gather's settle"), "max": None if max is None else ms(max, "a gather's max")}
+        body = await self._source.call(
+            "jobs.gather", lambda h: JobsGather.encode(asked, call={**call, "handle": h}), "write"
+        )
+        gathered = JobsGathered.decode(body)
+        return Gathered(
+            added=gathered.get("added", False), count=gathered.get("count", 0), at=moment(gathered.get("at", 0))
+        )
 
     async def cancel(self, id: Job[T] | str) -> bool:
         """Takes a job, whatever its state, and says whether it was there.

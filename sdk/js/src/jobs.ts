@@ -21,6 +21,8 @@ import {
 	JobsCall,
 	JobsChanged,
 	JobsCounts,
+	JobsGather,
+	JobsGathered,
 	JobsHeld,
 	JobsId,
 	JobsJob,
@@ -103,6 +105,32 @@ export interface JobOptions {
 export interface AddOptions extends JobOptions {
 	/** the job's id, 1 to 1024 bytes: what finds it again, and adds it once */
 	id?: string | undefined
+}
+
+/** How a gather waits, and the options of its own a job it adds or changes takes. */
+export interface GatherOptions {
+	/** the job runs this long after the last gather under its id */
+	settle: Duration
+	/** and never later than this long after the gather that started its list */
+	max?: Duration | undefined
+	/** the group whose running jobs the queue's concurrency.group bounds */
+	group?: string | undefined
+	/** how long this job holds its id once done, in the place of its queue's dedupe */
+	dedupe?: Dedupe | undefined
+	/** how long this job is kept once it failed for good, in the place of its queue's: '0s' not at all */
+	keep?: Duration | undefined
+	/** it leaves its queue this long after its last write unless written again */
+	ttl?: Duration | undefined
+	/** it leaves its queue at this time; not beside ttl */
+	expiresAt?: Time | undefined
+}
+
+/** What a gather did: whether it started the job, the items it holds now, and when it is due. */
+export interface Gathered {
+	added: boolean
+	/** 0 when a done job its dedupe holds keeps the id, and nothing was gathered */
+	count: number
+	at: Date
 }
 
 /** done while dedupe keeps its id; cancelled only a watcher sees */
@@ -507,6 +535,24 @@ function callOf<T>(
 	return source.via.call(source.openMethod, source.open, method, body, idempotence)
 }
 
+async function gatherInto<T>(
+	source: Source<T>,
+	id: string,
+	items: T,
+	options: GatherOptions,
+): Promise<Gathered> {
+	const { settle, max, ...own } = options
+	const call = { ...jobFields(own), id, value: source.values.encode(items) }
+	const body = await callOf(
+		source,
+		methods['jobs.gather'],
+		handle => JobsGather.encode({ call: { ...call, handle }, settle: ms(settle), max: msOf(max) }),
+		'write',
+	)
+	const { added, count, at } = JobsGathered.decode(body)
+	return { added: added === true, count: count ?? 0, at: new Date(at ?? 0) }
+}
+
 async function getJob<T>(source: Source<T>, id: string): Promise<Job<T> | undefined> {
 	const body = await callOf(
 		source,
@@ -813,6 +859,31 @@ export class Queue<T> {
 	}
 
 	/**
+	 * Gathers items into the job under id, whose value is a list: a job
+	 * scheduled or waiting takes them after its own, in the order they came,
+	 * and is due settle after this gather, never later than max after the
+	 * gather that started it. With no job there it adds one of these items;
+	 * a running one runs on with what it read, and its next run takes only
+	 * what is gathered meanwhile, at its settle time, once it ends well; a
+	 * retry takes both, and a failure for good leaves the gathered ones a job
+	 * of their own. A done job its dedupe holds keeps the id, count 0; a
+	 * failed one gives it up, as to add. A
+	 * value that is no list, there or here, or a job that repeats, is
+	 * InvalidError. It compiles only for a queue whose value is a list.
+	 *
+	 *     const batch = store.queue<Notice[]>('notify-batch')
+	 *     const { added, count, at } = await batch.gather('grades:7', [{ course: 1 }], { settle: '5m', max: '1h' })
+	 */
+	async gather<I>(
+		this: Queue<I[]>,
+		id: string,
+		items: I[],
+		options: GatherOptions,
+	): Promise<Gathered> {
+		return gatherInto(this.#source, id, items, options)
+	}
+
+	/**
 	 * Takes a job, whatever its state, and says whether it was there: the job
 	 * under an id, or a job a list gave, by its id or, for one without, by the
 	 * row it was listed from. A job retried, run again for its repeat or
@@ -953,6 +1024,11 @@ export class TxQueue<T> {
 
 	upsert(id: string, value: T, options: JobOptions = {}): Promise<boolean> {
 		return this.#queue.upsert(id, value, options)
+	}
+
+	/** Gathers items into the job under id, as `queue.gather` does, with the transaction. */
+	gather<I>(this: TxQueue<I[]>, id: string, items: I[], options: GatherOptions): Promise<Gathered> {
+		return this.#queue.gather(id, items, options)
 	}
 
 	cancel(job: Job<T> | string): Promise<boolean> {

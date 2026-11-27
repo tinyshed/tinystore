@@ -63,7 +63,9 @@ const (
 	MethodJobsUpsert = 0x020f
 	// A schedule's one run as soon as a worker is free, its later times as they
 	// were: a schedule's handle alone.
-	MethodJobsRunNow       = 0x0210
+	MethodJobsRunNow = 0x0210
+	// Gathers what arrives under one id into one job: see jobs.Gather.
+	MethodJobsGather       = 0x0211
 	MethodKvBucketOpen     = 0x0101
 	MethodKvGet            = 0x0102
 	MethodKvHas            = 0x0103
@@ -217,6 +219,7 @@ var methodNames = []struct {
 	{"jobs.counts", MethodJobsCounts},
 	{"jobs.upsert", MethodJobsUpsert},
 	{"jobs.runNow", MethodJobsRunNow},
+	{"jobs.gather", MethodJobsGather},
 	{"kv.bucket.open", MethodKvBucketOpen},
 	{"kv.get", MethodKvGet},
 	{"kv.has", MethodKvHas},
@@ -436,6 +439,10 @@ func NewMessage(name string) Message {
 		return &JobsId{}
 	case "jobs.Changed":
 		return &JobsChanged{}
+	case "jobs.Gather":
+		return &JobsGather{}
+	case "jobs.Gathered":
+		return &JobsGathered{}
 	case "jobs.Job":
 		return &JobsJob{}
 	case "jobs.List":
@@ -5076,6 +5083,124 @@ func (m *JobsChanged) Read(r *Reader) {
 // IsZero says whether JobsChanged writes as no field at all.
 func (m JobsChanged) IsZero() bool {
 	return !m.Changed
+}
+
+// JobsGather is the schema's jobs.Gather.
+//
+// A gather: the call's value, a JSON list, appended to the list of the job
+// under its id, which runs settle after the last gather and never later
+// than max after the gather that started it.
+type JobsGather struct {
+	// its id, its list, its group and options; no at, delay or repeat
+	Call   *JobsCall `wire:"1,call"`
+	Settle uint64    `wire:"2,settle"`
+	Max    *uint64   `wire:"3,max"`
+}
+
+func (m JobsGather) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Call != nil {
+		w.Uint(1)
+		m.Call.Write(w)
+		n++
+	}
+	if m.Settle != 0 {
+		w.Uint(2)
+		w.Uint(m.Settle)
+		n++
+	}
+	if m.Max != nil {
+		w.Uint(3)
+		w.Uint(*m.Max)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *JobsGather) Read(r *Reader) {
+	*m = JobsGather{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			var v JobsCall
+			v.Read(r)
+			m.Call = &v
+		case 2:
+			m.Settle = r.Uint()
+		case 3:
+			v := r.Uint()
+			m.Max = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether JobsGather writes as no field at all.
+func (m JobsGather) IsZero() bool {
+	return m.Call == nil &&
+		m.Settle == 0 &&
+		m.Max == nil
+}
+
+// JobsGathered is the schema's jobs.Gathered.
+//
+// What a gather did: whether it started the job, the items the job holds
+// now, and when it is due; a done job its dedupe holds gathers nothing,
+// count 0.
+type JobsGathered struct {
+	Added bool   `wire:"1,added"`
+	Count uint64 `wire:"2,count"`
+	At    int64  `wire:"3,at"`
+}
+
+func (m JobsGathered) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Added {
+		w.Uint(1)
+		w.Bool(m.Added)
+		n++
+	}
+	if m.Count != 0 {
+		w.Uint(2)
+		w.Uint(m.Count)
+		n++
+	}
+	if m.At != 0 {
+		w.Uint(3)
+		w.Int(m.At)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *JobsGathered) Read(r *Reader) {
+	*m = JobsGathered{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Added = r.Bool()
+		case 2:
+			m.Count = r.Uint()
+		case 3:
+			m.At = r.Int()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether JobsGathered writes as no field at all.
+func (m JobsGathered) IsZero() bool {
+	return !m.Added &&
+		m.Count == 0 &&
+		m.At == 0
 }
 
 // JobsJob is the schema's jobs.Job.

@@ -10,10 +10,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::call::{LONGEST_SPAN, in_years};
 use super::dedupe::Dedupe;
+use super::gather;
 use super::policy::Policy;
 use super::repeat::Repeat;
 use super::rows::{self, PARKED_BY, execute};
 use super::state::QueueState;
+use super::values::Kept;
 use crate::sqlite::{query_cached, sql_error};
 use crate::text::fnv1a;
 use crate::{Error, ErrorKind, Result};
@@ -26,7 +28,7 @@ const PARK_AT_MOST: usize = 1000;
 /// A failure as a job keeps it: its text, at most this long.
 const MAX_ERROR: usize = 4096;
 
-const CLAIM_JOBS: &str = "select next, id, key, at, attempt, value, spill, grp, expires
+const CLAIM_JOBS: &str = "select next, id, key, at, attempt, value, spill, grp, expires, taken
     from _tinystore_jobs j
     where queue = ?1 and next <= ?2
         and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
@@ -42,6 +44,11 @@ const TAKE_LEASE: &str =
     on conflict (id) do update set next = excluded.next, until = excluded.until,
         attempt = max(_tinystore_jobs_leases.attempt, excluded.attempt - 1) + 1";
 const LEASE_ATTEMPT: &str = "select attempt from _tinystore_jobs_leases where id = ?1";
+/// A claim of a job a gather came to while a run whose lease ended held it:
+/// this run reads the whole list, so nothing of it is cut off at its end, nor
+/// run once more for the gather's `again`.
+const FORGET_GATHERED: &str =
+    "update _tinystore_jobs set again = null, taken = null where queue = ?1 and next = ?2 and id = ?3";
 const LIVE_LEASES: &str = "select count(*) from _tinystore_jobs_leases where queue = ?1 and until > ?2";
 const RUNNING_IN_GROUPS: &str = "select j.grp, count(*) from _tinystore_jobs_leases l
         join _tinystore_jobs j on j.queue = l.queue and j.next = l.next and j.id = l.id
@@ -60,15 +67,19 @@ const EARLIEST_LEASE: &str = "select min(until) from _tinystore_jobs_leases wher
 const DROP_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1 and attempt = ?2 and next = ?3";
 const DROP_ANY_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1";
 const EXTEND_LEASE: &str = "update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2 and next = ?4";
-const JOB_HELD: &str = "select again, repeat, error, attempt, dedupe, keep, expires from _tinystore_jobs
+const JOB_HELD: &str = "select again, repeat, error, attempt, dedupe, keep, expires, taken from _tinystore_jobs
     where queue = ?1 and next = ?2 and id = ?3";
 const JOB_SPILL: &str = "select spill from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
 /// The spill and the dedupe of a job whose end deletes it: one that neither
 /// repeats nor was asked to run again.
 const DONE_SPILL: &str = "select spill, dedupe from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3
     and again is null and repeat is null";
+/// A gather's latest time stays only for the list gathered while the job ran,
+/// whose run `again` asked; the run that took the list before ends it, and
+/// the count of the items it took goes with it.
 const MOVE_JOB: &str = "update _tinystore_jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7,
-        ran = coalesce(?8, ran), took = coalesce(?9, took)
+        ran = coalesce(?8, ran), took = coalesce(?9, took),
+        latest = case when again is null then null else latest end, taken = null
     where queue = ?1 and next = ?2 and id = ?3";
 /// A job failed for good, kept until ?9 when it has a keep of its own, and
 /// for its queue's when that is null.
@@ -395,6 +406,9 @@ struct DueRow {
     spill: Option<i64>,
     group: Option<String>,
     expires: Option<i64>,
+    /// The leading items of its list a run whose lease ended read, once a
+    /// gather came while that run held it.
+    taken: Option<i64>,
 }
 
 /// Up to `limit` due jobs no live lease holds, in the order of their time.
@@ -411,6 +425,7 @@ fn due(c: &Connection, claiming: &Claiming<'_>, limit: usize) -> Result<Vec<DueR
             spill: row.get(6)?,
             group: row.get(7)?,
             expires: row.get(8)?,
+            taken: row.get(9)?,
         })
     })
 }
@@ -441,6 +456,9 @@ impl Claimed {
                 rows::unpark_one(c, queue.id, group)?;
             }
             return Ok(false);
+        }
+        if row.taken.is_some() {
+            execute(c, FORGET_GATHERED, params![queue.id, row.next, row.id], "a claim: what a gather counted")?;
         }
         let state = LeaseState { until: claiming.until, ..LeaseState::default() };
         self.leases.push(Lease {
@@ -490,7 +508,7 @@ fn abandon(c: &Connection, claiming: &Claiming<'_>, row: &DueRow, attempts: i64)
         run_again(c, queue, (place, &held), (next, Some(cause)), (None, None))?;
         return Ok(false);
     }
-    let ending = Ending { attempts, cause: &cause, ran: (None, None), now: claiming.now };
+    let ending = Ending { attempts, cause: &cause, ran: (None, None), now: claiming.now, forked: false };
     failed_for_good(c, queue, (place, &held), &ending)?;
     Ok(true)
 }
@@ -502,6 +520,8 @@ struct Ending<'a> {
     cause: &'a str,
     ran: (Option<i64>, Option<i64>),
     now: i64,
+    /// Whether a job made of what was gathered while it ran lives on under its id.
+    forked: bool,
 }
 
 /// Keeps a job that failed for good for its own keep or its queue's, or,
@@ -522,10 +542,16 @@ fn failed_for_good(
             .map_err(|error| sql_error("a job failed for good", error))?;
         execute(c, DROP_JOB_ROW, params![queue.id, next, id], "a job failed for good")?;
         rows::drop_spill(c, spilled)?;
-        if let Some(key) = key {
+        if let Some(key) = key
+            && !ending.forked
+        {
             queue.watchers.failed(key, ending.cause);
         }
         return Ok(());
+    }
+    // a failure kept under the id before, that of a job forked from, gives way
+    if let Some(key) = key {
+        rows::drop_failed(c, queue.id, key)?;
     }
     let until = held.keep.map(|keep| ending.now.saturating_add(keep));
     let (ran, took) = ending.ran;
@@ -675,6 +701,7 @@ fn superseded(
     now: i64,
 ) -> Result<Option<Settled>> {
     let error = match how {
+        How::Retry { .. } if held.taken.is_some() => return Ok(None),
         How::Retry { cause, .. } => Some(bounded(cause)),
         How::Snooze { .. } | How::GiveBack => None,
         How::Done | How::Fail { .. } | How::Extend { .. } => return Ok(None),
@@ -720,6 +747,8 @@ struct HeldRow {
     keep: Option<i64>,
     /// When it leaves its queue unless written again.
     expires: Option<i64>,
+    /// The leading items of its list the run read, once a gather came while it ran.
+    taken: Option<i64>,
 }
 
 fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<HeldRow> {
@@ -735,6 +764,7 @@ fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<
                         dedupe: row.get(4)?,
                         keep: row.get(5)?,
                         expires: row.get(6)?,
+                        taken: row.get(7)?,
                     })
                 })
                 .optional()
@@ -747,6 +777,10 @@ fn held(c: &Connection, queue: &QueueState, (next, id, _): Place<'_>) -> Result<
 /// again, to its next time; a job whose id its dedupe or its queue's keeps
 /// leaves its value and last run behind with the id.
 fn done(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, now: i64) -> Result<Settled> {
+    if let Some(taken) = held.taken.filter(|taken| *taken > 0) {
+        let (_, gathered) = gather::split(&rows::value_of(c, queue.id, (lease.next, lease.id))?, taken as u64)?;
+        rows::set_value(c, queue.id, (lease.next, lease.id), &Kept::of(gathered))?;
+    }
     if let Some(next) = next_run(lease.at, held, now) {
         return run_again(c, queue, (lease.place(), held), (next, None), lease.last_run(now));
     }
@@ -793,8 +827,18 @@ fn retry(
         return fail(c, queue, lease, held, cause, now);
     }
     let mut due = at.unwrap_or_else(|| now.saturating_add(backoff(&queue.policy, lease.attempt, lease.id)));
-    if let Some(next) = next_run(lease.at, held, now) {
-        due = due.min(next);
+    match (held.taken, held.again) {
+        // what a gather appended while it ran is retried with it, no earlier than
+        // its settle; the steps answered for the shorter list run again on the whole
+        (Some(_), Some(again)) => {
+            due = due.max(again);
+            rows::drop_steps(c, lease.id)?;
+        }
+        _ => {
+            if let Some(next) = next_run(lease.at, held, now) {
+                due = due.min(next);
+            }
+        }
     }
     if past_term(held, due) {
         end_term(c, queue, lease.place())?;
@@ -815,12 +859,35 @@ fn retry(
 /// to run again, waits for that time instead, its error kept.
 fn fail(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, cause: &str, now: i64) -> Result<Settled> {
     let cause = bounded(cause);
+    if let (Some(taken), Some(again)) = (held.taken, held.again) {
+        return fail_gathered(c, queue, lease, (held, taken, again), (&cause, now));
+    }
     if let Some(next) = next_run(lease.at, held, now) {
         return run_again(c, queue, (lease.place(), held), (next, Some(cause)), lease.last_run(now));
     }
-    let ending = Ending { attempts: lease.attempt, cause: &cause, ran: lease.last_run(now), now };
+    let ending = Ending { attempts: lease.attempt, cause: &cause, ran: lease.last_run(now), now, forked: false };
     failed_for_good(c, queue, (lease.place(), held), &ending)?;
     Ok(Settled { failed: Some(cause), ..Settled::default() })
+}
+
+/// Fails for good a run a gather came during: the failed job keeps the items
+/// the run read, and what was gathered since becomes a job of its own under
+/// the id, due at its settle time, as an add after a failure would make it,
+/// the failure's error shown until its first run ends.
+fn fail_gathered(
+    c: &Connection,
+    queue: &QueueState,
+    lease: &Lease,
+    (held, taken, again): (&HeldRow, i64, i64),
+    (cause, now): (&str, i64),
+) -> Result<Settled> {
+    let place = (lease.next, lease.id);
+    let (read, gathered) = gather::split(&rows::value_of(c, queue.id, place)?, taken as u64)?;
+    rows::set_value(c, queue.id, place, &Kept::of(read))?;
+    rows::fork(c, queue.id, place, (again, rows::next_id(c)?), (&Kept::of(gathered), cause))?;
+    let ending = Ending { attempts: lease.attempt, cause, ran: lease.last_run(now), now, forked: true };
+    failed_for_good(c, queue, (lease.place(), held), &ending)?;
+    Ok(Settled { failed: Some(cause.to_owned()), due: Some(again), ..Settled::default() })
 }
 
 /// When a settled job, whose run was for `at`, runs again without a retry: the

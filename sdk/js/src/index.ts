@@ -83,6 +83,8 @@ export type {
 	Backoff,
 	Concurrency,
 	Dedupe,
+	Gathered,
+	GatherOptions,
 	Handler,
 	Job,
 	JobCounts,

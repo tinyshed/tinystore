@@ -410,7 +410,8 @@ fn a_jobs_file_the_release_before_wrote_opens_and_its_jobs_run_by_their_queues_o
     let back = "drop index _tinystore_jobs_expiring; drop index _tinystore_jobs_failed_by_until;
         alter table _tinystore_jobs drop column dedupe; alter table _tinystore_jobs drop column keep;
         alter table _tinystore_jobs drop column expires; alter table _tinystore_jobs_failed drop column until;
-        delete from _tinystore_migrations where history = 'jobs' and version = 2";
+        alter table _tinystore_jobs drop column latest; alter table _tinystore_jobs drop column taken;
+        delete from _tinystore_migrations where history = 'jobs' and version >= 2";
     let file = crate::sqlite::File::open(&path, crate::sqlite::Config::default()).unwrap();
     let failed = |error| crate::sqlite::sql_error("a test", error);
     file.transaction(|tx| tx.execute_batch(back).map_err(failed)).unwrap();

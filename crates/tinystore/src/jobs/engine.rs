@@ -17,6 +17,7 @@ use crate::{Clock, Error, Result, Store, unix_millis};
 pub(super) const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
     Migration::of(2, "0002_own_options.sql", include_str!("migrations/0002_own_options.sql")),
+    Migration::of(3, "0003_gather.sql", include_str!("migrations/0003_gather.sql")),
 ];
 
 /// jobs' own file in the store's directory.

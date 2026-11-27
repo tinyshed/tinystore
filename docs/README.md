@@ -117,6 +117,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 
 - [Overview](guides/jobs/README.md)
 - [Ids](guides/jobs/ids.md)
+- [Gather](guides/jobs/gather.md)
 - [Schedules and cron](guides/jobs/schedules.md)
 - [Concurrency and rate](guides/jobs/concurrency.md)
 - [Watching a job](guides/jobs/watching.md)

@@ -11,7 +11,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::run::Run;
-use crate::jobs::{self, Change, Concurrency, Counts, Dedupe, Filter, Job, JobRef, Lease, Outcome, Page, Took};
+use crate::jobs::{
+    self, Change, Concurrency, Counts, Dedupe, Filter, Gather, Gathered, Job, JobRef, Lease, Outcome, Page, Took,
+};
 use crate::pool::Pool;
 use crate::{ErrorKind, Result, Transaction, TxHandle};
 
@@ -159,6 +161,18 @@ where
     /// time, attempts and steps as they were; see [`JobCall::upsert`].
     pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
         self.id(id).upsert(value)
+    }
+
+    /// Gathers `items`, a list, into the job under `id`, which runs `settle`
+    /// after the last gather and never later than `max` after the first; see
+    /// [`jobs::JobCall::gather`].
+    pub fn gather(
+        &self,
+        id: impl AsRef<str>,
+        items: &V,
+        gather: Gather,
+    ) -> impl Future<Output = Result<Gathered>> + Send + 'static {
+        self.id(id).gather(items, gather)
     }
 
     /// Takes a job, whatever its state, and says whether it was there: the
@@ -456,6 +470,16 @@ where
     /// [`jobs::JobCall::upsert`].
     pub fn upsert(self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
         self.write(Change::Upsert, "an upsert", value)
+    }
+
+    /// Gathers `items` into the id's job, and says what it did; see
+    /// [`jobs::JobCall::gather`]. Checked now, queued at the first poll.
+    pub fn gather(self, items: &V, gather: Gather) -> impl Future<Output = Result<Gathered>> + Send + 'static {
+        let what = format!("{:?}: a gather", self.queue.queue);
+        let writing = self.call.gathering(items, gather);
+        crate::aio::run::write(&self.queue.pool, what, move |answer| {
+            writing.submit(move |written| answer.send(written))
+        })
     }
 
     /// The blocking call, which the job's add for a database's batch is made

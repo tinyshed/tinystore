@@ -148,6 +148,8 @@ These contracts are what does not.
 - **JOB-19** A job MUST NOT start at or after its term, `ttl` or `expiresAt`, and a repeat MUST end at it.
 - **JOB-20** A job that failed for good MUST be gone once its own `keep`, or its queue's, has passed, and at once for a `keep` of zero.
 - **JOB-21** `runNow` MUST run its schedule once as soon as a worker is free, never beside a run under way, and MUST leave its later times as they were.
+- **JOB-22** Items gathered under one id while its job waits MUST be one job's list, in the order they came, each item's JSON as it came, and none MUST be lost, also across a run: the items gathered while a job runs MUST be the next run's list alone once the run ends well, MUST follow the run's own in its retry, and MUST run as a job of their own under the id once the run fails for good.
+- **JOB-23** A gathered job MUST run `settle` after the last gather under its id, and never later than `max` after the gather that started its list.
 
 ### SQL
 

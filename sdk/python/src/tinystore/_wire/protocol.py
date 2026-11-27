@@ -73,6 +73,8 @@ methods: dict[str, int] = {
     # A schedule's one run as soon as a worker is free, its later times as they
     # were: a schedule's handle alone.
     "jobs.runNow": 0x0210,
+    # Gathers what arrives under one id into one job: see jobs.Gather.
+    "jobs.gather": 0x0211,
     "kv.bucket.open": 0x0101,
     "kv.get": 0x0102,
     "kv.has": 0x0103,
@@ -3440,6 +3442,107 @@ JobsChanged = Message(
     },
     _write_jobs_changed,
     _read_jobs_changed,
+)
+
+
+def _write_jobs_gather(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("call")) is not None:
+        w.uint(1)
+        JobsCall.write(w, x)
+        n += 1
+    if (x := v.get("settle")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    if (x := v.get("max")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_jobs_gather(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["call"] = JobsCall.read(r)
+            case 2:
+                read["settle"] = r.uint()
+            case 3:
+                read["max"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A gather: the call's value, a JSON list, appended to the list of the job
+# under its id, which runs settle after the last gather and never later
+# than max after the gather that started it.
+JobsGather = Message(
+    "jobs.Gather",
+    {
+        # its id, its list, its group and options; no at, delay or repeat
+        "call": (1, JobsCall),
+        "settle": (2, uint),
+        "max": (3, uint),
+    },
+    _write_jobs_gather,
+    _read_jobs_gather,
+)
+
+
+def _write_jobs_gathered(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("added")) is not None:
+        w.uint(1)
+        w.bool(x)
+        n += 1
+    if (x := v.get("count")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    if (x := v.get("at")) is not None:
+        w.uint(3)
+        w.int(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_jobs_gathered(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["added"] = r.bool()
+            case 2:
+                read["count"] = r.uint()
+            case 3:
+                read["at"] = r.int()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# What a gather did: whether it started the job, the items the job holds
+# now, and when it is due; a done job its dedupe holds gathers nothing,
+# count 0.
+JobsGathered = Message(
+    "jobs.Gathered",
+    {
+        "added": (1, bool_),
+        "count": (2, uint),
+        "at": (3, int_),
+    },
+    _write_jobs_gathered,
+    _read_jobs_gathered,
 )
 
 
@@ -12849,6 +12952,8 @@ messages: dict[str, Message] = {
     "jobs.Call": JobsCall,
     "jobs.Id": JobsId,
     "jobs.Changed": JobsChanged,
+    "jobs.Gather": JobsGather,
+    "jobs.Gathered": JobsGathered,
     "jobs.Job": JobsJob,
     "jobs.List": JobsList,
     "jobs.Page": JobsPage,
