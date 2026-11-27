@@ -91,11 +91,15 @@ macro_rules! forget_gathered {
 }
 
 /// An update's job: its value, and what else the update named.
-const UPDATE_JOB: &str = "update _tinystore_jobs
-    set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
+const UPDATE_JOB: &str = concat!(
+    "update _tinystore_jobs
+    set ",
+    forget_gathered!(),
+    ", next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
         dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep), expires = coalesce(?11, expires),
         quiet = coalesce(?12, quiet)
-    where queue = ?1 and next = ?2 and id = ?3";
+    where queue = ?1 and next = ?2 and id = ?3"
+);
 /// A set while the job runs: the value and repeat its next run takes, and when
 /// that run is, which its settlement reads; no gather's latest time holds it.
 const ASK_AGAIN: &str = "update _tinystore_jobs
@@ -126,7 +130,8 @@ const RESHAPE_JOB: &str = concat!(
         repeat = coalesce(?7, repeat), grp = coalesce(?8, grp),
         dedupe = coalesce(?9, dedupe), keep = coalesce(?10, keep), expires = coalesce(?11, expires),
         quiet = coalesce(?12, quiet)
-    where queue = ?1 and next = ?2 and id = ?3";
+    where queue = ?1 and next = ?2 and id = ?3"
+);
 /// A run asked of a job that runs, right after the run under way: its
 /// settlement reads `again`.
 const RUN_AFTER: &str = "update _tinystore_jobs set again = min(coalesce(again, ?4), ?4)
@@ -141,7 +146,7 @@ const DUE_NOW: &str = "update _tinystore_jobs set next = ?4, at = case when atte
 const GATHERING: &str = "select j.next, j.id, j.again, j.repeat, j.spill, j.expires,
         coalesce(j.value, (select s.value from _tinystore_jobs_spilled s where s.id = j.spill)),
         j.latest, j.taken, j.quiet,
-        exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?3)
+        exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?3), j.attempt
     from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
     where k.queue = ?1 and k.key = ?2";
 /// A gather's waiting job: its list, its time, and what else it named; an
@@ -285,7 +290,7 @@ pub(crate) struct Change<'a> {
 }
 
 /// The id and kind of the queue `name`, if it was registered.
-#[cfg(feature = "replication")]
+#[cfg(any(feature = "replication", feature = "wire"))]
 pub(crate) fn find_queue(c: &Connection, name: &str) -> Result<Option<(i64, String)>> {
     c.prepare_cached(QUEUE_NAMED)
         .and_then(|mut select| select.query_row([name], |row| Ok((row.get(0)?, row.get(1)?))).optional())
@@ -371,6 +376,7 @@ pub(crate) fn gathering(c: &Connection, queue: i64, key: &str, now: i64) -> Resu
                         latest: row.get(7)?,
                         taken: row.get(8)?,
                         held: row.get(10)?,
+                        attempt: row.get(11)?,
                     };
                     let quiet = row.get(9)?;
                     Ok((Row { next, id, again, repeat, spill, expires, quiet }, kept))
