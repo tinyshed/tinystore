@@ -29,7 +29,7 @@ use super::open::OpenIndex;
 use super::read::{Prefix, Query};
 #[cfg(feature = "sql")]
 use super::table_index::{ReadRows, TableIndex};
-use crate::{Error, ErrorKind, Result, Store};
+use crate::{Error, Result, Store};
 
 /// The indexes one call asks at most.
 pub(crate) const MOST_AMONG: usize = 32;
@@ -484,7 +484,7 @@ fn found_each<V>(
     for (at, query) in queries.iter_mut().enumerate() {
         if let Some(query) = query.take() {
             match query.and_then(|query| reading.table(&among[at].0, query)) {
-                Err(stopped) if stopped.kind() == ErrorKind::Cancelled => return Err(stopped),
+                Err(stopped) if stopped.kind() == crate::ErrorKind::Cancelled => return Err(stopped),
                 table => found[at] = Some(table),
             }
         }
