@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::dedupe::Dedupe;
+use super::gather::{self, Gather, Gathered, Gathering};
 #[cfg(any(feature = "wire", feature = "sql", feature = "async"))]
 use super::queue::Change;
 use super::queue::Queue;
@@ -174,6 +175,23 @@ where
         self.queue.upsert_asked(self.asked, value, self.tx)
     }
 
+    /// Gathers `items`, a JSON list, into the id's job: a job scheduled or
+    /// waiting takes them after its own, in the order they came, and is due
+    /// `settle` after this gather, never later than `max` after the gather
+    /// that started it. With no job there, it adds one of these items; a
+    /// running one runs on with what it read, and the items gathered
+    /// meanwhile are its next run's alone once it ends well, at their settle
+    /// time, follow its own in its retry, and are a job of their own under
+    /// the id once it fails for good. `count` is what the next run takes. A done job
+    /// its dedupe holds keeps the id, and the gather adds nothing, `count` 0,
+    /// as `add` would; a failed one gives the id up, as to `add`. A job that
+    /// repeats, or a value that is not a list there or here, is `invalid`; a
+    /// list past a job's bound a `limit`. A gather needs an id, and its time
+    /// is its settle's: `at`, `delay` and a repeat are refused beside it.
+    pub fn gather(self, items: &V, gather: Gather) -> Result<Gathered> {
+        self.queue.gather_asked(self.asked, items, gather, self.tx)
+    }
+
     /// Changes the id's job when it is not running: its value, the steps kept
     /// for the old one dropped with it, and its time, group or repeat when the
     /// call names them. Says whether it did: a job that runs, is done or failed,
@@ -186,6 +204,14 @@ where
     #[cfg(feature = "wire")]
     pub(crate) fn write_then(self, change: Change, value: &V, done: impl FnOnce(Result<bool>) + Send + 'static) {
         self.queue.write_then(change, self.asked, value, done);
+    }
+
+    /// The call's gather checked and its value encoded now, queued later; an
+    /// awaited call and the wire's are never made through a transaction.
+    #[cfg(any(feature = "wire", feature = "async"))]
+    pub(crate) fn gathering(self, items: &V, gather: Gather) -> super::queue::GatherWriting {
+        debug_assert!(self.tx.is_none(), "a queued gather is made outside a transaction");
+        self.queue.gathering(self.asked, items, gather)
     }
 
     /// The call's write checked and its value encoded now, queued later; see
@@ -324,6 +350,29 @@ impl Asked {
         self.id.as_deref()
     }
 
+    /// A gather's call checked and its value encoded, as [`Asked::prepare`]
+    /// does, its time the settle's.
+    pub(crate) fn prepare_gather<V: Serialize>(self, items: &V, asked: Gather, now: i64) -> Result<Prepared> {
+        let beside = match (&self.id, &self.when, &self.repeat) {
+            (None, _, _) => Some("a gather needs an id, which names the job it gathers into"),
+            (_, Some(_), _) => Some("a gather's time is its settle's: no at or delay beside it"),
+            (_, _, Some(_)) => Some("a gathered job runs once it settles: no repeat beside it"),
+            _ => None,
+        };
+        if let Some(why) = beside {
+            return Err(Error::invalid(why));
+        }
+        let (settled, latest) = asked.times(now)?;
+        let mut call = self.prepare(items, now)?;
+        let count = gather::count(call.value.bytes())?;
+        call.at = latest.map_or(settled, |latest| latest.min(settled));
+        if !in_years(call.at) {
+            return Err(Error::invalid("a time outside the years 1 to 9999"));
+        }
+        call.gather = Some(Gathering { settled, latest, count });
+        Ok(call)
+    }
+
     /// Checks what was asked and gathers what the write needs, the value
     /// encoded, before the write waits for the writer.
     pub(crate) fn prepare<V: Serialize>(self, value: &V, now: i64) -> Result<Prepared> {
@@ -380,6 +429,7 @@ impl Asked {
             expires,
             ttl,
             value: Kept::of(values::encode(value)?),
+            gather: None,
             now,
         })
     }

@@ -221,6 +221,18 @@ type Counts struct {
 
 Counts is how many jobs a queue holds in each state, from one snapshot; a done job has left it.
 
+## Gathered
+
+```go
+type Gathered struct {
+	Added bool
+	Count int
+	At    time.Time
+}
+```
+
+Gathered is what a gather did: whether it started the job, how many items the job holds now, and when it is due. Count is 0 when a done job its dedupe holds keeps the id, and nothing was gathered.
+
 ## Job
 
 ```go
@@ -359,6 +371,16 @@ func (q *Queue[T]) Counts(ctx context.Context) (Counts, error)
 ```
 
 Counts is how many jobs the queue holds in each state, from one snapshot; it reads no value.
+
+### Queue.Gather
+
+```go
+func (q *Queue[T]) Gather(ctx context.Context, id string, items T, settling Settling, opts ...SetOption) (Gathered, error)
+```
+
+Gather appends items, a slice, to the list of the job under id: a job scheduled or waiting takes them after its own, in the order they came, and is due Settle after this gather, never later than Max after the gather that started it. With no job there it adds one of these items; a running one runs on with what it read, and its next run takes only what is gathered meanwhile, at its settle time, once it ends well; a retry takes both, and a failure for good leaves the gathered ones a job of their own. A done job its dedupe holds keeps the id; a failed one gives it up, as to Add. A value that is no list, there or here, a job that repeats, or At, Delay or a repeat among opts is an Invalid error. It answers what it did, which the store's transaction knows only at its commit: inside one it is refused.
+
+	gathered, err := batch.Gather(ctx, "grades:7", []Notice{{Course: 1}}, jobs.Settle(5*time.Minute).Max(time.Hour))
 
 ### Queue.Get
 
@@ -604,6 +626,32 @@ type SetOption interface {
 ```
 
 SetOption is what a Set or an Update gives besides its id and value: a time, a group, a repeat, and a dedupe or a keep of the job's own.
+
+## Settling
+
+```go
+type Settling struct {
+	// contains filtered or unexported fields
+}
+```
+
+Settling is how a gather waits: Settle after the last gather under an id, and, with Max, never later than that after the gather that started it.
+
+### Settle
+
+```go
+func Settle(d time.Duration) Settling
+```
+
+Settle makes a gathered job run d after the last gather under its id.
+
+### Settling.Max
+
+```go
+func (s Settling) Max(d time.Duration) Settling
+```
+
+Max makes a gathered job run at the latest d after the gather that started it.
 
 ## State
 

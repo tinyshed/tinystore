@@ -95,6 +95,25 @@ for (const way of ways) {
 			expect((await polls.get('group:2'))?.state).toBe('scheduled')
 		})
 
+		// contract: JOB-22, JOB-23
+		test('gather appends what arrives under one id to one job, due settle after the last', async () => {
+			const batch = store.queue<{ course: number }[]>('notify-batch')
+			const first = await batch.gather('grades:7', [{ course: 1 }], { settle: '5m', max: '1h' })
+			await sleep(20)
+			const second = await batch.gather('grades:7', [{ course: 2 }], { settle: '5m', max: '1h' })
+			expect([first.added, first.count, second.added, second.count]).toEqual([true, 1, false, 2])
+			expect(second.at.getTime()).toBeGreaterThan(first.at.getTime())
+			const job = await batch.get('grades:7')
+			expect([job?.value, job?.at]).toEqual([[{ course: 1 }, { course: 2 }], second.at])
+
+			const notes = store.queue<{ course: number }>('notify-one')
+			await notes.add({ course: 1 }, { id: 'one' })
+			// @ts-expect-error a gather compiles only for a queue whose value is a list
+			expect(await caught(notes.gather('one', [{ course: 2 }], { settle: '5m' }))).toBeInstanceOf(
+				InvalidError,
+			)
+		})
+
 		// contract: JOB-19
 		test("a job's term shows, and a job past it is gone with its id free", async () => {
 			const polls = store.queue<{ group: string }>('terms')

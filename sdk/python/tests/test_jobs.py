@@ -50,6 +50,24 @@ async def test_an_id_adds_a_job_once_set_makes_it_whatever_it_was_update_and_can
     assert not await later.cancel(job_id)
 
 
+# contract: JOB-22, JOB-23
+async def test_gather_appends_what_arrives_under_one_id_to_one_job_due_settle_after_the_last(
+    store: tinystore.Store,
+) -> None:
+    batch = store.queue("notify-batch", list[dict[str, int]])
+    first = await batch.gather("grades:7", [{"course": 1}], settle="5m", max="1h")
+    await asyncio.sleep(0.02)
+    second = await batch.gather("grades:7", [{"course": 2}], settle="5m", max="1h")
+    assert (first.added, first.count, second.added, second.count) == (True, 1, False, 2)
+    assert second.at > first.at
+    job = await batch.get("grades:7")
+    assert job is not None and (job.value, job.at) == ([{"course": 1}, {"course": 2}], second.at)
+    one = store.queue("notify-one", dict[str, int])
+    await one.add({"course": 1}, id="one")
+    with pytest.raises(tinystore.InvalidError):
+        await one.gather("one", {"course": 2}, settle="5m")
+
+
 # contract: JOB-17
 async def test_upsert_adds_a_job_or_brings_the_one_there_to_the_call_and_keeps_its_time(store: tinystore.Store) -> None:
     polls = store.queue("polls", dict[str, str])

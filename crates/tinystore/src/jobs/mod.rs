@@ -31,6 +31,7 @@ mod engine;
 mod fixture;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
+mod gather;
 mod maintain;
 mod measure;
 mod policy;
@@ -51,6 +52,7 @@ mod write;
 
 pub use call::JobCall;
 pub use dedupe::Dedupe;
+pub use gather::{Gather, Gathered};
 pub use maintain::{Maintenance, maintain};
 pub use policy::Concurrency;
 pub use queue::{All, Claimed, Queue, QueueBuilder, Workers};
@@ -97,6 +99,9 @@ pub(crate) use queue::Change;
 #[cfg(feature = "client")]
 pub(crate) use engine::{held, queues};
 
+#[cfg(test)]
+#[path = "gather_tests.rs"]
+mod gather_tests;
 #[cfg(test)]
 #[path = "queue_tests.rs"]
 mod queue_tests;

@@ -89,6 +89,24 @@ message jobs.Changed {
   1 changed: bool
 }
 
+# A gather: the call's value, a JSON list, appended to the list of the job
+# under its id, which runs settle after the last gather and never later
+# than max after the gather that started it.
+message jobs.Gather {
+  1 call: jobs.Call?                 # its id, its list, its group and options; no at, delay or repeat
+  2 settle: duration
+  3 max: duration?
+}
+
+# What a gather did: whether it started the job, the items the job holds
+# now, and when it is due; a done job its dedupe holds gathers nothing,
+# count 0.
+message jobs.Gathered {
+  1 added: bool
+  2 count: uint
+  3 at: time
+}
+
 # A job as its queue holds it.
 message jobs.Job {
   1 found: bool
@@ -228,3 +246,6 @@ write 0x020f jobs.upsert(jobs.Call) -> jobs.Changed
 # A schedule's one run as soon as a worker is free, its later times as they
 # were: a schedule's handle alone.
 write 0x0210 jobs.runNow(Handle) -> Empty
+
+# Gathers what arrives under one id into one job: see jobs.Gather.
+write 0x0211 jobs.gather(jobs.Gather) -> jobs.Gathered

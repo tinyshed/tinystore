@@ -101,6 +101,42 @@ interface AddOptions extends JobOptions {
 }
 ```
 
+## GatherOptions
+
+```ts
+interface GatherOptions {
+    /** the job runs this long after the last gather under its id */
+    settle: Duration
+    /** and never later than this long after the gather that started its list */
+    max?: Duration | undefined
+    /** the group whose running jobs the queue's concurrency.group bounds */
+    group?: string | undefined
+    /** how long this job holds its id once done, in the place of its queue's dedupe */
+    dedupe?: Dedupe | undefined
+    /** how long this job is kept once it failed for good, in the place of its queue's: '0s' not at all */
+    keep?: Duration | undefined
+    /** it leaves its queue this long after its last write unless written again */
+    ttl?: Duration | undefined
+    /** it leaves its queue at this time; not beside ttl */
+    expiresAt?: Time | undefined
+}
+```
+
+How a gather waits, and the options of its own a job it adds or changes takes.
+
+## Gathered
+
+```ts
+interface Gathered {
+    added: boolean
+    /** 0 when a done job its dedupe holds keeps the id, and nothing was gathered */
+    count: number
+    at: Date
+}
+```
+
+What a gather did: whether it started the job, the items it holds now, and when it is due.
+
 ## JobState
 
 ```ts
@@ -381,6 +417,27 @@ cheap to call on every request. `at` and `delay` count only when it adds.
 
     const changed = await polls.upsert(`group:${g}`, { group: g }, { every: '3m' })
 
+### Queue.gather
+
+```ts
+gather<I>(this: Queue<I[]>, id: string, items: I[], options: GatherOptions): Promise<Gathered>
+```
+
+Gathers items into the job under id, whose value is a list: a job
+scheduled or waiting takes them after its own, in the order they came,
+and is due settle after this gather, never later than max after the
+gather that started it. With no job there it adds one of these items;
+a running one runs on with what it read, and its next run takes only
+what is gathered meanwhile, at its settle time, once it ends well; a
+retry takes both, and a failure for good leaves the gathered ones a job
+of their own. A done job its dedupe holds keeps the id, count 0; a
+failed one gives it up, as to add. A
+value that is no list, there or here, or a job that repeats, is
+InvalidError. It compiles only for a queue whose value is a list.
+
+    const batch = store.queue<Notice[]>('notify-batch')
+    const { added, count, at } = await batch.gather('grades:7', [{ course: 1 }], { settle: '5m', max: '1h' })
+
 ### Queue.cancel
 
 ```ts
@@ -508,6 +565,14 @@ update(id: string, value: T, options?: JobOptions): Promise<boolean>
 ```ts
 upsert(id: string, value: T, options?: JobOptions): Promise<boolean>
 ```
+
+### TxQueue.gather
+
+```ts
+gather<I>(this: TxQueue<I[]>, id: string, items: I[], options: GatherOptions): Promise<Gathered>
+```
+
+Gathers items into the job under id, as `queue.gather` does, with the transaction.
 
 ### TxQueue.cancel
 

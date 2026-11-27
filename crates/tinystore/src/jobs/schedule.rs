@@ -281,6 +281,7 @@ fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &
             group: None,
             error: None,
             own: Own::default(),
+            latest: None,
             value,
         };
         return rows::insert(c, &job).map(|()| next);

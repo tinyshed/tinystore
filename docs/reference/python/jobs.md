@@ -156,6 +156,20 @@ def fail(reason: str | BaseException) -> Outcome: ...
 
 Fails the job for good now, its reason kept as its error: return it.
 
+## Gathered
+
+```python
+@dataclass(frozen=True, slots=True)
+class Gathered:
+    added: bool
+    count: int
+    at: datetime
+```
+
+What a gather did: whether it started the job, the items it holds now, and when it is due.
+
+``count`` is 0 when a done job its dedupe holds keeps the id, and nothing was gathered.
+
 ## Dedupe
 
 ```python
@@ -320,6 +334,39 @@ a job that already was so is not written, so it is cheap to call on
 every request. ``at`` and ``delay`` count only when it adds.
 
     changed = await polls.upsert(f"group:{g}", Poll(group=g), every="3m")
+
+### Queue.gather
+
+```python
+async def gather(
+    id: str,
+    items: T,
+    *,
+    settle: Duration,
+    max: Duration | None = None,
+    group: str | None = None,
+    dedupe: Duration | Dedupe | None = None,
+    keep: Duration | None = None,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
+) -> Gathered: ...
+```
+
+Gathers items, a list, into the job under id, which runs settle after the last gather.
+
+A job scheduled or waiting takes them after its own, in the order they
+came, and is due settle after this gather, never later than max after
+the gather that started it. With no job there it adds one of these
+items; a running one runs on with what it read, and its next run takes
+only what is gathered meanwhile, at its settle time, once it ends well; a
+retry takes both, and a failure for good leaves the gathered ones a job of
+their own. A done job its dedupe holds keeps the id, count 0; a failed one
+gives it up, as to
+add. A value that is no list, there or here, or a job that repeats, is
+InvalidError:
+
+    batch = store.queue("notify-batch", list[Notice])
+    gathered = await batch.gather("grades:7", [Notice(course=1)], settle="5m", max="1h")
 
 ### Queue.cancel
 

@@ -11,6 +11,7 @@ use super::call::{Asked, JobCall};
 use super::claim::{self, Claiming, Lease};
 use super::dedupe::Dedupe;
 use super::engine::Jobs;
+use super::gather::{self, Gather, Gathered};
 use super::policy::{Concurrency, Policy};
 use super::read::named::Which;
 use super::read::{self, Counts, Filter, Job, JobRef, Page};
@@ -253,6 +254,13 @@ where
     /// added or changed anything; see [`JobCall::upsert`].
     pub fn upsert(&self, id: impl AsRef<str>, value: &V) -> Result<bool> {
         self.upsert_asked(Asked::with_id(id.as_ref()), value, None)
+    }
+
+    /// Gathers `items`, a list, into the job under `id`, which runs `settle`
+    /// after the last gather and never later than `max` after the first; see
+    /// [`JobCall::gather`].
+    pub fn gather(&self, id: impl AsRef<str>, items: &V, gather: Gather) -> Result<Gathered> {
+        self.gather_asked(Asked::with_id(id.as_ref()), items, gather, None)
     }
 
     /// Takes a job, whatever its state, and says whether it was there: the
@@ -499,6 +507,54 @@ where
         Ok(self.write_now(Change::Upsert, asked, value, tx)?.is_some())
     }
 
+    /// A gather in `tx`, or in a commit of its own that it waits for; it wakes
+    /// the queue's workers for the time the job is due.
+    pub(crate) fn gather_asked(
+        &self,
+        asked: Asked,
+        items: &V,
+        gather: Gather,
+        tx: Option<&Transaction<'_>>,
+    ) -> Result<Gathered> {
+        let named = self.named(asked.id());
+        let written = || {
+            self.refuse_gather_on_a_copy(tx.is_none())?;
+            let call = asked.prepare_gather(items, gather, self.jobs.now())?;
+            let (bytes, work) = (call.value.len(), gathers(Arc::clone(&self.state), call));
+            match tx {
+                None => self.jobs.file().write(bytes, work),
+                Some(tx) => self.run_in(tx, work),
+            }
+        };
+        let wrote = written().map_err(|error| error.within(named))?;
+        if wrote.count > 0 {
+            self.wake(wrote.due, tx);
+        }
+        Ok(wrote.gathered())
+    }
+
+    /// A gather checked and its value encoded now, to queue at the writer
+    /// later with [`GatherWriting::submit`].
+    #[cfg(any(feature = "wire", feature = "async"))]
+    pub(crate) fn gathering(&self, asked: Asked, items: &V, gather: Gather) -> GatherWriting {
+        let named = self.named(asked.id());
+        let now = self.jobs.now();
+        let ready = self.refuse_gather_on_a_copy(true).and_then(|()| asked.prepare_gather(items, gather, now));
+        GatherWriting { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), named, ready }
+    }
+
+    /// A copy passes its writes to its home, and a gather's answer is not yet
+    /// among what it brings back: the gather is refused there, rather than
+    /// answered without its count and its time.
+    fn refuse_gather_on_a_copy(&self, outside_a_tx: bool) -> Result<()> {
+        #[cfg(feature = "replication")]
+        if outside_a_tx && self.jobs.file().is_copy() {
+            return Err(Error::new(ErrorKind::Unavailable, "a gather on a copy of jobs' file: gather at its home"));
+        }
+        let _ = outside_a_tx;
+        Ok(())
+    }
+
     /// An add, a set or an update in `tx`, or in a commit of its own that it
     /// waits for. It gives the time the job is due at when the write changed
     /// it, and wakes the queue's workers for that time.
@@ -669,6 +725,46 @@ fn writes(
         Change::Set => write::set(c, &queue, &call).map(|set| Some(set.due)),
         Change::Update => write::update(c, &queue, &call),
         Change::Upsert => write::upsert(c, &queue, &call),
+    }
+}
+
+/// The write of a gather in `queue`.
+fn gathers(
+    queue: Arc<QueueState>,
+    call: Prepared,
+) -> impl FnOnce(&SqlTx<'_>) -> Result<gather::Wrote> + Send + 'static {
+    move |c| write::gather(c, &queue, &call)
+}
+
+/// A gather whose call was checked and whose value was encoded when it was
+/// made, queued at the writer by [`GatherWriting::submit`], as [`Writing`] is.
+#[cfg(any(feature = "wire", feature = "async"))]
+pub(crate) struct GatherWriting {
+    jobs: Arc<Jobs>,
+    state: Arc<QueueState>,
+    named: String,
+    ready: Result<Prepared>,
+}
+
+#[cfg(any(feature = "wire", feature = "async"))]
+impl GatherWriting {
+    /// Queues the gather, and calls `done` with what it did on the thread
+    /// that commits it; one refused before it is queued is answered here.
+    pub(crate) fn submit(self, done: impl FnOnce(Result<Gathered>) + Send + 'static) {
+        let GatherWriting { jobs, state, named, ready } = self;
+        let call = match ready {
+            Ok(call) => call,
+            Err(error) => return done(Err(error.within(named))),
+        };
+        let (bytes, write) = (call.value.len(), gathers(Arc::clone(&state), call));
+        jobs.file().submit(bytes, write, move |wrote| {
+            if let Ok(wrote) = &wrote
+                && wrote.count > 0
+            {
+                state.wake(wrote.due);
+            }
+            done(wrote.map(gather::Wrote::gathered).map_err(|error| error.within(named)));
+        });
     }
 }
 

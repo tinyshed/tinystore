@@ -37,7 +37,12 @@ const GRACE: Duration = Duration::from_secs(10);
 /// How long a failed write waits to try again.
 const RETRY_WRITE: Duration = Duration::from_secs(1);
 
-const SPILLED_VALUE: &str = "select value from _tinystore_jobs_spilled where id = ?1";
+/// A claimed job's spilled value, read after its claim committed, and the
+/// items of it the run took, which a gather that committed in between counted:
+/// the run acts on its list as it was at its claim.
+const SPILLED_VALUE: &str = "select s.value, (select j.taken from _tinystore_jobs_leases l
+        join _tinystore_jobs j on j.queue = l.queue and j.next = l.next and j.id = l.id where l.id = ?1)
+    from _tinystore_jobs_spilled s where s.id = ?1";
 
 /// What handlers hand back to their loop, and what wakes it.
 #[derive(Default)]
@@ -551,11 +556,19 @@ pub(crate) fn value_or_how<V: DeserializeOwned>(jobs: &Jobs, lease: &Lease) -> s
 /// spilled; one that no longer reads as the queue's type is `invalid`.
 pub(crate) fn read_value<V: DeserializeOwned>(jobs: &Jobs, lease: &Lease) -> Result<V> {
     let encoded = match (&lease.inline, lease.spill) {
-        (_, Some(spill)) => jobs.file().read(|c| {
-            c.prepare_cached(SPILLED_VALUE)
-                .and_then(|mut select| select.query_row([spill], |row| row.get::<_, Vec<u8>>(0)))
-                .map_err(|error| sql_error("the value a claimed job spilled", error))
-        })?,
+        (_, Some(spill)) => {
+            let (value, taken) = jobs.file().read(|c| {
+                c.prepare_cached(SPILLED_VALUE)
+                    .and_then(|mut select| {
+                        select.query_row([spill], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Option<i64>>(1)?)))
+                    })
+                    .map_err(|error| sql_error("the value a claimed job spilled", error))
+            })?;
+            match taken {
+                Some(taken) => super::gather::split(&value, taken as u64).map_or(value, |(read, _)| read),
+                None => value,
+            }
+        }
         (Some(inline), None) => inline.clone(),
         (None, None) => Vec::new(),
     };

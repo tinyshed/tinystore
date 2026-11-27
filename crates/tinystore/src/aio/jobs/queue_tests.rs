@@ -87,6 +87,21 @@ async fn a_call_refused_before_its_write_answers_as_the_blocking_one() {
     f.store.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn a_gather_answers_as_the_blocking_one_and_its_refusal_too() {
+    let f = fixture();
+    let batch = f.store.queue::<Vec<Draft>>("notify-batch").open().unwrap();
+    let first = batch.gather("chat:7", &vec![draft(1)], Gather::settle(HOUR)).await.unwrap();
+    let second = batch.blocking().gather("chat:7", &vec![draft(2)], Gather::settle(HOUR)).unwrap();
+    assert_eq!((first.added, first.count, second.added, second.count), (true, 1, false, 2));
+    let job = batch.get("chat:7").await.unwrap().unwrap();
+    assert_eq!((job.value, job.at), (vec![draft(1), draft(2)], second.at));
+    let refused = batch.id("chat:7").delay(HOUR).gather(&vec![], Gather::settle(HOUR)).await.unwrap_err();
+    let blocking = batch.blocking().id("chat:7").delay(HOUR).gather(&vec![], Gather::settle(HOUR)).unwrap_err();
+    assert_eq!((refused.kind(), refused.to_string()), (blocking.kind(), blocking.to_string()));
+    f.store.close().await.unwrap();
+}
+
 /// Holds jobs.db's writer on a thread of its own until the sender is used or
 /// a second passes, so that no commit of the file can end meanwhile.
 fn hold_the_writer(queue: &Queue<Draft>) -> (mpsc::Sender<()>, thread::JoinHandle<()>) {

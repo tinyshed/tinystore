@@ -1,13 +1,13 @@
-//! What add, set, update, upsert and cancel do to the job under an id, by
-//! where that job is:
+//! What add, set, update, upsert, gather and cancel do to the job under an
+//! id, by where that job is:
 //!
-//! | the id's job is      | add     | set                         | update                | upsert                      | cancel                    |
-//! |----------------------|---------|-----------------------------|-----------------------|-----------------------------|---------------------------|
-//! | none                 | adds it | adds it                     | false                 | adds it                     | false                     |
-//! | scheduled or waiting | false   | makes it new                | changes what it names | changes what differs        | removes it                |
-//! | running              | false   | one run more after this one | false                 | next run takes what differs | tells its handler to stop |
-//! | failed               | adds it | starts it again             | false                 | adds it                     | removes it                |
-//! | done, kept by dedupe | false   | adds it again               | false                 | false                       | false                     |
+//! | the id's job is      | add     | set                         | update                | upsert                      | gather                               | cancel                    |
+//! |----------------------|---------|-----------------------------|-----------------------|-----------------------------|--------------------------------------|---------------------------|
+//! | none                 | adds it | adds it                     | false                 | adds it                     | adds it                              | false                     |
+//! | scheduled or waiting | false   | makes it new                | changes what it names | changes what differs        | appends, due when it settles         | removes it                |
+//! | running              | false   | one run more after this one | false                 | next run takes what differs | its next run takes what comes        | tells its handler to stop |
+//! | failed               | adds it | starts it again             | false                 | adds it                     | adds it                              | removes it                |
+//! | done, kept by dedupe | false   | adds it again               | false                 | false                       | nothing                              | false                     |
 //!
 //! A done job holds its id while its own dedupe or its queue's lasts, and a
 //! failed one is kept for its own keep or its queue's; a write that names
@@ -15,6 +15,7 @@
 
 use rusqlite::Connection;
 
+use super::gather::{self, Gathering, Wrote};
 use super::read::Row;
 use super::rows::{self, Change, Failed, NewJob, Own};
 use super::state::QueueState;
@@ -43,6 +44,8 @@ pub(crate) struct Prepared {
     /// thirtieth of it.
     pub(crate) ttl: Option<i64>,
     pub(crate) value: Kept,
+    /// A gather's times and items.
+    pub(crate) gather: Option<Gathering>,
     pub(crate) now: i64,
 }
 
@@ -59,6 +62,7 @@ impl Prepared {
             group: self.group.as_deref().or(failed.and_then(|failed| failed.group.as_deref())),
             error: failed.and_then(|failed| failed.error.as_deref()),
             own: self.own(),
+            latest: self.gather.and_then(|gather| gather.latest),
             value: &self.value,
         }
     }
@@ -93,10 +97,18 @@ fn there(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Option<r
 /// its error until the new one's first run ends, so that a `get` still says
 /// why the last one failed.
 pub(crate) fn add(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<bool> {
+    if call.key.is_some() && there(c, queue, call)?.is_some() {
+        return Ok(false);
+    }
+    add_free(c, queue, call)
+}
+
+/// Adds a job where no job waits or runs under the call's id: a done one its
+/// dedupe keeps holds it still.
+fn add_free(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<bool> {
     let mut failed = None;
     if let Some(key) = &call.key {
-        let taken = there(c, queue, call)?.is_some() || rows::done_key(c, queue.id, key, call.now)?;
-        if taken {
+        if rows::done_key(c, queue.id, key, call.now)? {
             return Ok(false);
         }
         failed = rows::drop_failed(c, queue.id, key)?;
@@ -188,6 +200,52 @@ pub(crate) fn upsert(c: &Connection, queue: &QueueState, call: &Prepared) -> Res
     };
     rows::reshape(c, (queue.id, key), &there, &call.change(next), !shape.same_value)?;
     Ok(Some(rows::due_of(next)))
+}
+
+/// Gathers a call's items into the id's job, as [`JobCall::gather`] says:
+/// one read of the job and its value, then its write. A running job's run
+/// read its list at its claim, so a gather appends after it, asks a run more
+/// with `again`, and the first since the claim keeps in `taken` how many of
+/// the list's items the run read: its settlement drops them once the run
+/// ends well, and keeps them for a retry. Its count is what the next run
+/// takes.
+///
+/// [`JobCall::gather`]: super::JobCall::gather
+pub(crate) fn gather(c: &Connection, queue: &QueueState, call: &Prepared) -> Result<Wrote> {
+    let (key, asked) = (call.key.as_deref().unwrap_or_default(), call.gather.as_ref());
+    let asked = asked.ok_or_else(|| crate::Error::internal("a gather's write without its gathering"))?;
+    let found = match rows::gathering(c, queue.id, key, call.now)? {
+        Some((there, kept)) if there.expires.is_some_and(|expires| expires <= call.now) && !kept.held => {
+            rows::end_term(c, queue.id, &there)?;
+            None
+        }
+        found => found,
+    };
+    let Some((there, kept)) = found else {
+        let added = add_free(c, queue, call)?;
+        let (count, due) = if added { (asked.count, call.at) } else { (0, call.now) };
+        return Ok(Wrote { added, count, due });
+    };
+    if there.repeat.is_some() {
+        return Err(crate::Error::invalid("a job that repeats gathers nothing: its list would run each time"));
+    }
+    let (joined, before, count) = gather::appended(&kept.value, call.value.bytes())?;
+    // the first gather since the claim counts what the run read: the whole
+    // list, unless a set since gave the job a value the run never saw
+    let first_since_claim = kept.held && kept.taken.is_none();
+    let taken = match (kept.held, kept.taken) {
+        (false, _) => None,
+        (true, Some(taken)) => Some(taken),
+        (true, None) if there.again.is_none() => Some(i64::try_from(before).unwrap_or(i64::MAX)),
+        (true, None) => Some(0),
+    };
+    let latest = if first_since_claim { asked.latest } else { kept.latest.or(asked.latest) };
+    let due = latest.map_or(asked.settled, |latest| latest.min(asked.settled));
+    let value = Kept::of(joined);
+    let change = Change { next: due, repeat: None, group: call.group.as_deref(), own: call.own(), value: &value };
+    rows::gather(c, (queue.id, key), &there, (latest, taken, kept.held), &change)?;
+    let count = count - taken.map_or(0, |taken| u64::try_from(taken).unwrap_or(0));
+    Ok(Wrote { added: first_since_claim, count, due })
 }
 
 /// Changes a job that is not running, one waiting for a retry among them: its
