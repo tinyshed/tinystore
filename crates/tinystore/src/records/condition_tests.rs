@@ -178,6 +178,8 @@ fn a_statements_values_are_bounded_in_bytes_and_held_of_the_stores_memory() {
     let long = count("select printf('%.*c', 5000, 'x')").unwrap_err();
     assert_eq!(long.kind(), ErrorKind::Limit, "{long}");
     assert!(long.to_string().contains("a value of 5002 bytes, past a list's 4096"), "{long}");
+    let facts = (long.fact("limit"), long.fact("wanted"), long.fact("bound"));
+    assert_eq!(facts, (Some("where value bytes"), Some("5002"), Some("4096")));
     assert_eq!(count("select printf('%.*c', 4094, 'x')").unwrap(), 0, "a value of 4 KiB as JSON is taken");
 
     // 5,000 values of a KiB hold some 10 MB, past a store of 8 MB

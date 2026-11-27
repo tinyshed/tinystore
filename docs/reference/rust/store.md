@@ -944,6 +944,23 @@ pub const SESSION_BYTES: Limit
 What one `sessions` holds: the events each session keeps, and its values
 of `by`.
 
+## WHERE_VALUE_BYTES
+
+```rust
+pub const WHERE_VALUE_BYTES: Limit
+```
+
+A value a `where`'s statement gives, as JSON.
+
+## SUM_RANGE
+
+```rust
+pub const SUM_RANGE: Limit
+```
+
+The bits an aggregate row's sum of integers is held in, its sign among
+them: a sum is exact, and past them `limit` rather than a float.
+
 ## INGEST_SAMPLES
 
 ```rust

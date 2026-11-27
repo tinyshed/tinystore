@@ -750,6 +750,10 @@ const limits: Readonly<{
     sessions: Limit
     /** What one `sessions` holds: the events each session keeps, and its values of `by`. */
     sessionBytes: Limit
+    /** A value a `where`'s statement gives, as JSON. */
+    whereValueBytes: Limit
+    /** The bits an aggregate row's sum of integers is held in, its sign among them: a sum is exact, and past them a LimitError. */
+    sumRange: Limit
     /** The samples of one `ingest`, written in one write: what one exporter's text takes. */
     ingestSamples: Limit
     /** The bytes of one `ingest`'s samples, each with its labels. */

@@ -278,6 +278,11 @@ fn keep(open: &mut Open, event: Event, most: usize, held: (&mut Reservation, &mu
 
 /// Grows what a cut holds by `bytes`: past its bound `limit`, as past the
 /// store's memory.
+///
+/// The bound is of working memory, the events the sessions keep and one
+/// open session a value of `by`: fewer `max_events`, a shorter range or a
+/// `where` is the way on, since how many values are active within one `gap`
+/// of each other is the read's own and no cut of the answer shrinks it.
 fn grow((held, bytes): (&mut Reservation, &mut u64), more: u64) -> Result<()> {
     *bytes += more;
     if *bytes > MOST_BYTES {

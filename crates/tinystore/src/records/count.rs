@@ -24,7 +24,7 @@ use super::event::{Event, Fields};
 use super::events::AllEvents;
 use super::read::{EVENT_HELD, List};
 use crate::calendar::{Calendar, LocalDate, Zoned};
-use crate::limits::{AGGREGATE_ROWS, COUNT_BYTES, Limit};
+use crate::limits::{AGGREGATE_ROWS, COUNT_BYTES, Limit, SUM_RANGE};
 use crate::sqlite::sql_error;
 use crate::{Error, Reservation, Result, unix_nanos};
 
@@ -37,6 +37,11 @@ const MOST_ROWS: usize = AGGREGATE_ROWS.bound as usize;
 /// What the different values a count holds may weigh at most: of the key
 /// `top` counts, or of every field `distinct` names in every row, each its
 /// JSON and what its map spends on it.
+///
+/// It bounds working memory, about a million short values, and is owed no
+/// page: `top` must count every value of its range before it knows the
+/// first, and two ranges' tops do not add up to the top of both, so a
+/// shorter range or a `where` is the way on, as it is for `distinct`.
 const MOST_HELD: usize = COUNT_BYTES.bound as usize;
 const HELD_EACH: usize = 64;
 
@@ -670,8 +675,8 @@ impl Summing {
         match number {
             Number::Integer(integer) => {
                 let sum = self.integers.checked_add(integer);
-                // named alone: its bound, 2¹²⁷, is no number a fact of a bound holds
-                let past = || Error::limit("a sum of integers past what 128 bits hold").naming("limit", "sum range");
+                // its bound in bits, since 2¹²⁷ is no number a fact holds: two such sums add up to 129 at most
+                let past = || SUM_RANGE.refuse(SUM_RANGE.bound + 1, "a sum of integers past what 128 bits hold");
                 self.integers = sum.ok_or_else(past)?;
             }
             Number::Float(float) => (self.floats, self.float) = (self.floats + float, true),

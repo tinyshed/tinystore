@@ -236,6 +236,12 @@ impl Tally {
     }
 
     /// Past the most a listing holds of different keys, `limit`.
+    ///
+    /// The bound is of working memory, near a million keys, and is owed no
+    /// page: a stream's keys are what its events carry, and one past it
+    /// keeps values in its keys, a user's id as a field's name, which belong
+    /// in a field's value. The listing merges every segment's counts in
+    /// memory, so a page would cost the whole merge each time.
     fn bounded(&self) -> Result<()> {
         let most = COUNT_BYTES.bound as usize;
         if self.bytes <= most {

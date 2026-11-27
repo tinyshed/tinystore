@@ -101,6 +101,13 @@ pub const SESSIONS: Limit = Limit { name: "sessions", bound: 10_000 };
 /// of `by`.
 #[cfg(feature = "records")]
 pub const SESSION_BYTES: Limit = Limit { name: "session bytes", bound: 64 << 20 };
+/// A value a `where`'s statement gives, as JSON.
+#[cfg(feature = "records")]
+pub const WHERE_VALUE_BYTES: Limit = Limit { name: "where value bytes", bound: 4 << 10 };
+/// The bits an aggregate row's sum of integers is held in, its sign among
+/// them: a sum is exact, and past them `limit` rather than a float.
+#[cfg(feature = "records")]
+pub const SUM_RANGE: Limit = Limit { name: "sum range", bound: 128 };
 
 /// The samples of one `ingest`, written in one write: what one exporter's
 /// text takes.
@@ -206,6 +213,8 @@ const ALL: &[Limit] = &[
     COUNT_BYTES,
     SESSIONS,
     SESSION_BYTES,
+    WHERE_VALUE_BYTES,
+    SUM_RANGE,
     INGEST_SAMPLES,
     INGEST_BYTES,
     REPLACE_SAMPLES,

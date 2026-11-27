@@ -277,6 +277,7 @@ fn field_names_hold_the_heads_they_read_of_the_stores_memory() {
     assert_eq!(api.list().since(MINUTE).limit(1).field_names_prefix("n").unwrap_err().kind(), ErrorKind::Limit);
 }
 
+// contract: ERR-05
 #[test]
 fn what_a_count_holds_of_different_values_is_bounded_in_bytes_and_a_sum_past_128_bits_is_limit() {
     let mut held = Held { bytes: 0, most: 200 };
@@ -288,7 +289,9 @@ fn what_a_count_holds_of_different_values_is_bounded_in_bytes_and_a_sum_past_128
     assert_eq!(held.add("\"a third\"", true).unwrap_err().kind(), ErrorKind::Limit);
     let mut summing = Summing::default();
     summing.add(Number::Integer(i128::MAX)).unwrap();
-    assert_eq!(summing.add(Number::Integer(1)).unwrap_err().kind(), ErrorKind::Limit);
+    let past = summing.add(Number::Integer(1)).unwrap_err();
+    let facts = (past.kind(), past.fact("limit"), past.fact("wanted"), past.fact("bound"));
+    assert_eq!(facts, (ErrorKind::Limit, Some("sum range"), Some("129"), Some("128")));
 }
 
 // contract: REC-16, REC-17

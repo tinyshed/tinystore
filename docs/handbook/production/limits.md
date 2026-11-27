@@ -221,45 +221,47 @@ Each constant has the name below in its language's case:
 `limits.setManyDocuments`, `bounds.SET_MANY_DOCUMENTS`,
 `limits.SetManyDocuments` and `limits::SET_MANY_DOCUMENTS`.
 
-| Constant             | The error's `limit`      | Bound     | What it bounds                                               |
-|----------------------|--------------------------|-----------|--------------------------------------------------------------|
-| `VALUE_BYTES`        | `value bytes`            | 1 MiB     | a bucket's value                                             |
-| `SETTING_BYTES`      | `setting bytes`          | 16 KiB    | a live setting's change, as JSON                             |
-| `CONFIG_BYTES`       | `config bytes`           | 256 KiB   | every change a config keeps                                  |
-| `LOCK_WAITERS`       | `lock waiters`           | 10,000    | callers waiting for one lock or semaphore                    |
-| `SUBSCRIPTIONS`      | `subscriptions`          | 10,000    | subscriptions to the store's channels                        |
-| `JOB_BYTES`          | `job bytes`              | 1 MiB     | a job's payload, result or step's answer, as JSON            |
-| `PROGRESS_BYTES`     | `progress bytes`         | 4 KiB     | a run's progress, as JSON                                    |
-| `ROWS_BYTES`         | `bytes of a call's rows` | 64 MiB    | the values one call reads from a database                    |
-| `MIRROR_ROWS`        | `mirror rows`            | 100,000   | the rows of a mirror's list, and the rows in its scope       |
-| `EVENT_BYTES`        | `event bytes`            | 256 KiB   | one event                                                    |
-| `APPEND_BYTES`       | `append bytes`           | 4 MiB     | the events of one append                                     |
-| `AGGREGATE_ROWS`     | `aggregate rows`         | 10,000    | the rows of one `aggregate` of events                        |
-| `COUNT_BYTES`        | `count bytes`            | 64 MiB    | the different values one `top` or `distinct` holds           |
-| `SESSIONS`           | `sessions`               | 10,000    | the sessions one `sessions` call keeps, open ones included   |
-| `SESSION_BYTES`      | `session bytes`          | 64 MiB    | the events and `by` values one `sessions` call keeps         |
-| `INGEST_SAMPLES`     | `ingest samples`         | 100,000   | the samples of one `ingest`, in one write                    |
-| `INGEST_BYTES`       | `ingest bytes`           | 32 MiB    | the samples of one `ingest` with their labels                |
-| `REPLACE_SAMPLES`    | `replace samples`        | 10,000    | the samples of one gauge's `replace`                         |
-| `REPLACE_BYTES`      | `replace bytes`          | 4 MiB     | the samples of one `replace` with the series' labels         |
-| `TEXT_SAMPLES`       | `text samples`           | 100,000   | the samples of one exporter's text                           |
-| `TEXT_BYTES`         | `text bytes`             | 32 MiB    | one exporter's text                                          |
-| `QUERY_SERIES`       | `series`                 | 1,000     | the series one metrics query finds                           |
-| `QUERY_BYTES`        | `bytes read`             | 16 MiB    | what one metrics query reads from the file                   |
-| `QUERY_SAMPLES`      | `samples decoded`        | 1,048,576 | the samples one metrics query decodes                        |
-| `QUERY_ANSWER`       | `answer`                 | 100,000   | the samples or buckets one metrics query answers             |
-| `SET_MANY_DOCUMENTS` | `set_many documents`     | 1,000     | the documents of one `setMany`                               |
-| `SET_MANY_BYTES`     | `set_many bytes`         | 16 MiB    | the documents of one `setMany` as JSON                       |
-| `DOCUMENT_BYTES`     | `document bytes`         | 1 MiB     | one document as JSON, or a table's row as its index reads it |
-| `SEARCH_HITS`        | `search hits`            | 1,000     | `offset` and `limit` of one search together                  |
-| `SEARCH_TEXT`        | `search text`            | 1 KiB     | a search's text                                              |
-| `FILTER_CONDITIONS`  | `filter conditions`      | 8         | the conditions of one search's filter                        |
-| `FILTER_VALUES`      | `filter values`          | 100       | the values in the lists of one search's conditions           |
-| `FILTER_ROWS`        | `filter rows`            | 100,000   | the rows a statement of a table's index's `where` gives      |
-| `FILTER_TEXT`        | `filter text`            | 256 bytes | a text that a filter keeps or asks for                       |
-| `VECTOR_DIMENSIONS`  | `vector dimensions`      | 4,096     | a vector                                                     |
-| `REQUEST_BYTES`      | `request bytes`          | 64 MiB    | one request from an SDK; 2 MiB to a server of 0.13           |
-| `ANSWER_BYTES`       | `answer bytes`           | 64 MiB    | one answer to an SDK; 2 MiB from a server of 0.13            |
+| Constant             | The error's `limit`      | Bound     | What it bounds                                                  |
+|----------------------|--------------------------|-----------|-----------------------------------------------------------------|
+| `VALUE_BYTES`        | `value bytes`            | 1 MiB     | a bucket's value                                                |
+| `SETTING_BYTES`      | `setting bytes`          | 16 KiB    | a live setting's change, as JSON                                |
+| `CONFIG_BYTES`       | `config bytes`           | 256 KiB   | every change a config keeps                                     |
+| `LOCK_WAITERS`       | `lock waiters`           | 10,000    | callers waiting for one lock or semaphore                       |
+| `SUBSCRIPTIONS`      | `subscriptions`          | 10,000    | subscriptions to the store's channels                           |
+| `JOB_BYTES`          | `job bytes`              | 1 MiB     | a job's payload, result or step's answer, as JSON               |
+| `PROGRESS_BYTES`     | `progress bytes`         | 4 KiB     | a run's progress, as JSON                                       |
+| `ROWS_BYTES`         | `bytes of a call's rows` | 64 MiB    | the values one call reads from a database                       |
+| `MIRROR_ROWS`        | `mirror rows`            | 100,000   | the rows of a mirror's list, and the rows in its scope          |
+| `EVENT_BYTES`        | `event bytes`            | 256 KiB   | one event                                                       |
+| `APPEND_BYTES`       | `append bytes`           | 4 MiB     | the events of one append                                        |
+| `AGGREGATE_ROWS`     | `aggregate rows`         | 10,000    | the rows of one `aggregate` of events                           |
+| `COUNT_BYTES`        | `count bytes`            | 64 MiB    | the different values one `top` or `distinct` holds              |
+| `SESSIONS`           | `sessions`               | 10,000    | the sessions one `sessions` call keeps, open ones included      |
+| `SESSION_BYTES`      | `session bytes`          | 64 MiB    | the events and `by` values one `sessions` call keeps            |
+| `WHERE_VALUE_BYTES`  | `where value bytes`      | 4 KiB     | a value that a statement of a records `where` gives, as JSON    |
+| `SUM_RANGE`          | `sum range`              | 128       | the bits a sum of integers in an aggregate's `stats` is held in |
+| `INGEST_SAMPLES`     | `ingest samples`         | 100,000   | the samples of one `ingest`, in one write                       |
+| `INGEST_BYTES`       | `ingest bytes`           | 32 MiB    | the samples of one `ingest` with their labels                   |
+| `REPLACE_SAMPLES`    | `replace samples`        | 10,000    | the samples of one gauge's `replace`                            |
+| `REPLACE_BYTES`      | `replace bytes`          | 4 MiB     | the samples of one `replace` with the series' labels            |
+| `TEXT_SAMPLES`       | `text samples`           | 100,000   | the samples of one exporter's text                              |
+| `TEXT_BYTES`         | `text bytes`             | 32 MiB    | one exporter's text                                             |
+| `QUERY_SERIES`       | `series`                 | 1,000     | the series one metrics query finds                              |
+| `QUERY_BYTES`        | `bytes read`             | 16 MiB    | what one metrics query reads from the file                      |
+| `QUERY_SAMPLES`      | `samples decoded`        | 1,048,576 | the samples one metrics query decodes                           |
+| `QUERY_ANSWER`       | `answer`                 | 100,000   | the samples or buckets one metrics query answers                |
+| `SET_MANY_DOCUMENTS` | `set_many documents`     | 1,000     | the documents of one `setMany`                                  |
+| `SET_MANY_BYTES`     | `set_many bytes`         | 16 MiB    | the documents of one `setMany` as JSON                          |
+| `DOCUMENT_BYTES`     | `document bytes`         | 1 MiB     | one document as JSON, or a table's row as its index reads it    |
+| `SEARCH_HITS`        | `search hits`            | 1,000     | `offset` and `limit` of one search together                     |
+| `SEARCH_TEXT`        | `search text`            | 1 KiB     | a search's text                                                 |
+| `FILTER_CONDITIONS`  | `filter conditions`      | 8         | the conditions of one search's filter                           |
+| `FILTER_VALUES`      | `filter values`          | 100       | the values in the lists of one search's conditions              |
+| `FILTER_ROWS`        | `filter rows`            | 100,000   | the rows a statement of a table's index's `where` gives         |
+| `FILTER_TEXT`        | `filter text`            | 256 bytes | a text that a filter keeps or asks for                          |
+| `VECTOR_DIMENSIONS`  | `vector dimensions`      | 4,096     | a vector                                                        |
+| `REQUEST_BYTES`      | `request bytes`          | 64 MiB    | one request from an SDK; 2 MiB to a server of 0.13              |
+| `ANSWER_BYTES`       | `answer bytes`           | 64 MiB    | one answer to an SDK; 2 MiB from a server of 0.13               |
 
 A bound that the store's options set is named the same way, but it has no
 constant: `store memory` and `store memory, now` for the memory budget,

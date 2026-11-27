@@ -168,6 +168,10 @@ export const limits = Object.freeze({
 	sessions: limit('sessions', 10_000),
 	/** What one `sessions` holds: the events each session keeps, and its values of `by`. */
 	sessionBytes: limit('session bytes', 64 << 20),
+	/** A value a `where`'s statement gives, as JSON. */
+	whereValueBytes: limit('where value bytes', 4 << 10),
+	/** The bits an aggregate row's sum of integers is held in, its sign among them: a sum is exact, and past them a LimitError. */
+	sumRange: limit('sum range', 128),
 	/** The samples of one `ingest`, written in one write: what one exporter's text takes. */
 	ingestSamples: limit('ingest samples', 100_000),
 	/** The bytes of one `ingest`'s samples, each with its labels. */

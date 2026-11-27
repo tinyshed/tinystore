@@ -53,6 +53,11 @@ var (
 	// SessionBytes is what one Sessions holds: the events each session keeps,
 	// and its values of By.
 	SessionBytes = Limit{"session bytes", 64 << 20}
+	// WhereValueBytes is a value a Where's statement gives, as JSON.
+	WhereValueBytes = Limit{"where value bytes", 4 << 10}
+	// SumRange is the bits an aggregate row's sum of integers is held in, its
+	// sign among them: a sum is exact, and past them a limit error.
+	SumRange = Limit{"sum range", 128}
 	// IngestSamples is the samples of one Ingest, written in one write: what
 	// one exporter's text takes.
 	IngestSamples = Limit{"ingest samples", 100_000}
@@ -106,7 +111,7 @@ var (
 // all is every bound above, which testdata/wire/limits.json holds.
 var all = []Limit{
 	ValueBytes, SettingBytes, ConfigBytes, LockWaiters, Subscriptions, JobBytes, ProgressBytes, RowsBytes, MirrorRows,
-	EventBytes, AppendBytes, AggregateRows, CountBytes, Sessions, SessionBytes, IngestSamples, IngestBytes, ReplaceSamples,
+	EventBytes, AppendBytes, AggregateRows, CountBytes, Sessions, SessionBytes, WhereValueBytes, SumRange, IngestSamples, IngestBytes, ReplaceSamples,
 	ReplaceBytes, TextSamples, TextBytes,
 	QuerySeries, QueryBytes, QuerySamples, QueryAnswer, SetManyDocuments, SetManyBytes, DocumentBytes,
 	SearchHits, SearchText, FilterConditions, FilterValues, FilterRows, FilterText, VectorDimensions, RequestBytes,

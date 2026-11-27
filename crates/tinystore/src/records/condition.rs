@@ -26,14 +26,14 @@ use serde_json::value::RawValue;
 
 use super::event::Fields;
 use super::values::integer;
-use crate::limits::FILTER_ROWS;
+use crate::limits::{FILTER_ROWS, WHERE_VALUE_BYTES};
 use crate::memory::{Memory, PATIENCE};
 use crate::{Error, Not, Prefix, Reservation, Result};
 
 /// The values a list of a condition holds at most, as in metrics.
 const MOST_VALUES: usize = 1000;
 /// What a value of a list, or a prefix, weighs at most, as a metrics label's.
-const MOST_VALUE_BYTES: usize = 4 << 10;
+const MOST_VALUE_BYTES: usize = WHERE_VALUE_BYTES.bound as usize;
 /// The rows a statement of a `where` gives at most, as a table's index's.
 const MOST_ROWS: usize = FILTER_ROWS.bound as usize;
 /// What a set of a statement's values holds of the store's memory for each
@@ -202,7 +202,7 @@ impl Rows {
         jsons.extend(booleans(&jsons));
         if let Some(long) = jsons.iter().find(|json| json.len() > MOST_VALUE_BYTES) {
             let why = format!("a value of {} bytes, past a list's {MOST_VALUE_BYTES}", long.len());
-            return Err(within(Error::limit(why)));
+            return Err(within(WHERE_VALUE_BYTES.refuse(long.len() as u64, why)));
         }
         let bytes = jsons.iter().map(|json| 2 * json.len() as u64 + VALUE_HELD).sum();
         let held = memory.reserve_for_read(bytes, "records: a where's statement", PATIENCE).map_err(within)?;

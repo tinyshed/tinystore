@@ -61,6 +61,11 @@ SESSIONS = Limit("sessions", 10_000)
 """The sessions one ``sessions`` holds while it cuts them, those still open among them, and answers."""
 SESSION_BYTES = Limit("session bytes", 64 << 20)
 """What one ``sessions`` holds: the events each session keeps, and its values of ``by``."""
+WHERE_VALUE_BYTES = Limit("where value bytes", 4 << 10)
+"""A value a ``where``'s statement gives, as JSON."""
+SUM_RANGE = Limit("sum range", 128)
+"""The bits an aggregate row's sum of integers is held in, its sign among them: a sum is exact, and past them a
+LimitError."""
 INGEST_SAMPLES = Limit("ingest samples", 100_000)
 """The samples of one ``ingest``, written in one write: what one exporter's text takes."""
 INGEST_BYTES = Limit("ingest bytes", 32 << 20)

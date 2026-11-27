@@ -1139,6 +1139,12 @@ fn whole<T>(found: &[T], limit: usize, at: impl Fn(&T) -> i64) -> Result<Option<
         whole -= 1;
     }
     if whole == 0 {
+        // A page never splits one nanosecond, since its `next` is a time, so
+        // events at one time past the limit fit only a larger one, 10,000 at
+        // most. The store stamps an append's events 100 ns apart, so only a
+        // program that gives more than that one `at` meets this; a place by
+        // arrival in `next` would page them, at the cost of a second order in
+        // every read, which no such program has asked for.
         let at_once = found.iter().take_while(|event| at(event) == at(&found[0])).count();
         let page = Limit { name: "page events", bound: limit as u64 };
         let refused = format!("more events at one time than a page of {limit} holds");

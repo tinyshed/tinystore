@@ -14,6 +14,8 @@
   "count bytes": 67108864,
   "sessions": 10000,
   "session bytes": 67108864,
+  "where value bytes": 4096,
+  "sum range": 128,
   "ingest samples": 100000,
   "ingest bytes": 33554432,
   "replace samples": 10000,
