@@ -921,3 +921,190 @@ func TestQueriesWhoseContextEndsStopOnTheServer(t *testing.T) {
 		}
 	})
 }
+
+const tasksTable = `create table tasks (
+    id         integer primary key,
+    title      text not null,
+    deleted_at integer,
+    version    integer not null default 0
+) strict`
+
+type Task struct {
+	ID        int64
+	Title     string
+	DeletedAt *int64
+	Version   int64
+}
+
+func sp(t *testing.T, store *tinystore.Store) *sqldb.DB {
+	t.Helper()
+	migrations := fstest.MapFS{"0001_tasks.sql": {Data: []byte(tasksTable)}}
+	return ways.Must(sqldb.Open(context.Background(), store, "sp", sqldb.Migrations(migrations)))
+}
+
+func titles(tasks []Task) []string {
+	out := make([]string, len(tasks))
+	for i, task := range tasks {
+		out[i] = task.Title
+	}
+	return out
+}
+
+// contract: SQL-21, SQL-23, SQL-24
+func TestASecondWriterFromTheOldVersionIsRefusedAndADeletedRowIsGoneFromTheHandle(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := sp(t, store)
+		tasks := sqldb.OpenTable[Task](db, "tasks", sqldb.Deleted("deleted_at"), sqldb.Version("version"))
+		ways.Must(tasks.Insert(ctx, Task{ID: 1, Title: "first"}))
+		one := tasks.Where(sqldb.Eq{"id": 1})
+		seen, _ := ways.Must2(one.One(ctx))
+		if done := ways.Must(one.Update(ctx, sqldb.Set{"title": "from a"}, sqldb.Expect(seen.Version))); done.Changes != 1 {
+			t.Fatalf("a %+v", done)
+		}
+		_, err := one.Update(ctx, sqldb.Set{"title": "from b"}, sqldb.Expect(seen.Version))
+		is(t, err, tinystore.ErrConflict)
+		if err.Error() != "sql sp: table tasks: the row is at version 1, not 0" {
+			t.Fatalf("b %v", err)
+		}
+		if got, _ := ways.Must2(one.One(ctx)); got.Title != "from a" {
+			t.Fatalf("b wrote %+v", got)
+		}
+
+		if done := ways.Must(one.Delete(ctx)); done.Changes != 1 {
+			t.Fatalf("delete %+v", done)
+		}
+		if n := ways.Must(tasks.Count(ctx)); n != 0 {
+			t.Fatalf("count %d", n)
+		}
+		if _, found := ways.Must2(one.One(ctx)); found {
+			t.Fatal("a deleted row is gone from the handle")
+		}
+		marked, _ := ways.Must2(tasks.WithDeleted().Where(sqldb.Eq{"id": 1}).One(ctx))
+		if marked.Version != 2 || marked.DeletedAt == nil {
+			t.Fatalf("marked %+v", marked)
+		}
+		if done := ways.Must(one.Restore(ctx)); done.Changes != 1 {
+			t.Fatalf("restore %+v", done)
+		}
+		if got, _ := ways.Must2(one.One(ctx)); got.Version != 3 {
+			t.Fatalf("restored %+v", got)
+		}
+		if n := ways.Must(sqldb.Scalar[int64](ctx, db, `select count(*) from tasks`)); n != 1 {
+			t.Fatalf("by hand %d", n)
+		}
+	})
+}
+
+// contract: SQL-21, SQL-22
+func TestEveryCallOfAHandleWithADeletedColumnPassesTheMarkedRowsByUnlessAsked(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := sp(t, store)
+		tasks := sqldb.OpenTable[Task](db, "tasks", sqldb.Deleted("deleted_at"))
+		ways.Must(tasks.InsertMany(ctx, []Task{{ID: 1, Title: "a"}, {ID: 2, Title: "b"}, {ID: 3, Title: "c"}}))
+		two := tasks.Where(sqldb.Eq{"id": 2})
+		if first, again := ways.Must(two.Delete(ctx)), ways.Must(two.Delete(ctx)); first.Changes != 1 || again.Changes != 0 {
+			t.Fatalf("deletes %+v %+v", first, again)
+		}
+		byID := tasks.OrderBy("id", sqldb.Asc)
+		if got := titles(ways.Must(byID.All(ctx))); !slices.Equal(got, []string{"a", "c"}) {
+			t.Fatalf("all %v", got)
+		}
+		if page := ways.Must(byID.List(ctx, sqldb.Limit(10))); !slices.Equal(titles(page.Rows), []string{"a", "c"}) {
+			t.Fatalf("list %+v", page)
+		}
+		var walked []Task
+		for row, err := range byID.Each(ctx) {
+			walked = append(walked, ways.Must(row, err))
+		}
+		if !slices.Equal(titles(walked), []string{"a", "c"}) {
+			t.Fatalf("each %v", walked)
+		}
+		positive := sqldb.SQL("id > ?", 0)
+		if done := ways.Must(tasks.Where(positive).Update(ctx, sqldb.Set{"title": "x"})); done.Changes != 2 {
+			t.Fatalf("update %+v", done)
+		}
+		if done := ways.Must(two.Update(ctx, sqldb.Set{"title": "x"})); done.Changes != 0 {
+			t.Fatalf("update of a marked row %+v", done)
+		}
+		if got := titles(ways.Must(tasks.DeletedOnly().All(ctx))); !slices.Equal(got, []string{"b"}) {
+			t.Fatalf("deleted only %v", got)
+		}
+		if n := ways.Must(tasks.WithDeleted().Count(ctx)); n != 3 {
+			t.Fatalf("with deleted %d", n)
+		}
+
+		_, err := tasks.Where(positive).Purge(ctx)
+		is(t, err, tinystore.ErrInvalid)
+		if !strings.Contains(err.Error(), "sql sp: table tasks: a purge deletes for good") {
+			t.Fatalf("live %v", err)
+		}
+		if done := ways.Must(tasks.DeletedOnly().Where(positive).Purge(ctx)); done.Changes != 1 {
+			t.Fatalf("purge %+v", done)
+		}
+		ways.Must(tasks.Where(sqldb.Eq{"id": 3}).Delete(ctx))
+		if done := ways.Must(tasks.WithDeleted().Where(positive).Purge(ctx)); done.Changes != 2 {
+			t.Fatalf("purge of both %+v", done)
+		}
+		_, err = sqldb.OpenTable[Task](db, "tasks").WithDeleted().All(ctx)
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
+// contract: SQL-23, SQL-24
+func TestAnUpsertOntoAMarkedRowBringsItBackAndAnExpectWritesEveryRowOrNone(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := sp(t, store)
+		tasks := sqldb.OpenTable[Task](db, "tasks", sqldb.Deleted("deleted_at"), sqldb.Version("version"))
+		ways.Must(tasks.InsertMany(ctx, []Task{{ID: 1, Title: "a"}, {ID: 2, Title: "b"}}))
+		ways.Must(tasks.Where(sqldb.Eq{"id": 1}).Delete(ctx))
+		ways.Must(tasks.Upsert(ctx, Task{ID: 1, Title: "back"}, sqldb.Conflict("id"), sqldb.Update("title")))
+		if back, _ := ways.Must2(tasks.Where(sqldb.Eq{"id": 1}).One(ctx)); back.Title != "back" || back.DeletedAt != nil || back.Version != 2 {
+			t.Fatalf("back %+v", back)
+		}
+		_, err := tasks.Upsert(ctx, Task{ID: 1, Title: "v"}, sqldb.Conflict("id"), sqldb.Update("version"))
+		is(t, err, tinystore.ErrInvalid)
+		_, err = tasks.Where(sqldb.Eq{"id": 1}).Update(ctx, sqldb.Set{"version": 9})
+		is(t, err, tinystore.ErrInvalid)
+
+		both := tasks.Where(sqldb.Eq{"id": []int64{1, 2}})
+		_, err = both.Update(ctx, sqldb.Set{"title": "z"}, sqldb.Expect(0))
+		is(t, err, tinystore.ErrConflict)
+		if !strings.Contains(err.Error(), "the row is at version 2, not 0") {
+			t.Fatalf("refused %v", err)
+		}
+		if b, _ := ways.Must2(tasks.Where(sqldb.Eq{"id": 2}).One(ctx)); b.Title != "b" {
+			t.Fatalf("none %+v", b)
+		}
+		ways.Must(tasks.Where(sqldb.Eq{"id": 2}).Update(ctx, sqldb.Set{"title": "b2"}))
+		ways.Must(tasks.Where(sqldb.Eq{"id": 2}).Update(ctx, sqldb.Set{"title": "b3"}))
+		if done := ways.Must(both.Update(ctx, sqldb.Set{"title": "z"}, sqldb.Expect(2))); done.Changes != 2 {
+			t.Fatalf("all %+v", done)
+		}
+		if done := ways.Must(tasks.Where(sqldb.Eq{"id": 9}).Update(ctx, sqldb.Set{"title": "z"}, sqldb.Expect(0))); done.Changes != 0 {
+			t.Fatalf("no row %+v", done)
+		}
+		_, err = sqldb.OpenTable[Task](db, "tasks").Where(sqldb.Eq{"id": 1}).Update(ctx, sqldb.Set{"title": "z"}, sqldb.Expect(3))
+		is(t, err, tinystore.ErrInvalid)
+
+		err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+			one := sqldb.OpenTable[Task](tx, "tasks", sqldb.Deleted("deleted_at"), sqldb.Version("version")).Where(sqldb.Eq{"id": 1})
+			if done, err := one.Update(ctx, sqldb.Set{"title": "in tx"}, sqldb.Expect(3)); err != nil || done.Changes != 1 {
+				return fmt.Errorf("update %+v: %w", done, err)
+			}
+			if _, err := one.Delete(ctx, sqldb.Expect(3)); !errors.Is(err, tinystore.ErrConflict) {
+				return fmt.Errorf("delete from 3: %w", err)
+			}
+			_, err := one.Delete(ctx, sqldb.Expect(4))
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := ways.Must2(tasks.DeletedOnly().Where(sqldb.Eq{"id": 1}).One(ctx)); got.Title != "in tx" {
+			t.Fatalf("in tx %+v", got)
+		}
+	})
+}

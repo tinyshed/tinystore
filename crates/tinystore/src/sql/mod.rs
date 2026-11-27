@@ -53,7 +53,7 @@ pub use mirror::{Changed, Diff, Guarded, Mirror, MirrorBuilder, TxMirror};
 #[cfg(any(feature = "wire", feature = "async"))]
 pub(crate) use mirror::{Found, Mode};
 pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};
-pub use query::{Direction, Page, Query, Table, Upsert};
+pub use query::{Direction, Expecting, Page, Query, Table, Upsert};
 pub use statement::Sql;
 pub use tx::Tx;
 
@@ -81,7 +81,7 @@ pub(crate) use {
 #[cfg(feature = "async")]
 pub(crate) use {
     each::PART_BYTES,
-    query::{Paging, Parts, insert_sql, plan_of, upsert_sql},
+    query::{Edit, Paging, Parts, Sees, insert_sql, millis_of, plan_of, upsert_sql},
     rows::{Decoding, Nested},
 };
 

@@ -1092,18 +1092,24 @@ class Database:
         return Mirror(table, of, options, call)
 
     @overload
-    def table[T](self, name: str, of: type[T]) -> Table[T]: ...
+    def table[T](
+        self, name: str, of: type[T], *, deleted: str | None = None, version: str | None = None
+    ) -> Table[T]: ...
     @overload
-    def table(self, name: str, of: None = None) -> Table[dict[str, Any]]: ...
-    def table(self, name: str, of: Any = None) -> Table[Any]:
+    def table(
+        self, name: str, of: None = None, *, deleted: str | None = None, version: str | None = None
+    ) -> Table[dict[str, Any]]: ...
+    def table(self, name: str, of: Any = None, *, deleted: str | None = None, version: str | None = None) -> Table[Any]:
         """A table of the database, typed where it opens: its rows' inserts and upserts, and queries.
 
         It costs nothing until its first call; open each once, in the module
-        that owns it: ``notes = db.table("notes", Note)``.
+        that owns it: ``notes = db.table("notes", Note)``. ``deleted`` and
+        ``version`` name the columns that mark a deleted row and count a row's
+        versions: ``db.table("tasks", Task, deleted="deleted_at", version="version")``.
         """
         from .query import Table
 
-        return Table(self, name, of)
+        return Table(self, name, of, deleted=deleted, version=version)
 
     async def exec(self, statement: Statement, /, *values: Any) -> Done:
         """Runs a write once it is durable; writes from many callers share a commit, each failing alone."""
@@ -1414,14 +1420,18 @@ class SqlTx:
         return await self.exec_piece(statement_of(statement, values))
 
     @overload
-    def table[T](self, name: str, of: type[T]) -> Table[T]: ...
+    def table[T](
+        self, name: str, of: type[T], *, deleted: str | None = None, version: str | None = None
+    ) -> Table[T]: ...
     @overload
-    def table(self, name: str, of: None = None) -> Table[dict[str, Any]]: ...
-    def table(self, name: str, of: Any = None) -> Table[Any]:
+    def table(
+        self, name: str, of: None = None, *, deleted: str | None = None, version: str | None = None
+    ) -> Table[dict[str, Any]]: ...
+    def table(self, name: str, of: Any = None, *, deleted: str | None = None, version: str | None = None) -> Table[Any]:
         """A table inside the transaction: its calls are the transaction's."""
         from .query import Table
 
-        return Table(self, name, of)
+        return Table(self, name, of, deleted=deleted, version=version)
 
     async def rows(self, statement: Sql, want: Want) -> Answered:
         answer = await self._call(statement, want)

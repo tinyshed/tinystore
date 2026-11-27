@@ -171,6 +171,10 @@ These contracts are what does not.
 - **SQL-18** A mirror's call MUST write all of its difference or none of it.
 - **SQL-19** A mirror MUST NOT write a row the list gives as it is held, nor one whose compared columns are as held.
 - **SQL-20** A `replace` its shrink guard holds back MUST write nothing and answer what it would have written, `suspect`.
+- **SQL-21** A table's handle with a deleted column MUST NOT show, count or change a row its column marks, unless `withDeleted` or `deletedOnly` asks for the marked rows; its `delete` MUST mark the rows rather than delete them, and a statement written by hand MUST NOT be rewritten.
+- **SQL-22** `purge` MUST be refused, `invalid`, on a handle that shows the live rows alone.
+- **SQL-23** An update or a delete with `expect` MUST write every row its conditions match when each is at that version, and none otherwise, failing `conflict` with a message that names the table and the version a row is at; no row at all MUST change nothing and fail nothing.
+- **SQL-24** Every update through a versioned handle, a marking delete, a restore and an upsert's update among them, MUST raise the version by one, and a value given for the version column MUST be refused.
 
 ### Blobs
 

@@ -94,6 +94,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Writes and transactions](guides/sql/writes.md)
 - [Stopping a slow query](guides/sql/cancel.md)
 - [Tables and queries](guides/sql/tables.md)
+- [Deleted rows and versions](guides/sql/deleted-and-versions.md)
 - [Rows that include rows](guides/sql/include.md)
 - [Mirrors](guides/sql/mirror.md)
 - [Buckets and queues in a database](guides/sql/buckets-and-queues.md)

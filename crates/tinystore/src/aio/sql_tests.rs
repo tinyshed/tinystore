@@ -708,3 +708,36 @@ fn each_is_a_stream_of_rows_past_what_all_holds_with_a_few_parts_in_memory() {
     assert_eq!(failed.unwrap().unwrap_err().kind(), ErrorKind::Invalid);
     store.blocking().close().unwrap();
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Task {
+    id: i64,
+    title: String,
+    deleted_at: Option<i64>,
+    version: i64,
+}
+
+// contract: SQL-21, SQL-22, SQL-23
+#[tokio::test]
+async fn an_awaited_table_hides_its_deleted_rows_and_refuses_an_edit_from_an_old_version() {
+    let f = fixture();
+    let tasks_sql = "create table tasks (id integer primary key, title text not null, deleted_at integer,
+        version integer not null default 0) strict";
+    let db = f.store.database("sp").migrations([("0001_tasks.sql", tasks_sql)]).open().unwrap();
+    let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
+    tasks.insert(&Task { id: 1, title: "first".to_owned(), deleted_at: None, version: 0 }).await.unwrap();
+    let one = tasks.filter(sql::eq("id", &1));
+
+    assert_eq!(one.expect(0).update([("title", sql::value("from a"))]).await.unwrap().changes, 1);
+    let b = one.expect(0).update([("title", sql::value("from b"))]).await.unwrap_err();
+    assert_eq!(b.to_string(), "sql sp: table tasks: the row is at version 1, not 0: conflict");
+    assert_eq!(one.expect(1).delete().await.unwrap().changes, 1);
+    assert_eq!(tasks.count().await.unwrap(), 0);
+    let marked = tasks.deleted_only().all().await.unwrap();
+    assert_eq!((marked[0].version, marked[0].deleted_at), (2, Some(1_791_547_200_000)));
+    assert_eq!(one.purge().await.unwrap_err().kind(), ErrorKind::Invalid);
+    assert_eq!(one.restore().await.unwrap().changes, 1);
+    tasks.filter(sql::eq("id", &1)).delete().await.unwrap();
+    assert_eq!(tasks.deleted_only().filter(sql::eq("id", &1)).purge().await.unwrap().changes, 1);
+    assert_eq!(tasks.with_deleted().count().await.unwrap(), 0);
+}

@@ -114,6 +114,8 @@ fn apply<'r>(query: Rows<'r>, step: &Json) -> Rows<'r> {
                 None => query.order_by_sql(condition(&argument[0]), direction),
             }
         }
+        "withDeleted" => query.with_deleted(),
+        "deletedOnly" => query.deleted_only(),
         "limit" => query.limit(argument.as_u64().unwrap()),
         "offset" => query.offset(argument.as_u64().unwrap()),
         "include" => {
@@ -172,6 +174,10 @@ fn ran(
         table.upsert_all(&rows, upsert_of(&upserts[1])).map(drop)
     } else if vector.get("count").is_some() {
         query.count().map(drop)
+    } else if vector.get("restore").is_some() {
+        query.restore().map(drop)
+    } else if vector.get("purge").is_some() {
+        query.purge().map(drop)
     } else if let Some(page) = vector.get("list") {
         query.list(page["limit"].as_u64().unwrap(), None).map(drop)
     } else {
@@ -187,7 +193,13 @@ fn every_query_of_the_vectors_is_the_statement_every_sdk_writes() {
     for vector in vectors["queries"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let last = Arc::new(Mutex::new(None));
-        let table = Table::<Ordered>::recorded(vector["table"].as_str().unwrap(), Arc::clone(&last));
+        let mut table = Table::<Ordered>::recorded(vector["table"].as_str().unwrap(), Arc::clone(&last));
+        if let Some(column) = vector.pointer("/options/deleted").and_then(Json::as_str) {
+            table = table.deleted(column);
+        }
+        if let Some(column) = vector.pointer("/options/version").and_then(Json::as_str) {
+            table = table.version(column);
+        }
         let steps = vector.get("steps").and_then(Json::as_array).cloned().unwrap_or_default();
         let query = steps.iter().fold((*table).clone(), apply);
         let statement = ran(vector, &table, &query, &last).map(|()| last.lock().unwrap().take().unwrap());
@@ -565,4 +577,248 @@ fn an_included_query_names_its_columns_and_its_limit_and_includes_nothing() {
         assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
         assert!(error.to_string().contains(why), "{error}");
     }
+}
+
+const TASKS: &str = "create table tasks (
+    id         integer primary key,
+    title      text not null,
+    deleted_at integer,
+    version    integer not null default 0
+) strict";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Task {
+    id: i64,
+    title: String,
+    deleted_at: Option<i64>,
+    version: i64,
+}
+
+fn task(id: i64, title: &str) -> Task {
+    Task { id, title: title.to_owned(), deleted_at: None, version: 0 }
+}
+
+/// The fixture's clock, as a deleted column keeps it.
+const NOW_MILLIS: i64 = 1_791_547_200_000;
+
+fn tasks_db(f: &Fixture) -> super::Database {
+    f.store.database("sp").migrations([("0001_tasks.sql", TASKS)]).open().unwrap()
+}
+
+fn titles(rows: Vec<Task>) -> Vec<String> {
+    rows.into_iter().map(|row| row.title).collect()
+}
+
+// contract: SQL-21, SQL-23, SQL-24
+#[test]
+fn a_second_writer_from_the_old_version_is_refused_and_a_deleted_row_is_gone_from_the_handle() {
+    let f = fixture();
+    let db = tasks_db(&f);
+    let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
+    tasks.insert(&task(1, "first")).unwrap();
+    let one = tasks.filter(sql::eq("id", &1));
+    let seen = one.one().unwrap().unwrap().version;
+
+    let a = one.expect(seen).update([("title", sql::value("from a"))]).unwrap();
+    assert_eq!(a.changes, 1);
+    let b = one.expect(seen).update([("title", sql::value("from b"))]).unwrap_err();
+    assert_eq!(b.kind(), ErrorKind::Conflict, "{b}");
+    assert_eq!(b.to_string(), "sql sp: table tasks: the row is at version 1, not 0: conflict");
+    assert_eq!(one.one().unwrap().unwrap().title, "from a", "b wrote nothing");
+
+    assert_eq!(one.delete().unwrap().changes, 1);
+    assert_eq!(tasks.count().unwrap(), 0, "a count of the live rows");
+    assert!(one.one().unwrap().is_none());
+    let marked = tasks.with_deleted().filter(sql::eq("id", &1)).one().unwrap().unwrap();
+    assert_eq!(
+        (marked.deleted_at, marked.version),
+        (Some(NOW_MILLIS), 2),
+        "the store's clock, and a delete is an edit"
+    );
+    assert_eq!(one.restore().unwrap().changes, 1);
+    assert_eq!(one.one().unwrap().unwrap().version, 3, "a restore is an edit too");
+    let plain: i64 = db.scalar("select count(*) from tasks").unwrap();
+    assert_eq!(plain, 1, "a statement by hand is not rewritten");
+}
+
+// contract: SQL-21, SQL-22
+#[test]
+fn every_call_of_a_handle_with_a_deleted_column_passes_the_marked_rows_by_unless_asked() {
+    let f = fixture();
+    let db = tasks_db(&f);
+    let tasks = db.table::<Task>("tasks").deleted("deleted_at");
+    tasks.insert_all(&[task(1, "a"), task(2, "b"), task(3, "c")]).unwrap();
+    assert_eq!(tasks.filter(sql::eq("id", &2)).delete().unwrap().changes, 1);
+    assert_eq!(tasks.filter(sql::eq("id", &2)).delete().unwrap().changes, 0, "a marked row is marked once");
+
+    let by_id = tasks.order_by("id", Direction::Asc);
+    assert_eq!(titles(by_id.all().unwrap()), ["a", "c"]);
+    assert_eq!(titles(by_id.list(10, None).unwrap().rows), ["a", "c"]);
+    assert_eq!(titles(by_id.each().unwrap().map(Result::unwrap).collect()), ["a", "c"]);
+    assert_eq!(tasks.count().unwrap(), 2);
+    assert!(!tasks.filter(sql::eq("id", &1)).explain().unwrap().is_empty());
+    let any = sql!("id > ?", 0);
+    assert_eq!(tasks.filter(any.clone()).update([("title", sql::value("x"))]).unwrap().changes, 2);
+    assert_eq!(tasks.filter(sql::eq("id", &2)).update([("title", sql::value("x"))]).unwrap().changes, 0);
+    assert_eq!(titles(tasks.deleted_only().all().unwrap()), ["b"], "the marked row kept its title");
+    assert_eq!(tasks.with_deleted().count().unwrap(), 3);
+
+    let live = tasks.filter(any.clone()).purge().unwrap_err();
+    assert_eq!(live.kind(), ErrorKind::Invalid, "{live}");
+    assert!(live.to_string().starts_with("sql sp: table tasks: a purge deletes for good"), "{live}");
+    assert_eq!(tasks.deleted_only().filter(any.clone()).purge().unwrap().changes, 1);
+    assert_eq!(tasks.with_deleted().count().unwrap(), 2, "the purge took the marked row alone");
+    tasks.filter(sql::eq("id", &3)).delete().unwrap();
+    assert_eq!(tasks.with_deleted().filter(any).purge().unwrap().changes, 2, "live and marked");
+
+    let plain = db.table::<Task>("tasks");
+    let unmarked = plain.with_deleted().all().unwrap_err();
+    assert!(unmarked.to_string().contains("only a table with a deleted column"), "{unmarked}");
+    assert_eq!(plain.filter(sql::eq("id", &1)).restore().unwrap_err().kind(), ErrorKind::Invalid);
+}
+
+// contract: SQL-24
+#[test]
+fn an_upsert_onto_a_marked_row_brings_it_back_and_raises_its_version() {
+    let f = fixture();
+    let db = tasks_db(&f);
+    let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
+    tasks.insert(&task(1, "a")).unwrap();
+    tasks.filter(sql::eq("id", &1)).delete().unwrap();
+    let back = tasks.upsert(&task(1, "back"), Upsert::on(["id"]).update(["title"])).unwrap().unwrap();
+    assert_eq!((back.title.as_str(), back.deleted_at, back.version), ("back", None, 2));
+    assert_eq!(tasks.count().unwrap(), 1);
+    let refused = tasks.upsert(&task(1, "v"), Upsert::on(["id"]).update(["title", "version"])).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+    let set = tasks.filter(sql::eq("id", &1)).update([("version", sql::value(&9))]).unwrap_err();
+    assert!(set.to_string().contains("the version column is the handle's to raise"), "{set}");
+}
+
+// contract: SQL-23
+#[test]
+fn an_edit_with_expect_writes_every_row_at_its_version_or_none() {
+    let f = fixture();
+    let db = tasks_db(&f);
+    let tasks = db.table::<Task>("tasks").version("version");
+    tasks.insert_all(&[task(1, "a"), task(2, "b")]).unwrap();
+    tasks.filter(sql::eq("id", &2)).update([("title", sql::value("b2"))]).unwrap();
+    let both = tasks.filter(sql::is_in("id", &[1, 2]));
+    let refused = both.expect(0).update([("title", sql::value("z"))]).unwrap_err();
+    assert_eq!(refused.to_string(), "sql sp: table tasks: the row is at version 1, not 0: conflict");
+    let read = tasks.order_by("id", Direction::Asc).all().unwrap();
+    assert_eq!((titles(read.clone()), read[0].version), (vec!["a".to_owned(), "b2".to_owned()], 0), "none");
+    tasks.filter(sql::eq("id", &1)).update([("title", sql::value("a2"))]).unwrap();
+    assert_eq!(both.expect(1).update([("title", sql::value("z"))]).unwrap().changes, 2, "all of them");
+
+    assert_eq!(tasks.filter(sql::eq("id", &9)).expect(0).update([("title", sql::value("z"))]).unwrap().changes, 0);
+    let unversioned =
+        db.table::<Task>("tasks").filter(sql::eq("id", &1)).expect(0).update([("title", sql::value("z"))]);
+    assert_eq!(unversioned.unwrap_err().kind(), ErrorKind::Invalid);
+    let hard = tasks.filter(sql::eq("id", &1)).expect(2).delete().unwrap_err();
+    assert!(hard.to_string().contains("expect on a delete is a mark's"), "{hard}");
+}
+
+// contract: SQL-23
+#[test]
+fn an_edit_with_expect_inside_a_transaction_is_the_transactions() {
+    let f = fixture();
+    let db = tasks_db(&f);
+    db.table::<Task>("tasks").insert(&task(1, "a")).unwrap();
+    let ran = db.tx(|tx| -> crate::Result<()> {
+        let tasks = tx.table::<Task>("tasks").deleted("deleted_at").version("version");
+        let one = tasks.filter(sql::eq("id", &1));
+        assert_eq!(one.expect(0).update([("title", sql::value("in tx"))])?.changes, 1);
+        let again = one.expect(0).delete().unwrap_err();
+        assert_eq!(again.kind(), ErrorKind::Conflict, "{again}");
+        assert_eq!(one.expect(1).delete()?.changes, 1, "the transaction goes on after a conflict");
+        Ok(())
+    });
+    ran.unwrap();
+    let kept = db.table::<Task>("tasks").deleted("deleted_at").with_deleted().all().unwrap();
+    assert_eq!((kept[0].title.as_str(), kept[0].version, kept[0].deleted_at), ("in tx", 2, Some(NOW_MILLIS)));
+}
+
+#[test]
+fn a_plain_handle_writes_the_statements_it_wrote_before_tables_kept_columns() {
+    let last = Arc::new(Mutex::new(None));
+    let table = Table::<Note>::recorded("notes", Arc::clone(&last));
+    let sent = |ran: crate::Result<super::Done>| {
+        ran.unwrap();
+        last.lock().unwrap().take().map(|statement: Sql| statement.text().to_owned()).unwrap()
+    };
+    let one = table.filter(sql::eq("id", "n1"));
+    assert_eq!(sent(one.update([("title", sql::value("t"))])), "update \"notes\" set \"title\" = ? where \"id\" = ?");
+    assert_eq!(sent(one.delete()), "delete from \"notes\" where \"id\" = ?");
+    assert_eq!(one.to_sql().unwrap().text(), "select * from \"notes\" where \"id\" = ?");
+    let upsert = table.upsert(&note("n1", 1, "t"), Upsert::on(["id"]).update(["title"]));
+    assert!(upsert.unwrap().is_none());
+    let text = last.lock().unwrap().take().unwrap().text().to_owned();
+    assert!(text.ends_with("on conflict (\"id\") do update set \"title\" = excluded.\"title\" returning *"), "{text}");
+}
+
+/// The migrations docs/guides/sql/deleted-and-versions.md shows, by the name
+/// each block's first line gives it, so that the guide's recipe is the one
+/// tested here.
+fn guide_migrations() -> Vec<(String, String)> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/guides/sql/deleted-and-versions.md");
+    let page = std::fs::read_to_string(path).unwrap();
+    let blocks = page.split("```sql\n").skip(1).map(|rest| rest.split("```").next().unwrap());
+    let named = blocks.filter_map(|block| {
+        let name = block.lines().next()?.strip_prefix("-- ")?;
+        name.ends_with(".sql").then(|| (name.to_owned(), block.to_owned()))
+    });
+    named.collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct Past {
+    version: i64,
+    title: String,
+}
+
+#[test]
+fn the_guides_history_keeps_each_old_version_and_its_last_fifty() {
+    let f = fixture();
+    let migrations = guide_migrations();
+    let names: Vec<&str> = migrations.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["0001_tasks.sql", "0002_tasks_history.sql", "0003_tasks_history_merge.sql"]);
+    let db = f.store.database("history").migrations(migrations[..2].to_vec()).open().unwrap();
+    let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
+    tasks.insert(&task(1, "v0")).unwrap();
+    let one = tasks.filter(sql::eq("id", &1));
+    for edit in 1..=3 {
+        one.update([("title", sql::value(&format!("v{edit}")))]).unwrap();
+    }
+    let read = "select version, title from tasks_history where id = 1 order by version";
+    let past: Vec<Past> = db.all(read).unwrap();
+    let kept: Vec<(i64, &str)> = past.iter().map(|each| (each.version, each.title.as_str())).collect();
+    assert_eq!(kept, [(0, "v0"), (1, "v1"), (2, "v2")], "each old row with its version");
+    one.delete().unwrap();
+    assert_eq!(db.all::<Past>(read).unwrap().len(), 4, "a delete is an edit, and leaves its entry");
+
+    for edit in 0..60 {
+        tasks.with_deleted().filter(sql::eq("id", &1)).update([("title", sql::value(&format!("w{edit}")))]).unwrap();
+    }
+    let past: Vec<Past> = db.all(read).unwrap();
+    assert_eq!((past.len(), past[0].version), (49, 15), "the last 50 versions, the row's own among them");
+}
+
+#[test]
+fn the_guides_history_merges_one_persons_edits_within_ten_minutes() {
+    let f = fixture();
+    let db = f.store.database("history").migrations(guide_migrations()).open().unwrap();
+    db.exec("insert into tasks (id, title) values (1, 'v0')").unwrap();
+    let tasks = db.table::<Task>("tasks").version("version");
+    let edit = |title: &str, by: &str, at: i64| {
+        let sets = [("title", sql::value(title)), ("edited_by", sql::value(by)), ("edited_at", sql::value(&at))];
+        tasks.filter(sql::eq("id", &1)).update(sets).unwrap();
+    };
+    edit("ann 1", "ann", 0);
+    edit("ann 2", "ann", 60_000);
+    edit("ann 3", "ann", 120_000);
+    edit("ben 1", "ben", 180_000);
+    edit("ben 2", "ben", 180_000 + 600_000);
+    let past: Vec<Past> = db.all("select version, title from tasks_history where id = 1 order by version").unwrap();
+    let titles: Vec<&str> = past.iter().map(|each| each.title.as_str()).collect();
+    assert_eq!(titles, ["v0", "ann 3", "ben 1"], "ann's burst is one entry; ben's edits ten minutes apart are two");
 }

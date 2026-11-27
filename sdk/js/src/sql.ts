@@ -744,6 +744,8 @@ export interface Runner {
 	rows(statement: Sql, want: Want): Promise<Answered>
 	exec(statement: Sql): Promise<Done>
 	[walk]?<T = Row>(statement: Sql, order: readonly Ordered[] | undefined): AsyncGenerator<T>
+	/** the database's transaction, which a table's edit with `expect` runs in; a transaction is one already */
+	tx?<T>(fn: (tx: Runner) => Promise<T>): Promise<T>
 }
 
 /** The reads every runner shares: all, one and scalar over its rows. */

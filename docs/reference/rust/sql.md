@@ -701,6 +701,35 @@ pub enum Direction {
 
 The way an order goes.
 
+## Expecting
+
+```rust
+pub struct Expecting<'r, T> { /* private fields */ }
+```
+
+The edits of a query made from a version a program saw, from
+`Query::expect`: `tasks.filter(sql::eq("id", &1)).expect(3).update(…)`.
+
+### Expecting.update
+
+```rust
+pub fn update<I, S>(&self, sets: I) -> Result<Done>
+where
+    I: IntoIterator<Item = (S, Sql)>,
+    S: AsRef<str>,
+```
+
+`Query::update` of the rows at the version, all of them or none.
+
+### Expecting.delete
+
+```rust
+pub fn delete(&self) -> Result<Done>
+```
+
+`Query::delete` of the rows at the version, all of them or none: a
+mark, on a table with a deleted column, which a delete for good is not.
+
 ## Page
 
 ```rust
@@ -868,7 +897,8 @@ where
 ```
 
 Sets columns of the rows the conditions match, each a value from
-`sql::value` or a piece of SQL, and says how many changed.
+`sql::value` or a piece of SQL, and says how many changed. A versioned
+table's version goes up by one.
 
 ### Query.delete
 
@@ -877,6 +907,57 @@ pub fn delete(&self) -> Result<Done>
 ```
 
 Deletes the rows the conditions match, and says how many it deleted.
+On a table with a deleted column it marks the live ones instead, with
+the store's clock, and raises a versioned table's version.
+
+### Query.with_deleted
+
+```rust
+pub fn with_deleted(&self) -> Self
+```
+
+The query of every row, those the deleted column marks among them.
+
+### Query.deleted_only
+
+```rust
+pub fn deleted_only(&self) -> Self
+```
+
+The query of the rows the deleted column marks, and of no other.
+
+### Query.restore
+
+```rust
+pub fn restore(&self) -> Result<Done>
+```
+
+Clears the mark of the marked rows the conditions match, whichever
+rows the handle shows, and says how many came back; a versioned
+table's version goes up by one.
+
+### Query.purge
+
+```rust
+pub fn purge(&self) -> Result<Done>
+```
+
+Deletes for good the rows the conditions match of those the handle
+shows: the marked ones of `Query::deleted_only`, or every one of
+`Query::with_deleted`. A handle that shows the live rows alone
+refuses it, `Invalid`, so that nothing live is purged by a handle
+that forgot to ask.
+
+### Query.expect
+
+```rust
+pub fn expect(&self, version: i64) -> Expecting<'r, T>
+```
+
+The edits of a versioned table made from `version`: they write only
+when every row the conditions match is at it, all of those rows, and
+otherwise nothing, failing `Conflict` with the version a row is at.
+No row at all is no conflict: the edit changes none.
 
 ### Query.all
 
@@ -937,11 +1018,54 @@ impl Deref<Target = Query<'r, T>>
 A table: its queries, and its rows' inserts and upserts. `Deref`s to the
 query of all its rows.
 
+A table may keep two columns of its rows for the program: `deleted`, which
+marks a row deleted rather than deleting it, so that every query and write
+of the handle passes it by, and `version`, which every update raises, so
+that an edit made from an old version is refused rather than written over
+another's. A statement written by hand is not rewritten: they are the
+handle's.
+
+```rust
+let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
+let edit = tasks.filter(sql::eq("id", &1)).expect(0).update([("title", sql::value("from b"))]);
+if edit.as_ref().is_err_and(|error| error.kind() == ErrorKind::Conflict) {
+    // sql app: table tasks: the row is at version 1, not 0
+}
+tasks.filter(sql::eq("id", &1)).delete()?; // marks deleted_at; no query of tasks finds it
+tasks.deleted_only().filter(sql::eq("id", &1)).restore()?;
+```
+
 ### Table.name
 
 ```rust
 pub fn name(&self) -> &str
 ```
+
+### Table.deleted
+
+```rust
+pub fn deleted(self, column: &str) -> Self
+```
+
+Marks a row deleted rather than deleting it: `column`, a nullable
+integer, holds when, in unix milliseconds of the store's clock. Every
+query and write of the handle passes the marked rows by, unless
+`Query::with_deleted` or `Query::deleted_only` asks for them;
+`delete` marks, `Query::restore` clears the mark, and
+`Query::purge` deletes for good. An upsert whose key a marked row
+holds updates that row and clears its mark: the row came back.
+
+### Table.version
+
+```rust
+pub fn version(self, column: &str) -> Self
+```
+
+Counts a row's versions in `column`, an integer, not null, default 0:
+every update, delete, restore and upsert of the handle raises it by
+one, and an edit after `Query::expect` writes only rows at the
+version it names. The handle sets the column itself, and a value
+given for it is `Invalid`.
 
 ### Table.insert
 
@@ -968,7 +1092,9 @@ pub fn upsert(&self, row: &T, upsert: Upsert) -> Result<Option<T>>
 
 Inserts a row, or, when its key is taken, sets the columns `update`
 names on the row that holds it, if that row meets the upsert's
-condition; `None` when the condition kept it.
+condition; `None` when the condition kept it. On a table with a
+deleted column the update clears a mark, and on a versioned one it
+raises the version.
 
 ### Table.upsert_all
 
@@ -1565,7 +1691,50 @@ Sets columns of the rows the conditions match, as
 pub fn delete(&self) -> impl Future<Output = Result<Done>> + Send + 'static
 ```
 
-Deletes the rows the conditions match, and says how many it deleted.
+Deletes the rows the conditions match, or marks them on a table with
+a deleted column, as `sql::Query::delete` does, and says how many.
+
+### aio::sql::Query.with_deleted
+
+```rust
+pub fn with_deleted(&self) -> Self
+```
+
+The query of every row, as `sql::Query::with_deleted` reads them.
+
+### aio::sql::Query.deleted_only
+
+```rust
+pub fn deleted_only(&self) -> Self
+```
+
+The query of the marked rows alone, as `sql::Query::deleted_only` reads them.
+
+### aio::sql::Query.restore
+
+```rust
+pub fn restore(&self) -> impl Future<Output = Result<Done>> + Send + 'static
+```
+
+Clears the mark of the marked rows the conditions match, as
+`sql::Query::restore` does.
+
+### aio::sql::Query.purge
+
+```rust
+pub fn purge(&self) -> impl Future<Output = Result<Done>> + Send + 'static
+```
+
+Deletes for good what the handle shows of the rows the conditions
+match, as `sql::Query::purge` does; refused on the live rows alone.
+
+### aio::sql::Query.expect
+
+```rust
+pub fn expect(&self, version: i64) -> Expecting<T>
+```
+
+The edits made from `version`, as `sql::Query::expect` gives them.
 
 ### aio::sql::Query.all
 
@@ -1637,6 +1806,22 @@ rows.
 pub fn name(&self) -> &str
 ```
 
+### aio::sql::Table.deleted
+
+```rust
+pub fn deleted(self, column: &str) -> Self
+```
+
+Marks a row deleted rather than deleting it, as `sql::Table::deleted` does.
+
+### aio::sql::Table.version
+
+```rust
+pub fn version(self, column: &str) -> Self
+```
+
+Counts a row's versions, as `sql::Table::version` does.
+
 ### aio::sql::Table.insert
 
 ```rust
@@ -1682,6 +1867,35 @@ pub fn upsert_all(
 Upserts rows of one shape as one statement, all of them or none, as
 `sql::Table::upsert_all` does. The rows are encoded when the call is
 made.
+
+## aio::sql::Expecting
+
+```rust
+pub struct Expecting<T> { /* private fields */ }
+```
+
+The awaited edits made from a version a program saw, as
+`sql::Expecting` has them.
+
+### aio::sql::Expecting.update
+
+```rust
+pub fn update<I, S>(&self, sets: I) -> impl Future<Output = Result<Done>> + Send + 'static
+where
+    I: IntoIterator<Item = (S, Sql)>,
+    S: AsRef<str>,
+```
+
+An update of the rows at the version, all of them or none.
+
+### aio::sql::Expecting.delete
+
+```rust
+pub fn delete(&self) -> impl Future<Output = Result<Done>> + Send + 'static
+```
+
+A delete, a mark on a table with a deleted column, of the rows at the
+version, all of them or none.
 
 ## aio::sql::Guarded
 

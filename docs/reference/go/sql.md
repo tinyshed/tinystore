@@ -225,6 +225,24 @@ const (
 
 The directions an order takes.
 
+## EditOption
+
+```go
+type EditOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+EditOption is how an Update or a Delete writes: Expect.
+
+### Expect
+
+```go
+func Expect(version int64) EditOption
+```
+
+Expect writes only if every row the conditions match is at version, all of them, and otherwise nothing, failing with tinystore.ErrConflict and the version a row is at. No row at all is no conflict: the edit changes none.
+
 ## Eq
 
 ```go
@@ -497,10 +515,18 @@ Count counts every row the conditions match, without the order and the limit.
 ### Query.Delete
 
 ```go
-func (q *Query[T]) Delete(ctx context.Context) (Result, error)
+func (q *Query[T]) Delete(ctx context.Context, opts ...EditOption) (Result, error)
 ```
 
-Delete deletes the rows the conditions match, and says how many it deleted.
+Delete deletes the rows the conditions match, and says how many it deleted. On a table with a deleted column it marks the live ones instead, at this process's clock, and raises a versioned table's version; Expect is Update's.
+
+### Query.DeletedOnly
+
+```go
+func (q *Query[T]) DeletedOnly() *Query[T]
+```
+
+DeletedOnly is the query of the rows the deleted column marks, and of no other.
 
 ### Query.Each
 
@@ -590,6 +616,22 @@ func (q *Query[T]) OrderBy(column any, direction Direction) *Query[T]
 
 OrderBy orders the rows by a column, quoted as a name, or by a piece of SQL: OrderBy(sqldb.SQL("lower(title)"), sqldb.Asc).
 
+### Query.Purge
+
+```go
+func (q *Query[T]) Purge(ctx context.Context) (Result, error)
+```
+
+Purge deletes for good the rows the conditions match of those the query shows: the marked ones of DeletedOnly, or every one of WithDeleted. A query that shows the live rows alone refuses it, so that nothing live is purged by a query that forgot to ask.
+
+### Query.Restore
+
+```go
+func (q *Query[T]) Restore(ctx context.Context) (Result, error)
+```
+
+Restore clears the mark of the marked rows the conditions match, whichever rows the query shows, and says how many came back; a versioned table's version goes up by one.
+
 ### Query.SQL
 
 ```go
@@ -601,10 +643,10 @@ SQL is the text and the values the query sends, to read or to log.
 ### Query.Update
 
 ```go
-func (q *Query[T]) Update(ctx context.Context, set Set) (Result, error)
+func (q *Query[T]) Update(ctx context.Context, set Set, opts ...EditOption) (Result, error)
 ```
 
-Update sets columns of the rows the conditions match, and says how many changed.
+Update sets columns of the rows the conditions match, and says how many changed. A versioned table's version goes up by one, and with Expect the update writes only rows at that version.
 
 ### Query.Where
 
@@ -613,6 +655,14 @@ func (q *Query[T]) Where(conditions ...Condition) *Query[T]
 ```
 
 Where adds conditions with and: equal values, sqldb.Eq{"status": "paid"}, nil as is null and a slice as in (...); or a piece of SQL from sqldb.SQL.
+
+### Query.WithDeleted
+
+```go
+func (q *Query[T]) WithDeleted() *Query[T]
+```
+
+WithDeleted is the query of every row, those the deleted column marks among them.
 
 ## ReplaceOption
 
@@ -697,10 +747,12 @@ Table is a table: its queries, and its rows' inserts and upserts. Its rows are T
 ### OpenTable
 
 ```go
-func OpenTable[T any](r Runner, name string) *Table[T]
+func OpenTable[T any](r Runner, name string, opts ...TableOption) *Table[T]
 ```
 
 OpenTable is a table of a database, or of a transaction of it, "orders" or "orders as o", typed where it opens. It costs nothing until its first call.
+
+	tasks := sqldb.OpenTable[Task](db, "tasks", sqldb.Deleted("deleted_at"), sqldb.Version("version"))
 
 ### Table.Insert
 
@@ -732,7 +784,7 @@ Name is the table's name.
 func (t *Table[T]) Upsert(ctx context.Context, row T, opts ...UpsertOption) (Result, error)
 ```
 
-Upsert inserts a row, or, when the columns Conflict names are taken, sets the columns Update names on the row that holds them, when that row meets Where: its Changes is 0 when Where kept it.
+Upsert inserts a row, or, when the columns Conflict names are taken, sets the columns Update names on the row that holds them, when that row meets Where: its Changes is 0 when Where kept it. On a table with a deleted column the update clears a row's mark, since the row came back, and on a versioned one it raises the version.
 
 ### Table.UpsertMany
 
@@ -741,6 +793,32 @@ func (t *Table[T]) UpsertMany(ctx context.Context, rows []T, opts ...UpsertOptio
 ```
 
 UpsertMany upserts rows of one shape as one statement, all of them or none, each as Upsert does one: its Changes is the rows it wrote, without those whose key Where kept. SQLite refuses a list that holds one key twice.
+
+## TableOption
+
+```go
+type TableOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+TableOption is how a table opens: Deleted, Version.
+
+### Deleted
+
+```go
+func Deleted(column string) TableOption
+```
+
+Deleted marks a row deleted rather than deleting it: column, a nullable integer, holds when, in unix milliseconds of this process's clock. Every query and write of the table passes the marked rows by, unless WithDeleted or DeletedOnly asks for them, and Delete marks rather than deletes.
+
+### Version
+
+```go
+func Version(column string) TableOption
+```
+
+Version counts a row's versions in column, an integer, not null, default 0: every update of the table raises it by one, and an edit with Expect writes only rows at the version it names.
 
 ## Tx
 
