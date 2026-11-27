@@ -9,9 +9,11 @@ import { join } from 'node:path'
 
 import {
 	InvalidError,
+	LimitError,
 	ProtocolError,
 	type SearchFound,
 	type SearchGroup,
+	type SearchManyFound,
 	type SearchMatch,
 	type Store,
 	search,
@@ -305,6 +307,43 @@ for (const way of ways) {
 			)
 			expect(failed.merged.map(merged => merged.hit.id).sort()).toEqual(['c-1', 'c-2'])
 			expect(await caught(store.search({ text: 'algebra', in: [] }))).toBeInstanceOf(InvalidError)
+		})
+
+		// contract: SRCH-29
+		test('a group pages past a hundred by its offset', async () => {
+			const kinds = store.index<{ name: string }>('box_kinds', { fields: { name: 1 } })
+			const notes = store.index<{ name: string }>('box_notes', { fields: { name: 1 } })
+			await kinds.setMany(
+				Array.from({ length: 300 }, (_, n) => ({ id: `${n}`, value: { name: `algebra ${n}` } })),
+			)
+			await notes.set('1', { name: 'algebra notes' })
+			const alone = await kinds.search({ text: 'algebra', limit: 200 })
+			const hits = (found: SearchManyFound, at = 0) => {
+				const group = found.groups[at]
+				if (group === undefined || 'error' in group) {
+					throw new Error('the group answers')
+				}
+				return group
+			}
+			const wide = hits(await store.search({ text: 'algebra', in: [{ index: kinds, limit: 150 }] }))
+			expect(wide.hits.map(hit => hit.id)).toEqual(alone.hits.slice(0, 150).map(hit => hit.id))
+			expect(wide.more).toBe(true)
+			const second = await store.search({
+				text: 'algebra',
+				in: [{ index: kinds, limit: 20, offset: 20 }, { index: notes }],
+			})
+			expect(hits(second).hits.map(hit => hit.id)).toEqual(
+				alone.hits.slice(20, 40).map(hit => hit.id),
+			)
+			expect(second.merged[0]?.index).toBe('box_notes')
+			const last = hits(
+				await store.search({ text: 'algebra', in: [{ index: kinds, limit: 20, offset: 290 }] }),
+			)
+			expect([last.hits.length, last.more]).toEqual([10, false])
+			const far = await caught(
+				store.search({ text: 'algebra', in: [{ index: kinds, offset: 995 }] }),
+			)
+			expect(far).toBeInstanceOf(LimitError)
 		})
 
 		test('a hit keeps each half of its score, and a floor keeps a far vector out of the sum', async () => {

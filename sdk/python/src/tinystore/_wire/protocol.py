@@ -13015,12 +13015,12 @@ def _read_search_among(r: Reader) -> dict[str, Any]:
 
 
 # One index a ManyQuery asks, and its search as a query of it alone says it:
-# its where, limit, prefix, matches and snippet; its own text, vector,
-# offset or total are invalid.
+# its where, offset, limit, prefix, matches and snippet; its own text,
+# vector or total are invalid.
 SearchAmong = Message(
     "search.Among",
     {
-        # limit 1 to 100, 10 when absent
+        # offset and limit together 1000 at most, limit 10 when absent
         "query": (1, SearchQuery),
         # what its hits weigh in merged, above 0; 1 when absent
         "boost": (2, float_),
@@ -13387,7 +13387,7 @@ SearchGroup = Message(
         "corrected": (3, str_),
         # the columns of a table's index's rows
         "columns": (4, list_(str_)),
-        # the index has hits past the group's limit
+        # the index has hits past the group's offset and limit
         "more": (5, bool_),
         # why its search failed
         "failure": (6, Failure),
@@ -13508,8 +13508,9 @@ def _read_search_many_found(r: Reader) -> dict[str, Any]:
 
 
 # Each index's group in the order asked, and every group's hits in one
-# order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
-# weighs boost / (60 + r); equal weights by the group asked first, then rank.
+# order, by reciprocal rank fusion: the hit at rank r of its index, from 1
+# and counting its group's offset, weighs boost / (60 + r); equal weights by
+# the group asked first, then rank.
 SearchManyFound = Message(
     "search.ManyFound",
     {

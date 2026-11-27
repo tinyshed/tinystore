@@ -202,16 +202,17 @@ message search.ManyQuery {
 }
 
 # One index a ManyQuery asks, and its search as a query of it alone says it:
-# its where, limit, prefix, matches and snippet; its own text, vector,
-# offset or total are invalid.
+# its where, offset, limit, prefix, matches and snippet; its own text,
+# vector or total are invalid.
 message search.Among {
-  1 query: search.Query              # limit 1 to 100, 10 when absent
+  1 query: search.Query              # offset and limit together 1000 at most, limit 10 when absent
   2 boost: float?                    # what its hits weigh in merged, above 0; 1 when absent
 }
 
 # Each index's group in the order asked, and every group's hits in one
-# order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
-# weighs boost / (60 + r); equal weights by the group asked first, then rank.
+# order, by reciprocal rank fusion: the hit at rank r of its index, from 1
+# and counting its group's offset, weighs boost / (60 + r); equal weights by
+# the group asked first, then rank.
 message search.ManyFound {
   1 groups: [search.Group]
   2 merged: [search.Merged]
@@ -223,7 +224,7 @@ message search.Group {
   2 hits: [search.Hit]               # none where it failed
   3 corrected: str?                  # as search.Found's
   4 columns: [str]?                  # the columns of a table's index's rows
-  5 more: bool                       # the index has hits past the group's limit
+  5 more: bool                       # the index has hits past the group's offset and limit
   6 failure: Failure?                # why its search failed
 }
 

@@ -81,7 +81,7 @@ A call searches 1 to 32 indexes.
 `groups` contains one group for each index, in the order you listed them. A
 group contains the index's hits, sorted best first by that index's own
 scores. It also has `more`, which tells you whether the index has more hits
-than the group's limit. Search asks each index for one hit more than the
+after the group's page. Search asks each index for one hit more than the
 limit and drops the extra one, so `more` is exact. For example, a "show all
 courses" link appears only when there are more courses.
 
@@ -97,6 +97,54 @@ In Rust, Bun and Node, the indexes of one call can store values of different
 types, so a hit's value is JSON: a `serde_json::Value` in Rust and `unknown`
 in TypeScript. You can include a [table's index](table-index.md) in the call
 too, and each of its hits has the row as its value.
+
+## A page of a group
+
+A group pages the same way a search of its index alone does, with `offset`
+and `limit`. `offset` is the number of hits to skip. For example, a "show all
+courses" page shows 20 courses at a time, and the box beside it still shows
+the best 5 pages:
+
+```ts
+const found = await store.search({
+	text: 'algebra',
+	in: [{ index: courses, limit: 20, offset: 20 }, { index: pages, limit: 5 }],
+})
+found.groups[0] // courses 21 to 40, and more: true when there is a 41st
+```
+
+```python
+found = await store.search(
+    "algebra",
+    among=[search.Among(courses, limit=20, offset=20), search.Among(pages, limit=5)],
+)
+found.groups[0]  # courses 21 to 40, and more=True when there is a 41st
+```
+
+```go
+found, err := search.Many(ctx, store, "algebra",
+	search.Among(courses, search.Limit(20), search.Offset(20)),
+	search.Among(pages, search.Limit(5)))
+found.Groups[0] // courses 21 to 40, and More is true when there is a 41st
+```
+
+```rust
+let found = store
+    .search("algebra")
+    .among(&courses, |a| a.offset(20).limit(20))
+    .among(&pages, |a| a.limit(5))
+    .run()?;
+found.groups[0].more // true when courses has a 41st hit
+```
+
+The next page is the same call with `offset + limit` as its offset. As with
+a single search, `offset` and `limit` together reach the 1000th hit at most.
+A call past that fails with `limit` before it searches anything. `more` is
+still exact at the 1000th hit, even though no page can go past it.
+
+A hit's rank in `merged` counts from its index's best hit, not from the
+start of the page. So the 21st course weighs `1 / 81`, as it would on a
+longer first page. So it comes after the top hit of pages, at `1 / 61`.
 
 ## An index that fails
 
@@ -132,9 +180,12 @@ group it has reached.
 Before it searches any index, the call fails with `invalid` in these cases:
 
 - It lists no index, or more than 32.
-- A limit is outside 1 to 100.
+- A limit is 0.
 - A boost is not a positive number.
 - An index belongs to another store.
+
+A group whose `offset` and `limit` together pass 1000 fails the call with
+`limit` (`LimitError` in Bun and Python, `ErrLimit` in Go).
 
 ## Merged: by rank, not by score
 
@@ -148,7 +199,8 @@ scores of another index. Each index scores by the words of its own
 documents, so a word that is rare in courses and common in pages gets a
 different score in each. So `merged` never compares scores. Instead it uses
 reciprocal rank fusion: the hit at rank `r` of its group, counted from 1,
-gets the weight `boost / (60 + r)`.
+gets the weight `boost / (60 + r)`. The rank counts the group's `offset`
+too, as [A page of a group](#a-page-of-a-group) shows.
 
 | Courses, `boost` 2 | weight         | Pages, `boost` 1 | weight         |
 |--------------------|----------------|------------------|----------------|
@@ -173,18 +225,19 @@ different moments.
 
 ## Limits and defaults
 
-| What                      | Value                                            |
-|---------------------------|--------------------------------------------------|
-| indexes per call          | 1 to 32, and the same index can appear twice     |
-| a group's `limit`         | 1 to 100, 10 by default                          |
-| `boost`                   | a positive number, 1 by default                  |
-| an entry's own options    | `where`, `limit`, `prefix`, `matches`, `snippet` |
-| an entry's text or vector | not accepted: the call has one text              |
-| `offset` and `total`      | not accepted: `more` tells you if there are more |
-| `merged`                  | every group's hits, by reciprocal rank fusion    |
+| What                      | Value                                                      |
+|---------------------------|------------------------------------------------------------|
+| indexes per call          | 1 to 32, and the same index can appear twice               |
+| a group's `limit`         | 10 by default                                              |
+| a group's `offset`        | 0 by default, and `offset` plus `limit` 1000 at most       |
+| `boost`                   | a positive number, 1 by default                            |
+| an entry's own options    | `where`, `offset`, `limit`, `prefix`, `matches`, `snippet` |
+| an entry's text or vector | not accepted: the call has one text                        |
+| `total`                   | not accepted: `more` tells you if there are more           |
+| `merged`                  | every group's hits, by reciprocal rank fusion              |
 
-Over the wire, an entry that sets its own text, a vector, an offset or a
-total fails with `invalid`. The SDKs don't offer these options.
+Over the wire, an entry that sets its own text, a vector or a total fails
+with `invalid`. The SDKs don't offer these options.
 
 ## See also
 

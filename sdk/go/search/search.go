@@ -519,7 +519,7 @@ func (n limit) search(q *wire.SearchQuery) { l := uint64(max(int(n), 0)); q.Limi
 type offset int
 
 // Offset skips the best hits a page before gave.
-func Offset(n int) QueryOption { return offset(n) }
+func Offset(n int) SearchOption { return offset(n) }
 
 func (n offset) search(q *wire.SearchQuery) { q.Offset = uint64(max(int(n), 0)) }
 

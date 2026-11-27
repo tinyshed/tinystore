@@ -257,6 +257,26 @@ async def test_one_question_of_several_indexes_answers_a_group_an_index_and_ever
         await store.search("algebra", among=[])
 
 
+# contract: SRCH-29
+async def test_a_group_pages_past_a_hundred_by_its_offset(store: tinystore.Store) -> None:
+    kinds = store.index("box_kinds", fields={"name": 1})
+    notes = store.index("box_notes", fields={"name": 1})
+    await kinds.set_many([(str(n), {"name": f"algebra {n}"}) for n in range(300)])
+    await notes.set("1", {"name": "algebra notes"})
+    alone = [hit.id for hit in (await kinds.search("algebra", limit=200)).hits]
+    wide = (await store.search("algebra", among=[search.Among(kinds, limit=150)])).groups[0]
+    assert [hit.id for hit in wide.hits] == alone[:150] and wide.more
+    second = await store.search("algebra", among=[search.Among(kinds, limit=20, offset=20), search.Among(notes)])
+    assert [hit.id for hit in second.groups[0].hits] == alone[20:40]
+    assert second.merged[0].index == "box_notes", "the index's 21st hit weighs less than the other's first"
+    last = (await store.search("algebra", among=[search.Among(kinds, limit=20, offset=290)])).groups[0]
+    assert (len(last.hits), last.more) == (10, False)
+    with pytest.raises(tinystore.LimitError):
+        await store.search("algebra", among=[search.Among(kinds, offset=995)])
+    with pytest.raises(TypeError, match="offsets"):
+        search.Among(kinds, offsets=20)  # pyright: ignore[reportCallIssue]
+
+
 async def test_a_hit_keeps_each_half_of_its_score_and_a_floor_keeps_a_far_vector_out_of_the_sum(
     store: tinystore.Store,
 ) -> None:

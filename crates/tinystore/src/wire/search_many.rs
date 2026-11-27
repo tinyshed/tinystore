@@ -66,10 +66,11 @@ fn asked_of(handles: &Handles, asked: &SearchAmong) -> Result<(Index<Value>, Amo
     if query.vector.is_some() || query.vector_weight.is_some() || query.rerank || query.min_similarity.is_some() {
         return refused("a search among several indexes by a vector");
     }
-    if query.offset > 0 || query.total {
-        return refused("an offset or a total of a search among several indexes: each group says whether it has more");
+    if query.total {
+        return refused("a total of a search among several indexes: each group says whether it has more");
     }
-    let mut among = Among::default().boost(asked.boost.unwrap_or(1.0));
+    let offset = usize::try_from(query.offset).unwrap_or(usize::MAX);
+    let mut among = Among::default().boost(asked.boost.unwrap_or(1.0)).offset(offset);
     if let Some(limit) = query.limit {
         among = among.limit(usize::try_from(limit).unwrap_or(usize::MAX));
     }

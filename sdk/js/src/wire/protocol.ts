@@ -15969,13 +15969,13 @@ export const SearchSnippet = message(
 
 /**
  * One index a ManyQuery asks, and its search as a query of it alone says it:
- * its where, limit, prefix, matches and snippet; its own text, vector,
- * offset or total are invalid.
+ * its where, offset, limit, prefix, matches and snippet; its own text,
+ * vector or total are invalid.
  */
 export const SearchAmong = message(
 	'search.Among',
 	{
-		/** limit 1 to 100, 10 when absent */
+		/** offset and limit together 1000 at most, limit 10 when absent */
 		query: [1, SearchQuery],
 		/** what its hits weigh in merged, above 0; 1 when absent */
 		boost: [2, float],
@@ -16410,7 +16410,7 @@ export const SearchGroup = message(
 		corrected: [3, str],
 		/** the columns of a table's index's rows */
 		columns: [4, list(str)],
-		/** the index has hits past the group's limit */
+		/** the index has hits past the group's offset and limit */
 		more: [5, bool],
 		/** why its search failed */
 		failure: [6, Failure],
@@ -16612,8 +16612,9 @@ export const ConfigValue = message(
 
 /**
  * Each index's group in the order asked, and every group's hits in one
- * order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
- * weighs boost / (60 + r); equal weights by the group asked first, then rank.
+ * order, by reciprocal rank fusion: the hit at rank r of its index, from 1
+ * and counting its group's offset, weighs boost / (60 + r); equal weights by
+ * the group asked first, then rank.
  */
 export const SearchManyFound = message(
 	'search.ManyFound',

@@ -352,6 +352,26 @@ fn a_search_among_several_indexes_answers_each_group_and_best_by_its_groups_plac
     assert_eq!(merged, [(0, 0), (1, 0)], "a group and a place in its hits, not a copy of the hit");
 }
 
+// contract: SRCH-29
+#[test]
+fn a_group_of_a_search_among_several_pages_by_its_offset() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let courses = open(&mut client, "courses");
+    set(&mut client, courses, ("c-1", r#"{"title":"algebra"}"#), &[1.0, 0.0, 0.0]);
+    set(&mut client, courses, ("c-2", r#"{"title":"algebra of logic"}"#), &[1.0, 0.0, 0.0]);
+    let page = |offset: u64| SearchManyQuery {
+        text: "algebra".to_owned(),
+        among: vec![among(courses, None, SearchQuery { offset, limit: Some(1), ..SearchQuery::default() })],
+    };
+    let first: SearchManyFound = client.call(method::SEARCH_SEARCH_MANY, &page(0)).unwrap();
+    let second: SearchManyFound = client.call(method::SEARCH_SEARCH_MANY, &page(1)).unwrap();
+    assert_eq!((first.groups[0].hits[0].id.as_str(), first.groups[0].more), ("c-1", true));
+    assert_eq!((second.groups[0].hits[0].id.as_str(), second.groups[0].more), ("c-2", false));
+    let far = client.call::<SearchManyFound>(method::SEARCH_SEARCH_MANY, &page(1000)).unwrap_err();
+    assert_eq!(far.code, "limit", "offset and limit together 1000 at most: {}", far.message);
+}
+
 // contract: SRCH-25
 #[test]
 fn a_search_among_several_indexes_says_the_one_that_failed_and_refuses_what_only_one_takes() {
@@ -380,8 +400,8 @@ fn a_search_among_several_indexes_says_the_one_that_failed_and_refuses_what_only
     assert!(refused(every).contains("33 indexes"));
     let own_text = SearchQuery { text: "logic".to_owned(), ..SearchQuery::default() };
     assert!(refused(vec![among(courses, None, own_text)]).contains("one text"));
-    let paged = SearchQuery { offset: 5, ..SearchQuery::default() };
-    assert!(refused(vec![among(courses, None, paged)]).contains("offset"));
+    let counted = SearchQuery { total: true, ..SearchQuery::default() };
+    assert!(refused(vec![among(courses, None, counted)]).contains("a total"));
     let by_vector = SearchQuery { vector: Some(bytes(&[1.0, 0.0, 0.0])), ..SearchQuery::default() };
     assert!(refused(vec![among(courses, None, by_vector)]).contains("vector"));
     assert!(refused(vec![among(courses, Some(-1.0), SearchQuery::default())]).contains("boost"));

@@ -141,6 +141,41 @@ fn more_says_exactly_whether_the_index_has_hits_past_the_limit() {
 }
 
 #[test]
+fn a_group_pages_as_a_search_of_its_index_alone_and_weighs_its_rank_from_the_best() {
+    // contract: SRCH-26, SRCH-27, SRCH-29
+    let f = fixture();
+    let titles: Vec<String> = (0..300).map(|n| format!("algebra {n}")).collect();
+    let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+    let many = f.holding("many", &titles);
+    let one = f.holding("one", &["algebra notes"]);
+    let alone: Vec<String> = many.search("algebra").limit(200).run().unwrap().hits.into_iter().map(|h| h.id).collect();
+    let wide = f.store.search("algebra").among(&many, |a| a.limit(200)).run().unwrap();
+    assert_eq!(ids(&wide.groups[0]), alone, "past a hundred, as the index alone answers");
+    assert!(wide.groups[0].more);
+    let page = |offset: usize| {
+        let found = f.store.search("algebra").among(&many, |a| a.offset(offset).limit(20)).among(&one, |a| a);
+        found.run().unwrap()
+    };
+    let second = page(20);
+    assert_eq!(ids(&second.groups[0]), alone[20..40], "the second page of twenty");
+    assert!(second.groups[0].more);
+    let last = page(290);
+    assert_eq!(ids(&last.groups[0]).len(), 10);
+    assert!(!last.groups[0].more, "nothing past the index's last hit");
+    // the index's 21st hit weighs 1/81, under the other's first at 1/61
+    assert_eq!(merged(&second)[0], "one-0");
+    let deeper = f.store.index::<Value>("deeper").field("title", 1.0).open().unwrap();
+    for start in (0..1001).step_by(500) {
+        let documents: Vec<(String, Value)> =
+            (start..(start + 500).min(1001)).map(|n| (format!("d{n}"), json!({ "title": "algebra" }))).collect();
+        deeper.set_many(documents.iter().map(|(id, value)| (id.as_str(), value))).unwrap();
+    }
+    let deep = f.store.search("algebra").among(&deeper, |a| a.offset(980).limit(20)).run().unwrap();
+    assert_eq!(ids(&deep.groups[0]).len(), 20);
+    assert!(deep.groups[0].more, "more is exact at the 1000th hit too, which no page passes");
+}
+
+#[test]
 fn best_merges_the_groups_by_rank_and_boost_never_by_score() {
     // contract: SRCH-26
     let f = fixture();
@@ -191,8 +226,10 @@ fn a_call_of_no_index_too_many_or_options_no_group_takes_is_refused() {
         many = many.among(&courses, |a| a);
     }
     assert!(invalid(many.run()).contains("33 indexes"));
-    assert!(invalid(f.store.search("a").among(&courses, |a| a.limit(0)).run()).contains("1 to 100"));
-    assert!(invalid(f.store.search("a").among(&courses, |a| a.limit(101)).run()).contains("1 to 100"));
+    assert!(invalid(f.store.search("a").among(&courses, |a| a.limit(0)).run()).contains("at least one hit"));
+    let far = f.store.search("a").among(&courses, |a| a.offset(995).limit(10)).run().unwrap_err();
+    assert_eq!(far.kind(), ErrorKind::Limit, "as a search of the index alone: {far}");
+    assert!(far.to_string().contains("index courses") && far.to_string().contains("1000th hit"), "{far}");
     assert!(invalid(f.store.search("a").among(&courses, |a| a.boost(0.0)).run()).contains("positive"));
     assert!(invalid(f.store.search("a").among(&courses, |a| a.boost(f64::NAN)).run()).contains("positive"));
     let other = fixture();

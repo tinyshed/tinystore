@@ -411,15 +411,17 @@ class Among:
     """An index a search among several asks, and its search as a search of it alone says it.
 
     ``boost`` is what its hits weigh in ``merged``, a positive number; ``limit``
-    1 to 100, 10 unless said, and the group's ``more`` says whether the index
-    has more; ``where``, ``prefix``, ``matches`` and ``snippet`` as a search
-    of the index alone takes them.
+    10 unless said and ``offset`` the hits passed before the first answered,
+    together 1000 at most, and the group's ``more`` says whether the index
+    has more, its next page at ``offset + limit``; ``where``, ``prefix``,
+    ``matches`` and ``snippet`` as a search of the index alone takes them.
     """
 
     index: SearchIndex[Any] | TableIndex[Any]
     boost: float | None = None
     where: Where | None = None
     limit: int | None = None
+    offset: int | None = None
     prefix: bool | Literal["every"] = False
     matches: bool = False
     snippet: Mapping[str, Any] | None = None
@@ -519,6 +521,7 @@ def _among_of(link: Link, among: Among) -> Callable[[int], dict[str, Any]]:
             "handle": handle,
             "where": where,
             "statements": statements,
+            "offset": among.offset,
             "limit": among.limit,
             "prefix": among.prefix is True,
             "prefix_every": True if among.prefix == "every" else None,

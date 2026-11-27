@@ -78,18 +78,18 @@ of repeating them.
 
 ## Search
 
-| What               | Limit or default                                                                    |
-|--------------------|-------------------------------------------------------------------------------------|
-| a document         | 1 MiB                                                                               |
-| `setMany`          | 1,000 documents; 16 MiB of JSON in Rust, one request body, 2 MiB, from an SDK       |
-| a search's text    | 1 KiB, its first 32 words                                                           |
-| a vector           | 4,096 dimensions                                                                    |
-| `limit` + `offset` | 1,000; `limit` is 10; a `total` exact to 10,000                                     |
-| a field's weight   | above 0, at most 1,000                                                              |
-| a filter           | 8 conditions, 100 values; a statement's rows, 100,000                               |
-| `vectorWeight`     | 0.5                                                                                 |
-| a table's index    | the rows of one search's hits, 64 MiB together, as one `all`                        |
-| `store.search`     | 1 to 32 indexes; a group's `limit` 1 to 100, default 10; `boost` above 0, default 1 |
+| What               | Limit or default                                                                            |
+|--------------------|---------------------------------------------------------------------------------------------|
+| a document         | 1 MiB                                                                                       |
+| `setMany`          | 1,000 documents; 16 MiB of JSON in Rust, one request body, 2 MiB, from an SDK               |
+| a search's text    | 1 KiB, its first 32 words                                                                   |
+| a vector           | 4,096 dimensions                                                                            |
+| `limit` + `offset` | 1,000; `limit` is 10; a `total` exact to 10,000                                             |
+| a field's weight   | above 0, at most 1,000                                                                      |
+| a filter           | 8 conditions, 100 values; a statement's rows, 100,000                                       |
+| `vectorWeight`     | 0.5                                                                                         |
+| a table's index    | the rows of one search's hits, 64 MiB together, as one `all`                                |
+| `store.search`     | 1 to 32 indexes; a group's `limit` + `offset` 1,000, `limit` 10; `boost` above 0, default 1 |
 
 ## Channels and locks
 

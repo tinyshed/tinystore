@@ -444,8 +444,10 @@ export interface Among {
 	/** what its hits weigh in `merged`, a positive number, 1 unless said */
 	boost?: number | undefined
 	where?: Where | undefined
-	/** 1 to 100, 10 unless said; `more` says whether the index has more */
+	/** 10 unless said, offset and limit together 1000 at most; `more` says whether the index has more */
 	limit?: number | undefined
+	/** the hits passed before the first answered: the next page is `offset + limit` */
+	offset?: number | undefined
 	prefix?: boolean | 'every' | undefined
 	matches?: boolean | undefined
 	snippet?: { field: string; around?: number | undefined } | undefined
@@ -549,6 +551,7 @@ function amongOf(link: Link, among: Among) {
 			handle,
 			where,
 			statements,
+			offset: among.offset,
 			limit: among.limit,
 			prefix: among.prefix === true || undefined,
 			prefixEvery: among.prefix === 'every' || undefined,

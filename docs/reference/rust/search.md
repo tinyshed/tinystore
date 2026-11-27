@@ -736,8 +736,19 @@ rank would in a group of 1, near enough.
 pub fn limit(self, limit: usize) -> Self
 ```
 
-The hits the group answers, 1 to 100 and 10 unless said; its
-`more` says whether the index has more.
+The hits the group answers, 10 unless said, `offset` and `limit`
+together 1000 at most; its `more` says whether the
+index has more.
+
+### Among.offset
+
+```rust
+pub fn offset(self, offset: usize) -> Self
+```
+
+The hits the group passes before the first it answers, as
+`SearchCall::offset`: the next page of
+a group whose `more` was true is the same group at `offset + limit`.
 
 ### Among.filter
 

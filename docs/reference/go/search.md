@@ -34,7 +34,7 @@ type AmongOption interface {
 }
 ```
 
-AmongOption is how one index of a search among several is searched: Boost, Limit, a Where, Prefix, PrefixEvery, Matches and Snippet. A vector, an Offset or a Total belong to a search of one index alone.
+AmongOption is how one index of a search among several is searched: Boost, Limit, Offset, a Where, Prefix, PrefixEvery, Matches and Snippet. A vector or a Total belong to a search of one index alone.
 
 ### Boost
 
@@ -60,7 +60,7 @@ Asked is an index a search among several asks, from Among.
 func Among[T any](x *Index[T], opts ...AmongOption) Asked
 ```
 
-Among is the index x in a search among several, searched as opts say: each of its hits' Value is a T, as a search of x alone reads it. Limit is 1 to 100, 10 unless given, and the group's More says whether x has more.
+Among is the index x in a search among several, searched as opts say: each of its hits' Value is a T, as a search of x alone reads it. Limit is 10 unless given, Offset and Limit together 1000 at most, and the group's More says whether x has more, its next page at Offset plus Limit.
 
 ## Counted
 
@@ -433,14 +433,6 @@ func MinSimilarity(cosine float64) QueryOption
 
 MinSimilarity is the least cosine, from -1 to 1, a document's vector has with the search's for the Vector to find it: a search by its vector alone leaves out the hits under it, and one by words too adds nothing for them to the sum. Invalid beside a Rerank.
 
-### Offset
-
-```go
-func Offset(n int) QueryOption
-```
-
-Offset skips the best hits a page before gave.
-
 ### Total
 
 ```go
@@ -516,6 +508,14 @@ func Matches() SearchOption
 ```
 
 Matches has each hit say where the search's words matched it, in Hit.Matches, as a search box shows them in bold: a word found as written, by its stem or once corrected whole, and a word a prefix began by the letters typed.
+
+### Offset
+
+```go
+func Offset(n int) SearchOption
+```
+
+Offset skips the best hits a page before gave.
 
 ### Prefix
 

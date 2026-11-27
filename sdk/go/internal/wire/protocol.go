@@ -15273,10 +15273,10 @@ func (m SearchManyQuery) IsZero() bool {
 // SearchAmong is the schema's search.Among.
 //
 // One index a ManyQuery asks, and its search as a query of it alone says it:
-// its where, limit, prefix, matches and snippet; its own text, vector,
-// offset or total are invalid.
+// its where, offset, limit, prefix, matches and snippet; its own text,
+// vector or total are invalid.
 type SearchAmong struct {
-	// limit 1 to 100, 10 when absent
+	// offset and limit together 1000 at most, limit 10 when absent
 	Query SearchQuery `wire:"1,query"`
 	// what its hits weigh in merged, above 0; 1 when absent
 	Boost *float64 `wire:"2,boost"`
@@ -15324,8 +15324,9 @@ func (m SearchAmong) IsZero() bool {
 // SearchManyFound is the schema's search.ManyFound.
 //
 // Each index's group in the order asked, and every group's hits in one
-// order, by reciprocal rank fusion: the hit at rank r of its group, from 1,
-// weighs boost / (60 + r); equal weights by the group asked first, then rank.
+// order, by reciprocal rank fusion: the hit at rank r of its index, from 1
+// and counting its group's offset, weighs boost / (60 + r); equal weights by
+// the group asked first, then rank.
 type SearchManyFound struct {
 	Groups []SearchGroup  `wire:"1,groups"`
 	Merged []SearchMerged `wire:"2,merged"`
@@ -15401,7 +15402,7 @@ type SearchGroup struct {
 	Corrected *string `wire:"3,corrected"`
 	// the columns of a table's index's rows
 	Columns *[]string `wire:"4,columns"`
-	// the index has hits past the group's limit
+	// the index has hits past the group's offset and limit
 	More bool `wire:"5,more"`
 	// why its search failed
 	Failure *Failure `wire:"6,failure"`

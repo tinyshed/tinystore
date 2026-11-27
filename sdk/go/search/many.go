@@ -9,8 +9,8 @@ import (
 )
 
 // AmongOption is how one index of a search among several is searched:
-// Boost, Limit, a Where, Prefix, PrefixEvery, Matches and Snippet. A vector,
-// an Offset or a Total belong to a search of one index alone.
+// Boost, Limit, Offset, a Where, Prefix, PrefixEvery, Matches and Snippet.
+// A vector or a Total belong to a search of one index alone.
 type AmongOption interface{ among(*wire.SearchAmong) }
 
 // SearchOption is a QueryOption a search among several takes too.
@@ -28,6 +28,7 @@ func Boost(b float64) AmongOption { return boost(b) }
 func (b boost) among(a *wire.SearchAmong) { weight := float64(b); a.Boost = &weight }
 
 func (n limit) among(a *wire.SearchAmong)       { n.search(&a.Query) }
+func (n offset) among(a *wire.SearchAmong)      { n.search(&a.Query) }
 func (p prefix) among(a *wire.SearchAmong)      { p.search(&a.Query) }
 func (p prefixEvery) among(a *wire.SearchAmong) { p.search(&a.Query) }
 func (m matches) among(a *wire.SearchAmong)     { m.search(&a.Query) }
@@ -46,7 +47,8 @@ type Asked struct {
 
 // Among is the index x in a search among several, searched as opts say:
 // each of its hits' Value is a T, as a search of x alone reads it. Limit is
-// 1 to 100, 10 unless given, and the group's More says whether x has more.
+// 10 unless given, Offset and Limit together 1000 at most, and the group's
+// More says whether x has more, its next page at Offset plus Limit.
 func Among[T any](x *Index[T], opts ...AmongOption) Asked {
 	asked := Asked{name: x.name, opener: x.opener, store: x.store}
 	for _, opt := range opts {

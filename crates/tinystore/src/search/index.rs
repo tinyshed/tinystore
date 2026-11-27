@@ -591,6 +591,20 @@ pub struct Hit<T> {
     pub similarity: Option<f64>,
 }
 
+/// Refuses a page no search answers: no hit at all, or one past the 1000th,
+/// as a search of one index and a group of a search among several both page.
+pub(super) fn check_page(offset: usize, limit: usize) -> Result<()> {
+    if limit == 0 {
+        return Err(Error::invalid("a search asks for at least one hit"));
+    }
+    let reached = offset.saturating_add(limit);
+    if reached > MOST_HITS {
+        let refused = format!("a search reaches its {MOST_HITS}th hit at most, offset and limit together");
+        return Err(SEARCH_HITS.refuse(reached as u64, refused));
+    }
+    Ok(())
+}
+
 impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     /// Searches by `vector` too, which the program's model gave the question:
     /// each half's best hundred, or `offset + limit` if more, their scores
@@ -765,14 +779,7 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
             let refused = format!("a search's text of {} bytes, past {MOST_TEXT}", self.text.len());
             return Err(SEARCH_TEXT.refuse(self.text.len() as u64, refused));
         }
-        if self.limit == 0 {
-            return Err(Error::invalid("a search asks for at least one hit"));
-        }
-        let reached = self.offset.saturating_add(self.limit);
-        if reached > MOST_HITS {
-            let refused = format!("a search reaches its {MOST_HITS}th hit at most, offset and limit together");
-            return Err(SEARCH_HITS.refuse(reached as u64, refused));
-        }
+        check_page(self.offset, self.limit)?;
         if self.total && self.vector.is_some() {
             return Err(Error::invalid("a total of a search by a vector, which finds every document that has one"));
         }

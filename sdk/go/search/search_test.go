@@ -331,6 +331,44 @@ func TestOneQuestionOfSeveralIndexesAnswersAGroupAnIndexAndEveryHitMergedByRank(
 	})
 }
 
+// contract: SRCH-29
+func TestAGroupPagesPastAHundredByItsOffset(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		kinds := ways.Must(search.OpenIndex[map[string]string](store, "box_kinds", search.Fields{"name": 1}))
+		notes := ways.Must(search.OpenIndex[map[string]string](store, "box_notes", search.Fields{"name": 1}))
+		docs := make([]search.Doc[map[string]string], 300)
+		for n := range docs {
+			docs[n] = search.Doc[map[string]string]{ID: fmt.Sprint(n), Value: map[string]string{"name": fmt.Sprintf("algebra %d", n)}}
+		}
+		ways.Must(0, kinds.SetMany(ctx, docs))
+		ways.Must(0, notes.Set(ctx, "1", map[string]string{"name": "algebra notes"}))
+		alone := ids(ways.Must(kinds.Search(ctx, "algebra", search.Limit(200))))
+		groupIDs := func(group search.ManyGroup) []string {
+			out := []string{}
+			for _, hit := range group.Hits {
+				out = append(out, hit.ID)
+			}
+			return out
+		}
+		wide := ways.Must(search.Many(ctx, store, "algebra", search.Among(kinds, search.Limit(150)))).Groups[0]
+		if !reflect.DeepEqual(groupIDs(wide), alone[:150]) || !wide.More {
+			t.Fatalf("past a hundred, as the index alone: %v", groupIDs(wide))
+		}
+		second := ways.Must(search.Many(ctx, store, "algebra",
+			search.Among(kinds, search.Limit(20), search.Offset(20)), search.Among(notes)))
+		if !reflect.DeepEqual(groupIDs(second.Groups[0]), alone[20:40]) || second.Merged[0].Index != "box_notes" {
+			t.Fatalf("the second page of twenty: %v, merged first %s", groupIDs(second.Groups[0]), second.Merged[0].Index)
+		}
+		last := ways.Must(search.Many(ctx, store, "algebra", search.Among(kinds, search.Limit(20), search.Offset(290)))).Groups[0]
+		if len(last.Hits) != 10 || last.More {
+			t.Fatalf("the last page: %d hits, more %v", len(last.Hits), last.More)
+		}
+		_, err := search.Many(ctx, store, "algebra", search.Among(kinds, search.Offset(995)))
+		is(t, err, tinystore.ErrLimit)
+	})
+}
+
 func TestAHitKeepsEachHalfOfItsScoreAndAFloorKeepsAFarVectorOutOfTheSum(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

@@ -5,12 +5,16 @@
 //! The scores of two indexes say nothing of each other, since each scores by
 //! its own documents' words, so the merged list never compares them: it is
 //! reciprocal rank fusion, the hit at rank `r` of its group weighing
-//! `boost / (60 + r)`.
+//! `boost / (60 + r)`. A group pages as a search of its index alone does, by
+//! `offset` and `limit`, and its rank counts from the index's best, so that
+//! a later page weighs what it would have on a longer first one.
 //!
 //! ```text
 //! courses, boost 2: c1 c2     pages: p1 p2
 //! c1 2/61 = .0328   c2 2/62 = .0323   p1 1/61 = .0164   p2 1/62 = .0161
 //! merged: c1 c2 p1 p2
+//!
+//! courses, offset 20: c21 c22    c21 1/81 = .0123   c22 1/82 = .0122
 //! ```
 
 use std::sync::Arc;
@@ -33,8 +37,7 @@ use crate::{Error, Result, Store};
 
 /// The indexes one call asks at most.
 pub(crate) const MOST_AMONG: usize = 32;
-/// The hits a group answers at most, and unless it says.
-const MOST_LIMIT: usize = 100;
+/// The hits a group answers unless it says.
 const LIMIT: usize = 10;
 /// Reciprocal rank fusion's constant: the first few of each group stay near
 /// one another, and no group's tail outweighs another's head.
@@ -121,6 +124,7 @@ impl ManySearch<'_> {
 #[must_use = "an index's options are given to `among`"]
 pub struct Among {
     boost: f64,
+    offset: usize,
     limit: usize,
     filter: Vec<Condition>,
     prefix: Prefix,
@@ -133,6 +137,7 @@ impl Default for Among {
     fn default() -> Self {
         Among {
             boost: 1.0,
+            offset: 0,
             limit: LIMIT,
             filter: Vec::new(),
             prefix: Prefix::Whole,
@@ -152,10 +157,19 @@ impl Among {
         self
     }
 
-    /// The hits the group answers, 1 to 100 and 10 unless said; its
-    /// [`more`](Group::more) says whether the index has more.
+    /// The hits the group answers, 10 unless said, `offset` and `limit`
+    /// together 1000 at most; its [`more`](Group::more) says whether the
+    /// index has more.
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
+        self
+    }
+
+    /// The hits the group passes before the first it answers, as
+    /// [`SearchCall::offset`](super::SearchCall::offset): the next page of
+    /// a group whose `more` was true is the same group at `offset + limit`.
+    pub fn offset(mut self, offset: usize) -> Self {
+        self.offset = offset;
         self
     }
 
@@ -197,10 +211,11 @@ impl Among {
         self
     }
 
-    /// The search of `index` this group asks, `limit + 1` hits so that it
-    /// knows whether there are more.
+    /// The search of `index` this group asks, checked as a search of it
+    /// alone, then for `limit + 1` hits so that it knows whether there are
+    /// more, the one past 1000 too.
     fn query(&self, index: &Index<Value>, text: &str) -> Result<Query> {
-        let mut call = index.search(text).limit(self.limit + 1).counted_in(self.unit);
+        let mut call = index.search(text).offset(self.offset).limit(self.limit).counted_in(self.unit);
         for condition in &self.filter {
             call = call.filter(condition.clone());
         }
@@ -215,17 +230,18 @@ impl Among {
         if let Some((field, around)) = &self.snippet {
             call = call.snippet(field, *around);
         }
-        call.query()
+        let query = call.query()?;
+        Ok(Query { limit: query.limit + 1, ..query })
     }
 
-    /// Refuses a boost or a limit no group takes, naming the index.
+    /// Refuses a boost or a page no group takes, naming the index: a mistake
+    /// of the program's fails the whole call, where an index that fails its
+    /// search fails its group alone.
     fn check(&self, index: &Index<Value>) -> Result<()> {
-        let refused = |what: String| Err(Error::invalid(what).within(format!("index {}", index.name())));
-        if !(1..=MOST_LIMIT).contains(&self.limit) {
-            return refused(format!("a group's limit of {}: 1 to {MOST_LIMIT}", self.limit));
-        }
+        let within = |error: Error| error.within(format!("index {}", index.name()));
+        index::check_page(self.offset, self.limit).map_err(within)?;
         if !self.boost.is_finite() || self.boost <= 0.0 {
-            return refused(format!("a boost of {}: a positive number", self.boost));
+            return Err(within(Error::invalid(format!("a boost of {}: a positive number", self.boost))));
         }
         Ok(())
     }
@@ -305,8 +321,9 @@ fn json_of<T: Serialize>(row: &T) -> Result<Value> {
 pub struct ManyFound {
     pub groups: Vec<Group>,
     /// Every group's hits by reciprocal rank fusion, never by score: the hit
-    /// at rank `r` of its group, from 1, weighs `boost / (60 + r)`, and of
-    /// equal weights the group asked first comes first, then the higher rank.
+    /// at rank `r` of its index, from 1 and counting its group's offset,
+    /// weighs `boost / (60 + r)`, and of equal weights the group asked first
+    /// comes first, then the higher rank.
     pub merged: Vec<Merged>,
 }
 
@@ -318,7 +335,7 @@ pub struct Group<V = Value> {
     /// The index's name.
     pub index: String,
     pub hits: Vec<Hit<V>>,
-    /// Whether the index has hits past the group's limit, exactly.
+    /// Whether the index has hits past the group's offset and limit, exactly.
     pub more: bool,
     /// The text the index read in fact, when it read a misspelt word as its
     /// nearest, as [`Found::corrected`] says it.
@@ -398,7 +415,7 @@ pub(crate) fn searched<V>(
         let first = groups.iter_mut().find_map(|group| group.error.take());
         return Err(first.unwrap_or_else(|| Error::internal("a search among no index")));
     }
-    let merged = fused(&groups, among.iter().map(|(_, among)| among.boost));
+    let merged = fused(&groups, among.iter().map(|(_, among)| (among.boost, among.offset)));
     Ok(Many { groups, merged })
 }
 
@@ -508,13 +525,14 @@ fn group<V>(index: &str, limit: usize, found: Result<Found<V>>) -> Group<V> {
 }
 
 /// Every group's hits in one order, each its group and its place there, by
-/// reciprocal rank fusion: the hit at rank `r`, from 1, weighs
-/// `boost / (60 + r)`; of equal weights the group asked first comes first,
-/// then the higher rank.
-fn fused<V>(groups: &[Group<V>], boosts: impl Iterator<Item = f64>) -> Vec<(usize, usize)> {
+/// reciprocal rank fusion: the hit at rank `r` of its index, from 1 and
+/// counting the group's offset, weighs `boost / (60 + r)`; of equal weights
+/// the group asked first comes first, then the higher rank.
+fn fused<V>(groups: &[Group<V>], asked: impl Iterator<Item = (f64, usize)>) -> Vec<(usize, usize)> {
     let mut weighed: Vec<(f64, usize, usize)> = Vec::new();
-    for (at, (group, boost)) in groups.iter().zip(boosts).enumerate() {
-        weighed.extend((0..group.hits.len()).map(|rank| (boost / (FUSION + (rank + 1) as f64), at, rank)));
+    for (at, (group, (boost, offset))) in groups.iter().zip(asked).enumerate() {
+        let weight = |rank: usize| boost / (FUSION + (offset + rank + 1) as f64);
+        weighed.extend((0..group.hits.len()).map(|rank| (weight(rank), at, rank)));
     }
     weighed.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     weighed.into_iter().map(|(_, group, rank)| (group, rank)).collect()
