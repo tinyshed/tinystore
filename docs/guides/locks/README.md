@@ -47,8 +47,8 @@ let tried = summaries.try_hold(chat_id, |lease| write_summary(chat_id, lease.fen
 
 ## What it guarantees
 
-- A key has one holder at a time, given to waiters in the order they came
-  (contract LOCK-01).
+- A key has one holder at a time, given to waiters of one priority in the
+  order they came (contract LOCK-01).
 - Every lease's fence is larger than every earlier lease's, across restarts
   (contract LOCK-02).
 - A lease over a connection lasts its `ttl` from its last renewal; one that
@@ -65,7 +65,7 @@ let tried = summaries.try_hold(chat_id, |lease| write_summary(chat_id, lease.fen
 | [Holding and waiting](holding.md)     | `hold`, `tryHold`, `wait`, `maxHold`           |
 | [Leases over a connection](leases.md) | `ttl`, renewal, a lost lease                   |
 | [Fences](fences.md)                   | refusing a late write in SQL or another system |
-| [Semaphores](semaphores.md)           | up to N holders of a key                       |
+| [Semaphores](semaphores.md)           | up to N holders of a key, urgent or background |
 
 New to Locks? [Live updates](../../handbook/chat/live-updates.md#one-summary-per-chat-at-a-time)
 in the Handbook writes one summary per chat at a time, with a fence in SQL.

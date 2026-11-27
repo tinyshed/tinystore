@@ -24,7 +24,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use super::lease::{Answer, Ask, Ending, Place, Reply, Watch};
-use super::{Fence, Holding, Locks, Mark, Opened, refuse_where_a_hold_would_wait_for_itself};
+use super::{Fence, Holding, Locks, Mark, Opened, Terms, refuse_where_a_hold_would_wait_for_itself};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
@@ -32,20 +32,20 @@ use crate::{Error, ErrorKind, Result};
 pub(crate) struct Awaited {
     opened: Opened,
     key: String,
-    wait: Duration,
+    terms: Terms,
 }
 
 impl super::LockKey<'_> {
     /// The hold an awaited call makes of this key.
     pub(crate) fn awaited(self) -> Awaited {
-        Awaited { opened: self.opened.clone(), key: self.key, wait: self.wait }
+        Awaited { opened: self.opened.clone(), key: self.key, terms: self.terms }
     }
 }
 
 impl super::SemaphoreKey<'_> {
     /// The hold an awaited call makes of this key.
     pub(crate) fn awaited(self) -> Awaited {
-        Awaited { opened: self.opened.clone(), key: self.key, wait: self.wait }
+        Awaited { opened: self.opened.clone(), key: self.key, terms: self.terms }
     }
 }
 
@@ -54,7 +54,7 @@ impl Awaited {
     /// The ask is made in the first poll, and a key held puts a waiter in its
     /// line that parks no thread.
     pub(crate) async fn hold(self) -> Result<Held> {
-        let wait = self.wait;
+        let wait = self.terms.wait;
         let asking = self.ask(wait)?;
         let place = asking.place.clone();
         let held = asking.await?;
@@ -69,15 +69,8 @@ impl Awaited {
 
     fn ask(self, wait: Duration) -> Result<Asking> {
         let place = self.opened.place(&self.key)?;
+        let ask = self.opened.ask_of(&place, Terms { wait, ..self.terms })?;
         refuse_where_a_hold_would_wait_for_itself(&self.opened.locks, &place)?;
-        let ask = Ask {
-            place: place.clone(),
-            limit: self.opened.limit,
-            ttl: None,
-            max_hold: self.opened.max_hold,
-            wait,
-            request: None,
-        };
         Ok(Asking::new(&self.opened.locks, place, ask))
     }
 }

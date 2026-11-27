@@ -7516,6 +7516,10 @@ type LocksHold struct {
 	Wait uint64 `wire:"7,wait"`
 	// 16 random bytes: asked again, the lease given answers
 	Request []byte `wire:"8,request"`
+	// urgent or background; empty is urgent
+	Priority string `wire:"9,priority"`
+	// how many places background holds may take, 1 to limit; 0 for every place
+	Background uint64 `wire:"10,background"`
 }
 
 func (m LocksHold) Write(w *Writer) {
@@ -7561,6 +7565,16 @@ func (m LocksHold) Write(w *Writer) {
 		w.Bin(m.Request)
 		n++
 	}
+	if m.Priority != "" {
+		w.Uint(9)
+		w.Str(m.Priority)
+		n++
+	}
+	if m.Background != 0 {
+		w.Uint(10)
+		w.Uint(m.Background)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -7586,6 +7600,10 @@ func (m *LocksHold) Read(r *Reader) {
 			m.Wait = r.Uint()
 		case 8:
 			m.Request = r.Bin()
+		case 9:
+			m.Priority = r.Str()
+		case 10:
+			m.Background = r.Uint()
 		default:
 			r.Skip()
 		}
@@ -7602,7 +7620,9 @@ func (m LocksHold) IsZero() bool {
 		m.Ttl == 0 &&
 		m.MaxHold == nil &&
 		m.Wait == 0 &&
-		len(m.Request) == 0
+		len(m.Request) == 0 &&
+		m.Priority == "" &&
+		m.Background == 0
 }
 
 // LocksHeld is the schema's locks.Held.

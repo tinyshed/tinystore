@@ -72,22 +72,55 @@ func MaxHold(d time.Duration) Option { return func(k *keys) { k.maxHold = &d } }
 // Limit is how many may hold a semaphore's key at once, 1 to 1000.
 func Limit(n int) Option { return func(k *keys) { k.limit = n } }
 
-// HoldOption is how a hold waits.
-type HoldOption func(*time.Duration)
+// Background is how many of a semaphore's key's places background holds may
+// take at once, 1 to its Limit, so that urgent holds always find the rest;
+// every place unless given.
+func Background(n int) Option { return func(k *keys) { k.background = &n } }
+
+// HoldOption is how a hold asks for its key.
+type HoldOption func(*asked)
+
+// asked is how a hold asks for its key: how long it waits, in which line, and
+// how long it may keep it.
+type asked struct {
+	wait       time.Duration
+	background bool
+	timeout    *time.Duration
+}
 
 // Wait is how long a hold waits in line for its key, 10 s unless given: a
 // key still held past it is ErrInUse.
-func Wait(d time.Duration) HoldOption { return func(w *time.Duration) { *w = d } }
+func Wait(d time.Duration) HoldOption { return func(a *asked) { a.wait = d } }
+
+// InBackground asks for a semaphore's place in the background: behind every
+// urgent hold of the key, and among no more than the semaphore's Background
+// places. Nothing promises it a place: while urgent holds keep coming and
+// take the room, it waits, its Wait at most.
+func InBackground() HoldOption { return func(a *asked) { a.background = true } }
+
+// Timeout is how long a semaphore's hold may keep its place, from its grant:
+// past it the place goes to the next in line, fn's ctx ends and the hold is
+// ErrLost, as at MaxHold, the shorter of the two counting.
+func Timeout(d time.Duration) HoldOption { return func(a *asked) { a.timeout = &d } }
+
+func askedOf(opts []HoldOption) asked {
+	a := asked{wait: defaultWait}
+	for _, opt := range opts {
+		opt(&a)
+	}
+	return a
+}
 
 // keys is what a lock and a semaphore share: asking for a key, and the lease once given.
 type keys struct {
-	link    *core.Link
-	store   *core.Store
-	kind    string
-	name    string
-	limit   int
-	ttl     time.Duration
-	maxHold *time.Duration
+	link       *core.Link
+	store      *core.Store
+	kind       string
+	name       string
+	limit      int
+	background *int
+	ttl        time.Duration
+	maxHold    *time.Duration
 }
 
 func open(store *tinystore.Store, kind, name string, opts []Option) (*keys, error) {
@@ -102,25 +135,49 @@ func open(store *tinystore.Store, kind, name string, opts []Option) (*keys, erro
 	if kind == "semaphore" && (k.limit < 1 || k.limit > 1000) {
 		return nil, core.Errorf(core.Invalid, "semaphore %s: a limit of %d, not 1 to 1000", name, k.limit)
 	}
+	if k.background != nil && (kind != "semaphore" || *k.background < 1 || *k.background > k.limit) {
+		return nil, core.Errorf(core.Invalid, "%s %s: a background of %d, not 1 to its limit %d", kind, name, *k.background, k.limit)
+	}
 	if _, err := core.Millis(k.ttl, kind+" "+name+": its ttl"); err != nil {
 		return nil, err
 	}
 	if kind == "semaphore" {
-		if err := keepLimit(k.store, name, k.limit); err != nil {
+		if err := keepShape(k.store, name, shape{k.limit, k.backgroundOrZero()}); err != nil {
 			return nil, err
 		}
 	}
 	return k, nil
 }
 
-// keepLimit keeps the limit a semaphore's first open on store gives: another
-// limit is ErrInvalid, naming both. One name keeps one limit in a program,
-// and two stores are two programs, each of whose holds the store admits by
-// its own limit.
-func keepLimit(store *core.Store, name string, limit int) error {
-	first := store.Kept("locks.semaphore\x00"+name, func() any { return limit }).(int)
-	if first != limit {
-		return core.Errorf(core.Invalid, "semaphore %s: open in this program with a limit of %d, not %d", name, first, limit)
+func (k *keys) backgroundOrZero() int {
+	if k.background == nil {
+		return 0
+	}
+	return *k.background
+}
+
+// shape is what a semaphore's first open in a program gives: its limit, and
+// its background, zero for none.
+type shape struct{ limit, background int }
+
+// keepShape keeps the limit and the background a semaphore's first open on
+// store gives: another is ErrInvalid, naming both. One name keeps one of each
+// in a program, and two stores are two programs, each of whose holds the
+// store admits by its own.
+func keepShape(store *core.Store, name string, given shape) error {
+	first := store.Kept("locks.semaphore\x00"+name, func() any { return given }).(shape)
+	if first.limit != given.limit {
+		return core.Errorf(core.Invalid, "semaphore %s: open in this program with a limit of %d, not %d", name, first.limit, given.limit)
+	}
+	if first.background != given.background {
+		shown := func(n int) string {
+			if n == 0 {
+				return "none"
+			}
+			return strconv.Itoa(n)
+		}
+		return core.Errorf(core.Invalid, "semaphore %s: open in this program with a background of %s, not %s",
+			name, shown(first.background), shown(given.background))
 	}
 	return nil
 }
@@ -142,17 +199,17 @@ func OpenLock(store *tinystore.Store, name string, opts ...Option) (*Lock, error
 // ctx, and Hold is ErrLost though fn succeeded, since another holder may
 // have run beside it.
 func (l *Lock) Hold(ctx context.Context, key any, fn func(ctx context.Context, lease *Lease) error, opts ...HoldOption) error {
-	wait := defaultWait
-	for _, opt := range opts {
-		opt(&wait)
+	a := askedOf(opts)
+	if a.background || a.timeout != nil {
+		return core.Errorf(core.Invalid, "lock %s: InBackground and Timeout are a semaphore's", l.keys.name)
 	}
-	_, err := l.keys.hold(ctx, key, wait, fn)
+	_, err := l.keys.hold(ctx, key, a, fn)
 	return err
 }
 
 // TryHold holds key while fn runs if nobody holds it, and says whether it did.
 func (l *Lock) TryHold(ctx context.Context, key any, fn func(ctx context.Context, lease *Lease) error) (bool, error) {
-	return l.keys.hold(ctx, key, 0, fn)
+	return l.keys.hold(ctx, key, asked{}, fn)
 }
 
 // Semaphore is keys held by up to their limit at a time.
@@ -167,19 +224,22 @@ func OpenSemaphore(store *tinystore.Store, name string, opts ...Option) (*Semaph
 	return &Semaphore{k}, nil
 }
 
-// Hold waits for one of key's permits in line and holds it while fn runs, as a lock's Hold does.
+// Hold waits for one of key's places in line and holds it while fn runs, as a
+// lock's Hold does; InBackground and Timeout say in which line it waits and
+// how long it may keep its place:
+//
+//	err = cabinet.Hold(ctx, "requests", sync, locks.InBackground(), locks.Timeout(15*time.Second))
 func (s *Semaphore) Hold(ctx context.Context, key any, fn func(ctx context.Context, lease *Lease) error, opts ...HoldOption) error {
-	wait := defaultWait
-	for _, opt := range opts {
-		opt(&wait)
-	}
-	_, err := s.keys.hold(ctx, key, wait, fn)
+	_, err := s.keys.hold(ctx, key, askedOf(opts), fn)
 	return err
 }
 
-// TryHold holds one of key's permits while fn runs if one is free, and says whether it did.
-func (s *Semaphore) TryHold(ctx context.Context, key any, fn func(ctx context.Context, lease *Lease) error) (bool, error) {
-	return s.keys.hold(ctx, key, 0, fn)
+// TryHold holds one of key's places while fn runs if one is free, and says
+// whether it did; a Wait among opts is passed by, since it waits for none.
+func (s *Semaphore) TryHold(ctx context.Context, key any, fn func(ctx context.Context, lease *Lease) error, opts ...HoldOption) (bool, error) {
+	a := askedOf(opts)
+	a.wait = 0
+	return s.keys.hold(ctx, key, a, fn)
 }
 
 // holding is the keys a ctx holds or waits for, so that a hold inside its own hold is refused.
@@ -203,7 +263,7 @@ func (k *keys) place(key string) string {
 	return fmt.Sprintf("%s %s: key %s", k.kind, k.name, strconv.Quote(key))
 }
 
-func (k *keys) hold(ctx context.Context, given any, wait time.Duration, fn func(context.Context, *Lease) error) (bool, error) {
+func (k *keys) hold(ctx context.Context, given any, a asked, fn func(context.Context, *Lease) error) (bool, error) {
 	key, err := core.KeyText(given)
 	if err != nil {
 		return false, err
@@ -212,14 +272,18 @@ func (k *keys) hold(ctx context.Context, given any, wait time.Duration, fn func(
 	if held(ctx, place) {
 		return false, core.Errorf(core.Invalid, "%s: a hold of a key inside its own hold would wait for itself", place)
 	}
-	asked := time.Now()
-	answer, err := k.ask(ctx, key, wait)
+	// the store counts a hold's time in milliseconds: less would reach it as none
+	if a.timeout != nil && *a.timeout < time.Millisecond {
+		return false, core.Errorf(core.Invalid, "%s: a timeout of %v, not 1 ms or more", place, *a.timeout)
+	}
+	started := time.Now()
+	answer, err := k.ask(ctx, key, a)
 	if err != nil {
 		return false, core.Wrap(core.KindOf(err), err, "%s", place)
 	}
-	waited := time.Since(asked)
+	waited := time.Since(started)
 	if !answer.Acquired {
-		if wait == 0 {
+		if a.wait == 0 {
 			return false, nil
 		}
 		return false, core.Errorf(core.InUse, "%s: held for all of the wait", place)
@@ -240,15 +304,23 @@ func (k *keys) hold(ctx context.Context, given any, wait time.Duration, fn func(
 // ask is the key once the store gives it, or that it was held for all of
 // wait. A connection lost on the way asks again with the same request, which
 // the store answers with the lease it gave, or with the ask's place in line.
-func (k *keys) ask(ctx context.Context, key string, wait time.Duration) (wire.LocksHeld, error) {
+// A hold's Timeout is a MaxHold of its own: the shorter of the two revokes.
+func (k *keys) ask(ctx context.Context, key string, a asked) (wire.LocksHeld, error) {
 	request := make([]byte, 16)
 	_, _ = rand.Read(request)
 	body := wire.LocksHold{
 		Kind: k.kind, Name: k.name, Key: key, Limit: uint64(k.limit), Ttl: uint64(k.ttl / time.Millisecond),
-		Wait: uint64(max(wait, 0) / time.Millisecond), Request: request,
+		Wait: uint64(max(a.wait, 0) / time.Millisecond), Request: request, Background: uint64(k.backgroundOrZero()),
 	}
-	if k.maxHold != nil {
-		ms := uint64(*k.maxHold / time.Millisecond)
+	if a.background {
+		body.Priority = "background"
+	}
+	bound := k.maxHold
+	if a.timeout != nil && (bound == nil || *a.timeout < *bound) {
+		bound = a.timeout
+	}
+	if bound != nil {
+		ms := uint64(*bound / time.Millisecond)
 		body.MaxHold = &ms
 	}
 	var held wire.LocksHeld
@@ -306,7 +378,7 @@ func (l *leasing) renew(revoke <-chan time.Time) {
 		case <-l.done:
 			return
 		case <-revoke:
-			l.lose("it was revoked at its max hold", nil)
+			l.lose("it was revoked at its max hold or its timeout", nil)
 			return
 		case <-runsOut.C:
 			l.lose("it was not renewed in time", nil)

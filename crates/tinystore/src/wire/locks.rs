@@ -78,6 +78,8 @@ pub(crate) fn hold(
         name: &hold.name,
         key: &hold.key,
         limit: u32::try_from(hold.limit).unwrap_or(u32::MAX),
+        priority: &hold.priority,
+        background: u32::try_from(hold.background).unwrap_or(u32::MAX),
         ttl: Duration::from_millis(hold.ttl),
         max_hold: hold.max_hold.map(Duration::from_millis),
         wait: Duration::from_millis(hold.wait),

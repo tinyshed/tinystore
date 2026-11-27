@@ -181,6 +181,115 @@ for (const way of ways) {
 			expect(await Promise.all(holders)).toEqual([false, false])
 		})
 
+		// contract: LOCK-09
+		test('an urgent hold takes the first place freed before the background holds that came first', async () => {
+			const cabinet = store.semaphore('cabinet', { limit: 2 })
+			const served: string[] = []
+			const letGo = new Map<string, () => void>()
+			const hold = (name: string, priority: 'urgent' | 'background') =>
+				cabinet.hold(
+					'requests',
+					async () => {
+						served.push(name)
+						const done = gate()
+						letGo.set(name, done.open)
+						await done.opened
+					},
+					{ priority, wait: '60s' },
+				)
+			const holds = [hold('b1', 'background'), hold('b2', 'background')]
+			await sleep(50)
+			holds.push(hold('b3', 'background'), hold('b4', 'background'))
+			await sleep(50)
+			holds.push(hold('urgent', 'urgent'))
+			await sleep(50)
+			expect(served).toEqual(['b1', 'b2'])
+			letGo.get('b1')?.()
+			while (served.length < 3) await sleep(5)
+			expect(served).toEqual(['b1', 'b2', 'urgent'])
+			for (const name of ['b2', 'urgent']) {
+				const before = served.length
+				letGo.get(name)?.()
+				while (served.length === before) await sleep(5)
+			}
+			letGo.get('b3')?.()
+			letGo.get('b4')?.()
+			await Promise.all(holds)
+			expect(served).toEqual(['b1', 'b2', 'urgent', 'b3', 'b4'])
+		})
+
+		// contract: LOCK-10
+		test('background holds take no more than their places, and an urgent hold finds the rest at once', async () => {
+			const lane = store.semaphore('lane', { limit: 2, background: 1 })
+			const holding = gate()
+			const letGo = gate()
+			const first = lane.hold(
+				'requests',
+				async () => {
+					holding.open()
+					await letGo.opened
+				},
+				{ priority: 'background' },
+			)
+			await holding.opened
+			const waiting = lane.hold('requests', () => 'the background in line', {
+				priority: 'background',
+				wait: '60s',
+			})
+			expect(await lane.tryHold('requests', () => 'urgent', { priority: 'background' })).toEqual({
+				acquired: false,
+			})
+			expect(await lane.tryHold('requests', () => 'urgent')).toEqual({
+				acquired: true,
+				value: 'urgent',
+			})
+			letGo.open()
+			await first
+			expect(await waiting).toBe('the background in line')
+			expect(() => store.semaphore('lane', { limit: 2 })).toThrow(
+				'semaphore lane: open in this program with a background of 1, not none',
+			)
+			expect(() => store.semaphore('wide', { limit: 2, background: 3 })).toThrow(InvalidError)
+			// a background of the limit is every place, as none is
+			store.semaphore('full', { limit: 2, background: 2 })
+			store.semaphore('full', { limit: 2 })
+			const lock = store.lock('one')
+			const untyped = { priority: 'background', timeout: '1s' } as never
+			expect(await caught(lock.hold('k', () => 'held', untyped))).toBeInstanceOf(InvalidError)
+		})
+
+		// contract: LOCK-11
+		test("a hold's timeout counts from its grant, gives the place on and fails the hold LostError", async () => {
+			const lane = store.semaphore('timed', { limit: 1 })
+			const holding = gate()
+			const letGo = gate()
+			const first = lane.hold('requests', async () => {
+				holding.open()
+				await letGo.opened
+			})
+			await holding.opened
+			const granted = gate()
+			const hung = caught(
+				lane.hold(
+					'requests',
+					async permit => {
+						granted.open()
+						await new Promise<void>(resolve =>
+							permit.signal.addEventListener('abort', () => resolve()),
+						)
+					},
+					{ wait: '60s', timeout: '300ms' },
+				),
+			)
+			await sleep(400)
+			letGo.open()
+			await first
+			await granted.opened
+			const next = await lane.hold('requests', () => 'the next in line', { wait: '5s' })
+			expect(next).toBe('the next in line')
+			expect(await hung).toBeInstanceOf(LostError)
+		})
+
 		test('names and limits are checked before anything is sent', () => {
 			expect(() => store.lock('Invoices')).toThrow(InvalidError)
 			expect(() => store.semaphore('uploads', { limit: 0 })).toThrow(InvalidError)

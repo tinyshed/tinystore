@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use super::lease::{Answer, Ask, Ending, Fence, Granted, LeaseId, Place, Reply, RequestId, Watch};
+use super::lease::{Answer, Ask, Ending, Fence, Granted, LeaseId, Place, Priority, Reply, RequestId, Watch};
 use crate::encryption::random;
 use crate::limits::LOCK_WAITERS;
 use crate::{Error, Result};
@@ -32,7 +32,8 @@ impl Mint {
         let expires = ask.ttl.map(|ttl| now.saturating_add(millis(ttl)));
         let watch = Arc::new(Watch::default());
         let revokes = ask.max_hold.map(|bound| now.saturating_add(millis(bound)));
-        Ok(Holder { granted: Granted { lease, fence, expires, revokes, watch }, request: ask.request })
+        let background = ask.priority == Priority::Background;
+        Ok(Holder { granted: Granted { lease, fence, expires, revokes, watch }, request: ask.request, background })
     }
 }
 
@@ -74,6 +75,7 @@ impl Effects {
 pub(super) struct Holder {
     pub(super) granted: Granted,
     request: Option<RequestId>,
+    background: bool,
 }
 
 struct Waiter {
@@ -83,16 +85,39 @@ struct Waiter {
     reply: Reply,
 }
 
-/// A key's holders, and its line, first come first served.
+/// A key's holders, and its two lines, each first come first served: the
+/// urgent asks', given the key first, and the background asks', which take
+/// what room the urgent leave, `background` places at most.
+///
+/// A key no background hold ever waited for keeps its second line empty,
+/// and an empty `VecDeque` holds no memory.
 #[derive(Default)]
 struct Line {
     holders: Vec<Holder>,
     waiters: VecDeque<Waiter>,
+    background: VecDeque<Waiter>,
+    /// How many of `holders` hold in the background.
+    background_held: u32,
 }
 
 impl Line {
     fn is_empty(&self) -> bool {
-        self.holders.is_empty() && self.waiters.is_empty()
+        self.holders.is_empty() && self.waiters.is_empty() && self.background.is_empty()
+    }
+
+    fn waiting(&self) -> usize {
+        self.waiters.len() + self.background.len()
+    }
+
+    fn all_waiters(&self) -> impl Iterator<Item = &Waiter> {
+        self.waiters.iter().chain(&self.background)
+    }
+
+    fn queue(&mut self, priority: Priority) -> &mut VecDeque<Waiter> {
+        match priority {
+            Priority::Urgent => &mut self.waiters,
+            Priority::Background => &mut self.background,
+        }
     }
 
     /// The earliest moment something of this key comes due: a lease revoked,
@@ -102,7 +127,7 @@ impl Line {
     fn next_due(&self) -> Option<i64> {
         let revoked = self.holders.iter().filter_map(|holder| holder.granted.revokes);
         let run_out = self.holders.iter().filter_map(|holder| holder.granted.expires);
-        let given_up = self.waiters.iter().map(|waiter| waiter.gives_up_at);
+        let given_up = self.all_waiters().map(|waiter| waiter.gives_up_at);
         revoked.chain(run_out).chain(given_up).min()
     }
 
@@ -111,18 +136,38 @@ impl Line {
         let over = |holder: &Holder| {
             holder.granted.revokes.is_some_and(|at| at <= now) || holder.granted.expires.is_some_and(|at| at <= now)
         };
-        let (ended, kept) = std::mem::take(&mut self.holders).into_iter().partition(over);
+        let (ended, kept): (Vec<Holder>, Vec<Holder>) = std::mem::take(&mut self.holders).into_iter().partition(over);
         self.holders = kept;
+        for holder in &ended {
+            self.let_go(holder);
+        }
         ended
+    }
+
+    fn take_holder(&mut self, at: usize) -> Holder {
+        let holder = self.holders.swap_remove(at);
+        self.let_go(&holder);
+        holder
+    }
+
+    fn let_go(&mut self, holder: &Holder) {
+        if holder.background {
+            self.background_held -= 1;
+        }
     }
 
     fn given_up(&mut self, now: i64) -> Vec<Waiter> {
         let mut gone = Vec::new();
-        for waiter in std::mem::take(&mut self.waiters) {
-            if waiter.gives_up_at <= now {
-                gone.push(waiter);
-            } else {
-                self.waiters.push_back(waiter);
+        for queue in [&mut self.waiters, &mut self.background] {
+            if queue.iter().all(|waiter| waiter.gives_up_at > now) {
+                continue;
+            }
+            for waiter in std::mem::take(queue) {
+                if waiter.gives_up_at <= now {
+                    gone.push(waiter);
+                } else {
+                    queue.push_back(waiter);
+                }
             }
         }
         gone
@@ -130,6 +175,37 @@ impl Line {
 
     fn has_room(&self, limit: u32) -> bool {
         self.holders.len() < limit as usize
+    }
+
+    /// Whether background holds may take one more place: fewer than its
+    /// share hold in the background.
+    fn has_background_room(&self, share: Option<u32>) -> bool {
+        share.is_none_or(|share| self.background_held < share)
+    }
+
+    /// Whether `ask` is granted at once: nobody of its priority or before it
+    /// waits, and it has room. A background ask waiting never holds an urgent
+    /// one back.
+    fn admits(&self, ask: &Ask) -> bool {
+        let first = match ask.priority {
+            Priority::Urgent => self.waiters.is_empty(),
+            Priority::Background => {
+                self.waiters.is_empty() && self.background.is_empty() && self.has_background_room(ask.background)
+            }
+        };
+        first && self.has_room(ask.limit)
+    }
+
+    /// Which line's first waiter is given the key next, if any has room: the
+    /// urgent line's first, and the background line's only while no urgent
+    /// ask waits.
+    fn next_given(&self) -> Option<Priority> {
+        if let Some(first) = self.waiters.front() {
+            return self.has_room(first.ask.limit).then_some(Priority::Urgent);
+        }
+        let first = self.background.front()?;
+        let room = self.has_room(first.ask.limit) && self.has_background_room(first.ask.background);
+        room.then_some(Priority::Background)
     }
 }
 
@@ -176,8 +252,7 @@ impl State {
         let place = ask.place.clone();
         self.settle(&place, now, mint, effects);
         let line = self.lines.entry(place.clone()).or_default();
-        let free = line.waiters.is_empty() && line.has_room(ask.limit);
-        let waits = if free {
+        let waits = if line.admits(&ask) {
             self.grant_at_once(ask, reply, now, mint, effects);
             None
         } else {
@@ -259,8 +334,8 @@ impl State {
         }
         let place = ask.place.clone();
         let line = self.lines.entry(place.clone()).or_default();
-        if line.waiters.len() >= MOST_WAITERS {
-            let waiting = (line.waiters.len() + 1) as u64;
+        if line.waiting() >= MOST_WAITERS {
+            let waiting = (line.waiting() + 1) as u64;
             let refused = LOCK_WAITERS.refuse(waiting, format!("{MOST_WAITERS} wait for it already")).within(&place);
             effects.answer(reply, Err(refused));
             return None;
@@ -271,7 +346,7 @@ impl State {
             self.requests.insert(request, Asked::Waiting(id));
         }
         let gives_up_at = now.saturating_add(millis(ask.wait));
-        line.waiters.push_back(Waiter { id, ask, gives_up_at, reply });
+        line.queue(ask.priority).push_back(Waiter { id, ask, gives_up_at, reply });
         self.waiting.insert(id, place);
         Some(id)
     }
@@ -294,14 +369,15 @@ impl State {
         self.give_on(place, now, mint, effects);
     }
 
-    /// Gives the key to the waiters at the front of its line while it has
-    /// room for them.
+    /// Gives the key to the waiters at the front of its lines while it has
+    /// room for them, the urgent line first.
     fn give_on(&mut self, place: &Place, now: i64, mint: &Mint, effects: &mut Effects) {
         loop {
             let Some(line) = self.lines.get_mut(place) else { return };
-            let Some(waiter) = line.waiters.front().filter(|waiter| line.has_room(waiter.ask.limit)) else { return };
+            let Some(priority) = line.next_given() else { return };
+            let queue = line.queue(priority);
+            let Some(waiter) = queue.pop_front() else { return };
             let granted = mint.grant(&waiter.ask, now);
-            let Some(waiter) = line.waiters.pop_front() else { return };
             self.forget_waiter(&waiter);
             match granted {
                 Ok(holder) => {
@@ -318,7 +394,11 @@ impl State {
         if let Some(request) = holder.request {
             self.requests.insert(request, Asked::Held(holder.granted.lease));
         }
-        self.lines.entry(place.clone()).or_default().holders.push(holder);
+        let line = self.lines.entry(place.clone()).or_default();
+        if holder.background {
+            line.background_held += 1;
+        }
+        line.holders.push(holder);
     }
 
     fn forget_lease(&mut self, holder: &Holder) {
@@ -341,7 +421,7 @@ impl State {
         let Some(place) = self.leases.get(lease).cloned() else { return false };
         let Some(line) = self.lines.get_mut(&place) else { return false };
         let Some(at) = line.holders.iter().position(|holder| &holder.granted.lease == lease) else { return false };
-        let holder = line.holders.swap_remove(at);
+        let holder = line.take_holder(at);
         self.forget_lease(&holder);
         self.settle(&place, now, mint, effects);
         self.keep_or_forget(&place, effects);
@@ -401,9 +481,11 @@ impl State {
     pub(super) fn cancel(&mut self, id: u64) {
         let Some(place) = self.waiting.get(&id).cloned() else { return };
         let Some(line) = self.lines.get_mut(&place) else { return };
-        if let Some(at) = line.waiters.iter().position(|waiter| waiter.id == id)
-            && let Some(waiter) = line.waiters.remove(at)
-        {
+        let removed = [&mut line.waiters, &mut line.background].into_iter().find_map(|queue| {
+            let at = queue.iter().position(|waiter| waiter.id == id)?;
+            queue.remove(at)
+        });
+        if let Some(waiter) = removed {
             self.forget_waiter(&waiter);
         }
         if self.lines.get(&place).is_some_and(Line::is_empty) {
@@ -449,7 +531,8 @@ impl State {
 
     fn waiter_mut(&mut self, id: u64) -> Option<&mut Waiter> {
         let place = self.waiting.get(&id)?;
-        self.lines.get_mut(place)?.waiters.iter_mut().find(|waiter| waiter.id == id)
+        let line = self.lines.get_mut(place)?;
+        line.waiters.iter_mut().chain(&mut line.background).find(|waiter| waiter.id == id)
     }
 
     #[cfg(test)]
@@ -463,7 +546,7 @@ impl State {
         let mut by_name: HashMap<Arc<str>, Standing> = HashMap::new();
         for (place, line) in &self.lines {
             let standing = by_name.entry(Arc::clone(place.name())).or_default();
-            standing.waiting += line.waiters.len();
+            standing.waiting += line.waiting();
             standing.held += line.holders.len();
         }
         by_name
@@ -482,7 +565,7 @@ impl State {
             for holder in line.holders {
                 effects.endings.push((holder.granted.watch, Ending::Closed));
             }
-            for waiter in line.waiters {
+            for waiter in line.waiters.into_iter().chain(line.background) {
                 effects.answer(waiter.reply, Err(Error::closed(place.to_string())));
             }
         }

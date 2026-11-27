@@ -32,12 +32,31 @@ export interface LockOptions {
 export interface SemaphoreOptions extends LockOptions {
 	/** how many may hold a key at once, 1 to 1000 */
 	limit: number
+	/** how many of a key's places background holds may take at once, 1 to limit: every place unless said */
+	background?: number | undefined
 }
 
 export interface HoldOptions {
 	/** how long the hold waits in line: 10 s unless said, then InUseError */
 	wait?: Duration | undefined
 }
+
+/**
+ * Which line a semaphore's hold waits in: urgent holds are given a place
+ * before background ones, and a background hold waiting never keeps an urgent
+ * one from a free place. A background hold is promised no place: it waits
+ * while urgent holds keep coming, `wait` at most.
+ */
+export type Priority = 'urgent' | 'background'
+
+export interface PermitOptions {
+	/** urgent unless said */
+	priority?: Priority | undefined
+	/** how long the hold may keep its place, from its grant: past it the next in line holds it and the hold is LostError */
+	timeout?: Duration | undefined
+}
+
+export interface SemaphoreHoldOptions extends HoldOptions, PermitOptions {}
 
 /** What tryHold gives: the function's value, or that the key was held. */
 export type Tried<T> = { acquired: true; value: T } | { acquired: false }
@@ -79,12 +98,18 @@ export class Lock {
 	 *     await invoices.hold(invoice.id, lease => charge(invoice, { fence: lease.fence, signal: lease.signal }))
 	 */
 	async hold<T>(key: Key, fn: (lease: Lease) => T | Promise<T>, options?: HoldOptions): Promise<T> {
-		return held(await this.#keys.hold(key, fn, waitOf(options), leaseOf), this.#keys.place(key))
+		// a semaphore's options given a lock, from code the types do not reach, are refused rather than dropped
+		const given = options as SemaphoreHoldOptions | undefined
+		if (given?.priority !== undefined || given?.timeout !== undefined) {
+			throw new InvalidError(`lock ${this.name}: a priority and a timeout are a semaphore's`)
+		}
+		const asked = { wait: waitOf(options), priority: undefined, timeout: undefined }
+		return held(await this.#keys.hold(key, fn, asked, leaseOf), this.#keys.place(key))
 	}
 
 	/** Holds key while fn runs if nobody holds it, and says it was held without waiting if somebody does. */
 	tryHold<T>(key: Key, fn: (lease: Lease) => T | Promise<T>): Promise<Tried<T>> {
-		return this.#keys.hold(key, fn, 0, leaseOf)
+		return this.#keys.hold(key, fn, { wait: 0, priority: undefined, timeout: undefined }, leaseOf)
 	}
 }
 
@@ -97,51 +122,102 @@ export class Semaphore {
 	/** A semaphore comes from `store.semaphore`. */
 	constructor(link: Link, name: string, options: SemaphoreOptions) {
 		checkName(name, 'semaphore')
-		if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000) {
-			throw new InvalidError(`semaphore ${name}: a limit of ${options.limit}, not 1 to 1000`)
+		const { limit, background } = options
+		if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+			throw new InvalidError(`semaphore ${name}: a limit of ${limit}, not 1 to 1000`)
 		}
-		keepLimit(link, name, options.limit)
+		if (
+			background !== undefined &&
+			(!Number.isInteger(background) || background < 1 || background > limit)
+		) {
+			throw new InvalidError(
+				`semaphore ${name}: a background of ${background}, not 1 to its limit ${limit}`,
+			)
+		}
+		const breaker = breakerOf(name, options.breaker)
+		// a background of the limit is every place, as none is
+		const shaped = background === limit ? undefined : background
+		keepShape(link, name, [limit, shaped, breaker?.failures, breaker?.pause])
 		this.name = name
-		this.limit = options.limit
-		this.#keys = new Keys(link, 'semaphore', name, options.limit, options)
+		this.limit = limit
+		this.#keys = new Keys(link, 'semaphore', name, limit, options)
 	}
 
+	/**
+	 * Waits for one of key's places, holds it while fn runs and lets it go,
+	 * as a lock's hold does; in the background, it waits behind every urgent
+	 * hold and takes no more than the semaphore's `background` places:
+	 *
+	 *     await cabinet.hold('requests', permit => sync(permit.signal), { priority: 'background', timeout: '15s' })
+	 */
 	async hold<T>(
 		key: Key,
 		fn: (permit: Permit) => T | Promise<T>,
-		options?: HoldOptions,
+		options?: SemaphoreHoldOptions,
 	): Promise<T> {
-		return held(await this.#keys.hold(key, fn, waitOf(options), permitOf), this.#keys.place(key))
+		const asked = { wait: waitOf(options), ...termsOf(this.name, options) }
+		return held(await this.#keys.hold(key, fn, asked, permitOf), this.#keys.place(key))
 	}
 
-	tryHold<T>(key: Key, fn: (permit: Permit) => T | Promise<T>): Promise<Tried<T>> {
-		return this.#keys.hold(key, fn, 0, permitOf)
+	tryHold<T>(
+		key: Key,
+		fn: (permit: Permit) => T | Promise<T>,
+		options?: PermitOptions,
+	): Promise<Tried<T>> {
+		return this.#keys.hold(key, fn, { wait: 0, ...termsOf(this.name, options) }, permitOf)
 	}
 }
 
-// The limit each semaphore's first open gave, by the link of the store that
-// opened it: one name keeps one limit in a program, and two stores are two
-// programs, each of whose holds the store admits by its own limit.
-const opened = new WeakMap<Link, Map<string, number>>()
+// The limit and the background each semaphore's first open gave, by the link
+// of the store that opened it: one name keeps one of each in a program, and
+// two stores are two programs, each of whose holds the store admits by its own.
+const opened = new WeakMap<Link, Map<string, readonly [number, number | undefined]>>()
 
-/** Keeps the limit a semaphore's first open on this store gives: another limit is refused, naming both. */
-function keepLimit(link: Link, name: string, limit: number): void {
-	let limits = opened.get(link)
-	if (limits === undefined) {
-		limits = new Map()
-		opened.set(link, limits)
+/** Keeps the limit and the background a semaphore's first open on this store gives: another is refused, naming both. */
+function keepShape(link: Link, name: string, limit: number, background: number | undefined): void {
+	let shapes = opened.get(link)
+	if (shapes === undefined) {
+		shapes = new Map()
+		opened.set(link, shapes)
 	}
-	const first = limits.get(name) ?? limit
+	const [first, firstBackground] = shapes.get(name) ?? [limit, background]
 	if (first !== limit) {
 		throw new InvalidError(
 			`semaphore ${name}: open in this program with a limit of ${first}, not ${limit}`,
 		)
 	}
-	limits.set(name, first)
+	if (firstBackground !== background) {
+		throw new InvalidError(
+			`semaphore ${name}: open in this program with a background of ${firstBackground ?? 'none'}, not ${background ?? 'none'}`,
+		)
+	}
+	shapes.set(name, [first, firstBackground])
 }
 
 function waitOf(options: HoldOptions | undefined): number {
 	return ms(options?.wait ?? defaultWait)
+}
+
+/** What a semaphore's hold asks beside its wait. */
+function termsOf(name: string, options: PermitOptions | undefined): Omit<Asked, 'wait'> {
+	const priority = options?.priority
+	if (priority !== undefined && priority !== 'urgent' && priority !== 'background') {
+		throw new InvalidError(
+			`semaphore ${name}: a priority of ${JSON.stringify(priority)}, not urgent or background`,
+		)
+	}
+	const timeout = options?.timeout === undefined ? undefined : ms(options.timeout)
+	if (timeout === 0) {
+		throw new InvalidError(`semaphore ${name}: a timeout of zero`)
+	}
+	return { priority, timeout }
+}
+
+/** How a hold asks for its key: how long it waits, in which line, and how long it may keep it. */
+interface Asked {
+	wait: number
+	priority: Priority | undefined
+	timeout: number | undefined
 }
 
 /** What hold gives: fn's value, a hold told not to wait finding the key held. */
@@ -174,6 +250,7 @@ class Keys {
 	readonly #kind: 'lock' | 'semaphore'
 	readonly #name: string
 	readonly #limit: number
+	readonly #background: number | undefined
 	readonly #ttl: number
 	readonly #maxHold: number | undefined
 
@@ -182,12 +259,13 @@ class Keys {
 		kind: 'lock' | 'semaphore',
 		name: string,
 		limit: number,
-		options: LockOptions | undefined,
+		options: (LockOptions & Pick<SemaphoreOptions, 'background'>) | undefined,
 	) {
 		this.#link = link
 		this.#kind = kind
 		this.#name = name
 		this.#limit = limit
+		this.#background = options?.background
 		this.#ttl = ms(options?.ttl ?? defaultTtl)
 		this.#maxHold = options?.maxHold === undefined ? undefined : ms(options.maxHold)
 	}
@@ -200,13 +278,13 @@ class Keys {
 	async hold<T, V>(
 		key: Key,
 		fn: (view: V) => T | Promise<T>,
-		wait: number,
+		terms: Asked,
 		viewOf: (holding: Holding) => V,
 	): Promise<Tried<T>> {
 		const place = this.place(key)
 		this.#refuse(place)
 		const asked = performance.now()
-		const answer = await this.#ask(keyText(key), wait)
+		const answer = await this.#ask(keyText(key), terms)
 		if (answer.acquired !== true) {
 			return { acquired: false }
 		}
@@ -241,16 +319,21 @@ class Keys {
 
 	// A connection lost on the way asks again with the same request, which the
 	// store answers with the lease it gave, or with the ask's place in line.
-	async #ask(key: string, wait: number): Promise<ReturnType<typeof LocksHeld.decode>> {
+	// A hold's timeout is a maxHold of its own: the shorter of the two revokes.
+	async #ask(key: string, terms: Asked): Promise<ReturnType<typeof LocksHeld.decode>> {
+		const { wait, priority, timeout } = terms
+		const bounds = [this.#maxHold, timeout].filter(bound => bound !== undefined)
 		const body = LocksHold.encode({
 			kind: this.#kind,
 			name: this.#name,
 			key,
 			limit: this.#limit,
 			ttl: this.#ttl,
-			maxHold: this.#maxHold,
+			maxHold: bounds.length === 0 ? undefined : Math.min(...bounds),
 			wait,
 			request: crypto.getRandomValues(new Uint8Array(16)),
+			priority: priority === 'background' ? priority : undefined,
+			background: this.#background,
 		})
 		const answer = await this.#link.run('read', connection =>
 			connection.session.call(methods['locks.hold'], body, currentSignal()),
@@ -295,7 +378,9 @@ class Holding {
 		this.#revoking =
 			revokeIn === undefined
 				? undefined
-				: unref(setTimeout(() => this.#lose('it was revoked at its maxHold'), revokeIn))
+				: unref(
+						setTimeout(() => this.#lose('it was revoked at its maxHold or its timeout'), revokeIn),
+					)
 	}
 
 	get signal(): AbortSignal {

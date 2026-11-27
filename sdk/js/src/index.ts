@@ -118,7 +118,10 @@ export type {
 	Lock,
 	LockOptions,
 	Permit,
+	PermitOptions,
+	Priority,
 	Semaphore,
+	SemaphoreHoldOptions,
 	SemaphoreOptions,
 	Tried,
 } from './locks.ts'

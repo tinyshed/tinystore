@@ -3240,6 +3240,9 @@
     },
     {
       "fields": {
+        "background": {
+          "uint": "1007"
+        },
         "key": {
           "str": "key"
         },
@@ -3255,6 +3258,9 @@
         "name": {
           "str": "name"
         },
+        "priority": {
+          "str": "priority"
+        },
         "request": {
           "bin": "01ff"
         },
@@ -3265,7 +3271,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8801a46b696e6402a46e616d6503a36b657904cd019705cd05dc06cd05dc07cd05dc08c40201ff",
+      "hex": "8a01a46b696e6402a46e616d6503a36b657904cd019705cd05dc06cd05dc07cd05dc08c40201ff09a87072696f726974790acd03ef",
       "message": "locks.Hold",
       "name": "locks.Hold with every field"
     },

@@ -16,6 +16,7 @@ fn hold(key: &str, wait: u64, request: u8) -> LocksHold {
         max_hold: None,
         wait,
         request: vec![request; 16],
+        ..Default::default()
     }
 }
 
@@ -105,4 +106,44 @@ fn a_semaphore_held_over_the_wire_has_no_fence_and_names_are_checked() {
     assert_eq!(refused(&mut client, &LocksHold { ttl: 500, ..hold("42", 0, 7) }), "invalid", "a ttl under 1 s");
     assert_eq!(refused(&mut client, &LocksHold { name: "Invoices".to_owned(), ..hold("42", 0, 7) }), "invalid");
     assert_eq!(refused(&mut client, &LocksHold { request: vec![1; 3], ..hold("42", 0, 7) }), "invalid");
+}
+
+/// A hold of a semaphore of two places, one of them for background holds.
+fn cabinet(request: u8, priority: &str) -> LocksHold {
+    LocksHold {
+        kind: "semaphore".to_owned(),
+        name: "cabinet".to_owned(),
+        limit: 2,
+        background: 1,
+        priority: priority.to_owned(),
+        ..hold("requests", 60_000, request)
+    }
+}
+
+// contract: LOCK-09
+// contract: LOCK-10
+#[test]
+fn an_urgent_hold_over_the_wire_passes_the_background_ones_which_keep_to_their_places() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let first: LocksHeld = client.call(method::LOCKS_HOLD, &cabinet(1, "background")).unwrap();
+    assert!(first.acquired);
+    let second = client.start(method::LOCKS_HOLD, &cabinet(2, "background"));
+    assert!(client.silent_on(second, Duration::from_millis(50)), "background holds have one place of two");
+    let urgent: LocksHeld = client.call(method::LOCKS_HOLD, &cabinet(3, "")).unwrap();
+    assert!(urgent.acquired, "an urgent hold takes the place left, past the background one waiting");
+    let later = client.start(method::LOCKS_HOLD, &cabinet(4, "urgent"));
+    release(&mut client, &first.lease);
+    let given: LocksHeld = answered(&client.next_on(later)).unwrap();
+    assert!(given.acquired, "the place freed goes to the urgent hold that came after the background one");
+    assert!(client.silent_on(second, Duration::from_millis(50)));
+    release(&mut client, &urgent.lease);
+    let background: LocksHeld = answered(&client.next_on(second)).unwrap();
+    assert!(background.acquired);
+
+    let refused =
+        |client: &mut Client, hold: &LocksHold| client.call::<LocksHeld>(method::LOCKS_HOLD, hold).unwrap_err().code;
+    let wider = LocksHold { background: 3, request: vec![8; 16], ..cabinet(8, "") };
+    assert_eq!(refused(&mut client, &wider), "invalid", "a background past the limit");
+    assert_eq!(refused(&mut client, &cabinet(9, "later")), "invalid", "a priority of neither");
 }

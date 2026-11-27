@@ -42,16 +42,28 @@ if TYPE_CHECKING:
 
 _WAIT = "10s"
 
+type Priority = Literal["urgent", "background"]
+"""Which line a semaphore's hold waits in.
+
+Urgent holds are given a place before background ones, and a background hold
+waiting never keeps an urgent one from a free place. A background hold is
+promised no place: it waits while urgent holds keep coming, ``wait`` at most.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class _Asked:
+    """How a hold asks for its key: how long it waits, in which line, and how long it may keep it."""
+
+    wait: int
+    priority: Priority = "urgent"
+    timeout: int | None = None
+
+
 _holding: contextvars.ContextVar[tuple[tuple[int, str], ...]] = contextvars.ContextVar("tinystore holding", default=())
 """The keys the caller holds or waits for, each with the link of the store it is of."""
 
-
-def outside_holds() -> None:
-    """Holds no key from here on in this context: work that outlives the hold its caller is inside."""
-    _holding.set(())
-
-
-_opened: weakref.WeakKeyDictionary[Link, dict[str, _Shape]] = weakref.WeakKeyDictionary()
+_opened: weakref.WeakKeyDictionary[Link, dict[str, tuple[int, int | None]]] = weakref.WeakKeyDictionary()
 """The limit and the background each semaphore's first open gave, by the link of the store that opened it.
 
 One name keeps one limit in a program, and two stores are two programs, each
@@ -59,12 +71,15 @@ of whose holds the store admits by its own limit.
 """
 
 
-def _keep_limit(link: Link, name: str, limit: int) -> None:
-    """Keeps the limit a semaphore's first open on this store gives: another limit is refused, naming both."""
-    limits = _opened.setdefault(link, {})
-    first = limits.setdefault(name, limit)
+def _keep_shape(link: Link, name: str, limit: int, background: int | None) -> None:
+    """Keeps the limit and the background a semaphore's first open on this store gives: another is refused."""
+    shapes = _opened.setdefault(link, {})
+    first, first_background = shapes.setdefault(name, (limit, background))
     if first != limit:
         raise InvalidError(f"semaphore {name}: open in this program with a limit of {first}, not {limit}")
+    if first_background != background:
+        before, now = ("none" if places is None else places for places in (first_background, background))
+        raise InvalidError(f"semaphore {name}: open in this program with a background of {before}, not {now}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,12 +111,14 @@ class _Keys:
         limit: int,
         ttl: Duration,
         max_hold: Duration | None,
+        background: int | None = None,
     ) -> None:
         check_name(name, kind)
         self._link = link
         self._kind = kind
         self._name = name
         self._limit = limit
+        self._background = background
         self._ttl = ms(ttl, f"{kind} {name}: its ttl")
         self._max_hold = None if max_hold is None else ms(max_hold, f"{kind} {name}: its max_hold")
 
@@ -118,21 +135,25 @@ class _Keys:
         if (id(self._link), place) in _holding.get():
             raise InvalidError(f"{place}: a hold of a key inside its own hold would wait for itself")
 
-    async def ask(self, key: Key, wait: int) -> dict[str, Any]:
+    async def ask(self, key: Key, asked: _Asked) -> dict[str, Any]:
         """The key, once the store gives it, or that it was held for all of wait.
 
         A connection lost on the way asks again with the same request, which
-        the store answers with the lease it gave, or with the ask's place in line.
+        the store answers with the lease it gave, or with the ask's place in
+        line. A hold's timeout is a max_hold of its own: the shorter revokes.
         """
+        bounds = [bound for bound in (self._max_hold, asked.timeout) if bound is not None]
         body = LocksHold.encode(
             kind=self._kind,
             name=self._name,
             key=key_text(key),
             limit=self._limit,
             ttl=self._ttl,
-            max_hold=self._max_hold,
-            wait=wait,
+            max_hold=min(bounds) if bounds else None,
+            wait=asked.wait,
             request=secrets.token_bytes(16),
+            priority="background" if asked.priority == "background" else None,
+            background=self._background,
         )
         answer = await self._link.run("read", lambda c: c.session.call(methods["locks.hold"], body))
         return LocksHeld.decode(answer)
@@ -146,10 +167,10 @@ class Holding[V]:
     last await ends it LostError too, since another holder may have run beside it.
     """
 
-    def __init__(self, keys: _Keys, key: Key, wait: int, view: type[V], tries: bool) -> None:
+    def __init__(self, keys: _Keys, key: Key, asked: _Asked, view: type[V], tries: bool) -> None:
         self._keys = keys
         self._key = key
-        self._wait = wait
+        self._asked = asked
         self._view = view
         self._tries = tries
         self._place = keys.place(key)
@@ -167,7 +188,7 @@ class Holding[V]:
     async def __aenter__(self) -> V:
         self._keys.refuse(self._place)
         asked = time.monotonic()
-        answer = await self._keys.ask(self._key, self._wait)
+        answer = await self._keys.ask(self._key, self._asked)
         waited = timedelta(seconds=time.monotonic() - asked)
         if not answer.get("acquired"):
             if self._tries:
@@ -208,7 +229,9 @@ class Holding[V]:
         self._run_out_at(time.monotonic() + ttl / 1000)
         revoke_in = answer.get("revoke_in")
         if revoke_in is not None:
-            self._revoking = loop.call_later(revoke_in / 1000, self._lose, "it was revoked at its max_hold", None)
+            self._revoking = loop.call_later(
+                revoke_in / 1000, self._lose, "it was revoked at its max_hold or its timeout", None
+            )
 
     async def _renew_every(self, ttl: int) -> None:
         while True:
@@ -276,28 +299,55 @@ class Lock:
         A key still held after wait is InUseError; a lease lost while the
         block ran is LostError, though the block succeeded.
         """
-        return Holding(self._keys, key, ms(wait, f"lock {self.name}: its wait"), Lease, False)
+        return Holding(self._keys, key, _Asked(ms(wait, f"lock {self.name}: its wait")), Lease, False)
 
     def try_hold(self, key: Key) -> Holding[Lease | None]:
         """Holds key through the block if nobody holds it; the lease is None when somebody does."""
-        return Holding(self._keys, key, 0, Lease, True)  # pyright: ignore[reportReturnType]
+        return Holding(self._keys, key, _Asked(0), Lease, True)  # pyright: ignore[reportReturnType]
 
 
 class Semaphore:
     """Keys held by up to their limit at a time: ``store.semaphore(name, limit=3)``."""
 
-    def __init__(self, link: Link, name: str, limit: int, ttl: Duration, max_hold: Duration | None) -> None:
+    def __init__(
+        self, link: Link, name: str, limit: int, ttl: Duration, max_hold: Duration | None, background: int | None
+    ) -> None:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:  # pyright: ignore[reportUnnecessaryIsInstance]
             raise InvalidError(f"semaphore {name}: a limit of {limit!r}, not 1 to 1000")
-        _keep_limit(link, name, limit)
+        if background is not None and (
+            isinstance(background, bool) or not isinstance(background, int) or not 1 <= background <= limit  # pyright: ignore[reportUnnecessaryIsInstance]
+        ):
+            raise InvalidError(f"semaphore {name}: a background of {background!r}, not 1 to its limit {limit}")
+        _keep_shape(link, name, limit, background)
         self.name = name
         self.limit = limit
-        self._keys = _Keys(link, "semaphore", name, limit, ttl, max_hold)
+        self._keys = _Keys(link, "semaphore", name, limit, ttl, max_hold, background)
 
-    def hold(self, key: Key, *, wait: Duration = _WAIT) -> Holding[Permit]:
-        """Waits for one of key's permits in line and holds it through the block."""
-        return Holding(self._keys, key, ms(wait, f"semaphore {self.name}: its wait"), Permit, False)
+    def hold(
+        self, key: Key, *, wait: Duration = _WAIT, priority: Priority = "urgent", timeout: Duration | None = None
+    ) -> Holding[Permit]:
+        """Waits for one of key's places in line and holds it through the block.
 
-    def try_hold(self, key: Key) -> Holding[Permit | None]:
-        """Holds one of key's permits through the block if one is free; None when none is."""
-        return Holding(self._keys, key, 0, Permit, True)  # pyright: ignore[reportReturnType]
+        In the background it waits behind every urgent hold and takes no more
+        than the semaphore's ``background`` places; past ``timeout`` from the
+        grant the place goes to the next in line and the block ends LostError::
+
+            async with cabinet.hold("requests", priority="background", timeout="15s"):
+                await sync()
+        """
+        asked = self._asked(ms(wait, f"semaphore {self.name}: its wait"), priority, timeout)
+        return Holding(self._keys, key, asked, Permit, False)
+
+    def try_hold(
+        self, key: Key, *, priority: Priority = "urgent", timeout: Duration | None = None
+    ) -> Holding[Permit | None]:
+        """Holds one of key's places through the block if one is free; None when none is."""
+        return Holding(self._keys, key, self._asked(0, priority, timeout), Permit, True)  # pyright: ignore[reportReturnType]
+
+    def _asked(self, wait: int, priority: Priority, timeout: Duration | None) -> _Asked:
+        if priority not in ("urgent", "background"):
+            raise InvalidError(f"semaphore {self.name}: a priority of {priority!r}, not urgent or background")
+        timed = None if timeout is None else ms(timeout, f"semaphore {self.name}: its timeout")
+        if timed == 0:
+            raise InvalidError(f"semaphore {self.name}: a timeout of zero")
+        return _Asked(wait, priority, timed)

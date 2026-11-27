@@ -11,6 +11,14 @@
 //! let charged = invoices.hold("42", |lease| -> tinystore::Result<String> {
 //!     Ok(format!("charged with fence {}", lease.fence())) // nobody else holds key 42 meanwhile
 //! })?;
+//!
+//! // eight places, background work on four of them at most, behind every urgent hold
+//! let cabinet = store.semaphore("cabinet").limit(8).background(4).open()?;
+//! let synced = cabinet
+//!     .key("requests")
+//!     .background()
+//!     .timeout(std::time::Duration::from_secs(15)) // from the grant: past it the hold is lost
+//!     .hold(|_| -> tinystore::Result<&str> { Ok("synced") })?;
 //! # Ok(())
 //! # }
 //! ```
@@ -32,7 +40,7 @@ pub(crate) use self::awaited::{Ends, Held};
 pub(crate) use self::engine::Locks;
 pub use self::lease::Fence;
 pub(crate) use self::lease::{Answer, Granted};
-use self::lease::{Ask, Ending, Kind, Place};
+use self::lease::{Ask, Ending, Kind, Place, Priority};
 use super::scope::check_name;
 use crate::{Error, ErrorKind, Key, Result, Store, sqlite};
 
@@ -57,6 +65,7 @@ pub struct SemaphoreBuilder {
     store: Store,
     name: String,
     limit: Option<u32>,
+    background: Option<u32>,
     max_hold: Option<Duration>,
 }
 
@@ -69,7 +78,7 @@ impl Store {
 
     /// Keys held by up to `limit` holders at a time.
     pub fn semaphore(&self, name: &str) -> SemaphoreBuilder {
-        SemaphoreBuilder { store: self.clone(), name: name.to_owned(), limit: None, max_hold: None }
+        SemaphoreBuilder { store: self.clone(), name: name.to_owned(), limit: None, background: None, max_hold: None }
     }
 }
 
@@ -96,6 +105,15 @@ impl SemaphoreBuilder {
         self
     }
 
+    /// How many of a key's places background holds may take at once, from 1
+    /// to the limit, so that urgent holds always find the rest; background
+    /// holds may take every place unless given. A name keeps one in a
+    /// program, as it keeps its limit.
+    pub fn background(mut self, places: u32) -> Self {
+        self.background = Some(places);
+        self
+    }
+
     pub fn max_hold(mut self, bound: Duration) -> Self {
         self.max_hold = Some(bound);
         self
@@ -107,8 +125,12 @@ impl SemaphoreBuilder {
         if !(1..=MOST_LIMIT).contains(&limit) {
             return Err(Error::invalid(format!("a limit of {limit}, not 1 to {MOST_LIMIT}")).within(shown()));
         }
-        let opened = Opened::open(&self.store, Kind::Semaphore, &self.name, limit, self.max_hold)?;
-        opened.locks.keep_limit(&self.name, limit).map_err(|error| error.within(shown()))?;
+        if let Some(places) = self.background.filter(|places| !(1..=limit).contains(places)) {
+            return Err(Error::invalid(format!("a background of {places}, not 1 to its limit {limit}")).within(shown()));
+        }
+        let mut opened = Opened::open(&self.store, Kind::Semaphore, &self.name, limit, self.max_hold)?;
+        opened.background = self.background;
+        opened.locks.keep_shape(&self.name, limit, self.background).map_err(|error| error.within(shown()))?;
         Ok(Semaphore { opened })
     }
 }
@@ -146,7 +168,7 @@ impl Lock {
 
     /// A key, for a hold that says how long it waits.
     pub fn key(&self, key: impl Key) -> LockKey<'_> {
-        LockKey { opened: &self.opened, key: key.text().into_owned(), wait: WAIT }
+        LockKey { opened: &self.opened, key: key.text().into_owned(), terms: Terms::default() }
     }
 }
 
@@ -163,8 +185,10 @@ impl Semaphore {
         self.key(key).try_hold(work)
     }
 
+    /// A key, for a hold that says how long it waits, whether it waits in
+    /// the background and how long it may keep its place.
     pub fn key(&self, key: impl Key) -> SemaphoreKey<'_> {
-        SemaphoreKey { opened: &self.opened, key: key.text().into_owned(), wait: WAIT }
+        SemaphoreKey { opened: &self.opened, key: key.text().into_owned(), terms: Terms::default() }
     }
 }
 
@@ -173,32 +197,49 @@ impl Semaphore {
 pub struct LockKey<'a> {
     opened: &'a Opened,
     key: String,
-    wait: Duration,
+    terms: Terms,
 }
 
-/// A key of a semaphore, for a hold that says how long it waits.
+/// A key of a semaphore, for a hold that says how long it waits, at which
+/// priority, and how long it may keep its place.
 #[must_use = "a key is held with hold() or try_hold()"]
 pub struct SemaphoreKey<'a> {
     opened: &'a Opened,
     key: String,
+    terms: Terms,
+}
+
+/// How a hold asks for its key.
+#[derive(Clone, Copy)]
+struct Terms {
     wait: Duration,
+    priority: Priority,
+    /// How long the hold may keep its place from its grant: a `max_hold` of
+    /// this hold alone.
+    timeout: Option<Duration>,
+}
+
+impl Default for Terms {
+    fn default() -> Terms {
+        Terms { wait: WAIT, priority: Priority::Urgent, timeout: None }
+    }
 }
 
 impl LockKey<'_> {
     /// How long the hold waits in line; ten seconds unless said.
     pub fn wait(mut self, wait: Duration) -> Self {
-        self.wait = wait;
+        self.terms.wait = wait;
         self
     }
 
     pub fn hold<T, E: From<Error>>(self, work: impl FnOnce(&Lease) -> Result<T, E>) -> Result<T, E> {
-        let holding = self.opened.hold(&self.key, self.wait)?;
+        let holding = self.opened.hold(&self.key, self.terms)?;
         let lease = Lease { fence: holding.granted.fence, holding: &holding };
         holding.run(|| work(&lease))
     }
 
     pub fn try_hold<T, E: From<Error>>(self, work: impl FnOnce(&Lease) -> Result<T, E>) -> Result<Option<T>, E> {
-        let Some(holding) = self.opened.try_hold(&self.key)? else { return Ok(None) };
+        let Some(holding) = self.opened.try_hold(&self.key, self.terms)? else { return Ok(None) };
         let lease = Lease { fence: holding.granted.fence, holding: &holding };
         holding.run(|| work(&lease)).map(Some)
     }
@@ -206,17 +247,34 @@ impl LockKey<'_> {
 
 impl SemaphoreKey<'_> {
     pub fn wait(mut self, wait: Duration) -> Self {
-        self.wait = wait;
+        self.terms.wait = wait;
+        self
+    }
+
+    /// Waits behind every urgent hold of the key, and takes no more of its
+    /// places than the semaphore's `background`. Nothing promises it a place:
+    /// while urgent holds keep coming and take the room, it waits, `wait` at
+    /// most.
+    pub fn background(mut self) -> Self {
+        self.terms.priority = Priority::Background;
+        self
+    }
+
+    /// How long the hold may keep its place, from its grant: past it the
+    /// place goes to the next in line and the hold fails `lost`, as at the
+    /// semaphore's `max_hold`, the shorter of the two counting.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.terms.timeout = Some(timeout);
         self
     }
 
     pub fn hold<T, E: From<Error>>(self, work: impl FnOnce(&Permit) -> Result<T, E>) -> Result<T, E> {
-        let holding = self.opened.hold(&self.key, self.wait)?;
+        let holding = self.opened.hold(&self.key, self.terms)?;
         holding.run(|| work(&Permit { holding: &holding }))
     }
 
     pub fn try_hold<T, E: From<Error>>(self, work: impl FnOnce(&Permit) -> Result<T, E>) -> Result<Option<T>, E> {
-        let Some(holding) = self.opened.try_hold(&self.key)? else { return Ok(None) };
+        let Some(holding) = self.opened.try_hold(&self.key, self.terms)? else { return Ok(None) };
         holding.run(|| work(&Permit { holding: &holding })).map(Some)
     }
 }
@@ -270,6 +328,7 @@ struct Opened {
     kind: Kind,
     name: Arc<str>,
     limit: u32,
+    background: Option<u32>,
     max_hold: Option<Duration>,
 }
 
@@ -281,7 +340,7 @@ impl Opened {
             return Err(Error::invalid("a max_hold of zero").within(shown()));
         }
         let locks = Locks::of(store)?;
-        Ok(Opened { locks, kind, name: Arc::from(name), limit, max_hold })
+        Ok(Opened { locks, kind, name: Arc::from(name), limit, background: None, max_hold })
     }
 
     fn place(&self, key: &str) -> Result<Place> {
@@ -292,28 +351,51 @@ impl Opened {
         Ok(place)
     }
 
-    /// Holds `key` once it is free, `wait` at most.
-    fn hold(&self, key: &str, wait: Duration) -> Result<Holding> {
+    /// Holds `key` once it is free, its terms' `wait` at most.
+    fn hold(&self, key: &str, terms: Terms) -> Result<Holding> {
         let place = self.place(key)?;
-        match self.ask(&place, wait)? {
+        match self.ask(&place, terms)? {
             Some(holding) => Ok(holding),
-            None => Err(Error::new(ErrorKind::InUse, format!("held past a wait of {wait:?}")).within(place)),
+            None => {
+                let wait = terms.wait;
+                Err(Error::new(ErrorKind::InUse, format!("held past a wait of {wait:?}")).within(place))
+            }
         }
     }
 
-    fn try_hold(&self, key: &str) -> Result<Option<Holding>> {
+    fn try_hold(&self, key: &str, terms: Terms) -> Result<Option<Holding>> {
         let place = self.place(key)?;
-        self.ask(&place, Duration::ZERO)
+        self.ask(&place, Terms { wait: Duration::ZERO, ..terms })
+    }
+
+    /// What a hold of `place` on these terms asks the store's locks for.
+    fn ask_of(&self, place: &Place, terms: Terms) -> Result<Ask> {
+        if terms.timeout.is_some_and(|timeout| timeout.is_zero()) {
+            return Err(Error::invalid("a timeout of zero").within(place));
+        }
+        let max_hold = match (self.max_hold, terms.timeout) {
+            (Some(bound), Some(timeout)) => Some(bound.min(timeout)),
+            (bound, timeout) => bound.or(timeout),
+        };
+        Ok(Ask {
+            place: place.clone(),
+            limit: self.limit,
+            priority: terms.priority,
+            background: self.background,
+            ttl: None,
+            max_hold,
+            wait: terms.wait,
+            request: None,
+        })
     }
 
     /// Asks for `place` and waits for the answer; none when it stayed busy.
-    fn ask(&self, place: &Place, wait: Duration) -> Result<Option<Holding>> {
+    fn ask(&self, place: &Place, terms: Terms) -> Result<Option<Holding>> {
         let asked = Instant::now();
+        let ask = self.ask_of(place, terms)?;
         crate::polled::may_wait(|| format!("{place}: a hold"))?;
         refuse_where_a_hold_would_wait_for_itself(&self.locks, place)?;
         let mark = Mark::enter(&self.locks, place);
-        let ask =
-            Ask { place: place.clone(), limit: self.limit, ttl: None, max_hold: self.max_hold, wait, request: None };
         let (answered, answer) = mpsc::sync_channel(1);
         self.locks.ask(ask, Box::new(move |answer| drop(answered.send(answer))));
         let answer = answer.recv().map_err(|_| Error::internal("a lock's answer was dropped").within(place))?;
@@ -337,6 +419,10 @@ pub(crate) struct Remote<'a> {
     pub(crate) name: &'a str,
     pub(crate) key: &'a str,
     pub(crate) limit: u32,
+    /// `urgent` or `background`; empty is urgent.
+    pub(crate) priority: &'a str,
+    /// Zero for none.
+    pub(crate) background: u32,
     pub(crate) ttl: Duration,
     pub(crate) max_hold: Option<Duration>,
     pub(crate) wait: Duration,
@@ -357,9 +443,20 @@ pub(crate) fn remote_ask(store: &Store, remote: &Remote<'_>) -> Result<(Arc<Lock
     if !(Duration::from_secs(1)..=Duration::from_secs(60 * 60)).contains(&remote.ttl) {
         return Err(Error::invalid(format!("a ttl of {:?}, not 1 s to 1 hour", remote.ttl)).within(place));
     }
+    let priority = match remote.priority {
+        "" | "urgent" => Priority::Urgent,
+        "background" => Priority::Background,
+        other => return Err(Error::invalid(format!("a priority of {other:?}, not urgent or background")).within(place)),
+    };
+    if remote.background > remote.limit {
+        let shown = format!("a background of {}, not 1 to its limit {}", remote.background, remote.limit);
+        return Err(Error::invalid(shown).within(place));
+    }
     let ask = Ask {
         place,
         limit: remote.limit,
+        priority,
+        background: (remote.background > 0).then_some(remote.background),
         ttl: Some(remote.ttl),
         max_hold: remote.max_hold,
         wait: remote.wait,
@@ -400,7 +497,7 @@ impl Holding {
         match self.granted.watch.ending() {
             Ending::Live => Ok(value),
             Ending::Lost => {
-                let lost = "the lease ended while its function ran, revoked at its max_hold";
+                let lost = "the lease ended while its function ran, revoked at its max_hold or its timeout";
                 Err(E::from(Error::new(ErrorKind::Lost, lost).within(&self.place)))
             }
             Ending::Closed => Err(E::from(Error::closed(self.place.to_string()))),
@@ -512,3 +609,7 @@ impl Drop for Mark {
 #[cfg(test)]
 #[path = "locks_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "priority_tests.rs"]
+mod priority_tests;

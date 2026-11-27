@@ -36,11 +36,12 @@ const LONGEST_SLEEP: Duration = Duration::from_secs(60);
 pub(crate) struct Locks {
     inner: Arc<Inner>,
     thread: Mutex<Option<JoinHandle<()>>>,
-    /// The limit each semaphore's first open in this program gave. A client's
-    /// holds over a connection pass it by, each admitted by its own limit:
-    /// one server serves several programs, and a program may change its
-    /// limit between deploys while the old one's holds still run.
-    opened: Mutex<HashMap<String, u32>>,
+    /// The limit and the background each semaphore's first open in this
+    /// program gave. A client's holds over a connection pass them by, each
+    /// admitted by its own: one server serves several programs, and a program
+    /// may change its limit between deploys while the old one's holds still
+    /// run.
+    opened: Mutex<HashMap<String, (u32, Option<u32>)>>,
     /// The names the last sample told of, so that one whose keys all went is
     /// told zero once rather than left at what it last held.
     sampled: Mutex<HashSet<Arc<str>>>,
@@ -85,14 +86,19 @@ impl Locks {
         Ok(locks)
     }
 
-    /// Keeps the limit a semaphore's first open in this program gives: an
-    /// open of the name with another limit is refused, naming both, as
-    /// counters refuse an open that counts another way.
-    pub(crate) fn keep_limit(&self, name: &str, limit: u32) -> Result<()> {
+    /// Keeps the limit and the background a semaphore's first open in this
+    /// program gives: an open of the name with another is refused, naming
+    /// both, as counters refuse an open that counts another way.
+    pub(crate) fn keep_shape(&self, name: &str, limit: u32, background: Option<u32>) -> Result<()> {
         let mut opened = lock(&self.opened);
-        let first = *opened.entry(name.to_owned()).or_insert(limit);
+        let (first, first_background) = *opened.entry(name.to_owned()).or_insert((limit, background));
         if first != limit {
             return Err(Error::invalid(format!("open in this program with a limit of {first}, not {limit}")));
+        }
+        if first_background != background {
+            let shown = |places: Option<u32>| places.map_or_else(|| "none".to_owned(), |places| places.to_string());
+            let (first, given) = (shown(first_background), shown(background));
+            return Err(Error::invalid(format!("open in this program with a background of {first}, not {given}")));
         }
         Ok(())
     }
