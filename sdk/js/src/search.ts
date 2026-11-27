@@ -7,6 +7,7 @@
 
 import type { Link } from './connection.ts'
 import { errorOf, InvalidError, ProtocolError, type TinystoreError } from './errors.ts'
+import { refuseUnknown } from './fields.ts'
 import { checkName, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import { parseJson } from './json.ts'
 import { keyText } from './kv.ts'
@@ -453,6 +454,9 @@ export interface Among {
 	snippet?: { field: string; around?: number | undefined } | undefined
 }
 
+/** The fields an `Among` takes, so that one it does not, as a typo, is refused rather than dropped. */
+const amongFields = ['index', 'boost', 'where', 'limit', 'offset', 'prefix', 'matches', 'snippet']
+
 /** One question of several indexes: the text every one reads, and 1 to 32 indexes in order. */
 export interface ManyQuery {
 	text: string
@@ -488,6 +492,7 @@ export interface ManyFound {
  * refused.
  */
 export async function searchMany(link: Link, query: ManyQuery): Promise<ManyFound> {
+	refuseUnknown('a search among indexes', query, ['text', 'in'])
 	const asked = query.in.map(among => amongOf(link, among))
 	const answer = await link.run('read', async connection => {
 		const handles = await Promise.all(
@@ -532,6 +537,7 @@ export function mergedOf(
 
 /** An index a search among several asks: its open, and its part of the request once its handle is known. */
 function amongOf(link: Link, among: Among) {
+	refuseUnknown('a search among indexes', among, amongFields)
 	const reach = reached.get(among.index)
 	if (reach === undefined) {
 		throw new InvalidError(

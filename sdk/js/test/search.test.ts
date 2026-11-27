@@ -310,7 +310,7 @@ for (const way of ways) {
 		})
 
 		// contract: SRCH-29
-		test('a group pages past a hundred by its offset', async () => {
+		test('a group pages past a hundred by its offset, and a field no group takes is refused', async () => {
 			const kinds = store.index<{ name: string }>('box_kinds', { fields: { name: 1 } })
 			const notes = store.index<{ name: string }>('box_notes', { fields: { name: 1 } })
 			await kinds.setMany(
@@ -344,6 +344,17 @@ for (const way of ways) {
 				store.search({ text: 'algebra', in: [{ index: kinds, offset: 995 }] }),
 			)
 			expect(far).toBeInstanceOf(LimitError)
+			const typo = await caught(
+				store.search({ text: 'algebra', in: [{ index: kinds, offsets: 20 }] } as never),
+			)
+			expect(typo).toBeInstanceOf(InvalidError)
+			expect((typo as Error).message).toContain(
+				'a search among indexes: no field `offsets`; did you mean `offset`?',
+			)
+			const outer = await caught(
+				store.search({ text: 'algebra', in: [{ index: kinds }], limit: 5 } as never),
+			)
+			expect((outer as Error).message).toContain('a search among indexes: no field `limit`')
 		})
 
 		test('a hit keeps each half of its score, and a floor keeps a far vector out of the sum', async () => {

@@ -183,6 +183,9 @@ Before it searches any index, the call fails with `invalid` in these cases:
 - A limit is 0.
 - A boost is not a positive number.
 - An index belongs to another store.
+- In Bun and Node, an entry has a field that a group doesn't take, such as a
+  misspelt `offsets`. The error names the field. In Python, Go and Rust the
+  language refuses it, because `Among` takes only the fields it knows.
 
 A group whose `offset` and `limit` together pass 1000 fails the call with
 `limit` (`LimitError` in Bun and Python, `ErrLimit` in Go).
