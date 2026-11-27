@@ -49,6 +49,21 @@ pub fn semaphore(&self, name: &str) -> SemaphoreBuilder
 Keys held by up to `limit` holders at a time, as
 `crate::Store::semaphore`.
 
+## KeyState
+
+```rust
+pub struct KeyState {
+    pub up: bool,
+    pub down_since: Option<SystemTime>,
+    pub last_failure: Option<SystemTime>,
+    pub waiting: u32,
+    pub holding: u32,
+}
+```
+
+How a semaphore's key stands now: whether what it guards is up, and how
+many wait for it and hold it.
+
 ## Fence
 
 ```rust
@@ -120,6 +135,24 @@ How many of a key's places background holds may take at once, from 1
 to the limit, so that urgent holds always find the rest; background
 holds may take every place unless given. A name keeps one in a
 program, as it keeps its limit.
+
+### SemaphoreBuilder.breaker
+
+```rust
+pub fn breaker(self, failures: u32, pause: Duration) -> Self
+```
+
+Puts a key down for `pause` once `failures` holds of it failed in a
+row: every ask of it, waiting or new, is then refused at once
+`Unavailable`. When the pause is over, one ask goes through. Its
+success puts the key up again, and its failure pauses it again.
+
+A hold failed when its work answered an error, unless its permit said
+`Permit::succeeded`, or when it ran past its timeout or `max_hold`. A
+success resets the count. The breaker lives in the memory of the
+process that holds the store, beside the lines: every program of the
+store sees one answer, and a restart of that process starts every key
+up. A name keeps one breaker in a program, as it keeps its limit.
 
 ### SemaphoreBuilder.max_hold
 
@@ -213,6 +246,16 @@ pub fn key(&self, key: impl Key) -> SemaphoreKey<'_>
 
 A key, for a hold that says how long it waits, whether it waits in
 the background and how long it may keep its place.
+
+### Semaphore.state
+
+```rust
+pub fn state(&self, key: impl Key) -> Result<KeyState>
+```
+
+How `key` stands now: up or down and since when, its last failed
+hold, and how many wait for it and hold it. Up always without a
+breaker.
 
 ## LockKey
 
@@ -344,6 +387,16 @@ A holding of a semaphore's key: one of its limit.
 pub fn lost(&self) -> bool
 ```
 
+### Permit.succeeded
+
+```rust
+pub fn succeeded(&self)
+```
+
+Says the hold succeeded, so that the semaphore's breaker does not count
+it a failure though its work then answers an error: a 404 that is the
+caller's, not the service's.
+
 ### Permit.waited
 
 ```rust
@@ -402,6 +455,17 @@ pub fn background(self, places: u32) -> Self
 
 How many of a key's places background holds may take at once, as
 `crate::locks::SemaphoreBuilder::background`.
+
+### aio::locks::SemaphoreBuilder.breaker
+
+```rust
+pub fn breaker(self, failures: u32, pause: Duration) -> Self
+```
+
+Puts a key down for `pause` once `failures` holds of it failed in a
+row, as `crate::locks::SemaphoreBuilder::breaker`: a hold whose
+future answered an error failed, and one whose future was dropped
+counts neither way.
 
 ### aio::locks::SemaphoreBuilder.max_hold
 
@@ -527,6 +591,15 @@ As `Lock::try_hold`: `None` at once while `limit` hold the key.
 ```rust
 pub fn key(&self, key: impl Key) -> SemaphoreKey<'_>
 ```
+
+### aio::locks::Semaphore.state
+
+```rust
+pub fn state(&self, key: impl Key) -> Result<KeyState>
+```
+
+How `key` stands now, as `crate::locks::Semaphore::state`: a plain
+call, since the store's process keeps it in memory.
 
 ### aio::locks::Semaphore.blocking
 
@@ -700,6 +773,15 @@ pub fn lost(&self) -> bool
 ```
 
 As `Lease::lost`: true too once its hold is over.
+
+### aio::locks::Permit.succeeded
+
+```rust
+pub fn succeeded(&self)
+```
+
+As `crate::locks::Permit::succeeded`: the breaker does not count the
+hold a failure though its future then answers an error.
 
 ### aio::locks::Permit.waited
 

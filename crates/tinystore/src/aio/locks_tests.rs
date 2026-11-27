@@ -408,3 +408,30 @@ async fn an_awaited_urgent_hold_passes_a_background_one_and_a_timeout_fails_its_
     assert_eq!(lost.kind(), ErrorKind::Lost, "{lost}");
     store.close().await.unwrap();
 }
+
+// contract: LOCK-12
+#[tokio::test]
+async fn an_awaited_hold_that_fails_counts_and_one_whose_future_is_dropped_counts_neither_way() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = opened(&dir);
+    let lane = store.semaphore("cabinet").limit(1).breaker(2, Duration::from_secs(30)).open().unwrap();
+    let bad_gateway = || Error::new(ErrorKind::Io, "502");
+    lane.hold("requests", move |_| async move { Err::<(), _>(bad_gateway()) }).await.unwrap_err();
+    for _ in 0..2 {
+        let mut dropped = Box::pin(lane.hold("requests", |_| std::future::pending::<Result<(), Error>>()));
+        assert!(poll(&mut dropped).is_pending());
+    }
+    assert!(lane.state("requests").unwrap().up, "two futures dropped: the caller gave up, not the service");
+    let vouched = lane.hold("requests", move |permit| async move {
+        permit.succeeded();
+        Err::<(), _>(Error::not_found("no such student"))
+    });
+    assert_eq!(vouched.await.unwrap_err().kind(), ErrorKind::NotFound);
+    lane.hold("requests", move |_| async move { Err::<(), _>(bad_gateway()) }).await.unwrap_err();
+    assert!(lane.state("requests").unwrap().up, "one failure since the success the permit said");
+    lane.hold("requests", move |_| async move { Err::<(), _>(bad_gateway()) }).await.unwrap_err();
+    assert!(!lane.state("requests").unwrap().up, "two in a row");
+    let refused = lane.hold("requests", |_| async { Ok::<_, Error>(()) }).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Unavailable, "{refused}");
+    store.close().await.unwrap();
+}

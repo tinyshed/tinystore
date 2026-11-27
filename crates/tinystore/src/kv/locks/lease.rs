@@ -3,9 +3,10 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
+use super::breaker::Rule;
 use crate::Result;
 
 /// A lock and a semaphore of one name are two things.
@@ -115,6 +116,11 @@ pub(crate) struct Ask {
     /// How long the holder waits in line; zero to take the key only if free.
     pub(crate) wait: Duration,
     pub(crate) request: Option<RequestId>,
+    /// How many failed holds in a row put the key down, and for how long.
+    pub(crate) breaker: Option<Rule>,
+    /// Set by the state alone: the one ask a down key lets through once its
+    /// pause is over.
+    pub(crate) probe: bool,
 }
 
 /// What an ask comes to.
@@ -157,9 +163,19 @@ pub(crate) enum Ending {
 #[derive(Default)]
 pub(crate) struct Watch {
     ending: AtomicU8,
+    /// The holder said its hold succeeded, whatever its work answers after.
+    succeeded: AtomicBool,
 }
 
 impl Watch {
+    pub(crate) fn succeed(&self) {
+        self.succeeded.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn succeeded(&self) -> bool {
+        self.succeeded.load(Ordering::Acquire)
+    }
+
     pub(crate) fn ending(&self) -> Ending {
         match self.ending.load(Ordering::Acquire) {
             0 => Ending::Live,

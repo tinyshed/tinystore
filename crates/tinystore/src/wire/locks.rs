@@ -8,8 +8,10 @@ use std::time::Duration;
 
 use super::Route;
 use super::codec::Message;
-use super::protocol::{Empty, Failure, LocksHeld, LocksHold, LocksLease, LocksRenew, method};
-use crate::kv::locks::{Answer, Granted, Locks, Remote, remote_ask};
+use super::protocol::{
+    Empty, Failure, LocksHeld, LocksHold, LocksLease, LocksRenew, LocksState, LocksStateAsked, method,
+};
+use crate::kv::locks::{Answer, Granted, Locks, Outcome, Remote, key_state, remote_ask};
 use crate::sync::lock;
 use crate::{Clock, Error, ErrorKind, Store, unix_millis};
 
@@ -42,8 +44,22 @@ pub(crate) fn call(store: &Store, called: u16, body: &[u8]) -> Answered {
         }
         method::LOCKS_RELEASE => {
             let release = LocksLease::decode(body)?;
-            Locks::of(store)?.release(&lease_id(&release.lease)?);
+            let ended = if release.failed { Outcome::Failed } else { Outcome::Succeeded };
+            Locks::of(store)?.release(&lease_id(&release.lease)?, ended);
             Ok(Empty {}.encode())
+        }
+        method::LOCKS_STATE => {
+            let asked = LocksStateAsked::decode(body)?;
+            let standing = key_state(store, &asked.kind, &asked.name, &asked.key)?;
+            let time = |at: Option<std::time::SystemTime>| at.map(unix_millis);
+            Ok(LocksState {
+                up: standing.up,
+                down_since: time(standing.down_since),
+                last_failure: time(standing.last_failure),
+                waiting: u64::from(standing.waiting),
+                holding: u64::from(standing.holding),
+            }
+            .encode())
         }
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
@@ -80,6 +96,8 @@ pub(crate) fn hold(
         limit: u32::try_from(hold.limit).unwrap_or(u32::MAX),
         priority: &hold.priority,
         background: u32::try_from(hold.background).unwrap_or(u32::MAX),
+        failures: u32::try_from(hold.failures).unwrap_or(u32::MAX),
+        pause: hold.pause.map(Duration::from_millis),
         ttl: Duration::from_millis(hold.ttl),
         max_hold: hold.max_hold.map(Duration::from_millis),
         wait: Duration::from_millis(hold.wait),
@@ -123,7 +141,7 @@ impl Replying {
         match answered {
             Ok(Answer::Granted(granted)) if !wanted => {
                 if let Some(locks) = self.locks.upgrade() {
-                    locks.release(&granted.lease);
+                    locks.release(&granted.lease, Outcome::Abandoned);
                 }
             }
             _ if !wanted => {}

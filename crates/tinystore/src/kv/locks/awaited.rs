@@ -24,7 +24,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use super::lease::{Answer, Ask, Ending, Place, Reply, Watch};
-use super::{Fence, Holding, Locks, Mark, Opened, Terms, refuse_where_a_hold_would_wait_for_itself};
+use super::{Fence, Finished, Holding, Locks, Mark, Opened, Outcome, Terms, refuse_where_a_hold_would_wait_for_itself};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
@@ -105,7 +105,7 @@ impl Asking {
             if matches!(*slot, Slot::Gone) {
                 drop(slot);
                 if let (Ok(Answer::Granted(granted)), Some(locks)) = (answer, letting_go.upgrade()) {
-                    locks.release(&granted.lease);
+                    locks.release(&granted.lease, Outcome::Abandoned);
                 }
                 return;
             }
@@ -139,6 +139,7 @@ impl Future for Asking {
                             place: self.place.clone(),
                             granted,
                             waited: self.asked.elapsed(),
+                            finished: Finished::new(Outcome::Abandoned),
                             _mark: None,
                         },
                         address: self.address,
@@ -174,7 +175,7 @@ impl Drop for Asking {
                 }
             }
             Slot::Answered(Ok(Answer::Granted(granted))) => {
-                locks.release(&granted.lease);
+                locks.release(&granted.lease, Outcome::Abandoned);
             }
             _ => {}
         }
@@ -211,6 +212,12 @@ impl Held {
         step()
     }
 
+    /// Keeps how the function's future ended, for the key's breaker: a hold
+    /// whose future is dropped first ends abandoned.
+    pub(crate) fn finished(&self, succeeded: bool) {
+        self.holding.finished.answered(succeeded);
+    }
+
     /// What the hold answers once its function answered `value`: the value,
     /// unless the lease ended meanwhile.
     pub(crate) fn kept<T, E: From<Error>>(&self, value: T) -> Result<T, E> {
@@ -232,5 +239,9 @@ pub(crate) struct Ends(Arc<Watch>);
 impl Ends {
     pub(crate) fn lost(&self) -> bool {
         self.0.ending() != Ending::Live
+    }
+
+    pub(crate) fn succeed(&self) {
+        self.0.succeed();
     }
 }

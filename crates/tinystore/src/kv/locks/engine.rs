@@ -14,7 +14,8 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use super::lease::{Answer, Ask, LeaseId, Reply};
+use super::breaker::{KeyState, Outcome, Rule};
+use super::lease::{Answer, Ask, LeaseId, Place, Reply};
 use super::state::{Effects, Mint, State};
 use crate::engine::{Engine, Host};
 use crate::kv::engine::Kv;
@@ -36,15 +37,23 @@ const LONGEST_SLEEP: Duration = Duration::from_secs(60);
 pub(crate) struct Locks {
     inner: Arc<Inner>,
     thread: Mutex<Option<JoinHandle<()>>>,
-    /// The limit and the background each semaphore's first open in this
-    /// program gave. A client's holds over a connection pass them by, each
+    /// The limit, the background and the breaker each semaphore's first open
+    /// in this program gave. A client's holds over a connection pass them by, each
     /// admitted by its own: one server serves several programs, and a program
     /// may change its limit between deploys while the old one's holds still
     /// run.
-    opened: Mutex<HashMap<String, (u32, Option<u32>)>>,
+    opened: Mutex<HashMap<String, Shape>>,
     /// The names the last sample told of, so that one whose keys all went is
     /// told zero once rather than left at what it last held.
     sampled: Mutex<HashSet<Arc<str>>>,
+}
+
+/// What a semaphore's open in a program gives, which the name keeps there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Shape {
+    pub(crate) limit: u32,
+    pub(crate) background: Option<u32>,
+    pub(crate) breaker: Option<Rule>,
 }
 
 struct Inner {
@@ -86,19 +95,30 @@ impl Locks {
         Ok(locks)
     }
 
-    /// Keeps the limit and the background a semaphore's first open in this
-    /// program gives: an open of the name with another is refused, naming
-    /// both, as counters refuse an open that counts another way.
-    pub(crate) fn keep_shape(&self, name: &str, limit: u32, background: Option<u32>) -> Result<()> {
-        let mut opened = lock(&self.opened);
-        let (first, first_background) = *opened.entry(name.to_owned()).or_insert((limit, background));
-        if first != limit {
-            return Err(Error::invalid(format!("open in this program with a limit of {first}, not {limit}")));
+    /// Keeps the limit, the background and the breaker a semaphore's first
+    /// open in this program gives: an open of the name with another is
+    /// refused, naming both, as counters refuse an open that counts another
+    /// way.
+    pub(crate) fn keep_shape(&self, name: &str, given: Shape) -> Result<()> {
+        let first = *lock(&self.opened).entry(name.to_owned()).or_insert(given);
+        if first.limit != given.limit {
+            let (first, given) = (first.limit, given.limit);
+            return Err(Error::invalid(format!("open in this program with a limit of {first}, not {given}")));
         }
-        if first_background != background {
+        if first.background != given.background {
             let shown = |places: Option<u32>| places.map_or_else(|| "none".to_owned(), |places| places.to_string());
-            let (first, given) = (shown(first_background), shown(background));
+            let (first, given) = (shown(first.background), shown(given.background));
             return Err(Error::invalid(format!("open in this program with a background of {first}, not {given}")));
+        }
+        if first.breaker != given.breaker {
+            let shown = |rule: Option<Rule>| {
+                rule.map_or_else(
+                    || "none".to_owned(),
+                    |rule| format!("{} failures and {:?}", rule.failures, rule.pause),
+                )
+            };
+            let (first, given) = (shown(first.breaker), shown(given.breaker));
+            return Err(Error::invalid(format!("open in this program with a breaker of {first}, not {given}")));
         }
         Ok(())
     }
@@ -123,9 +143,15 @@ impl Locks {
         self.inner.change(|state, now, mint, effects| state.ask(ask, reply, now, mint, effects))
     }
 
-    /// Lets go of a lease and gives its key on; says whether it was held.
-    pub(crate) fn release(&self, lease: &LeaseId) -> bool {
-        self.inner.change(|state, now, mint, effects| state.release(lease, now, mint, effects))
+    /// Lets go of a lease as its hold ended, which its key's breaker counts,
+    /// and gives its key on; says whether it was held.
+    pub(crate) fn release(&self, lease: &LeaseId, ended: Outcome) -> bool {
+        self.inner.change(|state, now, mint, effects| state.release(lease, ended, now, mint, effects))
+    }
+
+    /// How `place` stands now: up or down, and how many wait and hold.
+    pub(crate) fn state(&self, place: &Place) -> KeyState {
+        self.inner.change(|state, now, mint, effects| state.state_of(place, now, mint, effects))
     }
 
     /// Renews a lease held through a connection for `ttl`, and says its new

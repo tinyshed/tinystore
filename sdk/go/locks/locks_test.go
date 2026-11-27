@@ -338,6 +338,55 @@ func TestAHoldsTimeoutCountsFromItsGrantAndEndsTheHoldLost(t *testing.T) {
 	})
 }
 
+// contract: LOCK-12, LOCK-13, LOCK-14
+func TestFailedHoldsInARowPutTheKeyDownAndOneHoldAfterThePausePutsItUp(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		flaky := ways.Must(locks.OpenSemaphore(store, "flaky", locks.Limit(1), locks.Breaker(2, 300*time.Millisecond)))
+		badGateway := errors.New("the cabinet answered 502")
+		failing := func(context.Context, *locks.Lease) error { return badGateway }
+		if state := ways.Must(flaky.State(ctx, "requests")); !state.Up {
+			t.Fatalf("down before any hold: %+v", state)
+		}
+		for range 2 {
+			if err := flaky.Hold(ctx, "requests", failing); !errors.Is(err, badGateway) {
+				t.Fatalf("got %v, want fn's own error", err)
+			}
+		}
+		err := flaky.Hold(ctx, "requests", nothing)
+		is(t, err, tinystore.ErrUnavailable)
+		if want := "after 2 failed holds in a row"; !strings.Contains(err.Error(), want) {
+			t.Fatalf("got %q, want it to say %q", err, want)
+		}
+		down := ways.Must(flaky.State(ctx, "requests"))
+		if down.Up || down.DownSince.IsZero() || !down.LastFailure.Equal(down.DownSince) {
+			t.Fatalf("not down since its last failure: %+v", down)
+		}
+		time.Sleep(350 * time.Millisecond)
+		ways.Must(0, flaky.Hold(ctx, "requests", nothing))
+		if up := ways.Must(flaky.State(ctx, "requests")); !up.Up || !up.DownSince.IsZero() || up.Holding != 0 {
+			t.Fatalf("not up after the hold that went through: %+v", up)
+		}
+		notFound := errors.New("no such student")
+		for range 2 {
+			err := flaky.Hold(ctx, "requests", func(_ context.Context, lease *locks.Lease) error {
+				lease.Succeeded()
+				return notFound
+			})
+			if !errors.Is(err, notFound) {
+				t.Fatalf("got %v, want fn's own error", err)
+			}
+		}
+		if state := ways.Must(flaky.State(ctx, "requests")); !state.Up {
+			t.Fatalf("down after holds that said they succeeded: %+v", state)
+		}
+		_, err = locks.OpenSemaphore(store, "flaky", locks.Limit(1))
+		if want := "with a breaker of 2 failures and 300ms, not none"; err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("got %v, want it to say %q", err, want)
+		}
+	})
+}
+
 func TestNamesAndLimitsAreCheckedBeforeAnythingIsSent(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		_, err := locks.OpenLock(store, "Invoices")

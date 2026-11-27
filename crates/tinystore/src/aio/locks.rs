@@ -42,7 +42,7 @@ use std::pin::pin;
 use std::time::Duration;
 
 use crate::kv::locks::{Ends, Held};
-use crate::locks::Fence;
+use crate::locks::{Fence, KeyState};
 use crate::{Error, Key, Result};
 
 /// A lock being opened, as [`crate::locks::LockBuilder`].
@@ -95,6 +95,14 @@ impl SemaphoreBuilder {
     /// [`crate::locks::SemaphoreBuilder::background`].
     pub fn background(self, places: u32) -> Self {
         SemaphoreBuilder { builder: self.builder.background(places) }
+    }
+
+    /// Puts a key down for `pause` once `failures` holds of it failed in a
+    /// row, as [`crate::locks::SemaphoreBuilder::breaker`]: a hold whose
+    /// future answered an error failed, and one whose future was dropped
+    /// counts neither way.
+    pub fn breaker(self, failures: u32, pause: Duration) -> Self {
+        SemaphoreBuilder { builder: self.builder.breaker(failures, pause) }
     }
 
     pub fn max_hold(self, bound: Duration) -> Self {
@@ -206,6 +214,12 @@ impl Semaphore {
 
     pub fn key(&self, key: impl Key) -> SemaphoreKey<'_> {
         SemaphoreKey { key: self.semaphore.key(key) }
+    }
+
+    /// How `key` stands now, as [`crate::locks::Semaphore::state`]: a plain
+    /// call, since the store's process keeps it in memory.
+    pub fn state(&self, key: impl Key) -> Result<KeyState> {
+        self.semaphore.state(key)
     }
 
     /// The same semaphore, for its blocking calls.
@@ -344,8 +358,9 @@ where
     E: From<Error>,
 {
     let mut work = pin!(start(&held));
-    let value = std::future::poll_fn(|context| held.marked(|| work.as_mut().poll(context))).await?;
-    held.kept(value)
+    let worked = std::future::poll_fn(|context| held.marked(|| work.as_mut().poll(context))).await;
+    held.finished(worked.is_ok());
+    held.kept(worked?)
 }
 
 /// A holding of a lock's key, given to the function that holds it, and owned
@@ -386,6 +401,12 @@ impl Permit {
     /// As [`Lease::lost`]: true too once its hold is over.
     pub fn lost(&self) -> bool {
         self.ends.lost()
+    }
+
+    /// As [`crate::locks::Permit::succeeded`]: the breaker does not count the
+    /// hold a failure though its future then answers an error.
+    pub fn succeeded(&self) {
+        self.ends.succeed();
     }
 
     /// As [`Lease::waited`].

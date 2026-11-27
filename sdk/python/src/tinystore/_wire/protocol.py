@@ -107,6 +107,8 @@ methods: dict[str, int] = {
     # A lease that ran out or was revoked is `lost`.
     "locks.renew": 0x0902,
     "locks.release": 0x0903,
+    # Up, with nobody waiting or holding, for a key nothing was ever asked of.
+    "locks.state": 0x0904,
     "metrics.read": 0x0601,
     "metrics.latest": 0x0602,
     "metrics.aggregate": 0x0603,
@@ -5484,6 +5486,14 @@ def _write_locks_hold(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(10)
         w.uint(x)
         n += 1
+    if (x := v.get("failures")) is not None:
+        w.uint(11)
+        w.uint(x)
+        n += 1
+    if (x := v.get("pause")) is not None:
+        w.uint(12)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5512,6 +5522,10 @@ def _read_locks_hold(r: Reader) -> dict[str, Any]:
                 read["priority"] = r.str()
             case 10:
                 read["background"] = r.uint()
+            case 11:
+                read["failures"] = r.uint()
+            case 12:
+                read["pause"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -5544,6 +5558,10 @@ LocksHold = Message(
         "priority": (9, str_),
         # how many places background holds may take, 1 to limit; 0 for every place
         "background": (10, uint),
+        # a breaker's failed holds in a row that put the key down; 0 for none
+        "failures": (11, uint),
+        # how long the key is down once they failed, given with failures
+        "pause": (12, uint),
     },
     _write_locks_hold,
     _read_locks_hold,
@@ -5656,6 +5674,10 @@ def _write_locks_lease(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(1)
         w.bin(x)
         n += 1
+    if (x := v.get("failed")) is not None:
+        w.uint(2)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5666,6 +5688,8 @@ def _read_locks_lease(r: Reader) -> dict[str, Any]:
         match r.field(seen):
             case 1:
                 read["lease"] = r.bin()
+            case 2:
+                read["failed"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -5676,9 +5700,124 @@ LocksLease = Message(
     "locks.Lease",
     {
         "lease": (1, bin_),
+        # a release: the hold's work failed, which the key's breaker counts
+        "failed": (2, bool_),
     },
     _write_locks_lease,
     _read_locks_lease,
+)
+
+
+def _write_locks_state_asked(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("kind")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("name")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("key")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_locks_state_asked(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["kind"] = r.str()
+            case 2:
+                read["name"] = r.str()
+            case 3:
+                read["key"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A key of a lock or a semaphore whose standing is read.
+LocksStateAsked = Message(
+    "locks.StateAsked",
+    {
+        # lock or semaphore
+        "kind": (1, str_),
+        "name": (2, str_),
+        "key": (3, str_),
+    },
+    _write_locks_state_asked,
+    _read_locks_state_asked,
+)
+
+
+def _write_locks_state(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("up")) is not None:
+        w.uint(1)
+        w.bool(x)
+        n += 1
+    if (x := v.get("down_since")) is not None:
+        w.uint(2)
+        w.int(x)
+        n += 1
+    if (x := v.get("last_failure")) is not None:
+        w.uint(3)
+        w.int(x)
+        n += 1
+    if (x := v.get("waiting")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    if (x := v.get("holding")) is not None:
+        w.uint(5)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_locks_state(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["up"] = r.bool()
+            case 2:
+                read["down_since"] = r.int()
+            case 3:
+                read["last_failure"] = r.int()
+            case 4:
+                read["waiting"] = r.uint()
+            case 5:
+                read["holding"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# How a key stands: whether what it guards is up, as its breaker says, and its line.
+LocksState = Message(
+    "locks.State",
+    {
+        "up": (1, bool_),
+        # the failure that put the key down
+        "down_since": (2, int_),
+        # kept until a success after it
+        "last_failure": (3, int_),
+        "waiting": (4, uint),
+        "holding": (5, uint),
+    },
+    _write_locks_state,
+    _read_locks_state,
 )
 
 
@@ -12600,6 +12739,8 @@ messages: dict[str, Message] = {
     "locks.Held": LocksHeld,
     "locks.Renew": LocksRenew,
     "locks.Lease": LocksLease,
+    "locks.StateAsked": LocksStateAsked,
+    "locks.State": LocksState,
     "metrics.Condition": MetricsCondition,
     "metrics.Query": MetricsQuery,
     "metrics.Series": MetricsSeries,

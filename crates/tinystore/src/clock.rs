@@ -111,9 +111,19 @@ pub(crate) fn millis(span: Duration) -> i64 {
     saturate(span.as_millis())
 }
 
+/// A time in unix milliseconds in UTC to the second, as an error or an
+/// explanation says it: `2026-10-13 14:03:05 UTC`.
+#[cfg(any(feature = "config-load", feature = "locks"))]
+pub(crate) fn utc(millis: i64) -> String {
+    let (days, seconds) = (millis.div_euclid(86_400_000), millis.rem_euclid(86_400_000) / 1000);
+    let (year, month, day) = civil_from_days(days);
+    let (hour, minute, second) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
+}
+
 /// The year, month and day `days` after 1970-01-01, by Howard Hinnant's
 /// `civil_from_days`, its years counted in eras of 400.
-#[cfg(any(feature = "config-load", feature = "records", feature = "metrics"))]
+#[cfg(any(feature = "config-load", feature = "records", feature = "metrics", feature = "locks"))]
 pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);

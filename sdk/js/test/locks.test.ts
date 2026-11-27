@@ -9,7 +9,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { InUseError, InvalidError, LostError, ms, type Store } from '../src/index.ts'
+import {
+	InUseError,
+	InvalidError,
+	LostError,
+	ms,
+	type Store,
+	UnavailableError,
+} from '../src/index.ts'
 import { caught, removed, ways } from './ways.ts'
 
 /** A promise the test resolves itself. */
@@ -282,6 +289,43 @@ for (const way of ways) {
 			const next = await lane.hold('requests', () => 'the next in line', { wait: '5s' })
 			expect(next).toBe('the next in line')
 			expect(await hung).toBeInstanceOf(LostError)
+		})
+
+		// contract: LOCK-12, LOCK-13, LOCK-14
+		test('failed holds in a row put the key down, and one hold after the pause puts it up', async () => {
+			const flaky = store.semaphore('flaky', { limit: 1, breaker: { failures: 2, pause: '300ms' } })
+			const badGateway = () => {
+				throw new Error('the cabinet answered 502')
+			}
+			expect((await flaky.state('requests')).up).toBe(true)
+			for (const _ of [1, 2]) {
+				expect(await caught(flaky.hold('requests', badGateway))).toBeInstanceOf(Error)
+			}
+			const refused = await caught(flaky.hold('requests', () => 'answered'))
+			expect(refused).toBeInstanceOf(UnavailableError)
+			expect((refused as Error).message).toContain('after 2 failed holds in a row')
+			const down = await flaky.state('requests')
+			expect(down.up).toBe(false)
+			expect(down.downSince).toBeInstanceOf(Date)
+			expect(down.lastFailure?.getTime()).toBe(down.downSince?.getTime())
+			await sleep(350)
+			expect(await flaky.hold('requests', () => 'answered')).toBe('answered')
+			const up = await flaky.state('requests')
+			expect([up.up, up.downSince, up.waiting, up.holding]).toEqual([true, undefined, 0, 0])
+
+			for (const _ of [1, 2]) {
+				const notFound = await caught(
+					flaky.hold('requests', permit => {
+						permit.succeeded()
+						throw new Error('no such student')
+					}),
+				)
+				expect((notFound as Error).message).toBe('no such student')
+			}
+			expect((await flaky.state('requests')).up).toBe(true)
+			expect(() => store.semaphore('flaky', { limit: 1 })).toThrow(
+				'with a breaker of 2 failures and 300ms, not none',
+			)
 		})
 
 		test('names and limits are checked before anything is sent', () => {

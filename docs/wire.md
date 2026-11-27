@@ -846,11 +846,12 @@ engines'.
 ### locks
 
 <!-- written from protocol/*.wire by `just protocol`: methods of locks -->
-| method   | name          | may   | request       | answer       |
-|----------|---------------|-------|---------------|--------------|
-| `0x0901` | locks.hold    | write | `locks.Hold`  | `locks.Held` |
-| `0x0902` | locks.renew   | write | `locks.Renew` | `Empty`      |
-| `0x0903` | locks.release | write | `locks.Lease` | `Empty`      |
+| method   | name          | may   | request            | answer        |
+|----------|---------------|-------|--------------------|---------------|
+| `0x0901` | locks.hold    | write | `locks.Hold`       | `locks.Held`  |
+| `0x0902` | locks.renew   | write | `locks.Renew`      | `Empty`       |
+| `0x0903` | locks.release | write | `locks.Lease`      | `Empty`       |
+| `0x0904` | locks.state   | read  | `locks.StateAsked` | `locks.State` |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/locks.wire`. A hold is answered once its key is

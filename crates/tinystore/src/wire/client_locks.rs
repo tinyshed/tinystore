@@ -60,6 +60,6 @@ impl<S: Read + Write> Client<S> {
 
     /// Lets the key go.
     pub fn release(&mut self, lease: &[u8]) -> Result<()> {
-        self.call(method::LOCKS_RELEASE, &wire::LocksLease { lease: lease.to_vec() }).map(drop)
+        self.call(method::LOCKS_RELEASE, &wire::LocksLease { lease: lease.to_vec(), failed: false }).map(drop)
     }
 }

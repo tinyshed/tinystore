@@ -3243,6 +3243,9 @@
         "background": {
           "uint": "1007"
         },
+        "failures": {
+          "uint": "1107"
+        },
         "key": {
           "str": "key"
         },
@@ -3258,6 +3261,9 @@
         "name": {
           "str": "name"
         },
+        "pause": {
+          "uint": "1500"
+        },
         "priority": {
           "str": "priority"
         },
@@ -3271,7 +3277,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8a01a46b696e6402a46e616d6503a36b657904cd019705cd05dc06cd05dc07cd05dc08c40201ff09a87072696f726974790acd03ef",
+      "hex": "8c01a46b696e6402a46e616d6503a36b657904cd019705cd05dc06cd05dc07cd05dc08c40201ff09a87072696f726974790acd03ef0bcd04530ccd05dc",
       "message": "locks.Hold",
       "name": "locks.Hold with every field"
     },
@@ -3327,11 +3333,14 @@
     },
     {
       "fields": {
+        "failed": {
+          "bool": true
+        },
         "lease": {
           "bin": "01ff"
         }
       },
-      "hex": "8101c40201ff",
+      "hex": "8201c40201ff02c3",
       "message": "locks.Lease",
       "name": "locks.Lease with every field"
     },
@@ -3340,6 +3349,56 @@
       "hex": "80",
       "message": "locks.Lease",
       "name": "locks.Lease with no field"
+    },
+    {
+      "fields": {
+        "key": {
+          "str": "key"
+        },
+        "kind": {
+          "str": "kind"
+        },
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8301a46b696e6402a46e616d6503a36b6579",
+      "message": "locks.StateAsked",
+      "name": "locks.StateAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "locks.StateAsked",
+      "name": "locks.StateAsked with no field"
+    },
+    {
+      "fields": {
+        "downSince": {
+          "int": "1790000000000"
+        },
+        "holding": {
+          "uint": "507"
+        },
+        "lastFailure": {
+          "int": "1790000000000"
+        },
+        "up": {
+          "bool": true
+        },
+        "waiting": {
+          "uint": "407"
+        }
+      },
+      "hex": "8501c302cf000001a0c4506c0003cf000001a0c4506c0004cd019705cd01fb",
+      "message": "locks.State",
+      "name": "locks.State with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "locks.State",
+      "name": "locks.State with no field"
     },
     {
       "fields": {
@@ -7728,6 +7787,7 @@
     "locks.hold": 2305,
     "locks.release": 2307,
     "locks.renew": 2306,
+    "locks.state": 2308,
     "metrics.aggregate": 1539,
     "metrics.damaged": 1545,
     "metrics.delete": 1548,

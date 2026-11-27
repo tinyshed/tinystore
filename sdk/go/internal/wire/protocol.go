@@ -96,8 +96,10 @@ const (
 	// takes the ask out of its line.
 	MethodLocksHold = 0x0901
 	// A lease that ran out or was revoked is `lost`.
-	MethodLocksRenew              = 0x0902
-	MethodLocksRelease            = 0x0903
+	MethodLocksRenew   = 0x0902
+	MethodLocksRelease = 0x0903
+	// Up, with nobody waiting or holding, for a key nothing was ever asked of.
+	MethodLocksState              = 0x0904
 	MethodMetricsRead             = 0x0601
 	MethodMetricsLatest           = 0x0602
 	MethodMetricsAggregate        = 0x0603
@@ -245,6 +247,7 @@ var methodNames = []struct {
 	{"locks.hold", MethodLocksHold},
 	{"locks.renew", MethodLocksRenew},
 	{"locks.release", MethodLocksRelease},
+	{"locks.state", MethodLocksState},
 	{"metrics.read", MethodMetricsRead},
 	{"metrics.latest", MethodMetricsLatest},
 	{"metrics.aggregate", MethodMetricsAggregate},
@@ -509,6 +512,10 @@ func NewMessage(name string) Message {
 		return &LocksRenew{}
 	case "locks.Lease":
 		return &LocksLease{}
+	case "locks.StateAsked":
+		return &LocksStateAsked{}
+	case "locks.State":
+		return &LocksState{}
 	case "metrics.Condition":
 		return &MetricsCondition{}
 	case "metrics.Query":
@@ -7520,6 +7527,10 @@ type LocksHold struct {
 	Priority string `wire:"9,priority"`
 	// how many places background holds may take, 1 to limit; 0 for every place
 	Background uint64 `wire:"10,background"`
+	// a breaker's failed holds in a row that put the key down; 0 for none
+	Failures uint64 `wire:"11,failures"`
+	// how long the key is down once they failed, given with failures
+	Pause *uint64 `wire:"12,pause"`
 }
 
 func (m LocksHold) Write(w *Writer) {
@@ -7575,6 +7586,16 @@ func (m LocksHold) Write(w *Writer) {
 		w.Uint(m.Background)
 		n++
 	}
+	if m.Failures != 0 {
+		w.Uint(11)
+		w.Uint(m.Failures)
+		n++
+	}
+	if m.Pause != nil {
+		w.Uint(12)
+		w.Uint(*m.Pause)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -7604,6 +7625,11 @@ func (m *LocksHold) Read(r *Reader) {
 			m.Priority = r.Str()
 		case 10:
 			m.Background = r.Uint()
+		case 11:
+			m.Failures = r.Uint()
+		case 12:
+			v := r.Uint()
+			m.Pause = &v
 		default:
 			r.Skip()
 		}
@@ -7622,7 +7648,9 @@ func (m LocksHold) IsZero() bool {
 		m.Wait == 0 &&
 		len(m.Request) == 0 &&
 		m.Priority == "" &&
-		m.Background == 0
+		m.Background == 0 &&
+		m.Failures == 0 &&
+		m.Pause == nil
 }
 
 // LocksHeld is the schema's locks.Held.
@@ -7741,6 +7769,8 @@ func (m LocksRenew) IsZero() bool {
 // LocksLease is the schema's locks.Lease.
 type LocksLease struct {
 	Lease []byte `wire:"1,lease"`
+	// a release: the hold's work failed, which the key's breaker counts
+	Failed bool `wire:"2,failed"`
 }
 
 func (m LocksLease) Write(w *Writer) {
@@ -7749,6 +7779,11 @@ func (m LocksLease) Write(w *Writer) {
 	if len(m.Lease) > 0 {
 		w.Uint(1)
 		w.Bin(m.Lease)
+		n++
+	}
+	if m.Failed {
+		w.Uint(2)
+		w.Bool(m.Failed)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -7761,6 +7796,8 @@ func (m *LocksLease) Read(r *Reader) {
 		switch r.Field(&seen) {
 		case 1:
 			m.Lease = r.Bin()
+		case 2:
+			m.Failed = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -7770,7 +7807,141 @@ func (m *LocksLease) Read(r *Reader) {
 
 // IsZero says whether LocksLease writes as no field at all.
 func (m LocksLease) IsZero() bool {
-	return len(m.Lease) == 0
+	return len(m.Lease) == 0 &&
+		!m.Failed
+}
+
+// LocksStateAsked is the schema's locks.StateAsked.
+//
+// A key of a lock or a semaphore whose standing is read.
+type LocksStateAsked struct {
+	// lock or semaphore
+	Kind string `wire:"1,kind"`
+	Name string `wire:"2,name"`
+	Key  string `wire:"3,key"`
+}
+
+func (m LocksStateAsked) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Kind != "" {
+		w.Uint(1)
+		w.Str(m.Kind)
+		n++
+	}
+	if m.Name != "" {
+		w.Uint(2)
+		w.Str(m.Name)
+		n++
+	}
+	if m.Key != "" {
+		w.Uint(3)
+		w.Str(m.Key)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *LocksStateAsked) Read(r *Reader) {
+	*m = LocksStateAsked{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Kind = r.Str()
+		case 2:
+			m.Name = r.Str()
+		case 3:
+			m.Key = r.Str()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether LocksStateAsked writes as no field at all.
+func (m LocksStateAsked) IsZero() bool {
+	return m.Kind == "" &&
+		m.Name == "" &&
+		m.Key == ""
+}
+
+// LocksState is the schema's locks.State.
+//
+// How a key stands: whether what it guards is up, as its breaker says, and its line.
+type LocksState struct {
+	Up bool `wire:"1,up"`
+	// the failure that put the key down
+	DownSince *int64 `wire:"2,downSince"`
+	// kept until a success after it
+	LastFailure *int64 `wire:"3,lastFailure"`
+	Waiting     uint64 `wire:"4,waiting"`
+	Holding     uint64 `wire:"5,holding"`
+}
+
+func (m LocksState) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Up {
+		w.Uint(1)
+		w.Bool(m.Up)
+		n++
+	}
+	if m.DownSince != nil {
+		w.Uint(2)
+		w.Int(*m.DownSince)
+		n++
+	}
+	if m.LastFailure != nil {
+		w.Uint(3)
+		w.Int(*m.LastFailure)
+		n++
+	}
+	if m.Waiting != 0 {
+		w.Uint(4)
+		w.Uint(m.Waiting)
+		n++
+	}
+	if m.Holding != 0 {
+		w.Uint(5)
+		w.Uint(m.Holding)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *LocksState) Read(r *Reader) {
+	*m = LocksState{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Up = r.Bool()
+		case 2:
+			v := r.Int()
+			m.DownSince = &v
+		case 3:
+			v := r.Int()
+			m.LastFailure = &v
+		case 4:
+			m.Waiting = r.Uint()
+		case 5:
+			m.Holding = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether LocksState writes as no field at all.
+func (m LocksState) IsZero() bool {
+	return !m.Up &&
+		m.DownSince == nil &&
+		m.LastFailure == nil &&
+		m.Waiting == 0 &&
+		m.Holding == 0
 }
 
 // MetricsCondition is the schema's metrics.Condition.

@@ -19,20 +19,21 @@ import json
 import secrets
 import time
 import weakref
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 from ._connection import check_name
 from ._handles import key_text
 from ._session import ConnectionLostError
-from ._time import ms
-from ._wire.protocol import LocksHeld, LocksHold, LocksLease, LocksRenew, methods
+from ._time import date_of, ms, spelled
+from ._wire.protocol import LocksHeld, LocksHold, LocksLease, LocksRenew, LocksState, LocksStateAsked, methods
 from .errors import ClosedError, InUseError, InvalidError, LostError
 from .sql import inside_database_tx
 from .tx import inside_store_tx
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import TracebackType
     from typing import Any
 
@@ -63,7 +64,7 @@ class _Asked:
 _holding: contextvars.ContextVar[tuple[tuple[int, str], ...]] = contextvars.ContextVar("tinystore holding", default=())
 """The keys the caller holds or waits for, each with the link of the store it is of."""
 
-_opened: weakref.WeakKeyDictionary[Link, dict[str, tuple[int, int | None]]] = weakref.WeakKeyDictionary()
+_opened: weakref.WeakKeyDictionary[Link, dict[str, _Shape]] = weakref.WeakKeyDictionary()
 """The limit and the background each semaphore's first open gave, by the link of the store that opened it.
 
 One name keeps one limit in a program, and two stores are two programs, each
@@ -71,15 +72,39 @@ of whose holds the store admits by its own limit.
 """
 
 
-def _keep_shape(link: Link, name: str, limit: int, background: int | None) -> None:
-    """Keeps the limit and the background a semaphore's first open on this store gives: another is refused."""
-    shapes = _opened.setdefault(link, {})
-    first, first_background = shapes.setdefault(name, (limit, background))
-    if first != limit:
-        raise InvalidError(f"semaphore {name}: open in this program with a limit of {first}, not {limit}")
-    if first_background != background:
-        before, now = ("none" if places is None else places for places in (first_background, background))
-        raise InvalidError(f"semaphore {name}: open in this program with a background of {before}, not {now}")
+type _Shape = tuple[int, int | None, tuple[int, int] | None]
+"""What a semaphore's first open gives: its limit, its background, and its breaker's failures and pause."""
+
+
+def _breaking(name: str, breaker: Breaker | None) -> tuple[int, int] | None:
+    """A breaker's failures and its pause in milliseconds, checked."""
+    if breaker is None:
+        return None
+    pause = ms(breaker.pause, f"semaphore {name}: its breaker's pause")
+    failures = breaker.failures
+    if isinstance(failures, bool) or not isinstance(failures, int) or failures < 1 or pause == 0:  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise InvalidError(
+            f"semaphore {name}: a breaker of {failures!r} failures and {pause} ms, not 1 or more and above 0"
+        )
+    return (failures, pause)
+
+
+def _keep_shape(link: Link, name: str, given: _Shape) -> None:
+    """Keeps the limit, background and breaker a semaphore's first open on this store gives: another is refused."""
+    first = _opened.setdefault(link, {}).setdefault(name, given)
+
+    def refused(what: str, before: object, now: object) -> InvalidError:
+        return InvalidError(f"semaphore {name}: open in this program with a {what} of {before}, not {now}")
+
+    if first[0] != given[0]:
+        raise refused("limit", first[0], given[0])
+    if first[1] != given[1]:
+        raise refused("background", "none" if first[1] is None else first[1], "none" if given[1] is None else given[1])
+    if first[2] != given[2]:
+        shown = (
+            "none" if rule is None else f"{rule[0]} failures and {spelled(rule[1])}" for rule in (first[2], given[2])
+        )
+        raise refused("breaker", *shown)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +123,40 @@ class Permit:
 
     waited: timedelta
     """how long the hold waited for its place, from its call to the grant, the round trip included"""
+    _succeed: Callable[[], None] = field(repr=False, compare=False, default=lambda: None)
+
+    def succeeded(self) -> None:
+        """Says the hold succeeded, so that the breaker does not count it a failure though the block then raises."""
+        self._succeed()
+
+
+@dataclass(frozen=True, slots=True)
+class Breaker:
+    """A semaphore's breaker: ``failures`` failed holds of a key in a row put it down for ``pause``.
+
+    A hold failed when its block raised, unless its permit said
+    ``succeeded()``, or when it ran past its timeout or max_hold; a success
+    resets the count. While the key is down every hold is UnavailableError at
+    once. Once the pause is over, one hold goes through: its success puts the
+    key up, its failure pauses it again. The store's process keeps it in
+    memory, so a restart of that process puts every key up.
+    """
+
+    failures: int
+    pause: Duration
+
+
+@dataclass(frozen=True, slots=True)
+class KeyState:
+    """How a semaphore's key stands now: ``await semaphore.state(key)``."""
+
+    up: bool
+    """false from the failure that put the key down until a hold after the pause succeeds; true without a breaker"""
+    down_since: datetime | None
+    last_failure: datetime | None
+    """the last failed hold's end, kept until a success after it"""
+    waiting: int
+    holding: int
 
 
 class _Keys:
@@ -112,6 +171,7 @@ class _Keys:
         ttl: Duration,
         max_hold: Duration | None,
         background: int | None = None,
+        breaker: tuple[int, int] | None = None,
     ) -> None:
         check_name(name, kind)
         self._link = link
@@ -119,6 +179,7 @@ class _Keys:
         self._name = name
         self._limit = limit
         self._background = background
+        self._breaker = breaker
         self._ttl = ms(ttl, f"{kind} {name}: its ttl")
         self._max_hold = None if max_hold is None else ms(max_hold, f"{kind} {name}: its max_hold")
 
@@ -154,9 +215,22 @@ class _Keys:
             request=secrets.token_bytes(16),
             priority="background" if asked.priority == "background" else None,
             background=self._background,
+            failures=None if self._breaker is None else self._breaker[0],
+            pause=None if self._breaker is None else self._breaker[1],
         )
         answer = await self._link.run("read", lambda c: c.session.call(methods["locks.hold"], body))
         return LocksHeld.decode(answer)
+
+    async def state(self, key: Key) -> KeyState:
+        body = LocksStateAsked.encode(kind=self._kind, name=self._name, key=key_text(key))
+        state = LocksState.decode(await self._link.run("read", lambda c: c.session.call(methods["locks.state"], body)))
+        return KeyState(
+            up=bool(state.get("up")),
+            down_since=date_of(state.get("down_since")),
+            last_failure=date_of(state.get("last_failure")),
+            waiting=state.get("waiting", 0),
+            holding=state.get("holding", 0),
+        )
 
 
 class Holding[V]:
@@ -184,6 +258,7 @@ class Holding[V]:
         self._cancel_sent = False
         self._token: contextvars.Token[tuple[tuple[int, str], ...]] | None = None
         self._inside = False
+        self._succeeded = False
 
     async def __aenter__(self) -> V:
         self._keys.refuse(self._place)
@@ -199,7 +274,12 @@ class Holding[V]:
         self._task = asyncio.current_task()
         self._inside = True
         fence = answer.get("fence") or "0"
-        return Lease(int(fence), waited) if self._view is Lease else Permit(waited)  # type: ignore[return-value]
+        if self._view is Lease:
+            return Lease(int(fence), waited)  # type: ignore[return-value]
+        return Permit(waited, self._succeed)  # type: ignore[return-value]
+
+    def _succeed(self) -> None:
+        self._succeeded = True
 
     async def __aexit__(
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
@@ -212,7 +292,7 @@ class Holding[V]:
         self._stop()
         lost = self._lost
         if lost is None:
-            await self._release()
+            await self._release(failed=kind is not None and not self._succeeded)
             return None
         # a lease lost lets nothing go, so nothing waits here while a cancel this sent may still be pending
         if self._cancel_sent and self._task is not None:
@@ -278,9 +358,12 @@ class Holding[V]:
         if self._renewing is not None and self._renewing is not asyncio.current_task():
             self._renewing.cancel()
 
-    async def _release(self) -> None:
-        """Lets the key go: a lease that ran out meanwhile lets go nothing another holds now."""
-        body = LocksLease.encode(lease=self._lease)
+    async def _release(self, *, failed: bool) -> None:
+        """Lets the key go, saying whether the block failed, which the key's breaker counts.
+
+        A lease that ran out meanwhile lets go nothing another holds now.
+        """
+        body = LocksLease.encode(lease=self._lease, failed=failed or None)
         link = self._keys._link  # pyright: ignore[reportPrivateUsage]
         with contextlib.suppress(Exception):
             await link.run("read", lambda c: c.session.call(methods["locks.release"], body))
@@ -310,7 +393,14 @@ class Semaphore:
     """Keys held by up to their limit at a time: ``store.semaphore(name, limit=3)``."""
 
     def __init__(
-        self, link: Link, name: str, limit: int, ttl: Duration, max_hold: Duration | None, background: int | None
+        self,
+        link: Link,
+        name: str,
+        limit: int,
+        ttl: Duration,
+        max_hold: Duration | None,
+        background: int | None,
+        breaker: Breaker | None = None,
     ) -> None:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:  # pyright: ignore[reportUnnecessaryIsInstance]
             raise InvalidError(f"semaphore {name}: a limit of {limit!r}, not 1 to 1000")
@@ -318,10 +408,20 @@ class Semaphore:
             isinstance(background, bool) or not isinstance(background, int) or not 1 <= background <= limit  # pyright: ignore[reportUnnecessaryIsInstance]
         ):
             raise InvalidError(f"semaphore {name}: a background of {background!r}, not 1 to its limit {limit}")
-        _keep_shape(link, name, limit, background)
+        breaking = _breaking(name, breaker)
+        _keep_shape(link, name, (limit, background, breaking))
         self.name = name
         self.limit = limit
-        self._keys = _Keys(link, "semaphore", name, limit, ttl, max_hold, background)
+        self._keys = _Keys(link, "semaphore", name, limit, ttl, max_hold, background, breaking)
+
+    async def state(self, key: Key) -> KeyState:
+        """How key stands now: up or down and since when, its last failed hold, how many wait and hold it::
+
+        state = await cabinet.state("requests")
+        if not state.up:
+            print(f"the cabinet is down since {state.down_since}")
+        """
+        return await self._keys.state(key)
 
     def hold(
         self, key: Key, *, wait: Duration = _WAIT, priority: Priority = "urgent", timeout: Duration | None = None

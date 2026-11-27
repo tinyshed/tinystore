@@ -141,73 +141,165 @@ counts what started recently, even if it finished. A queue's concurrency is
 taken in the same transaction as the job, so it survives restarts; a
 semaphore lives in memory.
 
-## When what it guards is down
+## A pause when what it guards is down
 
-A semaphore sees only whether your function threw, not why. When the service
-behind it is down, every waiter still sits out its own timeout. To stop
-calling it for a while, keep the decision in a key with a `ttl`, which every
-program of the store shares:
+When the service behind a semaphore is down, every caller would wait for its
+own timeout. Give the semaphore a breaker instead. After a number of failed
+holds in a row, the key is down for a pause, and every caller hears it at
+once:
 
 ```ts
-const strikes = store.counters('strikes', { ttl: '1m' })
-const broken = store.bucket<true>('broken')
+const cabinet = store.semaphore('cabinet', {
+	limit: 8,
+	background: 4,
+	breaker: { failures: 2, pause: '30s' }, // two failed holds in a row: nobody is let in for 30 s
+})
 
-if (await broken.has('moodle')) throw new Unavailable()
 try {
-	return await moodle.hold('requests', permit => fetchMoodle(permit.signal))
+	return await cabinet.hold('requests', permit => fetchGrades(user.id, permit.signal), { timeout: '15s' })
 } catch (err) {
-	if (isTimeout(err) && (await strikes.add('moodle')) >= 2) await broken.set('moodle', true, { ttl: '30s' })
+	if (err instanceof UnavailableError) return showCached(user.id) // the cabinet is down
 	throw err
 }
 ```
 
 ```python
-strikes = store.counters("strikes", ttl="1m")
-broken = store.bucket("broken", bool)
+cabinet = store.semaphore("cabinet", limit=8, background=4, breaker=Breaker(failures=2, pause="30s"))
 
-if await broken.has("moodle"):
-    raise Unavailable()
 try:
-    async with moodle.hold("requests"):
-        return await fetch_moodle()
-except TimeoutError:
-    if await strikes.add("moodle") >= 2:
-        await broken.set("moodle", True, ttl="30s")
-    raise
+    async with cabinet.hold("requests", timeout="15s"):
+        return await fetch_grades(user.id)
+except UnavailableError:
+    return show_cached(user.id)  # the cabinet is down
 ```
 
 ```go
-strikes, err := kv.OpenCounters(store, "strikes", kv.TTL(time.Minute))
-broken, err := kv.OpenBucket[bool](store, "broken")
+cabinet, err := locks.OpenSemaphore(store, "cabinet",
+	locks.Limit(8), locks.Background(4), locks.Breaker(2, 30*time.Second))
 
-if down, _ := broken.Has(ctx, "moodle"); down {
-	return errUnavailable
+err = cabinet.Hold(ctx, "requests", fetchGrades, locks.Timeout(15*time.Second))
+if errors.Is(err, tinystore.ErrUnavailable) {
+	return showCached(user.ID) // the cabinet is down
 }
-err = moodle.Hold(ctx, "requests", fetchMoodle)
-if errors.Is(err, context.DeadlineExceeded) {
-	if n, _ := strikes.Add(ctx, "moodle", 1); n >= 2 {
-		_ = broken.Set(ctx, "moodle", true, kv.TTL(30*time.Second))
-	}
-}
-return err
 ```
 
 ```rust
-let strikes = store.counters("strikes").ttl(Duration::from_secs(60)).open()?;
-let broken = store.bucket::<bool>("broken").open()?;
+let cabinet = store.semaphore("cabinet").limit(8).background(4).breaker(2, Duration::from_secs(30)).open()?;
 
-if broken.has("moodle")? {
-    return Err(unavailable());
+match cabinet.key("requests").timeout(Duration::from_secs(15)).hold(|_| fetch_grades(&user.id)) {
+    Err(error) if error.kind() == ErrorKind::Unavailable => show_cached(&user.id), // the cabinet is down
+    fetched => fetched,
 }
-let fetched = moodle.hold("requests", |_| fetch_moodle());
-if fetched.as_ref().is_err_and(is_timeout) && strikes.add("moodle", 1)? >= 2 {
-    broken.key("moodle").ttl(Duration::from_secs(30)).set(&true)?;
-}
-fetched
 ```
 
-Two timeouts within a minute stop every program's calls for 30 seconds; the
-key expires by itself and the next call tries again.
+- A hold fails when its function throws or returns an error, or when it runs
+  past its `timeout` or `maxHold`. A hold that succeeds resets the count.
+- After `failures` failed holds of a key in a row, the key is down for
+  `pause`. Every hold of it, in line or new, fails at once with an
+  unavailable error: `UnavailableError` in Bun and Python,
+  `ErrUnavailable` in Go and `ErrorKind::Unavailable` in Rust. It is never an
+  in-use error, and its message says since when the key is down (contract
+  LOCK-12).
+- When the pause ends, one hold goes through and the others still fail. If it
+  succeeds, the key is up again. If it fails, the key is down for another
+  pause. If its program goes away before it ends, the next hold goes through
+  instead (contract LOCK-13).
+- A hold whose program goes away, so that its lease runs out, does not count:
+  the service did not fail. In Rust with async, a hold whose future you drop
+  does not count either.
+- Each key has its own breaker, like its own places.
+
+Some errors are yours, not the service's, such as a student who does not
+exist. Say so with `succeeded`, and the hold does not count as a failure even
+if the function then throws:
+
+```ts
+await cabinet.hold('requests', async permit => {
+	const response = await fetch(url, { signal: permit.signal })
+	if (response.status === 404) {
+		permit.succeeded() // the cabinet answered: it is up
+		throw new NotFound(user.id)
+	}
+	return response.json()
+})
+```
+
+```python
+async with cabinet.hold("requests") as permit:
+    response = await client.get(url)
+    if response.status_code == 404:
+        permit.succeeded()  # the cabinet answered: it is up
+        raise NotFound(user.id)
+```
+
+```go
+err = cabinet.Hold(ctx, "requests", func(ctx context.Context, permit *locks.Lease) error {
+	response, err := get(ctx, url)
+	if err == nil && response.StatusCode == http.StatusNotFound {
+		permit.Succeeded() // the cabinet answered: it is up
+		return errNotFound
+	}
+	return err
+})
+```
+
+```rust
+cabinet.hold("requests", |permit| {
+    let response = get(&url)?;
+    if response.status() == 404 {
+        permit.succeeded(); // the cabinet answered: it is up
+        return Err(not_found(&user.id));
+    }
+    Ok(response)
+})?;
+```
+
+### Whether it is up
+
+`state` says how a key stands now, for a status line:
+
+```ts
+const { up, downSince, lastFailure, waiting, holding } = await cabinet.state('requests')
+if (!up) banner(`The cabinet is down since ${downSince?.toLocaleTimeString()}`)
+```
+
+```python
+state = await cabinet.state("requests")
+if not state.up:
+    banner(f"The cabinet is down since {state.down_since:%H:%M}")
+```
+
+```go
+state, err := cabinet.State(ctx, "requests")
+if !state.Up {
+	banner("The cabinet is down since " + state.DownSince.Format(time.Kitchen))
+}
+```
+
+```rust
+let state = cabinet.state("requests")?;
+if !state.up {
+    banner(&format!("The cabinet is down since {:?}", state.down_since));
+}
+```
+
+`up` is false from the failure that put the key down until a hold after the
+pause succeeds. `lastFailure / last_failure / LastFailure / last_failure` is
+kept until a success after it. `waiting` and `holding` count the holds in line
+and those that hold a place, and work without a breaker too, where `up` is
+always true (contract LOCK-14).
+
+### What a breaker does not do
+
+- It lives in the memory of the process that holds the store, beside the
+  lines. Every program of the store sees the same answer. A restart of that
+  process starts every key up, with no failure counted (NOT-14).
+- Inside one program, a name has one breaker, as it has one `limit`. A second
+  open with another one fails `invalid` and names both.
+- Locks have no breaker. Use a semaphore of `limit: 1`.
+- These are not built yet: waiting for the first free place of several
+  semaphores, letting a place go at a point that the function chooses before
+  it ends, and a budget where one hold weighs more than another.
 
 ## Two opens with different limits
 
