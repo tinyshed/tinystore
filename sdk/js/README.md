@@ -13,7 +13,7 @@ one. Every call, by engine, is in docs/reference/bun.md.
 
 <!-- /landing:headline -->
 
-> **Version 0.12.** Until `1.0`, a minor release may still change the API,
+> **Version 0.13.** Until `1.0`, a minor release may still change the API,
 > and its notes say what changed.
 
 The SDK starts a small `tinystore` server next to your program, called the

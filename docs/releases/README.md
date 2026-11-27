@@ -4,7 +4,13 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
-- **[TinyStore 0.12.0](v0.12.0.md)** · 24 November 2026  A total of any number of series, a folder of a database's files replaced
+- **[TinyStore 0.13.0](v0.13.0.md)** · not yet released\
+  Tables mirrored from another system, deleted rows and versions, a memo
+  that answers while it rebuilds, semaphores with a background line and a
+  breaker, gathered jobs and quiet hours, synonyms and one search of several
+  indexes, sessions, a comparison with the usual, and Prometheus' text.
+- **[TinyStore 0.12.0](v0.12.0.md)** · 24 November 2026\
+  A total of any number of series, a folder of a database's files replaced
   whole in one transaction, a day of metrics by the hour in half the time,
   and nodes with TLS from the release's binaries.
 - **[TinyStore 0.11.0](v0.11.0.md)** · 19 November 2026\
