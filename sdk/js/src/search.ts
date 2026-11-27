@@ -44,6 +44,15 @@ export interface IndexOptions {
 	 * other layout, when it finds something there, and `corrected` says so
 	 */
 	layouts?: readonly KeyboardLayout[] | undefined
+	/**
+	 * each short form, one word, with the phrase of 1 to 8 words it stands
+	 * for, `{ ml: 'machine learning' }`: a search for the short form finds a
+	 * document that holds the phrase, its words adjacent and in order, and a
+	 * search for the phrase's words one that holds the short form; read when
+	 * a document is set, so a search pays nothing; other synonyms read an
+	 * index that holds documents again, and none given leaves it none
+	 */
+	synonyms?: Readonly<Record<string, string>> | undefined
 	/** a vector the program's model gives each document, and `recall` for searches from clusters */
 	vectors?: { dimensions: number; recall?: number | undefined } | undefined
 	/** how a search by words and a vector at once combines them unless it says */
@@ -241,6 +250,7 @@ export interface TableIndexOptions {
 	filters?: readonly string[] | undefined
 	typoTolerance?: boolean | undefined
 	layouts?: readonly KeyboardLayout[] | undefined
+	synonyms?: Readonly<Record<string, string>> | undefined
 	/** a column of blobs of little-endian floats, one a row or null, and `recall` for searches from clusters */
 	vectors?: { column: string; dimensions: number; recall?: number | undefined } | undefined
 	hybrid?: { vectorWeight?: number | undefined; rerank?: boolean | undefined } | undefined
@@ -457,6 +467,7 @@ export function tableIndexOpen(
 		filters: [...(options.filters ?? [])],
 		typoTolerance: options.typoTolerance,
 		layouts: layoutsOf(options.layouts),
+		synonyms: { ...options.synonyms },
 		dimensions: options.vectors?.dimensions,
 		recall: options.vectors?.recall,
 		vectorWeight: options.hybrid?.vectorWeight,
@@ -501,6 +512,7 @@ export function indexOpen(name: string, options: IndexOptions = {}, reindex = fa
 		filters: [...(options.filters ?? [])],
 		typoTolerance: options.typoTolerance,
 		layouts: layoutsOf(options.layouts),
+		synonyms: { ...options.synonyms },
 		dimensions: options.vectors?.dimensions,
 		recall: options.vectors?.recall,
 		vectorWeight: options.hybrid?.vectorWeight,

@@ -155,6 +155,21 @@ async def test_a_hit_says_where_it_matched_in_code_points_that_slice_its_own_str
     assert (await catalog.search("елка")).hits[0].matches is None
 
 
+# contract: SRCH-23
+async def test_a_short_form_finds_its_phrase_and_the_phrase_its_short_form(store: tinystore.Store) -> None:
+    synonyms = {"кмзи": "криптографические методы защиты информации", "ml": "machine learning"}
+    catalog = store.index("abbreviated", Course, fields={"name": 4}, synonyms=synonyms)
+    await catalog.set("c-1", Course("Криптографические методы защиты информации"))
+    await catalog.set("c-2", Course("Экзамен по КМЗИ"))
+    assert sorted(hit.id for hit in (await catalog.search("кмзи")).hits) == ["c-1", "c-2"]
+    result = await catalog.search("защиты информации", matches=True)
+    exam = next(hit for hit in result.hits if hit.id == "c-2")
+    assert exam.matches is not None
+    assert exam.value.name[exam.matches[0].start : exam.matches[0].end] == "КМЗИ"
+    with pytest.raises(tinystore.InvalidError):
+        await store.index("refused", Course, synonyms={"machine learning": "ml"}).search("ml")
+
+
 @dataclass
 class Page:
     title: str

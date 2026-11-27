@@ -11819,6 +11819,13 @@ def _write_search_open(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             w.str(item0)
         n += 1
+    if (x := v.get("synonyms")) is not None:
+        w.uint(17)
+        w.map(len(x))
+        for name0 in sorted(x):
+            w.str(name0)
+            w.str(x[name0])
+        n += 1
     w.close_map(head, n)
 
 
@@ -11867,6 +11874,14 @@ def _read_search_open(r: Reader) -> dict[str, Any]:
                 items0 = [r.str() for _ in range(r.array())]
                 r.leave()
                 read["keys"] = items0
+            case 17:
+                named0: dict[str, Any] = {}
+                names0: set[str] = set()
+                for _ in range(r.map()):
+                    name0 = r.name(names0)
+                    named0[name0] = r.str()
+                r.leave()
+                read["synonyms"] = named0
             case _:
                 r.skip()
     r.leave()
@@ -11911,6 +11926,8 @@ SearchOpen = Message(
         "layouts": (15, list_(str_)),
         # a key of several columns, in place of key: their values unique together
         "keys": (16, list_(str_)),
+        # each short form, one word, with the phrase of 1 to 8 words it stands for
+        "synonyms": (17, names(str_)),
     },
     _write_search_open,
     _read_search_open,

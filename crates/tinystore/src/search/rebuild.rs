@@ -738,5 +738,6 @@ pub(crate) fn wanted_of(settings: &Settings) -> Wanted {
         rerank: settings.hybrid.rerank,
         manual: false,
         table: settings.table.clone(),
+        synonyms: settings.synonyms.given().cloned().collect(),
     }
 }

@@ -83,7 +83,7 @@ impl Prepared {
     /// as its fields read them and its vector, which an index with vectors
     /// requires a set to give or to say it has none.
     pub(crate) fn new(index: i64, incoming: Incoming<'_>, settings: &Settings) -> Result<Prepared> {
-        let analyzed = analyze(&incoming.tree, &settings.fields, &settings.filters)?;
+        let analyzed = analyze(&incoming.tree, &settings.fields, &settings.filters, &settings.synonyms)?;
         let vector = match (settings.vectors, incoming.vector) {
             (None, Some(Some(_))) => return Err(Error::invalid("a vector for an index without vectors")),
             (None, _) | (Some(_), Some(None)) => None,

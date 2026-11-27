@@ -188,6 +188,24 @@ fn an_index_opened_with_layouts_reads_a_word_typed_with_the_other_on_over_the_wi
     assert_eq!(client.call::<Handle>(method::SEARCH_OPEN, &unknown).unwrap_err().code, "invalid");
 }
 
+// contract: SRCH-23
+#[test]
+fn an_index_opened_with_synonyms_finds_a_short_form_by_its_phrase_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let synonyms = [("кмзи".to_owned(), "криптографические методы защиты информации".to_owned())].into();
+    let asked = SearchOpen { name: "courses".to_owned(), synonyms, ..SearchOpen::default() };
+    let handle = client.call::<Handle>(method::SEARCH_OPEN, &asked).unwrap().handle;
+    let course = r#""Криптографические методы защиты информации""#.to_owned();
+    let asked_set = SearchSet { handle, id: "1".to_owned(), value: course, vector: None, no_vector: false };
+    client.call::<Empty>(method::SEARCH_SET, &asked_set).unwrap();
+    let found: SearchFound = client.call(method::SEARCH_SEARCH, &query(handle, "КМЗИ")).unwrap();
+    assert_eq!(ids(&found), ["1"]);
+    let two_words = [("machine learning".to_owned(), "ml".to_owned())].into();
+    let refused = SearchOpen { name: "other".to_owned(), synonyms: two_words, ..SearchOpen::default() };
+    assert_eq!(client.call::<Handle>(method::SEARCH_OPEN, &refused).unwrap_err().code, "invalid");
+}
+
 #[test]
 fn a_refusal_over_the_wire_names_what_failed() {
     let dir = tempfile::tempdir().unwrap();

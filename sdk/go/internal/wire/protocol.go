@@ -12614,6 +12614,8 @@ type SearchOpen struct {
 	Layouts []string `wire:"15,layouts"`
 	// a key of several columns, in place of key: their values unique together
 	Keys []string `wire:"16,keys"`
+	// each short form, one word, with the phrase of 1 to 8 words it stands for
+	Synonyms map[string]string `wire:"17,synonyms"`
 }
 
 func (m SearchOpen) Write(w *Writer) {
@@ -12711,6 +12713,15 @@ func (m SearchOpen) Write(w *Writer) {
 		}
 		n++
 	}
+	if len(m.Synonyms) > 0 {
+		w.Uint(17)
+		w.Map(len(m.Synonyms))
+		for _, name0 := range SortedNames(m.Synonyms) {
+			w.Str(name0)
+			w.Str(m.Synonyms[name0])
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -12784,6 +12795,16 @@ func (m *SearchOpen) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Keys = v
+		case 17:
+			v := map[string]string{}
+			seen0 := map[string]struct{}{}
+			for k0 := r.Map(); k0 > 0; k0-- {
+				name0 := r.Name(seen0)
+				item0 := r.Str()
+				v[name0] = item0
+			}
+			r.Leave()
+			m.Synonyms = v
 		default:
 			r.Skip()
 		}
@@ -12808,7 +12829,8 @@ func (m SearchOpen) IsZero() bool {
 		m.Key == nil &&
 		m.VectorColumn == nil &&
 		len(m.Layouts) == 0 &&
-		len(m.Keys) == 0
+		len(m.Keys) == 0 &&
+		len(m.Synonyms) == 0
 }
 
 // SearchField is the schema's search.Field.

@@ -215,18 +215,19 @@ search, `status` and `ready`: see [A table's index](table-index.md#async-rust).
 
 ## In these guides
 
-| Page                                    | Covers                                              |
-|-----------------------------------------|-----------------------------------------------------|
-| [Fields and weights](fields.md)         | which text is read, and how much each field counts  |
-| [Typos](typos.md)                       | the nearest word, `corrected`, `typoTolerance`      |
-| [As you type](prefix.md)                | `prefix`: the last word, or each, as a start        |
-| [Keyboard layouts](layouts.md)          | `layouts`: a word typed with the other layout on    |
-| [Show what matched](matches.md)         | `matches` and `snippet`: where each hit matched     |
-| [Filters](filters.md)                   | `where`, lists, ranges, `search.or`                 |
-| [Vectors](vectors.md)                   | dimensions, exact search, `recall` and clusters     |
-| [Words and vectors together](hybrid.md) | `vectorWeight`, `minSimilarity`, `rerank`           |
-| [A table's index](table-index.md)       | `db.searchIndex`, triggers, `ready`                 |
-| [Rebuilds](rebuilds.md)                 | changing fields and filters while the index answers |
+| Page                                      | Covers                                              |
+|-------------------------------------------|-----------------------------------------------------|
+| [Fields and weights](fields.md)           | which text is read, and how much each field counts  |
+| [Typos](typos.md)                         | the nearest word, `corrected`, `typoTolerance`      |
+| [As you type](prefix.md)                  | `prefix`: the last word, or each, as a start        |
+| [Keyboard layouts](layouts.md)            | `layouts`: a word typed with the other layout on    |
+| [Abbreviations and synonyms](synonyms.md) | `synonyms`: a short form and its phrase, both ways  |
+| [Show what matched](matches.md)           | `matches` and `snippet`: where each hit matched     |
+| [Filters](filters.md)                     | `where`, lists, ranges, `search.or`                 |
+| [Vectors](vectors.md)                     | dimensions, exact search, `recall` and clusters     |
+| [Words and vectors together](hybrid.md)   | `vectorWeight`, `minSimilarity`, `rerank`           |
+| [A table's index](table-index.md)         | `db.searchIndex`, triggers, `ready`                 |
+| [Rebuilds](rebuilds.md)                   | changing fields and filters while the index answers |
 
 New to Search? [Finding old messages](../../handbook/chat/finding-old-messages.md)
 in the Handbook indexes a chat's messages, and [How search

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"testing"
 	"testing/fstest"
 
@@ -223,6 +224,30 @@ func TestAHitSaysWhereItMatchedInBytesThatSliceItsOwnStrings(t *testing.T) {
 		if plain := ways.Must(catalog.Search(ctx, "елка")).Hits[0]; plain.Matches != nil {
 			t.Fatalf("matches %v unasked", plain.Matches)
 		}
+	})
+}
+
+// contract: SRCH-23
+func TestAShortFormFindsItsPhraseAndThePhraseItsShortForm(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		synonyms := search.Synonyms{"кмзи": "криптографические методы защиты информации", "ml": "machine learning"}
+		catalog := ways.Must(search.OpenIndex[listed](store, "abbreviated", search.Fields{"name": 4}, synonyms))
+		ways.Must(0, catalog.Set(ctx, "c-1", listed{Name: "Криптографические методы защиты информации"}))
+		ways.Must(0, catalog.Set(ctx, "c-2", listed{Name: "Экзамен по КМЗИ"}))
+		found := ids(ways.Must(catalog.Search(ctx, "кмзи")))
+		sort.Strings(found)
+		if !reflect.DeepEqual(found, []string{"c-1", "c-2"}) {
+			t.Fatalf("found %v", found)
+		}
+		for _, hit := range ways.Must(catalog.Search(ctx, "защиты информации", search.Matches())).Hits {
+			if hit.ID == "c-2" && hit.Value.Name[hit.Matches[0].Start:hit.Matches[0].End] != "КМЗИ" {
+				t.Fatalf("matches %v", hit.Matches)
+			}
+		}
+		refused := ways.Must(search.OpenIndex[listed](store, "refused", search.Synonyms{"machine learning": "ml"}))
+		_, err := refused.Search(ctx, "ml")
+		is(t, err, tinystore.ErrInvalid)
 	})
 }
 

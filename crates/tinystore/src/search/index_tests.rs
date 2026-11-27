@@ -578,7 +578,7 @@ fn setting_passages_a_thousand_at_a_time_takes() {
     let passages: Vec<serde_json::Value> = (0..100_000).map(|_| zipf.text(&mut random, 50).into()).collect();
     let started = std::time::Instant::now();
     for passage in &passages {
-        std::hint::black_box(document::analyze(passage, &fields, &[]).unwrap());
+        std::hint::black_box(document::analyze(passage, &fields, &[], &Default::default()).unwrap());
     }
     eprintln!(
         "100,000 passages: sets {setting:?}, merges {merging:?}, into one {into_one:?}, their words alone {:?}",
@@ -1073,9 +1073,13 @@ impl Model {
     fn read_by(&self, settings: &Settings) -> Model {
         let mut model = Model { next: self.next, prefix: self.prefix.clone(), ..Model::default() };
         for (id, doc) in &self.docs {
-            let analyzed =
-                document::analyze(&serde_json::to_value(&doc.value).unwrap(), &settings.fields, &settings.filters)
-                    .unwrap();
+            let analyzed = document::analyze(
+                &serde_json::to_value(&doc.value).unwrap(),
+                &settings.fields,
+                &settings.filters,
+                &settings.synonyms,
+            )
+            .unwrap();
             let terms = analyzed.terms.iter().map(|(part, term, tf)| ((*part, term.clone()), *tf)).collect();
             let value = doc.value.clone();
             model
@@ -1091,8 +1095,13 @@ impl Model {
 
     fn set_with(&mut self, settings: &Settings, id: String, value: Article, vector: Option<Vec<f32>>) {
         self.next += 1;
-        let analyzed =
-            document::analyze(&serde_json::to_value(&value).unwrap(), &settings.fields, &settings.filters).unwrap();
+        let analyzed = document::analyze(
+            &serde_json::to_value(&value).unwrap(),
+            &settings.fields,
+            &settings.filters,
+            &settings.synonyms,
+        )
+        .unwrap();
         let terms = analyzed.terms.iter().map(|(part, term, tf)| ((*part, term.clone()), *tf)).collect();
         self.docs.insert(id, Doc { number: self.next, value, terms, analyzed, vector });
     }

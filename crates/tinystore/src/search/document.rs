@@ -9,6 +9,7 @@ use super::analyzer;
 use super::filter;
 use super::score::Part;
 use super::settings::{Field, Filter, shown};
+use super::synonyms::Synonyms;
 use crate::{Error, Result};
 
 /// The most words a part's length counts: a length is kept in two bytes.
@@ -31,14 +32,22 @@ impl Analyzed {
 }
 
 /// The words of a document's fields, and its filters' values, each a key
-/// held once.
-pub(crate) fn analyze(document: &Value, fields: &[Field], filters: &[Filter]) -> Result<Analyzed> {
+/// held once; and the words its synonyms add, which count in no length.
+pub(crate) fn analyze(document: &Value, fields: &[Field], filters: &[Filter], synonyms: &Synonyms) -> Result<Analyzed> {
     let mut terms: BTreeMap<(Part, String), u32> = BTreeMap::new();
     let mut lengths: BTreeMap<Part, u32> = BTreeMap::new();
     for field in fields {
         let (written, stems) = (Part::written(field.number), Part::stems(field.number));
         for (_, text) in texts(document, &field.path)? {
-            for word in analyzer::words(text) {
+            let words = analyzer::words(text);
+            let extra = if synonyms.is_empty() { Vec::new() } else { synonyms.extra(&words) };
+            for word in extra.into_iter().cloned() {
+                if let Some(stem) = word.stem {
+                    *terms.entry((stems, stem)).or_default() += 1;
+                }
+                *terms.entry((written, word.text)).or_default() += 1;
+            }
+            for word in words {
                 *lengths.entry(written).or_default() += 1;
                 if let Some(stem) = word.stem {
                     *lengths.entry(stems).or_default() += 1;
@@ -102,7 +111,7 @@ mod tests {
     fn a_document_counts_its_words_and_stems_by_part() {
         let document = json!({ "title": "Кошки и кошка", "tags": ["cat", null, "cats"], "author": { "name": "Ann" } });
         let fields = [field("title", 0), field("tags", 1), field("author.name", 2), field("missing", 3)];
-        let analyzed = analyze(&document, &fields, &[]).unwrap();
+        let analyzed = analyze(&document, &fields, &[], &Synonyms::default()).unwrap();
         let (title, stems, tags) = (Part::written(0), Part::stems(0), Part::written(1));
         assert_eq!(analyzed.lengths, [(title, 3), (stems, 2), (tags, 2), (Part::written(2), 1)]);
         assert_eq!(analyzed.terms.iter().filter(|(part, _, _)| *part == stems).count(), 1);
@@ -112,9 +121,9 @@ mod tests {
 
     #[test]
     fn a_string_document_is_its_own_text_and_a_field_of_no_text_is_refused() {
-        let analyzed = analyze(&json!("hello world"), &[field("", 0)], &[]).unwrap();
+        let analyzed = analyze(&json!("hello world"), &[field("", 0)], &[], &Synonyms::default()).unwrap();
         assert_eq!(analyzed.lengths, [(Part::written(0), 2)]);
-        let refused = analyze(&json!({ "year": 2024 }), &[field("year", 0)], &[]).unwrap_err();
+        let refused = analyze(&json!({ "year": 2024 }), &[field("year", 0)], &[], &Synonyms::default()).unwrap_err();
         assert_eq!(refused.to_string(), "field year holds a number, not text: invalid");
     }
 }

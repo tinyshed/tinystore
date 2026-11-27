@@ -25,6 +25,7 @@ message search.Open {
   14 vectorColumn: str?              # the column of each row's vector, a blob of little-endian floats
   15 layouts: [str]                  # the keyboard layouts its readers type with: ru and en, or none
   16 keys: [str]                     # a key of several columns, in place of key: their values unique together
+  17 synonyms: {str}                 # each short form, one word, with the phrase of 1 to 8 words it stands for
 }
 
 # A field a search reads, by its path into the document, and what a word

@@ -198,6 +198,26 @@ for (const way of ways) {
 			expect((await catalog.search('елка')).hits[0]?.matches).toBeUndefined()
 		})
 
+		// contract: SRCH-23
+		test('a short form finds its phrase and the phrase its short form', async () => {
+			const catalog = store.index<{ name: string }>('abbreviated', {
+				fields: { name: 4 },
+				synonyms: { кмзи: 'криптографические методы защиты информации', ml: 'machine learning' },
+			})
+			await catalog.set('c-1', { name: 'Криптографические методы защиты информации' })
+			await catalog.set('c-2', { name: 'Экзамен по КМЗИ' })
+			expect(ids(await catalog.search('кмзи')).sort()).toEqual(['c-1', 'c-2'])
+			const [exam] = (
+				await catalog.search({ text: 'защиты информации', matches: true })
+			).hits.filter(hit => hit.id === 'c-2')
+			const at = exam?.matches?.[0]
+			expect(exam?.value.name.slice(at?.start, at?.end)).toBe('КМЗИ')
+			const refused = await caught(
+				store.index('refused', { synonyms: { 'machine learning': 'ml' } }).search('ml'),
+			)
+			expect(refused).toBeInstanceOf(InvalidError)
+		})
+
 		// contract: SRCH-22
 		test("a hit's snippet is cut around its first match, its marks in UTF-16 units", async () => {
 			const pages = store.index<{ title: string; plain: string }>('pages', {
