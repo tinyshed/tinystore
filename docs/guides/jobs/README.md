@@ -73,7 +73,7 @@ let worker = emails.work(|email: Email, run| -> Result<(), AppError> {
 | Page                                      | Covers                                                                              |
 |-------------------------------------------|-------------------------------------------------------------------------------------|
 | [Ids](ids.md)                             | `id`, `upsert`, `dedupe`, `keep`, `cancel`, `get`, pages and `counts`               |
-| [Gather and quiet hours](gather.md)       | `gather`, what arrives under one id as one job, and `quiet` hours                   |
+| [Gather and quiet hours](gather.md)       | `gather`, items under one id collected into one job, and `quiet` hours              |
 | [Schedules and cron](schedules.md)        | `every`, `cron` with a time zone, `ttl` and `expiresAt`, `store.schedule`, `runNow` |
 | [Concurrency and rate](concurrency.md)    | limits in all and per group, starts per second                                      |
 | [Watching a job](watching.md)             | `get`, `watch`, `ahead`, progress                                                   |

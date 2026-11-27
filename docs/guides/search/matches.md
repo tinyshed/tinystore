@@ -143,10 +143,10 @@ first, because escaping changes the offsets.
 
 ## Cut a snippet
 
-A page's body is too long to show whole under its title. With `snippet`,
-each hit carries the piece of one field around its first match there, and
-the matches inside that piece, so a result list can show the sentence that
-matched:
+A page's body is too long to show in full under its title. With `snippet`,
+each hit carries a piece of one field around the first match in that field,
+and the matches inside that piece. So a result list can show the sentence
+that matched:
 
 ```ts
 const found = await pages.search({ text: 'algebra', snippet: { field: 'plain', around: 60 } })
@@ -169,28 +169,31 @@ let snippet = found.hits[0].snippet.as_ref().unwrap();
 &snippet.text[snippet.marks[0].clone()] // "algebra"
 ```
 
-- `field` is a path the index reads, as its `fields` name it; any other is
-  refused as invalid.
-- `around` is how many characters to keep on each side of the field's first
-  match, 1 to 1000, and 80 unless said. Rust takes it always. A character is
-  what a reader counts as one: an emoji of several code points, or a letter
-  with its accent, is one, and is never cut in two.
-- The piece starts at the first word that starts within the allowance and
-  ends at the last word that ends within it, the words the index itself
-  reads. Where text was cut, the piece has `…` at that end.
-- `marks` are every match inside the piece, not only the first, counted in
-  the piece's text as `matches` count in each language: UTF-16 units in Bun
-  and Node, code points in Python, bytes in Go and Rust.
-- A hit that matched in another field, or by its vector alone, gets the
-  field's start, `2 × around` characters, with no marks. A hit whose
-  document lacks the field gets no snippet.
-- In a field that holds a list, the piece is of the string that matched
-  first, and `item` is its place in the list.
-- A snippet does not list the hit's `matches`; ask for both if you want
-  both. Only the hits of the page are cut, after the search.
+- `field` is a path that the index reads, written as in its `fields`. Any
+  other path fails with an invalid error.
+- `around` is the number of characters to keep on each side of the field's
+  first match: 1 to 1000, 80 by default. In Rust you always pass it. A
+  character here is what a reader sees as one character. For example, an
+  emoji made of several code points, or a letter with its accent, counts as
+  one and is never cut in two.
+- The piece starts at the first word that starts within that range, and ends
+  at the last word that ends within it. A word here is a word as the index
+  itself reads it. Where the text was cut, the piece has `…` at that end.
+- `marks` lists every match inside the piece, not only the first. Its
+  offsets count in the piece's text the same way `matches` counts in each
+  language: UTF-16 units in Bun and Node, code points in Python, bytes in Go
+  and Rust.
+- If a hit matched in another field, or only by its vector, its snippet is
+  the start of the field, `2 × around` characters long, with no marks. If
+  the hit's document doesn't have the field, the hit gets no snippet.
+- If the field contains a list, the piece comes from the string that matched
+  first, and `item` is that string's position in the list.
+- A snippet doesn't include the hit's `matches`, so ask for both if you want
+  both. Search cuts snippets after the search, and only for the hits of the
+  returned page.
 
 The store inserts no markup and escapes nothing, because a field's text is
-your users' text: only your program knows whether it goes into HTML, a
+your users' text. Only your program knows whether the text goes into HTML, a
 terminal or a push notification. To show it in HTML, escape each piece
 between the marks and wrap the marks yourself:
 
@@ -241,8 +244,8 @@ fn marked(snippet: &Snippet, escape: impl Fn(&str) -> String) -> String {
 }
 ```
 
-Escape after cutting, never before: escaping changes lengths, and the marks
-count the text as the store gave it.
+Escape after cutting, never before. Escaping changes lengths, and the marks
+count the text exactly as the store returned it.
 
 ## What a range covers
 
@@ -346,9 +349,9 @@ the row that the hit carries.
 | ranges in one text | in text order; ranges that overlap are joined  |
 | a prefix's range   | the letters typed, not the whole word          |
 | the work it adds   | each hit's text is read again after the search |
-| `snippet`          | off unless the search asks                     |
-| `around`           | 1 to 1000 characters; 80 unless said           |
-| a snippet's marks  | every match inside it, in its text's order     |
+| `snippet`          | off unless the search asks for it              |
+| `around`           | 1 to 1000 characters, 80 by default            |
+| a snippet's marks  | every match inside it, in text order           |
 
 ## See also
 

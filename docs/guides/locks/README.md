@@ -47,8 +47,8 @@ let tried = summaries.try_hold(chat_id, |lease| write_summary(chat_id, lease.fen
 
 ## What it guarantees
 
-- A key has one holder at a time, given to waiters of one priority in the
-  order they came (contract LOCK-01).
+- A key has one holder at a time. Waiters of the same priority get it in
+  the order they arrived (contract LOCK-01).
 - Every lease's fence is larger than every earlier lease's, across restarts
   (contract LOCK-02).
 - A lease over a connection lasts its `ttl` from its last renewal; one that

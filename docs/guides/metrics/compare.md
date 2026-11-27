@@ -1,9 +1,10 @@
 # Compare now with usual
 
-`compare` answers whether a call is slower than usual: the `op` over the
-newest window against the median of the same `op` over the windows before
-it, in one call that reads one snapshot. The program keeps no baseline of
-its own, refreshes nothing and caches nothing.
+`compare` tells you whether a call is slower than usual. It computes the
+`op` over the newest window and compares it with the median of the same `op`
+over the windows before it. It does this in one call that reads one
+snapshot. Your program keeps no baseline of its own, and nothing is
+refreshed or cached.
 
 ```ts
 const now = await store.metrics.compare({
@@ -47,66 +48,72 @@ let now = store
 
 ## The windows it compares
 
-`now` is read once from the store's clock. The newest window is
-`[now − window, now]`, the call's own millisecond in it, as in a read
-`since` the window; the windows before it are
+`compare` reads `now` once from the store's clock. The newest window is
+`[now − window, now]`, so it includes the call's own millisecond, as a read
+`since` the window does. The windows before it are:
 
 | Asked      | Windows before                                      | `against: '7d'`, `window: '15m'` |
 |------------|-----------------------------------------------------|----------------------------------|
 | `sameHour` | `[now − k·24h − window, now − k·24h)`, k = 1 … 7    | the same quarter hour of 7 days  |
 | without it | `[now − (k+1)·window, now − k·window)`, k = 1 … 671 | every quarter hour of the week   |
 
-- A day is 24 hours, in no time zone: in the week after the clocks change,
-  `sameHour` compares with hours one off from the local ones.
-- Without `sameHour` the windows are counted back from the newest, not from
-  a grid since 1970, and at most 1000 of them: more is `invalid`, asking for
-  a wider window or a shorter `against`. `sameHour` takes a window of a day
-  at most and an `against` of a day at least.
-- Each window is one aggregate of the series the query finds, merged as an
-  aggregate without `by` merges them, so a window inside one packed block is
-  answered from its summary. Every bound of a query holds over all the
-  windows together: past 1000 series, for one, it is `limit`.
-- Each window reads the blocks it reaches on its own. A packed block that
-  spans several windows is decoded once for each of them, and its samples
-  count against the query's bounds each time: minute windows over blocks
-  of hours read each block dozens of times, and reach `limit` sooner than
-  one aggregate of the same span would. A window as long as a block, or
-  `sameHour`, whose windows lie a day apart, reads each block about once.
+- A day is 24 hours, in no time zone. So in the week after a clock change,
+  `sameHour` compares with hours that are one hour off from local time.
+- Without `sameHour`, the windows are counted back from the newest one, not
+  from a grid that starts in 1970. There can be at most 1000 of them. More
+  fails with `invalid`, which asks for a wider window or a shorter
+  `against`. With `sameHour`, the window can be a day at most, and `against`
+  must be a day at least.
+- Each window is one aggregate of the series that the query finds, merged
+  the way an aggregate without `by` merges them. So a window that lies
+  inside one packed block is answered from the block's summary. The query's
+  bounds apply to all the windows together. For example, past 1000 series
+  the call fails with `limit`.
+- Each window reads the blocks it reaches on its own. If a packed block
+  spans several windows, it is decoded once per window, and its samples
+  count against the query's bounds each time. So minute windows over blocks
+  of several hours read each block dozens of times, and reach `limit`
+  sooner than one aggregate over the same span would. A window as long as a
+  block reads each block about once. So does `sameHour`, because its
+  windows lie a day apart.
 
 ## What it answers
 
-| Field     | Is                                             | Absent when                       |
-|-----------|------------------------------------------------|-----------------------------------|
-| `value`   | the `op` over the newest window                | the newest window holds no sample |
-| `usual`   | the median of the `op` over the windows before | no window before holds a sample   |
-| `ratio`   | `value / usual`                                | either is absent, or `usual` is 0 |
-| `samples` | the newest window's samples                    |                                   |
-| `windows` | how many windows the usual stands on           |                                   |
+| Field     | Is                                              | Absent when                       |
+|-----------|-------------------------------------------------|-----------------------------------|
+| `value`   | the `op` over the newest window                 | the newest window has no samples  |
+| `usual`   | the median of the `op` over the earlier windows | no earlier window has samples     |
+| `ratio`   | `value / usual`                                 | either is absent, or `usual` is 0 |
+| `samples` | the number of samples in the newest window      |                                   |
+| `windows` | how many windows `usual` is based on            |                                   |
 
-A window without a sample counts in no median, never as zero, and neither
-does a partial one, as an aggregate marks a bucket: retention cut it short,
-or a `rate`'s or an `increase`'s step into its first sample began at a
-sample retention took or after a NaN. `windows` says how many were left. A
-NaN sample in any window is `invalid`, as in an aggregate, unless the query
-skips NaN (`skipNaN`), so no NaN reaches the median. An even
-count's median is the mean of the two middle values.
+A window without samples doesn't count in the median, and it never counts
+as zero. A partial window doesn't count either. A window is partial in the
+same cases in which an aggregate marks a bucket as partial: retention cut it
+short, or the step of a `rate` or an `increase` into its first sample
+started at a sample that retention deleted, or after a NaN. `windows` says
+how many windows were left. A NaN sample in any window fails with
+`invalid`, as in an aggregate, unless the query skips NaN (`skipNaN`). So no
+NaN reaches the median. If the count is even, the median is the mean of the
+two middle values.
 
-The `op` is one an [aggregate](aggregates.md) takes for the series' kind,
-percentiles among them. A timer's percentile lies between two bounds of its
-buckets, which is no one number to compare: `compare` refuses it as
-`invalid` unless the query asks for the `estimate` (`estimate: true`,
-`estimate=True`, `Estimate: true`, `.estimate()`), and then compares the
-estimate, as the aggregate gives it.
+The `op` can be any op that an [aggregate](aggregates.md) accepts for the
+series' kind, including percentiles. A timer's percentile lies between two
+bounds of its buckets, so it isn't one number that you can compare.
+`compare` refuses it with `invalid` unless the query asks for the
+`estimate` (`estimate: true`, `estimate=True`, `Estimate: true`,
+`.estimate()`). Then it compares the estimate, as the aggregate returns it.
 
 ## Alerting with what exists
 
-The store does not yet evaluate alert rules or notify a queue by itself.
-A schedule does it now: every minute it compares, keeps since when the call
-has been slow in a bucket, and adds a job to the program's own queue once
-the condition has held five minutes, and once more when it clears. The
-bucket keeps the time negative once the alert was added, so that a later
-minute adds no second one; the job's id keeps a run that stopped between the
-two writes from adding it twice.
+The store doesn't evaluate alert rules or notify a queue by itself yet.
+You can do it now with a schedule. Every minute, the schedule calls
+`compare` and stores in a bucket the time when the call became slow. Once
+the condition has held for five minutes, it adds a job to your program's own
+queue. It adds one more job when the condition clears. After the alert is
+added, the bucket stores the time as a negative number, so a later minute
+doesn't add a second alert. The job's id makes sure that a run that stopped
+between the two writes doesn't add the alert twice.
 
 ```ts
 const slowSince = store.bucket<number>('slow-since') // negative once its alert was added
@@ -212,5 +219,6 @@ let checking = store.schedule("slow-calls").every(Duration::from_mins(1)).work(m
 })?;
 ```
 
-`Alert` is the program's own type of a job, `{ slow, since }`; the queue's
-worker sends it on, to a chat or a pager, as any job's handler does.
+`Alert` is your program's own job type, `{ slow, since }`. The queue's
+worker sends it on, for example to a chat or a pager, as any job handler
+does.

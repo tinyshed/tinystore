@@ -101,7 +101,7 @@ seconds after the store opens. In a container they read the container's.
 | `tinystore_jobs_claim_delay_ms`                                                       | how late a claim took a job past its time   |
 | `tinystore_jobs_waiting`, `_running`                                                  | jobs waiting, and held                      |
 | `tinystore_kv_expired_total`                                                          | keys deleted once they expired              |
-| `tinystore_once_builds_total`, `_build_failures_total`                                | a once's answers made, or failed, by `name` |
+| `tinystore_once_builds_total`, `_build_failures_total`                                | `once` answers built, or failed, by `name`  |
 | `tinystore_once_stale_total`                                                          | answers given older than `fresh`, by `name` |
 | `tinystore_records_events_total`                                                      | events appended, by `stream`                |
 | `tinystore_records_lines_dropped_total`                                               | a logger's lines dropped                    |

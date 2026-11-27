@@ -3,9 +3,9 @@
 `tinystore events` writes and reads a store's events from a shell, with no
 SDK. `append` writes one event given in words, or another program's output
 on stdin, a line per event. It writes through a server, as
-[every write](README.md#who-writes) of the command line does. `list` reads a
-page of a stream beside the program or server that holds the directory, and
-`export` every event of a range, as JSON lines.
+[every write](README.md#who-writes) of the command line does. `list` reads
+one page of a stream, and `export` writes every event in a range as JSON
+lines. Both read beside the program or server that holds the directory.
 
 ```sh
 tinystore events ./data append audit role.changed user:=42 role=admin
@@ -82,8 +82,8 @@ tinystore events ./data list audit --since 1h --where user:=42
   [Pages](README.md#pages) says.
 
 A stream the store doesn't hold is named as missing, and a read beside the
-holder makes nothing. A page holds 10,000 events at most: a `--limit` past it
-is refused, naming the bound, and `export` reads them all.
+holder makes nothing. A page holds 10,000 events at most. If `--limit` is
+larger, the command fails and names the bound. Use `export` to read them all.
 
 ## Export a stream
 
@@ -95,18 +95,19 @@ tinystore events ./data export audit --from 2026-11-01T00:00Z --to 2026-11-02T00
 tinystore events export: wrote 48211 events of audit
 ```
 
-- Each line of stdout is one event, oldest first, the object `list --json`
-  prints: `{"time":"2026-11-01T00:00:02.120Z","stream":"audit","event":"login","user":43}`.
-- It reads a page at a time until the range ends and writes each page before
-  it reads the next, so a stream of any length holds one page in memory. No
-  `--limit` or `--after` is needed.
-- Without `--since`, `--from` or `--to` it writes everything the stream
-  keeps; `--to` alone everything before it. `--where` and `--level` keep
-  what they keep in `list`.
-- `-o day.jsonl` writes the file rather than stdout: it is written beside as
-  `day.jsonl.part` and renamed once whole, so a reader never finds half of
-  it, and a failed export leaves the file as it was.
-- How many events it wrote goes to stderr, apart from the events.
+- Each line of stdout is one event, oldest first. It is the same object that
+  `list --json` prints: `{"time":"2026-11-01T00:00:02.120Z","stream":"audit","event":"login","user":43}`.
+- `export` reads one page at a time until the range ends, and writes each
+  page before it reads the next. So it keeps only one page in memory, however
+  long the stream is. You don't need `--limit` or `--after`.
+- Without `--since`, `--from` or `--to`, it writes everything the stream
+  keeps. With `--to` alone, it writes everything before that time. `--where`
+  and `--level` filter the same way as in `list`.
+- `-o day.jsonl` writes to that file instead of stdout. The command first
+  writes `day.jsonl.part` next to it and renames it when it is complete. So a
+  reader never sees half a file, and a failed export leaves the old file
+  unchanged.
+- The count of events it wrote goes to stderr, separate from the events.
 
 ## Limits and defaults
 
@@ -115,7 +116,7 @@ tinystore events export: wrote 48211 events of audit
 | a stream's name                   | `[a-z0-9][a-z0-9_-]{0,63}`                   |
 | an id                             | 1 to 128 bytes                               |
 | a line of output                  | 256 KiB; a longer one is dropped and counted |
-| a page of `list`                  | 100 events, 10,000 at most                   |
+| a page of `list`                  | 100 events by default, 10,000 at most        |
 | `list`'s range, when none given   | the last hour                                |
 | `export`'s range, when none given | everything the stream keeps                  |
 

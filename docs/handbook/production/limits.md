@@ -78,18 +78,18 @@ of repeating them.
 
 ## Search
 
-| What               | Limit or default                                                              |
-|--------------------|-------------------------------------------------------------------------------|
-| a document         | 1 MiB                                                                         |
-| `setMany`          | 1,000 documents; 16 MiB of JSON in Rust, one request body, 2 MiB, from an SDK |
-| a search's text    | 1 KiB, its first 32 words                                                     |
-| a vector           | 4,096 dimensions                                                              |
-| `limit` + `offset` | 1,000; `limit` is 10; a `total` exact to 10,000                               |
-| a field's weight   | above 0, at most 1,000                                                        |
-| a filter           | 8 conditions, 100 values; a statement's rows, 100,000                         |
-| `vectorWeight`     | 0.5                                                                           |
-| a table's index    | the rows of one search's hits, 64 MiB together, as one `all`                  |
-| `store.search`     | 1 to 32 indexes; a group's `limit` 1 to 100, 10; `boost` above 0, 1           |
+| What               | Limit or default                                                                    |
+|--------------------|-------------------------------------------------------------------------------------|
+| a document         | 1 MiB                                                                               |
+| `setMany`          | 1,000 documents; 16 MiB of JSON in Rust, one request body, 2 MiB, from an SDK       |
+| a search's text    | 1 KiB, its first 32 words                                                           |
+| a vector           | 4,096 dimensions                                                                    |
+| `limit` + `offset` | 1,000; `limit` is 10; a `total` exact to 10,000                                     |
+| a field's weight   | above 0, at most 1,000                                                              |
+| a filter           | 8 conditions, 100 values; a statement's rows, 100,000                               |
+| `vectorWeight`     | 0.5                                                                                 |
+| a table's index    | the rows of one search's hits, 64 MiB together, as one `all`                        |
+| `store.search`     | 1 to 32 indexes; a group's `limit` 1 to 100, default 10; `boost` above 0, default 1 |
 
 ## Channels and locks
 
@@ -213,13 +213,13 @@ Each constant has the name below in its language's case:
 | `JOB_BYTES`          | `job bytes`              | 1 MiB     | a job's payload, result or step's answer, as JSON                  |
 | `PROGRESS_BYTES`     | `progress bytes`         | 4 KiB     | a run's progress, as JSON                                          |
 | `ROWS_BYTES`         | `bytes of a call's rows` | 64 MiB    | the values one call reads from a database                          |
-| `MIRROR_ROWS`        | `mirror rows`            | 100,000   | the rows of a mirror's list, and those its scope holds             |
+| `MIRROR_ROWS`        | `mirror rows`            | 100,000   | the rows of a mirror's list, and the rows in its scope             |
 | `EVENT_BYTES`        | `event bytes`            | 256 KiB   | one event                                                          |
 | `APPEND_BYTES`       | `append bytes`           | 4 MiB     | the events of one append                                           |
 | `AGGREGATE_ROWS`     | `aggregate rows`         | 10,000    | the rows of one `aggregate` of events                              |
 | `COUNT_BYTES`        | `count bytes`            | 64 MiB    | the different values one `top` or `distinct` holds                 |
-| `SESSIONS`           | `sessions`               | 10,000    | the sessions one `sessions` holds, those still open among them     |
-| `SESSION_BYTES`      | `session bytes`          | 64 MiB    | what one `sessions` holds: each session's events and `by` values   |
+| `SESSIONS`           | `sessions`               | 10,000    | the sessions one `sessions` call keeps, open ones included         |
+| `SESSION_BYTES`      | `session bytes`          | 64 MiB    | the events and `by` values one `sessions` call keeps               |
 | `INGEST_SAMPLES`     | `ingest samples`         | 100,000   | the samples of one `ingest`, in one write                          |
 | `INGEST_BYTES`       | `ingest bytes`           | 32 MiB    | the samples of one `ingest` with their labels                      |
 | `REPLACE_SAMPLES`    | `replace samples`        | 10,000    | the samples of one gauge's `replace`                               |

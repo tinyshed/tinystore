@@ -5,10 +5,11 @@ version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
 - **[TinyStore 0.13.0](v0.13.0.md)** · not yet released\
-  Tables mirrored from another system, deleted rows and versions, a memo
-  that answers while it rebuilds, semaphores with a background line and a
-  breaker, gathered jobs and quiet hours, synonyms and one search of several
-  indexes, sessions, a comparison with the usual, and Prometheus' text.
+  Tables mirrored from another system, deleted rows and row versions, a memo
+  that keeps answering while it rebuilds, semaphores with background holds
+  and a breaker, gathered jobs and quiet hours, synonyms, one search across
+  several indexes, sessions of events, metrics compared with their usual
+  values, and export in Prometheus' text format.
 - **[TinyStore 0.12.0](v0.12.0.md)** · 24 November 2026\
   A total of any number of series, a folder of a database's files replaced
   whole in one transaction, a day of metrics by the hour in half the time,

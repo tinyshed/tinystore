@@ -73,9 +73,9 @@ id  email            plan
 
 - Without `--write`, a statement runs on a read-only connection: a write is
   refused, so a typo cannot change data.
-- A query that answers no row prints its head, the columns in the
-  statement's order, and `no rows` under it; `--json` prints a line a row,
-  so nothing.
+- If a query returns no rows, it prints the header with the columns in the
+  statement's order, and `no rows` under it. `--json` prints one line per
+  row, so it prints nothing.
 - `--write` lets it write. When no program holds the directory, it opens the
   store itself. When `tinystore serve` or an SDK's sidecar holds it, the
   statement goes through that server, once, since a statement sent again may

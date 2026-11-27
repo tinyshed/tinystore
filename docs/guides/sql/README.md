@@ -98,10 +98,10 @@ backup does with it.
 
 ## What a statement answers
 
-`describe` gives the columns a statement answers, in the statement's order,
-without running it: for a console, a dashboard or an export that shows a
-statement someone else wrote, and must name the columns even when no row
-comes back.
+`describe` returns the columns of a statement's result, in the statement's
+order, without running it. Use it in a console, a dashboard or an export that
+shows a statement someone else wrote, and must show the column names even
+when no row comes back.
 
 ```ts
 const columns = await db.describe`select id, title, length(title) as size from notes where author_id = ${userId}`
@@ -123,19 +123,22 @@ let columns = db.describe(sql!("select id, title, length(title) as size from not
 // [Column { name: "id", declared: Some("TEXT") }, …, Column { name: "size", declared: None }]
 ```
 
-A column that is a table's own carries the type its table declares, as
-SQLite keeps it: the types a strict table takes, `INTEGER` or `TEXT`, in
-capitals in any table however it wrote them, and any other type as the table
-wrote it, `varchar(80)`. An expression has none. The statement is
-compiled on a reader and nothing of it runs, so the values of its `?`s are
-not read: text alone, without them, is described too. A statement that
-writes, with `returning` or without, is `invalid`, and one that names a
-column its table lacks fails as `all` fails it (contract SQL-16).
+A column that comes straight from a table has the type that its table
+declares, as SQLite stores it. The types that a strict table accepts, such as
+`INTEGER` or `TEXT`, are always in capitals, in any table and however the
+table wrote them. Any other type is returned as the table wrote it, for
+example `varchar(80)`. An expression has no type.
 
-A row read as an object keeps its columns' order in TypeScript and Python,
-except that a JavaScript object puts a column named like an integer, `"2"`,
-before the others; a Go map keeps none. Read the order from `describe` where
-it matters.
+`describe` compiles the statement on a reader and runs no part of it, so it
+doesn't read the values of the `?`s. You can describe the text alone,
+without values. A statement that writes, with or without `returning`, is
+`invalid`. A statement that names a column its table doesn't have fails the
+same way `all` fails (contract SQL-16).
+
+In TypeScript and Python, a row read as an object keeps the order of its
+columns. The exception is a JavaScript object, which puts a column named like
+an integer, such as `"2"`, before the others. A Go map keeps no order. When
+the order matters, read it from `describe`.
 
 ## In these guides
 
@@ -145,9 +148,9 @@ it matters.
 | [Writes and transactions](writes.md)                      | `exec`, `batch`, `tx`, errors and `outcome unknown`     |
 | [Stopping a slow query](cancel.md)                        | a cancel or a timeout that stops a query                |
 | [Tables and queries](tables.md)                           | the builder: conditions, joins, pages, updates, deletes |
-| [Deleted rows and versions](deleted-and-versions.md)      | a deleted mark, restore, purge, edits from a version    |
+| [Deleted rows and versions](deleted-and-versions.md)      | deleted marks, restore, purge, edits from old versions  |
 | [Rows that include rows](include.md)                      | `include`: each row with the rows of a query            |
-| [Mirrors](mirror.md)                                      | another system's list in a table, and what changed      |
+| [Mirrors](mirror.md)                                      | a copy of another system's rows, and what changed       |
 | [Buckets and queues in a database](buckets-and-queues.md) | keys, jobs, files and events that commit with rows      |
 | [FTS5 and R*Tree](fts5.md)                                | SQLite's own full-text and spatial indexes              |
 

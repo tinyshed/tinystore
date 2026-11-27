@@ -78,12 +78,13 @@ a slow query that callers may give up on belongs in the program's memory.
 
 ## An answer kept while a new one is made
 
-A memo with only `keep` makes every caller wait the whole build again once
-`keep` ends, and has nothing to answer with when the build fails. Give it a
-second term, `fresh`, shorter than `keep`: an answer younger than `fresh` is
-answered as it is, and an older one is answered at once while one new answer
-is made in the background. A build that fails leaves the kept answer where it
-is until `keep` ends, so a source that is down still gets the last good one.
+With only `keep`, every caller waits for the whole build again when `keep`
+ends. If the build fails, there is no answer to return. Set a second term,
+`fresh`, that is shorter than `keep`. An answer younger than `fresh` is
+returned as it is. An older answer is returned at once, and one new answer
+is built in the background. If that build fails, the kept answer stays until
+`keep` ends. So when the source is down, callers still get the last good
+answer.
 
 ```ts
 const books = store.once<GradeBook>('cabinet-books', { fresh: '10m', keep: '12h' })
@@ -117,48 +118,50 @@ let answer = books.fetch(user_id, move || cabinet.book(user_id))?; // answer.val
 books.under(course_id).clear()?;
 ```
 
-| The kept answer            | What the caller gets            | What is built                                |
-|----------------------------|---------------------------------|----------------------------------------------|
-| younger than `fresh`       | it, as it is                    | nothing                                      |
-| between `fresh` and `keep` | it, at once, with `stale: true` | one new answer in the background             |
-| past `keep`, or none       | the new answer                  | one, which every caller of the key waits for |
+| The kept answer            | What the caller gets                         | What is built                                     |
+|----------------------------|----------------------------------------------|---------------------------------------------------|
+| younger than `fresh`       | the kept answer, as it is                    | nothing                                           |
+| between `fresh` and `keep` | the kept answer, at once, with `stale: true` | one new answer, in the background                 |
+| older than `keep`, or none | the new answer                               | one new answer, and every caller of the key waits |
 
-- One build of a key runs in the background at a time, across every client
-  of the store: the caller whose call found the answer stale and no build
-  under way runs its function there, and the callers beside it get the stale
-  answer and run nothing (contract KV-16). On a node that copies `kv.db`, it
-  is one a node.
-- Its answer replaces the kept one and starts both terms again. Its failure
-  changes nothing kept, reaches no caller, and holds off the next build of
-  the key for a tenth of `fresh`, a second at least and a minute at most, so
-  that a source that is down is not asked by every call. The pause is kept in
-  memory and forgotten at a restart (contract KV-17).
-- `age` is how old the answer is on the store's clock, and `stale` says it is
-  older than `fresh`; without `fresh`, `fetch` gives the age and `stale` is
-  always false (contract KV-18). The store keeps when an answer ends, not when
-  it was made, so a handle opened with another `keep` than the one that
-  wrote an answer reads its age shifted by the difference, within `[0, keep]`.
-- `clear` forgets every answer of its branch and of the branches under it in
-  one commit (contract KV-19). A build in the background under way meanwhile
-  keeps nothing, and neither does one whose stale answer was deleted or
-  reached `keep` while it ran: the next call builds the answer and waits for
-  it.
-- In Rust the build runs on the store's threads, so its function is
-  `Send + 'static`: `fresh` opens a `Fresh`, whose `run` and `fetch` take
-  such a function, while `Once` keeps its own. Builds run on threads the
-  store keeps for them, four at once at most, the next waiting for one, so a
-  slow source never holds the threads the store's other calls run on. Closing
-  the store waits for the builds under way and drops those waiting. Over the
-  protocol, in TypeScript,
-  Python and Go, the build runs in the program that asked, beside its caller:
-  a promise, a task or a goroutine nothing awaits, whose failure is never
-  thrown. A store closed or a connection lost meanwhile ends it with nothing
-  kept.
+- Only one background build per key runs at a time, across all clients of
+  the store. The first caller that finds the answer stale, when no build is
+  running, runs its function in the background. Callers at the same time get
+  the stale answer and run nothing (contract KV-16). On a node that copies
+  `kv.db`, there is one build per node.
+- The new answer replaces the kept one and restarts both terms. If the build
+  fails, nothing kept changes and no caller sees the error. The store then
+  waits before the next build of that key: a tenth of `fresh`, at least one
+  second and at most one minute. This way a source that is down isn't called
+  on every request. The store keeps this pause in memory, so a restart
+  forgets it (contract KV-17).
+- `age` is how old the answer is, by the store's clock. `stale` is true when
+  the answer is older than `fresh`. Without `fresh`, `fetch` still returns
+  the age, and `stale` is always false (contract KV-18). The store saves when
+  an answer expires, not when it was made. So if you open a handle with a
+  different `keep` from the one that wrote the answer, its age is off by the
+  difference, clamped to `[0, keep]`.
+- `clear` deletes every answer in its branch and in the branches under it,
+  in one commit (contract KV-19). If a background build is running at that
+  moment, it keeps nothing. The same is true for a build whose stale answer
+  was deleted, or reached `keep`, while it ran. In both cases the next call
+  builds the answer and waits for it.
+- In Rust, the build runs on the store's threads, so its function must be
+  `Send + 'static`. That is why `.fresh(…)` opens a separate `Fresh` handle,
+  whose `run` and `fetch` accept such a function. `Once` keeps its own
+  signature. The store runs at most four builds at once, on threads it keeps
+  for them, and the next build waits for a free one. So a slow source never
+  blocks the threads that the store's other calls run on. When the store
+  closes, it waits for the running builds and drops the waiting ones.
+- Over the protocol, in TypeScript, Python and Go, the build runs in your
+  program, next to the caller. It is a promise, a task or a goroutine that
+  nothing awaits, and its failure is never thrown. If the store closes or
+  the connection drops during the build, the build ends and keeps nothing.
 - The store counts `tinystore_once_builds_total`,
-  `tinystore_once_build_failures_total` and `tinystore_once_stale_total` by
+  `tinystore_once_build_failures_total` and `tinystore_once_stale_total` per
   `name` in its [own metrics](../metrics/self-metrics.md).
-- Not built yet: waiting a bounded time for the new answer before taking the
-  stale one.
+- Not built yet: waiting a limited time for the new answer before returning
+  the stale one.
 
 ## What it does not promise
 
@@ -190,9 +193,10 @@ let receipt = charges.run(&idempotency_key, || stripe.charge(&order, &order.id))
 A run that waits for the run under way holds no thread. The runs of the
 blocking API and of `aio` wait for one another.
 
-`aio`'s answers opened with `fresh` also take `spawn`, where a build in the
-background runs, since the library runs no async runtime of its own and your
-build's future may need yours; opening without it is `invalid`:
+In `aio`, a handle opened with `fresh` also needs `spawn`, which says where
+a background build runs. The library has no async runtime of its own, and
+your build's future may need yours. Opening without `spawn` fails with
+`invalid`:
 
 ```rust
 let books = store
@@ -204,8 +208,8 @@ let books = store
 let answer = books.fetch(user_id, move || cabinet.book(user_id)).await?;
 ```
 
-A build dropped before its end, by a runtime shutting down, keeps nothing and
-lets its key go.
+If a build is dropped before it ends, for example because the runtime shuts
+down, it keeps nothing and releases its key.
 
 On a node that copies `kv.db` from its home, a run claims its key at the
 home, which waits for the run under way there. Your run waits for the home's
@@ -224,8 +228,8 @@ If you drop the future of a run:
 
 | What                      | Value                                        |
 |---------------------------|----------------------------------------------|
-| `keep`                    | 1 day unless given                           |
-| `fresh`                   | none unless given; shorter than `keep`       |
+| `keep`                    | 1 day unless set                             |
+| `fresh`                   | none unless set, and shorter than `keep`     |
 | the pause after a failure | a tenth of `fresh`, between 1 s and 1 minute |
 | a kept answer             | 1 MiB at most                                |
 

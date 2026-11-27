@@ -37,8 +37,8 @@ tinystore kv ./data set flags beta on --ttl 1h
 |         | `files [dir] list <set>`              | a set's files; `get <set> <path> <file>` writes one to a path            |
 |         | `sql [dir] <db> "<query>"`            | a query's rows; reads only unless `--write`                              |
 |         | `search list [dir]`                   | the store's search indexes; `drop <dir> <name>` drops one                |
-|         | `metrics [dir] read <name>`           | a metric's samples; `names`, `aggregate` and `export` beside it          |
-|         | `events [dir] list <stream>`          | a stream's events; `export <stream>` every one of a range, JSON lines    |
+|         | `metrics [dir] read <name>`           | a metric's samples; also `names`, `aggregate` and `export`               |
+|         | `events [dir] list <stream>`          | a stream's events; `export <stream>` writes a range as JSON lines        |
 | Write   | `kv <dir> set <bucket> <key> <v>`     | set a key's value; `delete` deletes one                                  |
 |         | `jobs <dir> add <queue> <json>`       | add a job; `cancel <queue> <id>` cancels one                             |
 |         | `files <dir> put <set> <path> <f>`    | write a local file; `delete <set> <path>` deletes one                    |
@@ -94,12 +94,13 @@ waits for no server (contract CLI-07).
   `--json`.** Colour follows the rule every logger keeps: on a terminal, or
   where `FORCE_COLOR` asks, never under `NO_COLOR` or `TERM=dumb`
   ([colours](../records/console.md#colours)).
-- **Times are in one zone, and JSON is UTC.** A time printed for a person,
-  and a time `--from`, `--to` or `--at` is given without its offset, is in
-  the zone `--tz` names: an IANA name such as `Asia/Tokyo`, `utc`, or
-  `local`, this machine's. Without the flag, `TINYSTORE_TZ` names it, and
-  without either it is this machine's. `--json` prints UTC whatever the
-  zone, and a zone nobody knows is told the nearest name:
+- **Times are in one zone, and JSON is UTC.** A command prints times in one
+  zone. It reads a `--from`, `--to` or `--at` time without an offset in the
+  same zone. `--tz` sets the zone: an IANA name such as `Asia/Tokyo`, `utc`,
+  or `local` for this machine's zone. Without the flag, `TINYSTORE_TZ` sets
+  it, and without either the command uses this machine's zone. `--json`
+  always prints UTC. If you give a zone that doesn't exist, the command fails
+  and suggests the nearest name:
 
   ```sh
   tinystore events ./data list audit --tz Asia/Kolkata --from 2026-11-25T09:00 --to 2026-11-25T18:00
@@ -217,7 +218,7 @@ next=$(tinystore metrics ./data read ping_rtt_ms --since 30d --json | tail -1 | 
 tinystore metrics ./data read ping_rtt_ms --since 30d --json --after "$next"
 ```
 
-`events export` and `metrics export` walk every page themselves.
+`events export` and `metrics export` read all the pages themselves.
 
 ## In these guides
 

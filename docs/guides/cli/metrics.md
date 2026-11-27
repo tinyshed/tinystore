@@ -3,9 +3,10 @@
 `tinystore metrics` reads and writes a store's metrics from a shell, with no
 SDK. `names`, `read`, `aggregate` and `export` read beside the program or
 server that holds the directory. `ingest` writes the Prometheus text that an
-exporter serves, or that a script keeps printing. `replace` corrects a gauge's samples
-over a range, and `delete` removes a series. All three write through a
-server, as [every write](README.md#who-writes) of the command line does.
+exporter serves, or that a script keeps printing. `replace` corrects a
+gauge's samples over a range, and `delete` removes a series. All three write
+through a server, as [every write](README.md#who-writes) of the command line
+does.
 
 ```sh
 tinystore metrics ./data names
@@ -49,8 +50,9 @@ ping_rtt_ms{target="poland"}   26 Oct 14:32–14:33 Europe/Moscow · 46 samples
   14:32:17   24.0
 ```
 
-- The first line of each series names it and the range that was read, in the
-  command's [zone](README.md#how-it-behaves): `--tz`'s, or this machine's.
+- The first line of each series shows its name and the range that was read.
+  The range is in the command's [zone](README.md#how-it-behaves), which is
+  the `--tz` zone or this machine's zone.
   Without `--since`, `--from` or `--to`, `read` reads the last hour.
 - `--from` and `--to` take `14:30` for today, `2026-10-25T03:00` for a date,
   both in that zone, or a time with its offset, such as
@@ -109,33 +111,38 @@ tinystore metrics ./data export --only-prefix shop_ --since 5m -o shop.prom
 shop_orders_total{shop="msk"} 1027 1795737044534
 ```
 
-- `export` writes the newest sample of every series the store holds as
-  Prometheus' text format, a family a name and a line a series with its
-  newest value and that sample's time in milliseconds.
-  [To Prometheus](../metrics/exposition.md) says what each kind becomes.
-- `--only-prefix shop_` writes only the names that start with it. `--since 5m`
-  leaves out a series whose newest sample is older; without it, every
-  series the store still keeps is written, however long it has been silent.
-- `-o shop.prom` writes the file rather than stdout: it is written beside as
-  `shop.prom.part` and renamed once whole, so a collector never reads half
-  of it, and what it wrote is said on stderr.
+- `export` writes the newest sample of every series in the store, in
+  Prometheus' text format. It writes one family per name and one line per
+  series. Each line has the newest value and that sample's time in
+  milliseconds. [To Prometheus](../metrics/exposition.md) explains what each
+  kind of metric becomes.
+- `--only-prefix shop_` writes only the names that start with `shop_`.
+  `--since 5m` leaves out a series if its newest sample is older than that.
+  Without `--since`, the command writes every series that the store still
+  keeps, even one that has had no samples for a long time.
+- `-o shop.prom` writes to that file instead of stdout. The command first
+  writes `shop.prom.part` next to it and renames it when it is complete, so
+  a collector never reads half a file. It reports what it wrote on stderr.
 - `--no-timestamps` writes each line without its sample's time.
-- A name or a label past letters, digits, `_` and `:` is written with `_` in
-  their place; a series so spelt as another's is left out, and stderr says
-  how many.
+- The text format allows only letters, digits, `_` and `:` in names, and
+  the same without `:` in labels, so `export` writes any other character as
+  `_`. If a series then
+  has the same spelling as another one, `export` leaves it out, and stderr
+  says how many series it left out.
 - A running program's instruments write their totals every 15 seconds, so
-  its last seconds may not be in the text yet.
+  the last few seconds may not be in the text yet.
 
 node_exporter's textfile collector and the Pushgateway refuse a sample that
-carries its own time, so a cron line for them leaves the times out with
-`--no-timestamps`, and `-o` renames the file once whole:
+has its own time. So a cron line for them leaves the times out with
+`--no-timestamps`, and uses `-o` so that the file appears only when it is
+complete:
 
 ```sh
 * * * * * tinystore metrics /srv/shop/data export --no-timestamps -o /var/lib/node_exporter/shop.prom
 ```
 
-A Prometheus that scrapes a program's own handler keeps the times, as
-[To Prometheus](../metrics/exposition.md#give-the-metrics-to-a-prometheus)
+If Prometheus scrapes a program's own handler instead, it keeps the times,
+as [To Prometheus](../metrics/exposition.md#give-the-metrics-to-a-prometheus)
 shows.
 
 ## Write a scrape or a file

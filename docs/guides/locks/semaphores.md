@@ -45,15 +45,15 @@ let tried = uploads.try_hold(&user.id, |_| upload(&file))?; // None when three h
 - Each key has its own places: user 42's three uploads never take user 43's.
   For one bound over everything, use one key: `uploads.hold('all', …)`.
 - Waiters stand in line for the next free place, first come first served,
-  `wait` at most. Urgent holds stand before background ones, as the next
+  for at most `wait`. Urgent holds go before background ones, as the next
   section shows.
 - `limit` is 1 to 1,000. A semaphore of `limit: 1` is a lock without fences.
 
 ## Urgent and background
 
-Every request to an outside service goes through one semaphore. Background
-jobs should not fill its line while a person waits for an answer. Ask for the
-jobs' places in the background:
+Say every request to an outside service goes through one semaphore.
+Background jobs should not fill its line while a person waits for an answer.
+So mark the jobs' holds as background:
 
 ```ts
 const cabinet = store.semaphore('cabinet', { limit: 8, background: 4 })
@@ -95,30 +95,33 @@ cabinet
 cabinet.hold("requests", |_| fetch_profile(&user.id))?; // urgent: passes the background line
 ```
 
-- A hold is urgent unless you ask for the background. Every hold you wrote
-  before this option is urgent.
-- When a place frees, the first urgent hold in line gets it. Background holds
-  get a place only when no urgent hold waits.
-- A background hold in line never blocks an urgent one. An urgent hold that
-  finds a free place takes it at once, even if background holds wait.
-- `background` is how many of a key's places background holds can take at
-  once, 1 to `limit`. With 8 places and `background: 4`, urgent holds always
-  find at least 4 places that background work cannot take. Without it,
-  background holds can take every place.
-- Within each priority, holds are served in the order they came (contracts
-  LOCK-01, LOCK-09 and LOCK-10).
-- A background hold is not promised a place. While urgent holds keep coming
-  and take the room, it waits, and its `wait` ends that (NOT-13).
-- Inside one program, a name has one `background`, as it has one `limit`. A
-  second open with another value fails `invalid` and names both.
+- A hold is urgent unless you mark it as background. So every hold you
+  wrote before this option existed is urgent.
+- When a place frees up, the first urgent hold in line gets it. Background
+  holds get a place only when no urgent hold is waiting.
+- A background hold in line never blocks an urgent one. If an urgent hold
+  finds a free place, it takes it at once, even if background holds are
+  waiting.
+- `background` sets how many of a key's places background holds can take at
+  once, from 1 to `limit`. With 8 places and `background: 4`, urgent holds
+  always have at least 4 places that background work cannot take. Without
+  this option, background holds can take every place.
+- Within each priority, holds are served in the order they arrived
+  (contracts LOCK-01, LOCK-09 and LOCK-10).
+- A background hold is not guaranteed a place. While new urgent holds keep
+  taking the free places, it waits until its `wait` runs out (NOT-13).
+- Inside one program, a name has one `background` value, just as it has one
+  `limit`. A second open with a different value fails with `invalid`, and
+  the error shows both values.
 
-`timeout` is how long one hold may keep its place. It counts from the grant,
-not from the call, so the time spent in line does not shorten the work's
-time. Past it, the place goes to the next in line and the hold fails as at
-`maxHold`: with `LostError` in Bun and Python, `ErrLost` in Go and
-`ErrorKind::Lost` in Rust, even if the work finished. The permit's signal,
-the context in Go, aborts at that moment (contract LOCK-11). When the
-semaphore also has a `maxHold`, the shorter of the two counts.
+`timeout` sets how long one hold may keep its place. It counts from the
+moment the hold gets its place, not from the call, so time spent in line
+does not shorten the time for the work. When the timeout passes, the place
+goes to the next in line, and the hold fails the same way as at `maxHold`.
+The error is `LostError` in Bun and Python, `ErrLost` in Go and
+`ErrorKind::Lost` in Rust, even if the work finished. At that moment the
+permit's signal aborts, or the context in Go (contract LOCK-11). If the
+semaphore also has a `maxHold`, the shorter of the two applies.
 
 ## No fences
 
@@ -143,9 +146,9 @@ semaphore lives in memory.
 
 ## A pause when what it guards is down
 
-When the service behind a semaphore is down, every caller would wait for its
-own timeout. Give the semaphore a breaker instead. After a number of failed
-holds in a row, the key is down for a pause, and every caller hears it at
+When the service behind a semaphore is down, every caller waits for its own
+timeout. Give the semaphore a breaker instead. After a set number of failed
+holds in a row, the key is down for a pause, and every caller learns it at
 once:
 
 ```ts
@@ -193,27 +196,27 @@ match cabinet.key("requests").timeout(Duration::from_secs(15)).hold(|_| fetch_gr
 ```
 
 - A hold fails when its function throws or returns an error, or when it runs
-  past its `timeout` or `maxHold`. A hold that succeeds resets the count, and
-  so does a pause with no failure: a failure `pause` or more after the last
-  one counts as the first.
+  past its `timeout` or `maxHold`. A hold that succeeds resets the count. A
+  quiet period with no failures resets it too: if a failure comes `pause` or
+  more after the previous one, it counts as the first.
 - After `failures` failed holds of a key in a row, the key is down for
-  `pause`. Every hold of it, in line or new, fails at once with an
+  `pause`. Every hold of that key, waiting or new, fails at once with an
   unavailable error: `UnavailableError` in Bun and Python,
   `ErrUnavailable` in Go and `ErrorKind::Unavailable` in Rust. It is never an
-  in-use error, and its message says since when the key is down (contract
-  LOCK-12).
+  in-use error, and its message says since when the key has been down
+  (contract LOCK-12).
 - When the pause ends, one hold goes through and the others still fail. If it
   succeeds, the key is up again. If it fails, the key is down for another
-  pause. If its program goes away before it ends, the next hold goes through
-  instead (contract LOCK-13).
-- A hold whose program goes away, so that its lease runs out, does not count:
-  the service did not fail. In Rust with async, a hold whose future you drop
-  does not count either.
-- Each key has its own breaker, like its own places.
+  pause. If its program goes away before the hold ends, the next hold goes
+  through instead (contract LOCK-13).
+- If a hold's program goes away and its lease runs out, the hold does not
+  count as a failure, because the service did not fail. In Rust with async,
+  a hold whose future you drop does not count either.
+- Each key has its own breaker, just as it has its own places.
 
-Some errors are yours, not the service's, such as a student who does not
-exist. Say the service is up with `healthy`, and the hold does not count as a failure even
-if the function then throws:
+Some errors are yours, not the service's, for example a student who does
+not exist. Call `healthy` to say that the service is up. Then the hold does
+not count as a failure, even if the function throws afterwards:
 
 ```ts
 await cabinet.hold('requests', async permit => {
@@ -258,7 +261,7 @@ cabinet.hold("requests", |permit| {
 
 ### Whether it is up
 
-`state` says how a key stands now, for a status line:
+`state` returns the key's current status, for example for a status line:
 
 ```ts
 const { up, downSince, lastFailure, waiting, holding } = await cabinet.state('requests')
@@ -285,24 +288,25 @@ if !state.up {
 }
 ```
 
-`up` is false from the failure that put the key down until a hold after the
-pause succeeds. `lastFailure / last_failure / LastFailure / last_failure` is
-kept until a success after it, or, while the key is up, until a pause after
-it. `waiting` and `holding` count the holds in line
-and those that hold a place, and work without a breaker too, where `up` is
-always true (contract LOCK-14).
+`up` is false from the failure that put the key down until a hold succeeds
+after the pause. `lastFailure / last_failure / LastFailure / last_failure`
+stays set until a hold succeeds after it. While the key is up, it is also
+cleared once a `pause` passes after it. `waiting` counts the holds in line,
+and `holding` counts the holds that have a place. Both work without a
+breaker too, and then `up` is always true (contract LOCK-14).
 
 ### What a breaker does not do
 
-- It lives in the memory of the process that holds the store, beside the
-  lines. Every program of the store sees the same answer. A restart of that
-  process starts every key up, with no failure counted (NOT-14).
-- Inside one program, a name has one breaker, as it has one `limit`. A second
-  open with another one fails `invalid` and names both.
-- Locks have no breaker. Use a semaphore of `limit: 1`.
-- These are not built yet: waiting for the first free place of several
-  semaphores, letting a place go at a point that the function chooses before
-  it ends, and a budget where one hold weighs more than another.
+- The breaker lives in the memory of the process that holds the store, next
+  to the lines. Every program of the store sees the same state. When that
+  process restarts, every key starts up, with no failures counted (NOT-14).
+- Inside one program, a name has one breaker, just as it has one `limit`. A
+  second open with a different breaker fails with `invalid`, and the error
+  shows both.
+- Locks have no breaker. Use a semaphore with `limit: 1` instead.
+- These are not built yet: waiting for the first free place among several
+  semaphores, releasing a place at a point the function chooses before it
+  ends, and a budget where one hold weighs more than another.
 
 ## Two opens with different limits
 

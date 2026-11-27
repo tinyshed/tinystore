@@ -1,10 +1,11 @@
 # Ask several indexes at once
 
-A "find anything" box asks one question of every index a program keeps:
-courses, pages, people. `store.search` asks them all in one call, each index
-with its own filter, limit and snippet, and answers a group of hits for each
-index and one list of the best of all of them, merged by rank. In Search, it
-replaces a loop of single searches, and over the wire it is one round trip.
+A "find anything" box searches every index that a program keeps, for example
+courses, pages and people. `store.search` searches them all in one call, and
+each index gets its own filter, limit and snippet. The result contains a group
+of hits for each index, and one list of the best hits from all of them, merged
+by rank. It replaces a loop of single searches, and over the wire it takes one
+round trip.
 
 ```ts
 const courses = store.index<Course>('courses', { fields: { title: 2, summary: 1 } })
@@ -70,34 +71,37 @@ found.groups[0].more // true: courses has more than five
 found.merged[0].hit.id // the best of all three, by rank
 ```
 
-The text is the call's, and every index reads it as a search of that index
-alone would: its own fields, typos, synonyms and layouts. The same index may
-be asked twice, each time with another filter. A call asks 1 to 32 indexes.
+The call has one text. Each index reads it the same way a search of that
+index alone would, with its own fields, typos, synonyms and layouts. You can
+include the same index twice, for example with a different filter each time.
+A call searches 1 to 32 indexes.
 
 ## What each group says
 
-`groups` holds one group for each index, in the order asked. A group has the
-index's hits, the best by that index's own scores first, and `more`, which
-says whether the index has hits past the group's limit. Search asks each
-index for one hit more than the limit and drops it, so `more` is exact: a
-"show all courses" link appears only when there are more courses.
+`groups` contains one group for each index, in the order you listed them. A
+group contains the index's hits, sorted best first by that index's own
+scores. It also has `more`, which tells you whether the index has more hits
+than the group's limit. Search asks each index for one hit more than the
+limit and drops the extra one, so `more` is exact. For example, a "show all
+courses" link appears only when there are more courses.
 
-A group also has `corrected` when its index read a misspelt word as its
-nearest, as a [single search](typos.md) does. Each index corrects by its own
-words, so one group may read `algebar` as `algebra` while another finds
-nothing to correct.
+A group also has `corrected` when its index replaced a misspelt word with the
+nearest word it knows, as a [single search](typos.md) does. Each index
+corrects against its own words. So one group may read `algebar` as `algebra`,
+while another group finds nothing to correct.
 
-Each hit's value is its document. In Python and Go, a group's hits are of its
-index's type: `found.groups[0].hits[0].value` is a `Course`, and in Go
-`found.Groups[0].Hits[0].Value.(Course)`. In Rust and in Bun and Node the
-indexes of one call keep values of different types, so a hit's value is
-JSON: a `serde_json::Value` in Rust, `unknown` in TypeScript. A [table's
-index](table-index.md) answers among them too, each hit's value its row.
+Each hit's value is its document. In Python and Go, the hits of a group have
+the type of its index. In Python, `found.groups[0].hits[0].value` is a
+`Course`, and in Go you get it as `found.Groups[0].Hits[0].Value.(Course)`.
+In Rust, Bun and Node, the indexes of one call can store values of different
+types, so a hit's value is JSON: a `serde_json::Value` in Rust and `unknown`
+in TypeScript. You can include a [table's index](table-index.md) in the call
+too, and each of its hits has the row as its value.
 
 ## An index that fails
 
-An index that fails does not fail the others. Its group carries the error
-and no hits, and every other group answers:
+If one index fails, the other groups still get their hits. The failed group
+contains the error and no hits:
 
 ```ts
 const found = await store.search({ text: 'algebra', in: [{ index: courses }, { index: dropped }] })
@@ -119,61 +123,72 @@ let found = store.search("algebra").among(&courses, |a| a).among(&dropped, |a| a
 found.groups[1].error // Some(invalid: index dropped: …)
 ```
 
-The error is of the same kind a search of that index alone would raise,
-and names the index. A call fails only when every group fails, with the
-first group's error, or when it is cancelled or runs past its timeout,
-which fails it `cancelled` whichever group it reached. A call that asks no index, more than 32, a limit
-outside 1 to 100 or a boost that is not a positive number is refused as
-`invalid` before any index is searched, and so is an index of another store.
+The error has the same kind that a search of that index alone would raise,
+and it identifies the index. The whole call fails only when every group
+fails, and then it fails with the first group's error. It also fails with
+`cancelled` when it is cancelled or runs past its timeout, no matter which
+group it has reached.
+
+Before it searches any index, the call fails with `invalid` in these cases:
+
+- It lists no index, or more than 32.
+- A limit is outside 1 to 100.
+- A boost is not a positive number.
+- An index belongs to another store.
 
 ## Merged: by rank, not by score
 
-`merged` holds every group's hits in one list. Each entry names its group, by
-the index's name and the group's place in `groups`, and carries the same hit
-as its group: in Bun, Python and Go the same object.
+`merged` contains the hits of every group in one list. Each entry identifies
+its group by the index's name and by the group's position in `groups`. Each
+entry carries the same hit as its group, and in Bun, Python and Go it is the
+same object.
 
-A score orders the hits of one index and means nothing beside another's,
-since each index scores by the words of its own documents: a word rare in
-courses and common in pages scores differently in each. So `merged` never
-compares scores. It merges by reciprocal rank fusion: the hit at rank `r` of
-its group, counted from 1, weighs `boost / (60 + r)`.
+A score orders the hits of one index, but you can't compare it with the
+scores of another index. Each index scores by the words of its own
+documents, so a word that is rare in courses and common in pages gets a
+different score in each. So `merged` never compares scores. Instead it uses
+reciprocal rank fusion: the hit at rank `r` of its group, counted from 1,
+gets the weight `boost / (60 + r)`.
 
 | Courses, `boost` 2 | weight         | Pages, `boost` 1 | weight         |
 |--------------------|----------------|------------------|----------------|
 | rank 1             | 2 / 61 = 0.033 | rank 1           | 1 / 61 = 0.016 |
 | rank 2             | 2 / 62 = 0.032 | rank 2           | 1 / 62 = 0.016 |
 
-Of equal weights the group asked first comes first, then the higher rank, so
-with no boost the groups take turns: the first of each, then the second of
-each. A boost of 2 puts a group's first hits before another's first, without
-ever looking at how high either index scored them. `boost` is 1 unless said.
+When two hits have the same weight, the hit from the group listed earlier
+comes first, and then the hit with the higher rank. So with no boost, the
+groups take turns: first the top hit of each group, then the second hit of
+each. A boost of 2 puts a group's top hits before the top hits of another
+group, and it never looks at how high either index scored them. `boost` is 1
+by default.
 
 ## One moment, or one file at a time
 
-The store's own indexes live in one file, search.db, and one call searches
-all of them in one snapshot of it: a write that commits while the call runs
-reaches none of their groups or all of them. A [table's index](table-index.md)
-lives in its database's file and is searched in a snapshot of that file, so
-groups from different files are not one moment.
+The store's own indexes all live in one file, search.db. One call searches
+all of them in one snapshot of that file. So if a write commits while the
+call runs, either all their groups see it or none of them do. A [table's
+index](table-index.md) lives in its database's file, and the call searches
+it in a snapshot of that file. So groups from different files can show
+different moments.
 
 ## Limits and defaults
 
 | What                      | Value                                            |
 |---------------------------|--------------------------------------------------|
-| indexes a call asks       | 1 to 32; the same index may come twice           |
-| a group's `limit`         | 1 to 100, 10 unless said                         |
-| `boost`                   | a positive number, 1 unless said                 |
+| indexes per call          | 1 to 32, and the same index can appear twice     |
+| a group's `limit`         | 1 to 100, 10 by default                          |
+| `boost`                   | a positive number, 1 by default                  |
 | an entry's own options    | `where`, `limit`, `prefix`, `matches`, `snippet` |
-| an entry's text or vector | not taken: the text is the call's                |
-| `offset` and `total`      | not taken: `more` says whether there are more    |
+| an entry's text or vector | not accepted: the call has one text              |
+| `offset` and `total`      | not accepted: `more` tells you if there are more |
 | `merged`                  | every group's hits, by reciprocal rank fusion    |
 
-Over the wire, an entry that gives its own text, a vector, an offset or a
-total is refused as `invalid`; the SDKs do not offer them.
+Over the wire, an entry that sets its own text, a vector, an offset or a
+total fails with `invalid`. The SDKs don't offer these options.
 
 ## See also
 
-- [Overview](README.md): an index, its documents and a search of one.
-- [Filters](filters.md): what `where` takes.
+- [Overview](README.md): an index, its documents, and how to search one.
+- [Filters](filters.md): what `where` accepts.
 - [Show what matched](matches.md): `matches` and snippets.
-- [A table's index](table-index.md): a database's rows found by their words.
+- [A table's index](table-index.md): find a database's rows by their words.

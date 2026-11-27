@@ -116,7 +116,7 @@ as, a number as a number.
   its last value, the one the event reads back with.
 - A list in `where` means any of its values, `{ not }` none of them, and
   `{ prefix }` a text that starts with it: [A where](#a-where). A database's
-  statement means the values its one column gives: [A where kept to a
+  statement means any value in its one column: [A where kept to a
   database's statement](#a-where-kept-to-a-databases-statement).
 - `search` finds a phrase in the message, the name, and a value at any depth.
   It does not look at keys; `fieldNames` lists those.
@@ -192,9 +192,10 @@ api.list().since(day).filter("tags", &[["a", "b"]]).page()?; // the list ["a", "
 
 ## A where kept to a database's statement
 
-What teachers use: the events of the people whose id is in the teachers'
-table, counted by the store rather than gathered for everybody and kept to
-the teachers in the program.
+For example, you want to know what teachers use: the events of the people
+whose id is in the teachers' table. The store counts them itself, so your
+program doesn't fetch the events of everybody and then filter out the
+teachers.
 
 ```ts
 const teachers = db.statement`select id from teachers` // bound to its database; nothing runs yet
@@ -225,39 +226,46 @@ events.list().since(day * 7).filter("userId", &teachers).aggregate(&Aggregate::n
 events.list().since(day).filter("userId", Not(&teachers)).page()?;
 ```
 
-- The statement is read once, as the query starts, on a reader of its
-  database, and its one column's values are the list a key keeps to;
-  `{ not }` keeps to none of them, or no such key. A page asked later with
-  `after` reads it again.
-- It is not read in one moment with the events: they lie in records.db and
-  the rows in the database's file, and the store promises no moment across
-  two files.
-- Its values match as a list's do, by the JSON an event's value was written
-  as:
+- The store runs the statement once, when the query starts, on a reader of
+  its database. The values of its one column work as a list: the key must
+  equal one of them. `{ not }` matches events whose key equals none of
+  them, or that don't have the key. A page that you ask for later with
+  `after` runs the statement again.
+- The statement and the events aren't read at the same moment. The events
+  are in records.db and the rows are in the database's file, and the store
+  doesn't promise one moment across two files.
+- Its values match the way a list's values do, by the JSON that the event's
+  value was written as:
 
-  | The statement gives | Finds                             |
-  |---------------------|-----------------------------------|
-  | the integer `7`     | `7`                               |
-  | `1` or `0`          | also `true` or `false`            |
-  | the text `'7'`      | `"7"`, and never `7`              |
-  | the real `7.0`      | `7.0`, and not `7`; `0.5` `0.5`   |
-  | `null`              | nothing                           |
-  | a blob              | refused, `invalid`: select a text |
+  | The statement returns | Finds                                 |
+  |-----------------------|---------------------------------------|
+  | the integer `7`       | `7`                                   |
+  | `1` or `0`            | also `true` or `false`                |
+  | the text `'7'`        | `"7"`, and never `7`                  |
+  | the real `7.0`        | `7.0`, and not `7`; `0.5` finds `0.5` |
+  | `null`                | nothing                               |
+  | a blob                | refused with `invalid`: select a text |
 
-- It gives 100,000 rows at most, each value 4 KiB at most as JSON, as a
-  list's; past them the query is `limit`, and so is a set of values the
-  store's memory cannot hold while the query runs. A statement that writes,
-  or gives other than one column, is `invalid`.
-- `count`, `list`, `top`, `largest`, `aggregate` and `delete` take one, and a
-  delete reads it once, as it starts, for every segment it changes. A tail
-  lives on and refuses one, `invalid`.
-- A stream lives in records.db and belongs to no database, so a statement
-  says whose it is: a bare `` sql`…` `` in a stream's `where` is `invalid`,
-  where a table's index takes one, since an index lives in its database. A
-  statement of another store's database is `invalid` too.
-- A statement of more than 100 values passes no block by its filter, which
-  says maybe of one value in a hundred it does not hold; the read still
-  looks a value up by its hash, once an event.
+- The statement can return 100,000 rows at most, and each value can be
+  4 KiB at most as JSON, the same as for a list. Past these limits the
+  query fails with `limit`. It also fails with `limit` when the store's
+  memory can't hold the values while the query runs. A statement that
+  writes, or that returns more or fewer than one column, fails with
+  `invalid`.
+- `count`, `list`, `top`, `largest`, `aggregate` and `delete` accept a
+  statement. A delete runs it once, when it starts, and uses the values for
+  every segment it changes. A tail keeps running, so it refuses a statement
+  with `invalid`.
+- A stream lives in records.db and doesn't belong to any database, so the
+  statement must say which database it reads. That is why a bare
+  `` sql`…` `` in a stream's `where` is `invalid`. A table's index accepts
+  one, because an index lives in its database. A statement of another
+  store's database is `invalid` too.
+- If the statement returns more than 100 values, the read doesn't use the
+  blocks' filters to skip blocks. A filter answers "maybe" for about one
+  value in a hundred that the block doesn't contain, so with that many
+  values it would skip almost no block. The read still looks up each
+  event's value by its hash, once per event.
 
 ## Pages
 
@@ -484,9 +492,10 @@ let slowest = pages.list().names(["page-open"]).since(Duration::from_hours(7 * 2
 
 ## Sessions
 
-What a newcomer did in their first visit: the first session of each student
-who appeared since `from`, a session the events of one person each within 30
-minutes of the one before, with up to 50 of its events.
+For example, you want to see what newcomers did on their first visit. This
+call returns the first session of each student who appeared since `from`,
+with up to 50 of its events. Here a session is a run of one person's events,
+each within 30 minutes of the one before.
 
 ```ts
 const visits = await events.sessions({
@@ -515,33 +524,36 @@ let visit = Sessions::by(["userId"]).gap(minute * 30).max(minute * 240).first_se
 let visits = events.list().since(day * 30).filter("userId", &newcomers).sessions(&visit)?; // Vec<Session>
 ```
 
-| A session's  | Is                                                                 |
-|--------------|--------------------------------------------------------------------|
-| `by`         | each key's value, null for events without it                       |
-| `from`, `to` | its first event's time and its last's                              |
-| `count`      | every event of it, however few it keeps                            |
-| `events`     | its first `maxEvents`, as `list` gives an event; none unless asked |
-| `partial`    | it may go on outside what was read, the range cutting it           |
+| A session's  | Is                                                                        |
+|--------------|---------------------------------------------------------------------------|
+| `by`         | the value of each key, null for events without it                         |
+| `from`, `to` | the time of its first event and of its last                               |
+| `count`      | the number of all its events, even if it keeps fewer                      |
+| `events`     | its first `maxEvents` events, as `list` returns them; none unless you ask |
+| `partial`    | true when the session may go on outside the range that was read           |
 
-- `by` takes keys as `aggregate` does: a field's, else a context's, or
-  `stream`, `name`, `level` or `message`. A session is the events of one value of each,
-  in the order of their times, those of one time as they arrived, across
-  streams, packed or waiting.
-- A pause longer than `gap` begins the next session. `max` ends a session that
-  long after its first event, pause or none, and the next event begins a new
-  one.
-- `firstSessions` keeps each value's first sessions of the range; once a value has
-  them, its later events are passed over as they are read.
-- A session that the range's start or end cuts is answered, with `partial`:
-  its first event lies within `gap` of the start, or its last within `gap` of
-  the end, or of now when the range has no end.
-- It reads the range once and holds one open session a value of `by`. The
-  answer comes whole, in the order of the sessions' first events and then of
-  their `by`, 10,000 sessions at most, open ones among them, and 64 MiB of
-  what they keep: past either it is `limit`, never fewer sessions. It is not
-  paged yet; a shorter range, `firstSessions` or a `where` keeps it within them.
-- `maxEvents` keeps 1,000 a session at most. It takes a query as `count` does,
-  without `newest`, `limit` and `after`.
+- `by` accepts keys the way `aggregate` does: a field, or else a context
+  key, or `stream`, `name`, `level` or `message`. A session contains the
+  events that have one value of each key. They are in time order, and
+  events with the same time are in arrival order. A session spans streams,
+  and includes events that are packed and events that are still waiting.
+- A pause longer than `gap` starts the next session. `max` ends a session
+  when that much time has passed since its first event, with or without a
+  pause, and the next event starts a new session.
+- `firstSessions` keeps only the first sessions of each value in the range.
+  Once a value has them, the read skips its later events.
+- A session that the start or the end of the range cuts is still returned,
+  with `partial` set. This happens when its first event lies within `gap` of
+  the start, or its last event lies within `gap` of the end. If the range
+  has no end, the end is now.
+- It reads the range once and holds one open session per value of `by`. The
+  answer comes whole, sorted by the sessions' first events and then by their
+  `by`. It contains 10,000 sessions at most, open ones included, and 64 MiB
+  of what they keep. Past either limit the call fails with `limit`, and
+  never returns fewer sessions. It isn't paged yet. To stay within the
+  limits, use a shorter range, `firstSessions` or a `where`.
+- `maxEvents` is 1,000 per session at most. `sessions` accepts the same
+  query as `count`, except `newest`, `limit` and `after`.
 - Not built yet: a funnel over sessions, and a link from a metric's sample to
   an event.
 

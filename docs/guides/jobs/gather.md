@@ -1,9 +1,10 @@
 # Gather and quiet hours
 
-`gather` collects what arrives under one id into one job of a Jobs queue,
-and quiet hours keep a queue's jobs from running at night. Use them when
-many events should become one message, sent at a decent hour: grades that
-appear one by one, comments on a post, a burst of changes to sync.
+`gather` collects the items that arrive under one id into one job of a Jobs
+queue. Quiet hours keep a queue's jobs from running at night. Use them when
+many events should become one message that is sent at a reasonable hour.
+For example: grades that appear one by one, comments on a post, or a burst
+of changes to sync.
 
 ## Gather what arrives into one job
 
@@ -55,70 +56,74 @@ let worker = batch.work(|notices: Vec<Notice>, _run| push(7, &format!("{} new gr
 ```
 
 The job runs `settle` after the last gather under its id. With `max`, it
-runs no later than `max` after the gather that started it, however many
-gathers follow (contract JOB-23). Each gather answers what it did, so you
-need no second call:
+runs no later than `max` after the gather that started it, no matter how
+many gathers follow (contract JOB-23). Each gather returns what it did, so
+you don't need a second call:
 
-| Field   | What it says                                           |
-|---------|--------------------------------------------------------|
-| `added` | `true` if this gather started the job's list           |
-| `count` | how many items the job holds now                       |
-| `at`    | when the job is due, which `get` shows as its `at` too |
+| Field   | What it means                                       |
+|---------|-----------------------------------------------------|
+| `added` | `true` if this gather started the job's list        |
+| `count` | how many items the job contains now                 |
+| `at`    | when the job is due, the same `at` that `get` shows |
 
 The items stay in the order they arrived, and none is lost (contract
 JOB-22). The store never decodes an item, so a number such as `2.50` keeps
-its spelling.
+its exact text.
 
 ## What happens while the job runs
 
-A run reads its list when it starts. A gather while it runs adds its items
-after the run's, and the store remembers how many items the run took. What
-happens next depends on how the run ends:
+A run reads its list when it starts. If a gather comes in while the job
+runs, it adds its items after the run's items, and the store remembers how
+many items the run took. What happens next depends on how the run ends:
 
-| The run               | The job under the id holds                         | Due                            |
-|-----------------------|----------------------------------------------------|--------------------------------|
-| ends well             | only the items gathered while it ran               | at their settle time           |
-| fails, and will retry | the run's items, then the gathered ones            | its retry or the settle, later |
-| fails for good        | only the gathered items; the failure keeps its own | at their settle time           |
+| The run               | The job under the id then contains                        | Due                                            |
+|-----------------------|-----------------------------------------------------------|------------------------------------------------|
+| succeeds              | only the items gathered while it ran                      | at their settle time                           |
+| fails, and will retry | the run's items, then the gathered ones                   | at the retry or the settle, whichever is later |
+| fails for good        | only the gathered items, and the failed job keeps its own | at their settle time                           |
 
-No item runs twice after a run that ended well, and none is lost when a run
-fails (contract JOB-22). A retry of a list that grew runs again without the
-[steps](steps.md) its run kept, since they answered for the shorter list: a
-step that sends the list sends the whole of it, the run's items a second
-time among them. After a failure for good, the new job shows the
-failure's error until its first run ends, as an `add` after a failure does,
-and the failed job with the run's items is listed under the `failed` state.
-An id keeps one failure: if the new job fails for good too, its failure
-replaces the earlier one.
+After a run succeeds, no item runs twice. When a run fails, no item is lost
+(contract JOB-22). If the list grew, the retry runs without the
+[steps](steps.md) that the run saved, because those steps worked on the
+shorter list. So a step that sends the list sends all of it, including the
+run's items a second time. After a failure for good, the new job shows the
+failure's error until its first run ends, just as an `add` after a failure
+does. The failed job with the run's items is listed under the `failed`
+state. An id keeps only one failure: if the new job also fails for good,
+its failure replaces the earlier one.
 
-A gather into a job that waits for its retry adds its items to the retry,
-which runs at the later of its backoff and the settle: a gather never
-brings a retry forward.
+If a job is waiting for its retry, a gather adds its items to that retry.
+The retry runs at its backoff time or at the settle time, whichever is
+later. A gather never makes a retry run earlier.
 
 ## Where a gather is refused
 
-- The value is not a list, or the job already under the id holds a value
-  that is not a list: an invalid error that names the queue and the id
-  (`ErrInvalid` in Go, `InvalidError` in Bun and Python).
-- The list would pass the 1 MiB a job's value may hold: a limit error, and
-  nothing changes.
-- The job under the id repeats, or the call gives `at`, `delay`, `every` or
-  `cron`: an invalid error. A gather takes its time from `settle`.
+- If the value is not a list, or the job already under the id has a value
+  that is not a list, the gather fails with an invalid error that includes
+  the queue and the id (`ErrInvalid` in Go, `InvalidError` in Bun and
+  Python).
+- If the list would grow past 1 MiB, the limit for a job's value, the
+  gather fails with a limit error and nothing changes.
+- If the job under the id repeats, or the call sets `at`, `delay`, `every`
+  or `cron`, the gather fails with an invalid error. A gather gets its time
+  from `settle`.
 
-A done job that its `dedupe` still holds keeps the id, and a gather adds
-nothing: `count` is 0. A failed job gives its id up, and the gather starts a
-new list, as [`add`](ids.md#four-calls-one-table) does.
+If a done job is still kept by its `dedupe`, it keeps the id, and a gather
+adds nothing: `count` is 0. A failed job gives up its id, so the gather
+starts a new list, as [`add`](ids.md#four-calls-one-table) does.
 
-In Rust, Bun and Python, `tx.with(batch).gather(…)` (`tx.with_` in Python)
-inside a database's transaction gathers with the transaction's commit. The store's own transaction in the SDKs,
-`store.tx`, keeps its writes for the commit and answers them after it, so it
-has no gather either, and Go's transactions refuse one. A copy of a store on another node refuses a
-gather too: gather at the store's home.
+In Rust, Bun and Python, you can call `tx.with(batch).gather(…)`
+(`tx.with_` in Python) inside a database's transaction. The gather then
+commits with the transaction. The SDKs' own store transaction, `store.tx`,
+has no gather, because it holds its writes until the commit and returns
+their results only after it. Go's transactions refuse a gather. A copy of a
+store on another node refuses a gather too, so gather at the store's home.
 
 ## Quiet hours
 
-Grades are gathered for five minutes, and nothing is sent from 23:00 to
-07:00 Moscow time. A push that would go out at night goes out at seven.
+In this example, grades are gathered for five minutes, and nothing is sent
+from 23:00 to 07:00 Moscow time. A push that would go out at night goes out
+at seven instead.
 
 ```ts
 const night = { from: '23:00', to: '07:00', timeZone: 'Europe/Moscow' }
@@ -154,47 +159,56 @@ let gathered = pushes.gather("grades:7", &vec![Notice { course: 1, grade: "A".in
 let added = pushes.id("exam:3").quiet(Quiet::none()).add(&vec![Notice { course: 0, grade: "exam moved".into() }])?;
 ```
 
-The store moves a time when it falls inside the hours, and leaves it alone
-outside them (contract JOB-24):
+If a job's time falls inside the hours, the store moves it to their end.
+Times outside the hours stay as they are (contract JOB-24):
 
-| The store gives a job this time | 23:00 to 07:00, the job is due |
-|---------------------------------|--------------------------------|
-| 22:59                           | 22:59                          |
-| 23:00, or any time until 06:59  | 07:00                          |
-| 07:00                           | 07:00                          |
+| The store gives a job this time | With 23:00 to 07:00, the job is due |
+|---------------------------------|-------------------------------------|
+| 22:59                           | 22:59                               |
+| 23:00, or any time until 06:59  | 07:00                               |
+| 07:00                           | 07:00                               |
 
-This holds for every time the store computes: the time an `add`, a `set`,
-an `update` or an `upsert` gives with `at`, `delay` or none, a gather's
-settle, a retry's backoff, a snooze and a repeat's next time. An explicit
-`at` inside the hours moves too, because the hours are a promise to the
-person who gets the message. `get` and the command line show the moved
-time, so "why didn't it run?" has an answer.
+This applies to every time the store computes:
 
-A job due before the hours that a worker reaches only inside them, at the
-end of a backlog, after a busy group gave it its place or from before the
-queue had hours, does not run either: the worker's claim moves it to the
-hours' end instead.
+- the time that an `add`, a `set`, an `update` or an `upsert` sets with
+  `at`, with `delay` or with neither
+- a gather's settle time
+- a retry's backoff
+- a snooze
+- a repeat's next time
 
-- A `from` after `to` wraps midnight, as 23:00 to 07:00 does. The same two
-  times, a time that is not `HH:MM`, or an unknown zone is an invalid error.
-- The hours follow the wall clock of their zone. If daylight saving skips
-  the end, such as 02:30 on the night the clock jumps from 02:00 to 03:00,
-  the job is due at the end of the skip, 03:00, as a [cron](schedules.md)
-  time is.
-- A call's own `quiet` wins over the queue's, for that job's first run and
+An explicit `at` inside the hours moves too, because the hours are a
+promise to the person who gets the message. `get` and the command line show
+the moved time, so you can always see why a job didn't run.
+
+Sometimes a job is due before the hours start, but a worker reaches it only
+inside them. For example, it was at the end of a backlog, it waited for a
+place in a busy group, or it was added before the queue had hours. That job
+doesn't run either. The worker's claim moves it to the end of the hours
+instead.
+
+- If `from` is later than `to`, the hours wrap past midnight, as 23:00 to
+  07:00 does. Two equal times, a time that is not `HH:MM`, or an unknown
+  zone fail with an invalid error.
+- The hours follow the wall clock of their zone. If daylight saving time
+  skips the end time, such as 02:30 on the night the clock jumps from 02:00
+  to 03:00, the job is due at the end of the skip, 03:00, as a
+  [cron](schedules.md) time is.
+- A call's own `quiet` overrides the queue's, for that job's first run and
   every later one. `false` in Bun and Python, `jobs.NoQuiet()` in Go and
-  `Quiet::none()` in Rust hold the job by no hours at all.
-- A call's own hours are kept in its job's row and hold it in every
-  process. A `set`, an `update` or an `upsert` that gives none keeps them.
-- A queue's hours are given when it opens, like the rest of its options. A
-  second open in the same process with other hours is refused. They hold
-  only what the process that opened the queue with them does: a process
-  that opens it without them claims, retries and repeats its jobs at any
-  hour, a job's own hours aside. A write a copy of the store passes to its
-  home runs on the queue as the home opened it, so give the hours in the
-  home's process too, or on the call.
-- Quiet hours win over a gather's `max`: a list whose `max` ends at night
-  is sent at the hours' end.
+  `Quiet::none()` in Rust mean that no quiet hours apply to the job.
+- A call's own hours are saved in its job's row, so they apply in every
+  process. A `set`, an `update` or an `upsert` that sets no hours keeps
+  them.
+- A queue's hours are set when it opens, like its other options. A second
+  open in the same process with different hours is refused. The hours apply
+  only to the process that opened the queue with them. A process that opens
+  the queue without them claims, retries and repeats its jobs at any hour,
+  unless a job has its own hours. When a copy of the store passes a write to
+  its home, the write runs on the queue as the home opened it. So set the
+  hours in the home's process too, or on the call.
+- Quiet hours override a gather's `max`: if `max` ends at night, the list is
+  sent at the end of the hours.
 
 ## See also
 
