@@ -93,6 +93,14 @@ pub const AGGREGATE_ROWS: Limit = Limit { name: "aggregate rows", bound: 10_000 
 /// The different values one `top` or `distinct` holds, as JSON.
 #[cfg(feature = "records")]
 pub const COUNT_BYTES: Limit = Limit { name: "count bytes", bound: 64 << 20 };
+/// The sessions one `sessions` holds while it cuts them, those still open
+/// among them, and answers.
+#[cfg(feature = "records")]
+pub const SESSIONS: Limit = Limit { name: "sessions", bound: 10_000 };
+/// What one `sessions` holds: the events each session keeps, and its values
+/// of `by`.
+#[cfg(feature = "records")]
+pub const SESSION_BYTES: Limit = Limit { name: "session bytes", bound: 64 << 20 };
 
 /// The samples of one `ingest`, written in one write: what one exporter's
 /// text takes.
@@ -194,6 +202,8 @@ const ALL: &[Limit] = &[
     APPEND_BYTES,
     AGGREGATE_ROWS,
     COUNT_BYTES,
+    SESSIONS,
+    SESSION_BYTES,
     INGEST_SAMPLES,
     INGEST_BYTES,
     REPLACE_SAMPLES,

@@ -97,7 +97,7 @@ from .metrics import (
     exponential_buckets,
 )
 from .mirror import Changed, Diff, Mirror
-from .once import Once
+from .once import Fetched, Once
 from .query import Query, RowPage, Table
 from .records import (
     AllEvents,
@@ -111,6 +111,7 @@ from .records import (
     NameCount,
     PollBatch,
     Row,
+    Session,
     Stats,
     StreamFields,
     StreamInfo,
@@ -259,6 +260,7 @@ __all__ = [
     "SelfMetrics",
     "Semaphore",
     "Series",
+    "Session",
     "Snippet",
     "Sql",
     "SqlTx",

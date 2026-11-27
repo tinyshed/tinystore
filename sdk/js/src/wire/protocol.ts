@@ -186,6 +186,7 @@ export const methods = {
 	'records.fields': 0x050e,
 	'records.largest': 0x050f,
 	'records.delete': 0x0510,
+	'records.sessions': 0x0511,
 	'search.open': 0x0b01,
 	'search.set': 0x0b02,
 	'search.setMany': 0x0b03,
@@ -11605,6 +11606,246 @@ export const RecordsRows = message(
 			}
 			r.leave()
 			return { rows: $rows }
+		},
+	},
+)
+
+/**
+ * The events a query finds cut into sessions: those of one value of each key
+ * of by, each within gap of the one before. The query takes no newest, limit
+ * or after; the answer is whole, 10,000 sessions at most.
+ */
+export const RecordsSessionsAsked = message(
+	'records.SessionsAsked',
+	{
+		query: [1, RecordsQuery],
+		/** fields', contexts', or stream, name or level */
+		by: [2, list(str)],
+		/** a pause past it begins the next session */
+		gap: [3, uint],
+		/** a session ends this long after its first event, pause or none */
+		max: [4, uint],
+		/** each value's first sessions alone, its later events passed over */
+		first: [5, uint],
+		/** the first events each session keeps, 1000 at most */
+		events: [6, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.query !== undefined) {
+				w.field(1)
+				RecordsQuery.write(w, v.query)
+				n++
+			}
+			if (v.by !== undefined) {
+				w.field(2)
+				w.array(v.by.length)
+				for (const item0 of v.by) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.gap !== undefined) {
+				w.field(3)
+				w.uint(v.gap)
+				n++
+			}
+			if (v.max !== undefined) {
+				w.field(4)
+				w.uint(v.max)
+				n++
+			}
+			if (v.first !== undefined) {
+				w.field(5)
+				w.uint(v.first)
+				n++
+			}
+			if (v.events !== undefined) {
+				w.field(6)
+				w.uint(v.events)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $query: Read<typeof RecordsQuery.fields> | undefined
+			let $by: string[] | undefined
+			let $gap: number | undefined
+			let $max: number | undefined
+			let $first: number | undefined
+			let $events: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$query = RecordsQuery.read(r)
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$by = items0
+						break
+					}
+					case 3:
+						$gap = r.uint()
+						break
+					case 4:
+						$max = r.uint()
+						break
+					case 5:
+						$first = r.uint()
+						break
+					case 6:
+						$events = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { query: $query, by: $by, gap: $gap, max: $max, first: $first, events: $events }
+		},
+	},
+)
+
+export const RecordsSession = message(
+	'records.Session',
+	{
+		by: [1, names(str)],
+		/** its first event's time */
+		from: [2, int64],
+		/** its last event's */
+		to: [3, int64],
+		/** every event of it, however few it keeps */
+		count: [4, uint],
+		events: [5, list(RecordsEvent)],
+		/** its first event within gap of the range's start, or its last of its end */
+		partial: [6, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.by !== undefined) {
+				w.field(1)
+				writeNames(w, v.by, str.write)
+				n++
+			}
+			if (v.from !== undefined) {
+				w.field(2)
+				w.int(v.from)
+				n++
+			}
+			if (v.to !== undefined) {
+				w.field(3)
+				w.int(v.to)
+				n++
+			}
+			if (v.count !== undefined) {
+				w.field(4)
+				w.uint(v.count)
+				n++
+			}
+			if (v.events !== undefined) {
+				w.field(5)
+				w.array(v.events.length)
+				for (const item0 of v.events) {
+					RecordsEvent.write(w, item0)
+				}
+				n++
+			}
+			if (v.partial !== undefined) {
+				w.field(6)
+				w.bool(v.partial)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $by: Record<string, string> | undefined
+			let $from: bigint | undefined
+			let $to: bigint | undefined
+			let $count: number | undefined
+			let $events: Read<typeof RecordsEvent.fields>[] | undefined
+			let $partial: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$by = readNames(r, str.read)
+						break
+					case 2:
+						$from = r.int64()
+						break
+					case 3:
+						$to = r.int64()
+						break
+					case 4:
+						$count = r.uint()
+						break
+					case 5: {
+						const items0: Read<typeof RecordsEvent.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsEvent.read(r))
+						}
+						r.leave()
+						$events = items0
+						break
+					}
+					case 6:
+						$partial = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { by: $by, from: $from, to: $to, count: $count, events: $events, partial: $partial }
+		},
+	},
+)
+
+export const RecordsSessions = message(
+	'records.Sessions',
+	{
+		sessions: [1, list(RecordsSession)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.sessions !== undefined) {
+				w.field(1)
+				w.array(v.sessions.length)
+				for (const item0 of v.sessions) {
+					RecordsSession.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $sessions: Read<typeof RecordsSession.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsSession.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsSession.read(r))
+						}
+						r.leave()
+						$sessions = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { sessions: $sessions }
 		},
 	},
 )

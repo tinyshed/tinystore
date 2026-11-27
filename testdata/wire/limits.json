@@ -12,6 +12,8 @@
   "append bytes": 4194304,
   "aggregate rows": 10000,
   "count bytes": 67108864,
+  "sessions": 10000,
+  "session bytes": 67108864,
   "ingest samples": 100000,
   "ingest bytes": 33554432,
   "replace samples": 10000,

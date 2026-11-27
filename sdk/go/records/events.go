@@ -104,6 +104,22 @@ type Row struct {
 	Date string
 }
 
+// Session is the events of one value of each key of By, each within Gap of
+// the one before.
+type Session struct {
+	// By is each key's value, its numbers a json.Number; nil for events without it.
+	By map[string]any
+	// From is its first event's time, and To its last's.
+	From, To time.Time
+	// Count is every event of it, however few it keeps.
+	Count int
+	// Events is its first events, as many as Query.Events asked.
+	Events []Event
+	// Partial says it may go on outside what was read: its first event
+	// within Gap of the range's start, or its last within Gap of its end.
+	Partial bool
+}
+
 // Stream is a stream with events: what it keeps, where that begins, and its
 // newest event's time.
 type Stream struct {

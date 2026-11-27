@@ -201,6 +201,8 @@ export type {
 	PollBatch,
 	Query as EventsQuery,
 	Row as EventsRow,
+	Session,
+	SessionsQuery,
 	Stats,
 	StoreLoggerOptions,
 	StreamFields,

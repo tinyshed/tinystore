@@ -54,6 +54,18 @@ func (e *Events) Aggregate(ctx context.Context, q Query) ([]Row, error) {
 	return e.reads().aggregate(ctx, q)
 }
 
+// Sessions is the events the query finds cut into sessions by a pause: the
+// events of one value of each key of By, each within Gap of the one before,
+// in the order of their first events. The answer is whole, not paged, and
+// ErrLimit past 10,000 sessions held, open ones among them, or 64 MiB of
+// what they keep.
+//
+//	visits, err := events.Sessions(ctx, records.Query{Since: 30 * 24 * time.Hour,
+//		By: []string{"userId"}, Gap: 30 * time.Minute, Max: 4 * time.Hour, First: 1, Events: 50})
+func (e *Events) Sessions(ctx context.Context, q Query) ([]Session, error) {
+	return e.reads().sessions(ctx, q)
+}
+
 // FieldNames is the keys the events hold, in fields and in context, sorted;
 // Prefix narrows them.
 func (e *Events) FieldNames(ctx context.Context, q Query) ([]string, error) {
@@ -117,6 +129,12 @@ func (a *AllEvents) Largest(ctx context.Context, key string, q Query) ([]Event, 
 // By, with its count, the Stats of its fields and their Distinct values.
 func (a *AllEvents) Aggregate(ctx context.Context, q Query) ([]Row, error) {
 	return a.reads().aggregate(ctx, q)
+}
+
+// Sessions is the events the query finds cut into sessions by a pause, as a
+// stream's Sessions cuts them.
+func (a *AllEvents) Sessions(ctx context.Context, q Query) ([]Session, error) {
+	return a.reads().sessions(ctx, q)
 }
 
 // FieldNames is the keys the events hold, in fields and in context, sorted;

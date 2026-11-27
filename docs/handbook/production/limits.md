@@ -218,6 +218,8 @@ Each constant has the name below in its language's case:
 | `APPEND_BYTES`       | `append bytes`           | 4 MiB     | the events of one append                                           |
 | `AGGREGATE_ROWS`     | `aggregate rows`         | 10,000    | the rows of one `aggregate` of events                              |
 | `COUNT_BYTES`        | `count bytes`            | 64 MiB    | the different values one `top` or `distinct` holds                 |
+| `SESSIONS`           | `sessions`               | 10,000    | the sessions one `sessions` holds, those still open among them     |
+| `SESSION_BYTES`      | `session bytes`          | 64 MiB    | what one `sessions` holds: each session's events and `by` values   |
 | `INGEST_SAMPLES`     | `ingest samples`         | 100,000   | the samples of one `ingest`, in one write                          |
 | `INGEST_BYTES`       | `ingest bytes`           | 32 MiB    | the samples of one `ingest` with their labels                      |
 | `REPLACE_SAMPLES`    | `replace samples`        | 10,000    | the samples of one gauge's `replace`                               |

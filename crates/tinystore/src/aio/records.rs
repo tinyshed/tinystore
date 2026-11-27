@@ -53,7 +53,7 @@ use crate::{ErrorKind, Result};
 
 pub use crate::records::{
     Aggregate, Damage, Event, FieldInfo, Fields, Kind, Level, NameCount, NewEvent, Number, PAGE_EVENTS, Page, Part,
-    PollBatch, Row, SpanId, Stats, StreamFields, StreamInfo, TailBatch, Top, TraceId,
+    PollBatch, Row, Session, Sessions, SpanId, Stats, StreamFields, StreamInfo, TailBatch, Top, TraceId,
 };
 
 impl Store {
@@ -484,6 +484,14 @@ impl List {
     pub fn aggregate(&self, aggregate: &Aggregate) -> impl Future<Output = Result<Vec<Row>>> + Send + 'static {
         let (list, aggregate) = (self.list.clone(), aggregate.clone());
         run::read(&self.pool, format!("{}: an aggregate", self.named), move || list.aggregate(&aggregate))
+    }
+
+    /// The events the read finds cut into sessions by a pause, as
+    /// [`crate::records::List::sessions`] cuts them, walking the read once as
+    /// `count` does.
+    pub fn sessions(&self, sessions: &Sessions) -> impl Future<Output = Result<Vec<Session>>> + Send + 'static {
+        let (list, sessions) = (self.list.clone(), sessions.clone());
+        run::read(&self.pool, format!("{}: its sessions", self.named), move || list.sessions(&sessions))
     }
 
     /// The events appended from now on that meet the read's conditions, a

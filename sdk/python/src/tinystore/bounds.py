@@ -57,6 +57,10 @@ AGGREGATE_ROWS = Limit("aggregate rows", 10_000)
 """The rows one ``aggregate`` answers."""
 COUNT_BYTES = Limit("count bytes", 64 << 20)
 """The different values one ``top`` or ``distinct`` holds, as JSON."""
+SESSIONS = Limit("sessions", 10_000)
+"""The sessions one ``sessions`` holds while it cuts them, those still open among them, and answers."""
+SESSION_BYTES = Limit("session bytes", 64 << 20)
+"""What one ``sessions`` holds: the events each session keeps, and its values of ``by``."""
 INGEST_SAMPLES = Limit("ingest samples", 100_000)
 """The samples of one ``ingest``, written in one write: what one exporter's text takes."""
 INGEST_BYTES = Limit("ingest bytes", 32 << 20)

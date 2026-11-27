@@ -495,3 +495,17 @@ async fn an_awaited_read_keeps_to_the_values_a_statement_of_a_database_gives() {
     assert_eq!(spawnable(activity.list().filter("userId", &teachers).count()).await.unwrap(), 1);
     assert_eq!(activity.list().filter("userId", crate::Not(teachers)).page().await.unwrap().events.len(), 1);
 }
+
+// contract: REC-23
+#[tokio::test]
+async fn awaited_sessions_cut_the_read_by_a_pause() {
+    let fixture = fixture();
+    let activity = awaited(&fixture).events("activity").open().unwrap();
+    let start = fixture.now() - 4 * HOUR;
+    let visits = [0, 10, 100]
+        .map(|minutes| NewEvent::new("open").at(start + SECOND * 60 * minutes).fields(&json!({ "userId": 1 })));
+    activity.append_all(visits).await.unwrap();
+    let cut = Sessions::by(["userId"]).gap(SECOND * 60 * 30);
+    let sessions = spawnable(activity.list().from(start).sessions(&cut)).await.unwrap();
+    assert_eq!(sessions.iter().map(|session| session.count).collect::<Vec<_>>(), [2, 1]);
+}

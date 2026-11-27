@@ -746,6 +746,10 @@ const limits: Readonly<{
     aggregateRows: Limit
     /** The different values one `top` or `distinct` holds, as JSON. */
     countBytes: Limit
+    /** The sessions one `sessions` holds while it cuts them, those still open among them, and answers. */
+    sessions: Limit
+    /** What one `sessions` holds: the events each session keeps, and its values of `by`. */
+    sessionBytes: Limit
     /** The samples of one `ingest`, written in one write: what one exporter's text takes. */
     ingestSamples: Limit
     /** The bytes of one `ingest`'s samples, each with its labels. */

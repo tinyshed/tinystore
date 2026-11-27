@@ -43,6 +43,7 @@ mod poll;
 mod read;
 mod repair;
 mod segment;
+mod sessions;
 mod stamp;
 mod tail;
 mod text;
@@ -62,6 +63,7 @@ pub use maintain::{Maintenance, maintain};
 pub use poll::PollBatch;
 pub use read::{All, List, PAGE_EVENTS, Page};
 pub use repair::{Damage, Part};
+pub use sessions::{Session, Sessions};
 pub use tail::{Tail, TailBatch};
 #[cfg(feature = "sql")]
 pub use tx::TxEvents;

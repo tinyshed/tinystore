@@ -432,7 +432,7 @@ impl Largest {
 }
 
 /// What an event kept in memory weighs, about: its text and what holds it.
-fn weight(event: &Event) -> u64 {
+pub(super) fn weight(event: &Event) -> u64 {
     let fields = |fields: &Fields| fields.iter().map(|(key, json)| key.len() + json.len()).sum::<usize>();
     let text = event.message.as_ref().map_or(0, String::len) + event.name.len() + event.stream.len();
     (EVENT_HELD as usize + text + fields(&event.fields) + fields(&event.context)) as u64
@@ -525,7 +525,7 @@ impl Held {
 /// level's, its message, or a field's, else its context's. An event without
 /// a message gives a field's or a context's `message`, as a program that
 /// kept its message in a field read it before.
-fn value_of(event: &Event, key: &str) -> Option<Value> {
+pub(super) fn value_of(event: &Event, key: &str) -> Option<Value> {
     let held = |key: &str| {
         event.fields.json(key).or_else(|| event.context.json(key)).and_then(|json| serde_json::from_str(json).ok())
     };

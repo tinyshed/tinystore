@@ -235,6 +235,40 @@ func TestAWhereListIsOneOfNotFindsAnAbsentKeyAndPrefixAText(t *testing.T) {
 	})
 }
 
+// contract: REC-23
+func TestSessionsCutAReadByAPauseTwoVisitsNinetyMinutesApartAreTwo(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		visits := ways.Must(records.OpenEvents(store, "visits"))
+		start := time.Now().Add(-4 * time.Hour).Truncate(time.Millisecond)
+		at := func(minutes int) time.Time { return start.Add(time.Duration(minutes) * time.Minute) }
+		ways.Must(visits.AppendMany(ctx, []records.Event{
+			{Name: "open", Fields: records.Fields{"userId": 1}, At: at(0)},
+			{Name: "click", Fields: records.Fields{"userId": 1}, At: at(10)},
+			{Name: "open", Fields: records.Fields{"userId": 2}, At: at(5)},
+			{Name: "open", Fields: records.Fields{"userId": 1}, At: at(100)},
+		}))
+		query := records.Query{Since: 5 * time.Hour, By: []string{"userId"}, Gap: 30 * time.Minute, Events: 1}
+		sessions := ways.Must(visits.Sessions(ctx, query))
+		var shown []string
+		for _, session := range sessions {
+			shown = append(shown, fmt.Sprintf("%v:%d:%d", session.By["userId"], session.Count, len(session.Events)))
+		}
+		if fmt.Sprint(shown) != "[1:2:1 2:1:1 1:1:1]" {
+			t.Fatalf("%v", shown)
+		}
+		if !sessions[0].From.Equal(at(0)) || !sessions[0].To.Equal(at(10)) || sessions[0].Partial {
+			t.Fatalf("%+v", sessions[0])
+		}
+		query.First, query.Events = 1, 0
+		if first := ways.Must(visits.Sessions(ctx, query)); len(first) != 2 || len(first[0].Events) != 0 {
+			t.Fatalf("%+v", first)
+		}
+		_, err := visits.Sessions(ctx, records.Query{By: []string{"userId"}, Gap: 30 * time.Minute, Events: 1001})
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 // contract: REC-22
 func TestAWhereKeepsToTheValuesADatabasesStatementGives(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {

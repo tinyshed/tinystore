@@ -218,6 +218,46 @@ interface Aggregate extends Counted {
 }
 ```
 
+## SessionsQuery
+
+```ts
+interface SessionsQuery extends Counted {
+    /** the keys whose values a session shares: a field's, else a context's, or stream, name or level */
+    by: string | readonly string[]
+    /** the pause that ends a session: an event later than this after the one before begins the next */
+    gap: Duration
+    /** the longest a session lasts: an event later than this after its first begins the next */
+    max?: Duration
+    /** each value's first sessions of the range alone, its later events passed over */
+    first?: number
+    /** the first events each session keeps, 1000 at most; none unless asked */
+    events?: number
+}
+```
+
+What `sessions` cuts a read into: the events of one value of each key of
+`by`, each within `gap` of the one before.
+
+## Session
+
+```ts
+interface Session {
+    by: Record<string, unknown>
+    /** its first event's time */
+    from: Date
+    /** its last event's time */
+    to: Date
+    /** every event of it, however few it keeps */
+    count: number
+    /** its first events, as many as `events` asked */
+    events: Event[]
+    /** whether it may go on outside what was read: its first event within gap of the range's start, or its last of its end */
+    partial: boolean
+}
+```
+
+A session: the events of one value of each key of `by`, each within `gap` of the one before.
+
 ## StreamInfo
 
 ```ts

@@ -49,6 +49,8 @@ from ._wire.protocol import (
     RecordsPollAsked,
     RecordsQuery,
     RecordsRows,
+    RecordsSessions,
+    RecordsSessionsAsked,
     RecordsStreamFields,
     RecordsStreams,
     RecordsTailBatch,
@@ -131,6 +133,24 @@ class Stats:
     min: int | float
     max: int | float
     avg: float
+
+
+@dataclass(frozen=True, slots=True)
+class Session:
+    """A session: the events of one value of each key of by, each within gap of the one before."""
+
+    by: dict[str, Any]
+    from_: datetime
+    """its first event's time"""
+    to: datetime
+    """its last event's time"""
+    count: int
+    """every event of it, however few it keeps"""
+    events: list[Event]
+    """its first events, as many as max_events asked"""
+    partial: bool
+    """whether it may go on outside what was read: its first event within gap of the range's start, or its last
+    within gap of its end"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +288,15 @@ class Named(Counted, total=False):
 
 class Topped(Counted, total=False):
     limit: int
+
+
+class Sessioned(Counted, total=False):
+    max: Duration
+    """the longest a session lasts: an event later than this after its first begins the next"""
+    first: int
+    """each value's first sessions of the range alone, its later events passed over"""
+    events: int
+    """the first events each session keeps, 1000 at most; none unless asked"""
 
 
 class Aggregated(Counted, total=False):
@@ -594,6 +623,40 @@ class _Reads:
                 date=None if "date" not in row else date.fromisoformat(row["date"]),
             )
             for row in RecordsRows.decode(answer).get("rows", [])
+        ]
+
+    async def sessions(self, *, by: str | Sequence[str], gap: Duration, **query: Unpack[Sessioned]) -> list[Session]:
+        """The events the query finds cut into sessions by a pause, in the order of their first events.
+
+        A session is the events of one value of each key of by, each within gap of the one before. The answer is whole,
+        not paged, and LimitError past 10,000 sessions held, open ones among them, or 64 MiB of what they keep.
+
+            await events.sessions(since="30d", by="userId", gap="30m", max="4h", first=1, events=50)
+        """
+        longest, first, events = query.pop("max", None), query.pop("first", None), query.pop("events", None)
+        asked = _query_of(query)
+        answer = await self._ask(
+            "records.sessions",
+            lambda h: RecordsSessionsAsked.encode(
+                query={**asked, "handle": h},
+                by=[by] if isinstance(by, str) else list(by),
+                gap=ms(gap, "a session's gap"),
+                max=None if longest is None else ms(longest, "a session's max"),
+                first=first,
+                events=events,
+            ),
+            asked,
+        )
+        return [
+            Session(
+                by={key: json.loads(value) for key, value in session.get("by", {}).items()},
+                from_=_moment(session.get("from", 0)),
+                to=_moment(session.get("to", 0)),
+                count=session.get("count", 0),
+                events=[_event_of(each) for each in session.get("events", [])],
+                partial=session.get("partial", False),
+            )
+            for session in RecordsSessions.decode(answer).get("sessions", [])
         ]
 
     async def field_names(self, **query: Unpack[Named]) -> list[str]:

@@ -10935,6 +10935,221 @@ impl Message for RecordsRows {
     }
 }
 
+/// The events a query finds cut into sessions: those of one value of each key
+/// of by, each within gap of the one before. The query takes no newest, limit
+/// or after; the answer is whole, 10,000 sessions at most.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsSessionsAsked {
+    pub(crate) query: RecordsQuery,
+    /// Fields', contexts', or stream, name or level.
+    pub(crate) by: Vec<String>,
+    /// A pause past it begins the next session. Milliseconds.
+    pub(crate) gap: u64,
+    /// A session ends this long after its first event, pause or none. Milliseconds.
+    pub(crate) max: Option<u64>,
+    /// Each value's first sessions alone, its later events passed over.
+    pub(crate) first: Option<u64>,
+    /// The first events each session keeps, 1000 at most.
+    pub(crate) events: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsSessionsAsked {
+    const NAME: &'static str = "records.SessionsAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.query = RecordsQuery::read(r)?,
+                2 => message.by = codec::list(r, "by", codec::str)?,
+                3 => message.gap = codec::uint(r, "gap")?,
+                4 => message.max = Some(codec::uint(r, "max")?),
+                5 => message.first = Some(codec::uint(r, "first")?),
+                6 => message.events = codec::uint(r, "events")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.query.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.query);
+        }
+        if !self.by.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.by, codec::write_str);
+        }
+        if self.gap != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.gap);
+        }
+        if let Some(max) = &self.max {
+            map.field(out, 4);
+            codec::write_uint(out, max);
+        }
+        if let Some(first) = &self.first {
+            map.field(out, 5);
+            codec::write_uint(out, first);
+        }
+        if self.events != 0 {
+            map.field(out, 6);
+            codec::write_uint(out, &self.events);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.query.size()
+            + 1 + codec::list_size(&self.by, |item| 5 + item.len())
+            + 10
+            + self.max.map_or(0, |_| 10)
+            + self.first.map_or(0, |_| 10)
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.query.is_zero()
+            && self.by.is_empty()
+            && self.gap == 0
+            && self.max.is_none()
+            && self.first.is_none()
+            && self.events == 0
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsSession {
+    pub(crate) by: BTreeMap<String, String>,
+    /// Its first event's time. Unix nanoseconds.
+    pub(crate) from: i64,
+    /// Its last event's. Unix nanoseconds.
+    pub(crate) to: i64,
+    /// Every event of it, however few it keeps.
+    pub(crate) count: u64,
+    pub(crate) events: Vec<RecordsEvent>,
+    /// Its first event within gap of the range's start, or its last of its end.
+    pub(crate) partial: bool,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsSession {
+    const NAME: &'static str = "records.Session";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.by = codec::names(r, "by", codec::str)?,
+                2 => message.from = codec::int(r, "from")?,
+                3 => message.to = codec::int(r, "to")?,
+                4 => message.count = codec::uint(r, "count")?,
+                5 => message.events = codec::list(r, "events", codec::message::<RecordsEvent>)?,
+                6 => message.partial = codec::bool(r, "partial")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.by.is_empty() {
+            map.field(out, 1);
+            codec::write_names(out, &self.by, codec::write_str);
+        }
+        if self.from != 0 {
+            map.field(out, 2);
+            codec::write_int(out, &self.from);
+        }
+        if self.to != 0 {
+            map.field(out, 3);
+            codec::write_int(out, &self.to);
+        }
+        if self.count != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.count);
+        }
+        if !self.events.is_empty() {
+            map.field(out, 5);
+            codec::write_list(out, &self.events, codec::write_message);
+        }
+        if self.partial {
+            map.field(out, 6);
+            codec::write_bool(out, &self.partial);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::names_size(&self.by, |item| 5 + item.len())
+            + 10
+            + 10
+            + 10
+            + 1 + codec::list_size(&self.events, codec::message_size)
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.by.is_empty()
+            && self.from == 0
+            && self.to == 0
+            && self.count == 0
+            && self.events.is_empty()
+            && !self.partial
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsSessions {
+    pub(crate) sessions: Vec<RecordsSession>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsSessions {
+    const NAME: &'static str = "records.Sessions";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.sessions = codec::list(r, "sessions", codec::message::<RecordsSession>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.sessions.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.sessions, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.sessions, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.sessions.is_empty()
+    }
+}
+
 #[cfg(feature = "records")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RecordsStream {
@@ -15125,6 +15340,8 @@ pub(crate) mod method {
     pub(crate) const RECORDS_LARGEST: u16 = 0x050f;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_DELETE: u16 = 0x0510;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_SESSIONS: u16 = 0x0511;
     #[cfg(feature = "search")]
     pub(crate) const SEARCH_OPEN: u16 = 0x0b01;
     #[cfg(feature = "search")]
@@ -15404,6 +15621,8 @@ pub(crate) mod method {
             RECORDS_LARGEST => Some(Access::Read),
             #[cfg(feature = "records")]
             RECORDS_DELETE => Some(Access::Write),
+            #[cfg(feature = "records")]
+            RECORDS_SESSIONS => Some(Access::Read),
             #[cfg(feature = "search")]
             SEARCH_OPEN => Some(Access::Read),
             #[cfg(feature = "search")]
@@ -15675,6 +15894,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("records.largest", 0x050f, "call"),
     #[cfg(feature = "records")]
     ("records.delete", 0x0510, "call"),
+    #[cfg(feature = "records")]
+    ("records.sessions", 0x0511, "call"),
     #[cfg(feature = "search")]
     ("search.open", 0x0b01, "call"),
     #[cfg(feature = "search")]
@@ -16034,6 +16255,12 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.Row" => RecordsRow::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Rows" => RecordsRows::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.SessionsAsked" => RecordsSessionsAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Session" => RecordsSession::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Sessions" => RecordsSessions::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Stream" => RecordsStream::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]

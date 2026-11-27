@@ -1303,6 +1303,30 @@ pub fn all(self) -> All
 Every event of the answer, a page at a time; a statement in its
 `where` is read once, as the first page is.
 
+### List.sessions
+
+```rust
+pub fn sessions(&self, sessions: &Sessions) -> Result<Vec<Session>>
+```
+
+The events the read finds cut into sessions by a pause, as
+`Sessions` says, in the order of their first events and those of
+one time by their values of `by`: an answer whole, not paged, or an
+error of kind `limit` past 10,000 sessions held, open ones among
+them, or past 64 MiB of what they keep.
+
+A session cut by the range is answered with `partial`. A count is of
+every event of its session, however few it keeps.
+
+```rust
+use std::time::Duration;
+use tinystore::records::Sessions;
+let events = store.events("activity").open()?;
+let (month, minute) = (Duration::from_hours(30 * 24), Duration::from_secs(60));
+let visits = Sessions::by(["userId"]).gap(minute * 30).max(minute * 240).first(1).events(50);
+let first_visits = events.list().since(month).sessions(&visits)?;
+```
+
 ## PAGE_EVENTS
 
 ```rust
@@ -1350,6 +1374,76 @@ pub enum Part {
 
 What holds a damage's events: a head row those not packed yet, a segment
 packed ones.
+
+## Session
+
+```rust
+pub struct Session {
+    pub by: BTreeMap<String, Value>,
+    pub from: SystemTime,
+    pub to: SystemTime,
+    pub count: u64,
+    pub events: Vec<Event>,
+    pub partial: bool,
+}
+```
+
+A session: the events of one value of each key of `by`, each within
+`gap` of the one before.
+
+## Sessions
+
+```rust
+pub struct Sessions { /* private fields */ }
+```
+
+What `sessions` cuts a read into: the keys whose values a session shares,
+the pause that ends one, and what it keeps of each.
+
+### Sessions.by
+
+```rust
+pub fn by<S: Into<String>>(keys: impl IntoIterator<Item = S>) -> Sessions
+```
+
+Sessions of each value of these keys together: a field's, else a
+context's, or `stream`, `name` or `level`, the event's own before a
+field of that name.
+
+### Sessions.gap
+
+```rust
+pub fn gap(self, gap: Duration) -> Self
+```
+
+The pause that ends a session: an event later than this after the
+one before begins the next.
+
+### Sessions.max
+
+```rust
+pub fn max(self, max: Duration) -> Self
+```
+
+The longest a session lasts: an event later than this after its
+first begins the next, pause or none.
+
+### Sessions.first
+
+```rust
+pub fn first(self, sessions: usize) -> Self
+```
+
+Only each value's first `sessions` of the range; its later events are
+passed over.
+
+### Sessions.events
+
+```rust
+pub fn events(self, events: usize) -> Self
+```
+
+The first events each session keeps, 1000 at most; none unless asked.
 
 ## Tail
 
@@ -2103,6 +2197,19 @@ pub fn aggregate(
 
 A row for each span and each value of the keys `by` names, as
 `crate::records::List::aggregate` makes them, walking the read as
+`count` does.
+
+### aio::records::List.sessions
+
+```rust
+pub fn sessions(
+    &self,
+    sessions: &Sessions,
+) -> impl Future<Output = Result<Vec<Session>>> + Send + 'static
+```
+
+The events the read finds cut into sessions by a pause, as
+`crate::records::List::sessions` cuts them, walking the read once as
 `count` does.
 
 ### aio::records::List.tail

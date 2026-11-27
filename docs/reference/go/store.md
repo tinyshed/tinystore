@@ -434,6 +434,12 @@ var (
 	AggregateRows = Limit{"aggregate rows", 10_000}
 	// CountBytes is the different values one Top or Distinct holds, as JSON.
 	CountBytes = Limit{"count bytes", 64 << 20}
+	// Sessions is the sessions one Sessions holds while it cuts them, those
+	// still open among them, and answers.
+	Sessions = Limit{"sessions", 10_000}
+	// SessionBytes is what one Sessions holds: the events each session keeps,
+	// and its values of By.
+	SessionBytes = Limit{"session bytes", 64 << 20}
 	// IngestSamples is the samples of one Ingest, written in one write: what
 	// one exporter's text takes.
 	IngestSamples = Limit{"ingest samples", 100_000}

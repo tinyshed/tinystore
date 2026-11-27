@@ -154,6 +154,7 @@ methods: dict[str, int] = {
     "records.fields": 0x050E,
     "records.largest": 0x050F,
     "records.delete": 0x0510,
+    "records.sessions": 0x0511,
     "search.open": 0x0B01,
     "search.set": 0x0B02,
     "search.setMany": 0x0B03,
@@ -9448,6 +9449,208 @@ RecordsRows = Message(
 )
 
 
+def _write_records_sessions_asked(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("query")) is not None:
+        w.uint(1)
+        RecordsQuery.write(w, x)
+        n += 1
+    if (x := v.get("by")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("gap")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("max")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    if (x := v.get("first")) is not None:
+        w.uint(5)
+        w.uint(x)
+        n += 1
+    if (x := v.get("events")) is not None:
+        w.uint(6)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_sessions_asked(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["query"] = RecordsQuery.read(r)
+            case 2:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["by"] = items0
+            case 3:
+                read["gap"] = r.uint()
+            case 4:
+                read["max"] = r.uint()
+            case 5:
+                read["first"] = r.uint()
+            case 6:
+                read["events"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# The events a query finds cut into sessions: those of one value of each key
+# of by, each within gap of the one before. The query takes no newest, limit
+# or after; the answer is whole, 10,000 sessions at most.
+RecordsSessionsAsked = Message(
+    "records.SessionsAsked",
+    {
+        "query": (1, RecordsQuery),
+        # fields', contexts', or stream, name or level
+        "by": (2, list_(str_)),
+        # a pause past it begins the next session
+        "gap": (3, uint),
+        # a session ends this long after its first event, pause or none
+        "max": (4, uint),
+        # each value's first sessions alone, its later events passed over
+        "first": (5, uint),
+        # the first events each session keeps, 1000 at most
+        "events": (6, uint),
+    },
+    _write_records_sessions_asked,
+    _read_records_sessions_asked,
+)
+
+
+def _write_records_session(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("by")) is not None:
+        w.uint(1)
+        w.map(len(x))
+        for name0 in sorted(x):
+            w.str(name0)
+            w.str(x[name0])
+        n += 1
+    if (x := v.get("from")) is not None:
+        w.uint(2)
+        w.int(x)
+        n += 1
+    if (x := v.get("to")) is not None:
+        w.uint(3)
+        w.int(x)
+        n += 1
+    if (x := v.get("count")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    if (x := v.get("events")) is not None:
+        w.uint(5)
+        w.array(len(x))
+        for item0 in x:
+            RecordsEvent.write(w, item0)
+        n += 1
+    if (x := v.get("partial")) is not None:
+        w.uint(6)
+        w.bool(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_session(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                named0: dict[str, Any] = {}
+                names0: set[str] = set()
+                for _ in range(r.map()):
+                    name0 = r.name(names0)
+                    named0[name0] = r.str()
+                r.leave()
+                read["by"] = named0
+            case 2:
+                read["from"] = r.int()
+            case 3:
+                read["to"] = r.int()
+            case 4:
+                read["count"] = r.uint()
+            case 5:
+                items0 = [RecordsEvent.read(r) for _ in range(r.array())]
+                r.leave()
+                read["events"] = items0
+            case 6:
+                read["partial"] = r.bool()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+RecordsSession = Message(
+    "records.Session",
+    {
+        "by": (1, names(str_)),
+        # its first event's time
+        "from": (2, int_),
+        # its last event's
+        "to": (3, int_),
+        # every event of it, however few it keeps
+        "count": (4, uint),
+        "events": (5, list_(RecordsEvent)),
+        # its first event within gap of the range's start, or its last of its end
+        "partial": (6, bool_),
+    },
+    _write_records_session,
+    _read_records_session,
+)
+
+
+def _write_records_sessions(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("sessions")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            RecordsSession.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_sessions(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [RecordsSession.read(r) for _ in range(r.array())]
+                r.leave()
+                read["sessions"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+RecordsSessions = Message(
+    "records.Sessions",
+    {
+        "sessions": (1, list_(RecordsSession)),
+    },
+    _write_records_sessions,
+    _read_records_sessions,
+)
+
+
 def _write_records_stream(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -13473,6 +13676,9 @@ messages: dict[str, Message] = {
     "records.Stats": RecordsStats,
     "records.Row": RecordsRow,
     "records.Rows": RecordsRows,
+    "records.SessionsAsked": RecordsSessionsAsked,
+    "records.Session": RecordsSession,
+    "records.Sessions": RecordsSessions,
     "records.Stream": RecordsStream,
     "records.Streams": RecordsStreams,
     "records.FieldsAsked": RecordsFieldsAsked,
