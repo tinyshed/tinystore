@@ -102,6 +102,7 @@ class Sql {
     readonly text: string
     readonly values: readonly SqlArg[]
     readonly bare: boolean
+    readonly now: Unit | undefined
 }
 ```
 
@@ -513,6 +514,19 @@ type ColumnType = 'bool' | 'time' | 'json' | 'bigint'
 
 How a column SQLite keeps otherwise reads in JavaScript.
 
+## Mark
+
+```ts
+interface Mark {
+    column: string
+    unit?: Unit | undefined
+}
+```
+
+A column that marks a row with when it was marked, by the store's clock,
+and the unit it keeps that time in: `{ column: 'deleted_at', unit: 's' }`.
+A column's name alone, or no unit, keeps milliseconds.
+
 ## TableOptions
 
 ```ts
@@ -522,12 +536,13 @@ interface TableOptions {
     /** a Standard Schema, zod's or valibot's, that checks each row read */
     schema?: StandardSchemaV1
     /**
-     * a nullable integer column that marks a row deleted, in unix
-     * milliseconds of this process's clock: every query and write of the
-     * handle passes the marked rows by, unless `withDeleted` or
-     * `deletedOnly` asks for them, and `delete` marks rather than deletes
+     * a nullable integer column that marks a row deleted with the store's
+     * time, in unix milliseconds or, with `{ column, unit: 's' }`, seconds:
+     * every query and write of the handle passes the marked rows by, unless
+     * `withDeleted` or `deletedOnly` asks for them, and `delete` marks rather
+     * than deletes
      */
-    deleted?: string
+    deleted?: string | Mark
     /**
      * an integer column, not null, default 0, that every update of the handle
      * raises by one; an update or a delete with `ifVersion` writes only rows at
@@ -771,9 +786,9 @@ delete(options?: EditOptions): Promise<Done>
 ```
 
 Deletes the rows the conditions match, and says how many it deleted. On
-a table with a deleted column it marks the live ones instead, at this
-process's clock, and raises a versioned table's version; `ifVersion` is
-update's.
+a table with a deleted column it marks the live ones instead, with the
+store's time in the mark's unit, and raises a versioned table's
+version; `ifVersion` is update's.
 
 ### Query.withDeleted
 
@@ -859,8 +874,8 @@ came back, and on a versioned one it raises the version.
 interface MirrorOptions {
     /** the columns that name a row at the source: a unique index or the table's primary key covers them */
     key: string | readonly string[]
-    /** a column that marks what the source dropped with the store's time, unix milliseconds, instead of deleting it */
-    gone?: string | undefined
+    /** a column that marks what the source dropped with the store's time instead of deleting it: unix milliseconds, or seconds with `{ column, unit: 's' }` */
+    gone?: string | Mark | undefined
     /** the columns whose change makes a row changed: every column the rows carry but the key's when absent */
     changeOn?: readonly string[] | undefined
     /** the columns SQLite keeps as 0 or 1, unix milliseconds, JSON text or an integer past 2^53, as a table's */
@@ -911,7 +926,7 @@ the source's list of a scope, its `upsert` a change of some rows, and each
 answers what was added, changed and gone. A row the list gives as it is
 held is not written at all.
 
-    const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', changeOn: ['grade'] })
+    const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: { column: 'gone_at', unit: 's' } })
     const diff = await works.replace({ course_id: 1 }, fetched)
 
 ### Mirror.replace

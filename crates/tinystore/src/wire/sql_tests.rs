@@ -29,7 +29,7 @@ fn text(value: &str) -> Cell {
 }
 
 fn exec(client: &mut Client, handle: u64, sql: &str, values: Vec<Cell>) -> SqlDone {
-    let statement = SqlStatement { handle, text: sql.to_owned(), values };
+    let statement = SqlStatement { handle, text: sql.to_owned(), values, now: None };
     client.call(method::SQL_EXEC, &statement).unwrap()
 }
 
@@ -115,6 +115,7 @@ fn a_client_opens_a_database_writes_it_and_reads_its_rows() {
             handle,
             text: "insert into notes (id, title) values ('n1', 'again')".to_owned(),
             values: Vec::new(),
+            now: None,
         },
     );
     assert_eq!(taken.unwrap_err().code, "conflict");
@@ -977,7 +978,7 @@ fn describe_names_a_statements_columns_without_its_rows_and_a_read_connection_as
         name: name.to_owned(),
         declared: declared.map(str::to_owned),
     };
-    let asked = |text: &str| SqlStatement { handle: read, text: text.to_owned(), values: Vec::new() };
+    let asked = |text: &str| SqlStatement { handle: read, text: text.to_owned(), values: Vec::new(), now: None };
     let described: SqlDescribed = reader
         .call(method::SQL_DESCRIBE, &asked("select done, upper(title) as shout, id from notes where id = ?"))
         .unwrap();
@@ -1018,6 +1019,7 @@ fn a_mirror_answers_what_it_added_changed_and_dropped_and_refuses_what_cannot_be
         scope_values: Some(vec![Cell::Int(1)]),
         rows: SqlRows { columns: vec!["course_id".to_owned(), "id".to_owned(), "grade".to_owned()], rows },
         min_kept: None,
+        gone_unit: None,
     };
     let first: SqlDiff = client.call(method::SQL_MIRROR, &asked(vec![row("a", 4.0), row("b", 3.0)])).unwrap();
     assert_eq!((first.added.len(), first.same), (2, 0));
@@ -1047,6 +1049,59 @@ fn a_mirror_answers_what_it_added_changed_and_dropped_and_refuses_what_cannot_be
     assert_eq!(refused.code, "permission");
 }
 
+// contract: SQL-25
+#[test]
+fn a_statement_and_a_mirror_mark_with_the_stores_clock_in_the_unit_they_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_millis(1_795_790_506_171)));
+    let options = crate::Options { clock: Some(clock.clone()), ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let mut client = Client::admitted(&store, crate::pipe::Capability::Data);
+    let handle = open(&mut client);
+    exec(&mut client, handle, "create table marks (id integer primary key, at integer)", vec![]);
+    exec(&mut client, handle, "insert into marks (id) values (1), (2), (3)", vec![]);
+    let marked = |now: &str, id: i64| SqlStatement {
+        handle,
+        text: "update marks set at = ? where id = ?".to_owned(),
+        values: vec![Cell::Int(id)],
+        now: Some(now.to_owned()),
+    };
+    client.call::<SqlDone>(method::SQL_EXEC, &marked("s", 1)).unwrap();
+    let stream = begin(&mut client, handle);
+    let call = SqlTxCall {
+        text: "update marks set at = ? where id = ?".to_owned(),
+        values: vec![Cell::Int(2)],
+        want: "exec".to_owned(),
+        now: Some("ms".to_owned()),
+        ..SqlTxCall::default()
+    };
+    client.write(Frame::new(Kind::Data, stream, call.encode()));
+    assert_eq!(SqlTxAnswer::decode(&client.next_on(stream).body).unwrap().done.unwrap().changes, 1);
+    end(&mut client, stream, true);
+    let refused = client.call::<SqlDone>(method::SQL_EXEC, &marked("min", 3)).unwrap_err();
+    assert_eq!(refused.message, "a unit \"min\": a mark's time is s or ms");
+
+    exec(&mut client, handle, "create table works (id text primary key, gone_at integer)", vec![]);
+    let asked = |ids: &[&str]| SqlMirror {
+        handle,
+        table: "works".to_owned(),
+        key: vec!["id".to_owned()],
+        gone: Some("gone_at".to_owned()),
+        mode: "replace".to_owned(),
+        rows: SqlRows { columns: vec!["id".to_owned()], rows: ids.iter().map(|id| vec![text(id)]).collect() },
+        gone_unit: Some("s".to_owned()),
+        ..SqlMirror::default()
+    };
+    client.call::<SqlDiff>(method::SQL_MIRROR, &asked(&["a", "b"])).unwrap();
+    client.call::<SqlDiff>(method::SQL_MIRROR, &asked(&["a"])).unwrap();
+    let at = query(&mut client, handle, "select at from marks union all select gone_at from works", "all").rows;
+    let at: Vec<Cell> = at.into_iter().flatten().collect();
+    let seconds = Cell::Int(1_795_790_506);
+    assert_eq!(at, [seconds.clone(), Cell::Int(1_795_790_506_171), Cell::Nil, Cell::Nil, seconds]);
+    drop(client);
+    store.close().unwrap();
+}
+
 // contract: SEC-01
 #[test]
 fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
@@ -1060,7 +1115,8 @@ fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
     let read = open(&mut reader);
     let rows = query(&mut reader, read, "select title from notes", "all");
     assert_eq!(rows.rows.len(), 1);
-    let by_columns = SqlStatement { handle: read, text: "select title from notes".to_owned(), values: Vec::new() };
+    let by_columns =
+        SqlStatement { handle: read, text: "select title from notes".to_owned(), values: Vec::new(), now: None };
     assert_eq!(reader.call::<SqlColumns>(method::SQL_COLUMNS, &by_columns).unwrap().total, 1);
     let copy = dir.path().join("copy.db");
     let other = dir.path().join("other.db");
@@ -1075,11 +1131,11 @@ fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
             SqlQuery { handle: read, text: text.clone(), values: Vec::new(), want: "all".to_owned(), order: None };
         let refused = reader.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err();
         assert_eq!(refused.code, "permission", "{text}: {}", refused.message);
-        let by_columns = SqlStatement { handle: read, text: text.clone(), values: Vec::new() };
+        let by_columns = SqlStatement { handle: read, text: text.clone(), values: Vec::new(), now: None };
         let refused = reader.call::<SqlColumns>(method::SQL_COLUMNS, &by_columns).unwrap_err();
         assert_eq!(refused.code, "permission", "by columns, {text}: {}", refused.message);
     }
-    let statement = SqlStatement { handle: read, text: "delete from notes".to_owned(), values: Vec::new() };
+    let statement = SqlStatement { handle: read, text: "delete from notes".to_owned(), values: Vec::new(), now: None };
     assert_eq!(reader.call::<SqlDone>(method::SQL_EXEC, &statement).unwrap_err().code, "permission");
     assert_eq!(query(&mut owner, handle, "select title from notes", "all").rows.len(), 1);
     assert!(!copy.exists() && !other.exists(), "no file was made");
@@ -1104,7 +1160,7 @@ fn a_connection_that_writes_attaches_no_file_and_ends_no_transaction() {
         let asked = SqlQuery { handle, text: text.clone(), values: Vec::new(), want: "all".to_owned(), order: None };
         let refused = client.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err();
         assert_eq!(refused.code, "invalid", "a query of {text}: {}", refused.message);
-        let statement = SqlStatement { handle, text: text.clone(), values: Vec::new() };
+        let statement = SqlStatement { handle, text: text.clone(), values: Vec::new(), now: None };
         let refused = client.call::<SqlDone>(method::SQL_EXEC, &statement).unwrap_err();
         assert_eq!(refused.code, "invalid", "a write of {text}: {}", refused.message);
     }
@@ -1125,7 +1181,7 @@ fn a_statements_columns_hold_what_its_rows_hold() {
     let read = "select id, done, done * 1.5 as load, nullif(done, 0) as only_done, nullif(done * 1.5, 0) as only_load, \
                 iif(done, 1, 0.5) as either, null as empty, rowid * 9007199254740993 as past_a_float \
                 from notes order by id";
-    let asked = SqlStatement { handle, text: read.to_owned(), values: Vec::new() };
+    let asked = SqlStatement { handle, text: read.to_owned(), values: Vec::new(), now: None };
     let columns: SqlColumns = client.call(method::SQL_COLUMNS, &asked).unwrap();
     assert_eq!((columns.rows, columns.total), (3, 3));
     let packed: Vec<(&str, &str)> = columns
@@ -1172,7 +1228,7 @@ fn columns_past_one_message_come_in_parts_of_the_same_rows_within_the_clients_cr
     }
 
     let read = "select id, title, nullif(rowid % 3, 0) as third, rowid / 4.0 as quarter from notes order by id";
-    let asked = SqlStatement { handle, text: read.to_owned(), values: Vec::new() };
+    let asked = SqlStatement { handle, text: read.to_owned(), values: Vec::new(), now: None };
     let stream = client.start(method::SQL_COLUMNS, &asked);
     let head = client.next_on(stream);
     assert_eq!((head.kind, head.flags), (Kind::Response, 0), "the columns do not fit one message");
@@ -1222,7 +1278,7 @@ fn a_row_larger_than_a_message_is_limit_by_columns_as_by_rows() {
     let handle = open(&mut client);
     exec(&mut client, handle, "insert into notes (id, title) values ('n1', printf('%.*c', 100000, 'x'))", Vec::new());
 
-    let asked = SqlStatement { handle, text: "select id, title from notes".to_owned(), values: Vec::new() };
+    let asked = SqlStatement { handle, text: "select id, title from notes".to_owned(), values: Vec::new(), now: None };
     let refused = client.call::<SqlColumns>(method::SQL_COLUMNS, &asked).unwrap_err();
     assert_eq!(refused.code, "limit", "{}", refused.message);
     assert!(refused.message.contains("past the 32768 one message of this connection carries"), "{}", refused.message);

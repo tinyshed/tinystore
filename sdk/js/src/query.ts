@@ -22,11 +22,22 @@ import {
 	Sql,
 	type SqlArg,
 	type SqlValue,
+	type Unit,
 	walk,
 } from './sql.ts'
 
 /** How a column SQLite keeps otherwise reads in JavaScript. */
 export type ColumnType = 'bool' | 'time' | 'json' | 'bigint'
+
+/**
+ * A column that marks a row with when it was marked, by the store's clock,
+ * and the unit it keeps that time in: `{ column: 'deleted_at', unit: 's' }`.
+ * A column's name alone, or no unit, keeps milliseconds.
+ */
+export interface Mark {
+	column: string
+	unit?: Unit | undefined
+}
 
 export interface TableOptions {
 	/** the columns SQLite keeps as 0 or 1, unix milliseconds, JSON text or an integer past 2^53 */
@@ -34,12 +45,13 @@ export interface TableOptions {
 	/** a Standard Schema, zod's or valibot's, that checks each row read */
 	schema?: StandardSchemaV1
 	/**
-	 * a nullable integer column that marks a row deleted, in unix
-	 * milliseconds of this process's clock: every query and write of the
-	 * handle passes the marked rows by, unless `withDeleted` or
-	 * `deletedOnly` asks for them, and `delete` marks rather than deletes
+	 * a nullable integer column that marks a row deleted with the store's
+	 * time, in unix milliseconds or, with `{ column, unit: 's' }`, seconds:
+	 * every query and write of the handle passes the marked rows by, unless
+	 * `withDeleted` or `deletedOnly` asks for them, and `delete` marks rather
+	 * than deletes
 	 */
-	deleted?: string
+	deleted?: string | Mark
 	/**
 	 * an integer column, not null, default 0, that every update of the handle
 	 * raises by one; an update or a delete with `ifVersion` writes only rows at
@@ -108,12 +120,13 @@ interface Included {
 	columns: string[]
 }
 
-/** How a table reads and writes: its runner, its name, how its rows read, and its version column. */
+/** How a table reads and writes: its runner, how its rows read, its version column, and the unit its delete marks in. */
 interface Source {
 	runner: Runner
 	types: Record<string, ColumnType>
 	schema?: StandardSchemaV1 | undefined
 	version?: string | undefined
+	unit: Unit
 }
 
 /**
@@ -399,14 +412,14 @@ export class Query<T = Row> implements Embeddable {
 				out.push(fieldOf(value, name, this.#source.types))
 			}
 		}
-		return this.#edit(sets, out, this.#parts.sees, options.ifVersion)
+		return this.#edit(sets, out, this.#parts.sees, options.ifVersion, undefined)
 	}
 
 	/**
 	 * Deletes the rows the conditions match, and says how many it deleted. On
-	 * a table with a deleted column it marks the live ones instead, at this
-	 * process's clock, and raises a versioned table's version; `ifVersion` is
-	 * update's.
+	 * a table with a deleted column it marks the live ones instead, with the
+	 * store's time in the mark's unit, and raises a versioned table's
+	 * version; `ifVersion` is update's.
 	 */
 	async delete(options: EditOptions = {}): Promise<Done> {
 		this.#refuseEveryRow('a delete')
@@ -422,7 +435,8 @@ export class Query<T = Row> implements Embeddable {
 				new Sql(`delete from ${tableName(this.#parts)} where ${where.text}`, where.values),
 			)
 		}
-		return this.#edit([`${identOf(deleted)} = ?`], [Date.now()], 'live', options.ifVersion)
+		const now = this.#source.unit
+		return this.#edit([`${identOf(deleted)} = ?`], [], 'live', options.ifVersion, now)
 	}
 
 	/** The query of every row, those the deleted column marks among them. */
@@ -446,7 +460,7 @@ export class Query<T = Row> implements Embeddable {
 		if (deleted === undefined) {
 			throw this.#refusal('a restore clears a mark: open the table with a deleted column')
 		}
-		return this.#edit([`${identOf(deleted)} = null`], [], 'deleted', undefined)
+		return this.#edit([`${identOf(deleted)} = null`], [], 'deleted', undefined, undefined)
 	}
 
 	/**
@@ -525,13 +539,15 @@ export class Query<T = Row> implements Embeddable {
 	 * version goes up by one; with `ifVersion`, one statement writes every row
 	 * the conditions match or none, guarded by a read of a row at another
 	 * version, and after one that wrote none, the same read in the same
-	 * transaction tells a conflict from no row at all.
+	 * transaction tells a conflict from no row at all. With `now` the store's
+	 * time in that unit goes first, the value of the first set's ?.
 	 */
 	async #edit(
 		sets: string[],
 		values: SqlArg[],
 		sees: Sees,
 		ifVersion: number | undefined,
+		now: Unit | undefined,
 	): Promise<Done> {
 		const version = this.#source.version === undefined ? undefined : identOf(this.#source.version)
 		if (version !== undefined) {
@@ -543,10 +559,12 @@ export class Query<T = Row> implements Embeddable {
 		if (ifVersion === undefined) {
 			const where = conditionsText(named)
 			return runner.exec(
-				new Sql(`update ${table} set ${sets.join(', ')} where ${where.text}`, [
-					...values,
-					...where.values,
-				]),
+				new Sql(
+					`update ${table} set ${sets.join(', ')} where ${where.text}`,
+					[...values, ...where.values],
+					false,
+					now,
+				),
 			)
 		}
 		if (version === undefined) {
@@ -562,10 +580,12 @@ export class Query<T = Row> implements Embeddable {
 			bare: true,
 		}
 		const where = conditionsText([...named, at('='), guard])
-		const statement = new Sql(`update ${table} set ${sets.join(', ')} where ${where.text}`, [
-			...values,
-			...where.values,
-		])
+		const statement = new Sql(
+			`update ${table} set ${sets.join(', ')} where ${where.text}`,
+			[...values, ...where.values],
+			false,
+			now,
+		)
 		const why = new Sql(`select ${version} from ${table} where ${other.text} limit 1`, other.values)
 		const edit = async (on: Runner): Promise<Done> => {
 			const done = await on.exec(statement)
@@ -630,14 +650,16 @@ export class Table<T = Row> extends Query<T> {
 	/** Tables come from `db.table` and `tx.table`. */
 	constructor(runner: Runner, name: string, options: TableOptions = {}) {
 		const ref = tableRef(name)
+		const deleted = markOption(options.deleted, "a table's deleted option")
 		super(
 			{
 				runner,
 				types: options.types ?? {},
 				schema: options.schema,
 				version: columnOf(options.version, 'version'),
+				unit: deleted?.unit ?? 'ms',
 			},
-			{ ...emptyParts(ref.name, ref.alias), deleted: columnOf(options.deleted, 'deleted') },
+			{ ...emptyParts(ref.name, ref.alias), deleted: deleted?.column },
 		)
 		this.name = ref.name
 	}
@@ -769,6 +791,27 @@ function columnOf(column: string | undefined, option: string): string | undefine
 		throw new InvalidError(`a table's ${option} option is a column's name`)
 	}
 	return column
+}
+
+/**
+ * A mark's column and its unit, from a column's name or a `Mark`: an empty
+ * column, or a unit other than `s` and `ms`, is InvalidError.
+ */
+export function markOption(
+	given: string | Mark | undefined,
+	what: string,
+): { column: string; unit: Unit } | undefined {
+	if (given === undefined) {
+		return undefined
+	}
+	const { column, unit = 'ms' } = typeof given === 'string' ? { column: given } : given
+	if (typeof column !== 'string' || column.length === 0) {
+		throw new InvalidError(`${what} is a column's name, or { column, unit }`)
+	}
+	if (unit !== 's' && unit !== 'ms') {
+		throw new InvalidError(`${what}: a unit ${JSON.stringify(unit)}: a mark's time is 's' or 'ms'`)
+	}
+	return { column, unit }
 }
 
 /** The conditions of a query, and the deleted column's condition last. */

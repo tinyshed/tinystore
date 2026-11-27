@@ -418,7 +418,12 @@ fn a_condition_keeps_to_the_values_a_statement_of_a_database_of_this_connection_
     let migrations = Some(vec![SqlMigration { name: "0001_teachers.sql".to_owned(), sql: teachers.to_owned() }]);
     let open_app = SqlOpen { name: "app".to_owned(), migrations, durability: None, backup: None };
     let database = client.call::<Handle>(method::SQL_OPEN, &open_app).unwrap().handle;
-    let insert = SqlStatement { handle: database, text: "insert into teachers values (2)".to_owned(), values: vec![] };
+    let insert = SqlStatement {
+        handle: database,
+        text: "insert into teachers values (2)".to_owned(),
+        values: vec![],
+        now: None,
+    };
     client.call::<SqlDone>(method::SQL_EXEC, &insert).unwrap();
     let activity = open(&mut client, "activity");
     append(&mut client, activity, vec![event("used", r#"{"userId":1}"#), event("used", r#"{"userId":2}"#)]);

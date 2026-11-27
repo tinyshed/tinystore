@@ -11412,6 +11412,10 @@ def _write_sql_statement(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             sql_value.write(w, item0)
         n += 1
+    if (x := v.get("now")) is not None:
+        w.uint(4)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -11428,6 +11432,8 @@ def _read_sql_statement(r: Reader) -> dict[str, Any]:
                 items0 = [sql_value.read(r) for _ in range(r.array())]
                 r.leave()
                 read["values"] = items0
+            case 4:
+                read["now"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -11441,6 +11447,8 @@ SqlStatement = Message(
         "handle": (1, uint),
         "text": (2, str_),
         "values": (3, list_(sql_value)),
+        # s or ms: the store's time in this unit is the first ?'s value, before values: a table's delete marks with it
+        "now": (4, str_),
     },
     _write_sql_statement,
     _read_sql_statement,
@@ -11947,6 +11955,10 @@ def _write_sql_tx_call(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(7)
         w.bool(x)
         n += 1
+    if (x := v.get("now")) is not None:
+        w.uint(8)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -11971,6 +11983,8 @@ def _read_sql_tx_call(r: Reader) -> dict[str, Any]:
                 read["body"] = r.bin()
             case 7:
                 read["parts"] = r.bool()
+            case 8:
+                read["now"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -11997,6 +12011,8 @@ SqlTxCall = Message(
         "body": (6, bin_),
         # with want all: the rows may come in several answers, each within the client's credit
         "parts": (7, bool_),
+        # s or ms: the store's time in this unit is the first ?'s value, before values, as a statement's
+        "now": (8, str_),
     },
     _write_sql_tx_call,
     _read_sql_tx_call,
@@ -12203,6 +12219,10 @@ def _write_sql_mirror(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(10)
         w.float(x)
         n += 1
+    if (x := v.get("gone_unit")) is not None:
+        w.uint(11)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -12239,6 +12259,8 @@ def _read_sql_mirror(r: Reader) -> dict[str, Any]:
                 read["rows"] = SqlRows.read(r)
             case 10:
                 read["min_kept"] = r.float()
+            case 11:
+                read["gone_unit"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -12270,6 +12292,8 @@ SqlMirror = Message(
         "rows": (9, SqlRows),
         # replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
         "min_kept": (10, float_),
+        # s or ms: the unit gone marks the store's time in; ms when absent
+        "gone_unit": (11, str_),
     },
     _write_sql_mirror,
     _read_sql_mirror,

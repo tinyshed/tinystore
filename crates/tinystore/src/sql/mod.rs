@@ -31,6 +31,7 @@ mod engine;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
 mod included;
+mod mark;
 mod migrations;
 mod mirror;
 mod pieces;
@@ -46,6 +47,7 @@ pub use batch::Write;
 pub use database::{Database, DatabaseBuilder, Done};
 pub use describe::Column;
 pub use each::Each;
+pub use mark::Mark;
 pub use migrations::Migrations;
 #[cfg(feature = "async")]
 pub(crate) use mirror::scope_of;
@@ -62,6 +64,7 @@ pub use tx::Tx;
 pub(crate) use {
     columns::{Columns, Packed},
     database::is_query,
+    mark::Unit,
     mirror::{Given, Listed, Shape},
     rows::{Answer, Held, Keep, Kept},
     tx::{BOUND as TX_BOUND, HELD as TX_HELD},
@@ -81,7 +84,7 @@ pub(crate) use {
 #[cfg(feature = "async")]
 pub(crate) use {
     each::PART_BYTES,
-    query::{Edit, Paging, Parts, Sees, insert_sql, millis_of, plan_of, upsert_sql},
+    query::{Edit, Paging, Parts, Sees, insert_sql, plan_of, upsert_sql},
     rows::{Decoding, Nested},
 };
 

@@ -14068,6 +14068,8 @@ pub(crate) struct SqlStatement {
     pub(crate) handle: u64,
     pub(crate) text: String,
     pub(crate) values: Vec<Cell>,
+    /// S or ms: the store's time in this unit is the first ?'s value, before values: a table's delete marks with it.
+    pub(crate) now: Option<String>,
 }
 
 #[cfg(feature = "sql")]
@@ -14082,6 +14084,7 @@ impl Message for SqlStatement {
                 1 => message.handle = codec::uint(r, "handle")?,
                 2 => message.text = codec::str(r, "text")?,
                 3 => message.values = codec::list(r, "values", codec::cell)?,
+                4 => message.now = Some(codec::str(r, "now")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -14102,6 +14105,10 @@ impl Message for SqlStatement {
             map.field(out, 3);
             codec::write_list(out, &self.values, codec::write_cell);
         }
+        if let Some(now) = &self.now {
+            map.field(out, 4);
+            codec::write_str(out, now);
+        }
         map.close(out);
     }
 
@@ -14110,12 +14117,14 @@ impl Message for SqlStatement {
             + 10
             + 1 + 5 + self.text.len()
             + 1 + codec::list_size(&self.values, codec::cell_size)
+            + self.now.as_ref().map_or(0, |now| 1 + 5 + now.len())
     }
 
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.text.is_empty()
             && self.values.is_empty()
+            && self.now.is_none()
     }
 }
 
@@ -14654,6 +14663,8 @@ pub(crate) struct SqlTxCall {
     pub(crate) body: Option<Vec<u8>>,
     /// With want all: the rows may come in several answers, each within the client's credit.
     pub(crate) parts: bool,
+    /// S or ms: the store's time in this unit is the first ?'s value, before values, as a statement's.
+    pub(crate) now: Option<String>,
 }
 
 #[cfg(feature = "sql")]
@@ -14672,6 +14683,7 @@ impl Message for SqlTxCall {
                 5 => message.method = Some(codec::uint(r, "method")?),
                 6 => message.body = Some(codec::bin(r, "body")?),
                 7 => message.parts = codec::bool(r, "parts")?,
+                8 => message.now = Some(codec::str(r, "now")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -14708,6 +14720,10 @@ impl Message for SqlTxCall {
             map.field(out, 7);
             codec::write_bool(out, &self.parts);
         }
+        if let Some(now) = &self.now {
+            map.field(out, 8);
+            codec::write_str(out, now);
+        }
         map.close(out);
     }
 
@@ -14720,6 +14736,7 @@ impl Message for SqlTxCall {
             + self.method.map_or(0, |_| 10)
             + self.body.as_ref().map_or(0, |body| 1 + 5 + body.len())
             + 2
+            + self.now.as_ref().map_or(0, |now| 1 + 5 + now.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -14730,6 +14747,7 @@ impl Message for SqlTxCall {
             && self.method.is_none()
             && self.body.is_none()
             && !self.parts
+            && self.now.is_none()
     }
 }
 
@@ -14932,6 +14950,8 @@ pub(crate) struct SqlMirror {
     pub(crate) rows: SqlRows,
     /// Replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live.
     pub(crate) min_kept: Option<f64>,
+    /// S or ms: the unit gone marks the store's time in; ms when absent.
+    pub(crate) gone_unit: Option<String>,
 }
 
 #[cfg(feature = "sql")]
@@ -14953,6 +14973,7 @@ impl Message for SqlMirror {
                 8 => message.scope_values = Some(codec::list(r, "scopeValues", codec::cell)?),
                 9 => message.rows = SqlRows::read(r)?,
                 10 => message.min_kept = Some(codec::float(r, "minKept")?),
+                11 => message.gone_unit = Some(codec::str(r, "goneUnit")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -15001,6 +15022,10 @@ impl Message for SqlMirror {
             map.field(out, 10);
             codec::write_float(out, min_kept);
         }
+        if let Some(gone_unit) = &self.gone_unit {
+            map.field(out, 11);
+            codec::write_str(out, gone_unit);
+        }
         map.close(out);
     }
 
@@ -15016,6 +15041,7 @@ impl Message for SqlMirror {
             + self.scope_values.as_ref().map_or(0, |scope_values| 1 + codec::list_size(scope_values, codec::cell_size))
             + 1 + self.rows.size()
             + self.min_kept.map_or(0, |_| 10)
+            + self.gone_unit.as_ref().map_or(0, |gone_unit| 1 + 5 + gone_unit.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -15029,6 +15055,7 @@ impl Message for SqlMirror {
             && self.scope_values.is_none()
             && self.rows.is_zero()
             && self.min_kept.is_none()
+            && self.gone_unit.is_none()
     }
 }
 

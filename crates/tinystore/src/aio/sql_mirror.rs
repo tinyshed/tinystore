@@ -36,8 +36,8 @@ impl<T> MirrorBuilder<T> {
     }
 
     /// The column that marks what the source dropped, as [`sql::MirrorBuilder::gone`] says.
-    pub fn gone(self, column: &str) -> Self {
-        MirrorBuilder { builder: self.builder.gone(column), pool: self.pool }
+    pub fn gone(self, mark: impl Into<sql::Mark>) -> Self {
+        MirrorBuilder { builder: self.builder.gone(mark), pool: self.pool }
     }
 
     /// The columns whose change makes a row changed, as [`sql::MirrorBuilder::change_on`] says.

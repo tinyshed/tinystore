@@ -8345,6 +8345,9 @@
         "handle": {
           "uint": "107"
         },
+        "now": {
+          "str": "now"
+        },
         "text": {
           "str": "text"
         },
@@ -8356,7 +8359,7 @@
           ]
         }
       },
-      "hex": "83016b02a4746578740391a676616c756573",
+      "hex": "84016b02a4746578740391a676616c75657304a36e6f77",
       "message": "sql.Statement",
       "name": "sql.Statement with every field"
     },
@@ -8650,6 +8653,9 @@
         "method": {
           "uint": "507"
         },
+        "now": {
+          "str": "now"
+        },
         "parts": {
           "bool": true
         },
@@ -8667,7 +8673,7 @@
           "str": "want"
         }
       },
-      "hex": "8701a4746578740291a676616c75657303a477616e7404c305cd01fb06c40201ff07c3",
+      "hex": "8801a4746578740291a676616c75657303a477616e7404c305cd01fb06c40201ff07c308a36e6f77",
       "message": "sql.TxCall",
       "name": "sql.TxCall with every field"
     },
@@ -8803,6 +8809,9 @@
         "gone": {
           "str": "gone"
         },
+        "goneUnit": {
+          "str": "goneUnit"
+        },
         "handle": {
           "uint": "107"
         },
@@ -8859,7 +8868,7 @@
           "str": "table"
         }
       },
-      "hex": "8a016b02a57461626c650391a36b657904a4676f6e650591a86368616e67654f6e06a46d6f64650791a573636f70650891ab73636f706556616c75657309820191a7636f6c756d6e73029191a4726f77730acb3ff8000000000000",
+      "hex": "8b016b02a57461626c650391a36b657904a4676f6e650591a86368616e67654f6e06a46d6f64650791a573636f70650891ab73636f706556616c75657309820191a7636f6c756d6e73029191a4726f77730acb3ff80000000000000ba8676f6e65556e6974",
       "message": "sql.Mirror",
       "name": "sql.Mirror with every field"
     },

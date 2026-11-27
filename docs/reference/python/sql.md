@@ -10,11 +10,25 @@ class Sql:
     text: str
     values: tuple[SqlArg, ...] = ()
     bare: bool = False  # whether it stands beside others in an and or an or without parentheses: one column's comparison
+    now: Unit | None = None  # the unit of the store's time that the first ? takes, before values: what a table's delete marks with
 ```
 
 A piece of SQL and the values of its ``?``s, which are always values and never SQL.
 
 ``sql`` makes one; a call, a batch and a table's query take it.
+
+## Mark
+
+```python
+@dataclass(frozen=True, slots=True)
+class Mark:
+    column: str
+    unit: Unit = 'ms'
+```
+
+A column that marks a row with when it was marked, by the store's clock, and the unit it keeps that time in.
+
+``sql.Mark("deleted_at", unit="s")``: a column's name alone keeps milliseconds.
 
 ## sql
 
@@ -406,7 +420,7 @@ def mirror[T](
     of: type[T],
     *,
     key: Sequence[str],
-    gone: str | None = None,
+    gone: str | Mark | None = None,
     change_on: Sequence[str] | None = None,
 ) -> Mirror[T]: ...
 @overload
@@ -415,7 +429,7 @@ def mirror(
     of: None = None,
     *,
     key: Sequence[str],
-    gone: str | None = None,
+    gone: str | Mark | None = None,
     change_on: Sequence[str] | None = None,
 ) -> Mirror[dict[str, Any]]: ...
 def mirror(
@@ -423,7 +437,7 @@ def mirror(
     of: Any = None,
     *,
     key: Sequence[str],
-    gone: str | None = None,
+    gone: str | Mark | None = None,
     change_on: Sequence[str] | None = None,
 ) -> Mirror[Any]: ...
 ```
@@ -432,11 +446,12 @@ A table that mirrors another system: its ``replace`` and ``upsert`` answer what 
 
 ``key`` names a row at the source, and a unique index or the table's
 primary key covers it; ``gone`` marks what the source dropped with the
-store's time, unix milliseconds, instead of deleting it; ``change_on``
-names the columns whose change makes a row changed, every column the
-rows carry but the key's when not given.
+store's clock instead of deleting it, in unix milliseconds or seconds
+with ``sql.Mark("gone_at", unit="s")``; ``change_on`` names the columns
+whose change makes a row changed, every column the rows carry but the
+key's when not given.
 
-    works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
+    works = db.mirror("works", Work, key=["course_id", "id"], gone=sql.Mark("gone_at", unit="s"))
 
 ### Database.table
 
@@ -446,7 +461,7 @@ def table[T](
     name: str,
     of: type[T],
     *,
-    deleted: str | None = None,
+    deleted: str | Mark | None = None,
     version: str | None = None,
 ) -> Table[T]: ...
 @overload
@@ -454,14 +469,14 @@ def table(
     name: str,
     of: None = None,
     *,
-    deleted: str | None = None,
+    deleted: str | Mark | None = None,
     version: str | None = None,
 ) -> Table[dict[str, Any]]: ...
 def table(
     name: str,
     of: Any = None,
     *,
-    deleted: str | None = None,
+    deleted: str | Mark | None = None,
     version: str | None = None,
 ) -> Table[Any]: ...
 ```
@@ -472,6 +487,8 @@ It costs nothing until its first call; open each once, in the module
 that owns it: ``notes = db.table("notes", Note)``. ``deleted`` and
 ``version`` name the columns that mark a deleted row and count a row's
 versions: ``db.table("tasks", Task, deleted="deleted_at", version="version")``.
+A delete marks with the store's clock, in milliseconds, or seconds
+with ``deleted=sql.Mark("deleted_at", unit="s")``.
 
 ### Database.exec
 
@@ -671,7 +688,7 @@ def table[T](
     name: str,
     of: type[T],
     *,
-    deleted: str | None = None,
+    deleted: str | Mark | None = None,
     version: str | None = None,
 ) -> Table[T]: ...
 @overload
@@ -679,14 +696,14 @@ def table(
     name: str,
     of: None = None,
     *,
-    deleted: str | None = None,
+    deleted: str | Mark | None = None,
     version: str | None = None,
 ) -> Table[dict[str, Any]]: ...
 def table(
     name: str,
     of: Any = None,
     *,
-    deleted: str | None = None,
+    deleted: str | Mark | None = None,
     version: str | None = None,
 ) -> Table[Any]: ...
 ```
@@ -964,9 +981,9 @@ async def delete(*, if_version: int | None = None) -> Done: ...
 
 Deletes the rows the conditions match, and says how many it deleted.
 
-On a table with a deleted column it marks the live ones instead, at
-this process's clock, and raises a versioned table's version;
-``if_version`` is update's.
+On a table with a deleted column it marks the live ones instead, with
+the store's time in the mark's unit, and raises a versioned table's
+version; ``if_version`` is update's.
 
 ### Query.with_deleted
 
@@ -1018,12 +1035,13 @@ A table: its queries, and its rows' inserts and upserts.
 ``notes = db.table("notes", Note)``, a dataclass, a TypedDict or a
 pydantic model, whose fields are the table's columns.
 
-``deleted`` names a nullable integer column that marks a row deleted, in
-unix milliseconds of this process's clock: every query and write of the
-handle passes the marked rows by, unless ``with_deleted()`` or
-``deleted_only()`` asks for them, and ``delete`` marks rather than
-deletes. ``version`` names an integer column, not null, default 0, that
-every update of the handle raises by one, and that ``if_version`` checks.
+``deleted`` names a nullable integer column that marks a row deleted with
+the store's time, in unix milliseconds or, with ``sql.Mark("deleted_at",
+unit="s")``, seconds: every query and write of the handle passes the
+marked rows by, unless ``with_deleted()`` or ``deleted_only()`` asks for
+them, and ``delete`` marks rather than deletes. ``version`` names an
+integer column, not null, default 0, that every update of the handle
+raises by one, and that ``if_version`` checks.
 
 ### Table.insert
 
@@ -1117,7 +1135,7 @@ Its ``replace`` takes the source's list of a scope, its ``upsert`` a change
 of some rows, and each answers what was added, changed and gone. A row the
 list gives as it is held is not written at all.
 
-    works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
+    works = db.mirror("works", Work, key=["course_id", "id"], gone=sql.Mark("gone_at", unit="s"))
     diff = await works.replace({"course_id": 1}, fetched)
 
 ### Mirror.replace

@@ -105,3 +105,54 @@ test.skipIf(process.env.TINYSTORE_BIN === undefined)(
 		expect(existsSync(dir)).toBe(false)
 	},
 )
+
+// contract: SQL-25
+test.skipIf(process.env.TINYSTORE_BIN === undefined)(
+	"a table's delete and a mirror's gone mark with the store's clock, in the unit their column names",
+	async () => {
+		const at = Date.parse('2026-11-27T09:00:00.750Z')
+		await using store = await openTemp({ private: true, clock: new Date(at) })
+		const db = await store.database('uni', {
+			migrations: [
+				{
+					name: '0001_works.sql',
+					sql: `create table works (id text primary key, grade text, gone_at integer);
+						create table tasks (id integer primary key, title text, deleted_at integer)`,
+				},
+			],
+		})
+		const works = db.mirror<{ id: string; grade: string }>('works', {
+			key: 'id',
+			gone: { column: 'gone_at', unit: 's' },
+		})
+		await works.replace({}, [
+			{ id: 'a', grade: '4' },
+			{ id: 'b', grade: '5' },
+		])
+		await works.replace({}, [{ id: 'a', grade: '4' }])
+		const seconds = Math.floor(at / 1000)
+		expect(await db.scalar<number>`select gone_at from works where id = 'b'`).toBe(seconds)
+
+		const tasks = db.table<{ id: number; title: string }>('tasks', {
+			deleted: { column: 'deleted_at', unit: 's' },
+		})
+		await tasks.insert([
+			{ id: 1, title: 'draft' },
+			{ id: 2, title: 'plan' },
+		])
+		await store.clock.advance('1d')
+		await tasks.where({ id: 1 }).delete()
+		const day = 86_400
+		expect(await db.scalar<number>`select deleted_at from tasks where id = 1`).toBe(seconds + day)
+		await db.table('tasks', { deleted: 'deleted_at' }).where({ id: 2 }).delete()
+		expect(await db.scalar<number>`select deleted_at from tasks where id = 2`).toBe(at + day * 1000)
+		// a purge asked in seconds finds the mark kept in seconds, and not the one in milliseconds
+		const purged = await tasks
+			.deletedOnly()
+			.where('deleted_at <= ?', seconds + day)
+			.purge()
+		expect(purged.changes).toBe(1)
+		const minutes = { column: 'deleted_at', unit: 'min' as 's' }
+		expect(() => db.table('tasks', { deleted: minutes })).toThrow(InvalidError)
+	},
+)

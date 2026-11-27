@@ -111,6 +111,31 @@ Unix milliseconds. The mirror doesn't mark a marked row again or report it
 again. If the source lists the row again, the mirror clears its mark and
 reports it in `added`, so your program can announce it as new.
 
+If your schema keeps times in seconds, give the column with its unit, as a
+table's [deleted column](deleted-and-versions.md#seconds-or-milliseconds)
+takes it:
+
+```ts
+const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: { column: 'gone_at', unit: 's' } })
+```
+
+```python
+works = db.mirror("works", Work, key=["course_id", "id"], gone=sql.Mark("gone_at", unit="s"))
+```
+
+```go
+works := sqldb.OpenMirror[Work](db, "works", sqldb.MirrorOptions{
+	Key: []string{"course_id", "id"}, Gone: "gone_at", GoneUnit: sqldb.Seconds,
+})
+```
+
+```rust
+let works = db.mirror::<Work>("works").key(["course_id", "id"]).gone(sql::Mark::seconds("gone_at")).open()?;
+```
+
+The time comes from the store's clock, so a store on a test clock marks rows
+with the time the test set (contract SQL-25).
+
 The column belongs to the mirror. Your row type may include it to read the
 mark back, for example a `gone_at` field in a dataclass or a struct. The
 mirror ignores the field while it is null, and a given row that sets it is

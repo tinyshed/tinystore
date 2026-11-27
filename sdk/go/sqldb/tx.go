@@ -142,7 +142,8 @@ func (tx *Tx) exec(ctx context.Context, statement Piece) (Result, error) {
 	if statement.err != nil {
 		return Result{}, statement.err
 	}
-	answer, err := tx.send(ctx, wire.SqlTxCall{Text: statement.text, Values: statement.values, Want: "exec"})
+	values, now := stamped(tx.conn, statement)
+	answer, err := tx.send(ctx, wire.SqlTxCall{Text: statement.text, Values: values, Want: "exec", Now: now})
 	if err != nil || answer.Done == nil {
 		return Result{}, err
 	}

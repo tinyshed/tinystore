@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/wire"
@@ -76,8 +75,10 @@ type parts struct {
 	limit        *int64
 	offset       *int64
 	includes     []included
-	// deleted is the column that marks a deleted row, and sees which rows the query shows.
+	// deleted is the column that marks a deleted row, unit the unit of its
+	// mark, and sees which rows the query shows.
 	deleted string
+	unit    Unit
 	sees    sees
 	err     error
 }
@@ -143,17 +144,34 @@ var tableRef = regexp.MustCompile(`(?i)^\s*([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)
 // TableOption is how a table opens: Deleted, Version.
 type TableOption interface{ table(*tableOptions) }
 
-type tableOptions struct{ deleted, version string }
+type tableOptions struct {
+	deleted, version string
+	units            []Unit
+}
 
-type deletedOption string
+// Unit is what a mark's number counts since 1970: Seconds, as SQLite's
+// unixepoch() gives them, or Millis.
+type Unit string
+
+// The units a mark keeps the store's time in.
+const (
+	Millis  Unit = "ms"
+	Seconds Unit = "s"
+)
+
+type deletedOption struct {
+	column string
+	units  []Unit
+}
 
 // Deleted marks a row deleted rather than deleting it: column, a nullable
-// integer, holds when, in unix milliseconds of this process's clock. Every
-// query and write of the table passes the marked rows by, unless WithDeleted
-// or DeletedOnly asks for them, and Delete marks rather than deletes.
-func Deleted(column string) TableOption { return deletedOption(column) }
+// integer, holds when, by the store's clock, in milliseconds, or in seconds
+// with sqldb.Deleted("deleted_at", sqldb.Seconds). Every query and write of
+// the table passes the marked rows by, unless WithDeleted or DeletedOnly
+// asks for them, and Delete marks rather than deletes.
+func Deleted(column string, unit ...Unit) TableOption { return deletedOption{column, unit} }
 
-func (d deletedOption) table(o *tableOptions) { o.deleted = string(d) }
+func (d deletedOption) table(o *tableOptions) { o.deleted, o.units = d.column, d.units }
 
 type versionOption string
 
@@ -180,12 +198,31 @@ func OpenTable[T any](r Runner, name string, opts ...TableOption) *Table[T] {
 	} else {
 		p.table, p.alias = matched[1], matched[2]
 	}
+	unit, err := unitOf(o.units, "a table's deleted option")
+	if err != nil {
+		p.fail(core.Errorf(core.Invalid, "%s: table %s: %s", r.describeIt(), p.table, err))
+	}
+	p.unit = unit
 	for _, column := range []string{o.deleted, o.version} {
 		if _, err := identOf(column); column != "" && err != nil {
 			p.fail(err)
 		}
 	}
 	return &Table[T]{&Query[T]{r, p, o.version}, p.table}
+}
+
+// unitOf is the one unit a mark's option gives, Millis when it gives none:
+// two, or one other than Millis and Seconds, is invalid.
+func unitOf(units []Unit, option string) (Unit, error) {
+	switch {
+	case len(units) > 1:
+		return "", fmt.Errorf("%s: one unit, not %d", option, len(units))
+	case len(units) == 0 || units[0] == "":
+		return Millis, nil
+	case units[0] != Millis && units[0] != Seconds:
+		return "", fmt.Errorf("%s: a unit %q: a mark's time is s or ms", option, string(units[0]))
+	}
+	return units[0], nil
 }
 
 // Name is the table's name.
@@ -606,13 +643,13 @@ func (q *Query[T]) Update(ctx context.Context, set Set, opts ...EditOption) (Res
 		texts = append(texts, column+" = ?")
 		values = append(values, cell)
 	}
-	return q.edit(ctx, texts, values, q.parts.sees, editOf(opts).ifVersion)
+	return q.edit(ctx, assigned{texts: texts, values: values}, q.parts.sees, editOf(opts).ifVersion)
 }
 
 // Delete deletes the rows the conditions match, and says how many it
 // deleted. On a table with a deleted column it marks the live ones instead,
-// at this process's clock, and raises a versioned table's version;
-// IfVersion is Update's.
+// with the store's time in the mark's unit, and raises a versioned table's
+// version; IfVersion is Update's.
 func (q *Query[T]) Delete(ctx context.Context, opts ...EditOption) (Result, error) {
 	if err := q.refuseEveryRow("a delete"); err != nil {
 		return Result{}, err
@@ -625,8 +662,8 @@ func (q *Query[T]) Delete(ctx context.Context, opts ...EditOption) (Result, erro
 		where := conditionsText(q.parts.conditions)
 		return q.runner.exec(ctx, Piece{text: "delete from " + mustIdent(q.parts.table) + " where " + where.text, values: where.values, err: where.err})
 	}
-	mark := []string{mustIdent(q.parts.deleted) + " = ?"}
-	return q.edit(ctx, mark, []any{time.Now().UnixMilli()}, seesLive, ifVersion)
+	mark := assigned{texts: []string{mustIdent(q.parts.deleted) + " = ?"}, now: q.parts.unit}
+	return q.edit(ctx, mark, seesLive, ifVersion)
 }
 
 // WithDeleted is the query of every row, those the deleted column marks among them.
@@ -654,7 +691,7 @@ func (q *Query[T]) Restore(ctx context.Context) (Result, error) {
 	if q.parts.deleted == "" {
 		return Result{}, q.refusal("a restore clears a mark: open the table with a deleted column")
 	}
-	return q.edit(ctx, []string{mustIdent(q.parts.deleted) + " = null"}, nil, seesDeleted, nil)
+	return q.edit(ctx, assigned{texts: []string{mustIdent(q.parts.deleted) + " = null"}}, seesDeleted, nil)
 }
 
 // Purge deletes for good the rows the conditions match of those the query
@@ -678,7 +715,8 @@ func (q *Query[T]) Purge(ctx context.Context) (Result, error) {
 // match or none, guarded by a read of a row at another version, and after
 // one that wrote none, the same read in the same transaction tells a
 // conflict from no row at all.
-func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees, ifVersion *int64) (Result, error) {
+func (q *Query[T]) edit(ctx context.Context, set assigned, s sees, ifVersion *int64) (Result, error) {
+	sets, values := set.texts, set.values
 	version := ""
 	if q.version != "" {
 		version = mustIdent(q.version)
@@ -689,7 +727,7 @@ func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees
 	if ifVersion == nil {
 		where := conditionsText(named)
 		text := "update " + table + " set " + strings.Join(sets, ", ") + " where " + where.text
-		return q.runner.exec(ctx, Piece{text: text, values: append(values, where.values...), err: where.err})
+		return q.runner.exec(ctx, Piece{text: text, values: append(values, where.values...), now: set.now, err: where.err})
 	}
 	if version == "" {
 		return Result{}, q.refusal("IfVersion is a versioned table's: open the table with a version column")
@@ -703,7 +741,7 @@ func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees
 	if where.err != nil {
 		return Result{}, where.err
 	}
-	statement := Piece{text: "update " + table + " set " + strings.Join(sets, ", ") + " where " + where.text, values: append(values, where.values...)}
+	statement := Piece{text: "update " + table + " set " + strings.Join(sets, ", ") + " where " + where.text, values: append(values, where.values...), now: set.now}
 	why := Piece{text: "select " + version + " from " + table + " where " + other.text + " limit 1", values: other.values}
 	edit := func(on Runner) (Result, error) {
 		done, err := on.exec(ctx, statement)
@@ -727,6 +765,14 @@ func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees
 		return err
 	})
 	return done, err
+}
+
+// assigned is what an edit sets: its columns' assignments and their values,
+// and with now, the unit of the store's time its first ? takes, a mark's.
+type assigned struct {
+	texts  []string
+	values []any
+	now    Unit
 }
 
 func (q *Query[T]) refusal(why string) error {

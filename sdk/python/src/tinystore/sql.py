@@ -19,6 +19,7 @@ import math
 import re
 import struct
 import sys
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -75,6 +76,49 @@ class Sql:
     values: tuple[SqlArg, ...] = ()
     bare: bool = False
     """whether it stands beside others in an and or an or without parentheses: one column's comparison"""
+    now: Unit | None = None
+    """the unit of the store's time that the first ? takes, before values: what a table's delete marks with"""
+
+
+type Unit = Literal["s", "ms"]
+"""What a mark's number counts since 1970: seconds, as SQLite's ``unixepoch()`` gives them, or milliseconds."""
+
+
+@dataclass(frozen=True, slots=True)
+class Mark:
+    """A column that marks a row with when it was marked, by the store's clock, and the unit it keeps that time in.
+
+    ``sql.Mark("deleted_at", unit="s")``: a column's name alone keeps milliseconds.
+    """
+
+    column: str
+    unit: Unit = "ms"
+
+
+def mark_of(given: str | Mark | None, what: str) -> Mark | None:
+    """A mark from a column's name or a Mark: an empty column, or a unit other than s and ms, is InvalidError."""
+    if given is None:
+        return None
+    mark = Mark(given) if isinstance(given, str) else given
+    if not isinstance(mark, Mark) or not isinstance(mark.column, str) or not mark.column:  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise InvalidError(f"{what} is a column's name, or a Mark")
+    if mark.unit not in ("s", "ms"):
+        raise InvalidError(f"{what}: a unit {mark.unit!r}: a mark's time is 's' or 'ms'")
+    return mark
+
+
+def _stamped(piece: Sql, of_this_release: bool) -> dict[str, Any]:
+    """A statement's text and values as they leave, and the store's time for its first ?.
+
+    The server reads that time from its clock, a test's clock among them; a
+    server older than this SDK reads no ``now``, so it gets this process's.
+    """
+    if piece.now is None:
+        return {"text": piece.text, "values": list(piece.values)}
+    if of_this_release:
+        return {"text": piece.text, "values": list(piece.values), "now": piece.now}
+    now = time.time_ns() // (1_000_000_000 if piece.now == "s" else 1_000_000)
+    return {"text": piece.text, "values": [now, *piece.values]}
 
 
 Condition = Sql | Mapping[str, Any]
@@ -422,6 +466,9 @@ def _listed(value: Any) -> Any:
 
 class SqlMaker:
     """``sql("total >= ?", minimum)``: a piece of SQL, and the helpers a query's conditions are made of."""
+
+    Mark = Mark
+    """``sql.Mark("deleted_at", unit="s")``: a table's deleted column or a mirror's gone, and its unit"""
 
     def __call__(self, text: str | Any, /, *values: Any) -> Sql:
         """A piece of SQL from text and the values of its ``?``s, or from a t-string of Python 3.14."""
@@ -1062,7 +1109,7 @@ class Database:
         of: type[T],
         *,
         key: Sequence[str],
-        gone: str | None = None,
+        gone: str | Mark | None = None,
         change_on: Sequence[str] | None = None,
     ) -> Mirror[T]: ...
     @overload
@@ -1072,7 +1119,7 @@ class Database:
         of: None = None,
         *,
         key: Sequence[str],
-        gone: str | None = None,
+        gone: str | Mark | None = None,
         change_on: Sequence[str] | None = None,
     ) -> Mirror[dict[str, Any]]: ...
     def mirror(
@@ -1081,20 +1128,23 @@ class Database:
         of: Any = None,
         *,
         key: Sequence[str],
-        gone: str | None = None,
+        gone: str | Mark | None = None,
         change_on: Sequence[str] | None = None,
     ) -> Mirror[Any]:
         """A table that mirrors another system: its ``replace`` and ``upsert`` answer what was added, changed and gone.
 
         ``key`` names a row at the source, and a unique index or the table's
         primary key covers it; ``gone`` marks what the source dropped with the
-        store's time, unix milliseconds, instead of deleting it; ``change_on``
-        names the columns whose change makes a row changed, every column the
-        rows carry but the key's when not given.
+        store's clock instead of deleting it, in unix milliseconds or seconds
+        with ``sql.Mark("gone_at", unit="s")``; ``change_on`` names the columns
+        whose change makes a row changed, every column the rows carry but the
+        key's when not given.
 
-            works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
+            works = db.mirror("works", Work, key=["course_id", "id"], gone=sql.Mark("gone_at", unit="s"))
         """
         from .mirror import Mirror
+
+        mark = mark_of(gone, "a mirror's gone option")
 
         async def call(body: Callable[[int], bytes]) -> bytes:
             self.refuse_around(f"mirror {table}")
@@ -1104,24 +1154,28 @@ class Database:
 
             return await self._link.run("write", attempt)
 
-        options = (list(key), gone, None if change_on is None else list(change_on))
+        options = (list(key), mark, None if change_on is None else list(change_on))
         return Mirror(table, of, options, call)
 
     @overload
     def table[T](
-        self, name: str, of: type[T], *, deleted: str | None = None, version: str | None = None
+        self, name: str, of: type[T], *, deleted: str | Mark | None = None, version: str | None = None
     ) -> Table[T]: ...
     @overload
     def table(
-        self, name: str, of: None = None, *, deleted: str | None = None, version: str | None = None
+        self, name: str, of: None = None, *, deleted: str | Mark | None = None, version: str | None = None
     ) -> Table[dict[str, Any]]: ...
-    def table(self, name: str, of: Any = None, *, deleted: str | None = None, version: str | None = None) -> Table[Any]:
+    def table(
+        self, name: str, of: Any = None, *, deleted: str | Mark | None = None, version: str | None = None
+    ) -> Table[Any]:
         """A table of the database, typed where it opens: its rows' inserts and upserts, and queries.
 
         It costs nothing until its first call; open each once, in the module
         that owns it: ``notes = db.table("notes", Note)``. ``deleted`` and
         ``version`` name the columns that mark a deleted row and count a row's
         versions: ``db.table("tasks", Task, deleted="deleted_at", version="version")``.
+        A delete marks with the store's clock, in milliseconds, or seconds
+        with ``deleted=sql.Mark("deleted_at", unit="s")``.
         """
         from .query import Table
 
@@ -1218,7 +1272,7 @@ class Database:
 
         async def attempt(connection: Connection) -> bytes:
             handle = await self.handle(connection)
-            body = SqlStatement.encode(handle=handle, text=statement.text, values=list(statement.values))
+            body = SqlStatement.encode(handle=handle, **_stamped(statement, of_this_release(connection)))
             return await connection.session.call(methods["sql.exec"], body)
 
         return _done_of(SqlDone.decode(await self._link.run("write", attempt)))
@@ -1362,8 +1416,9 @@ class SqlTx:
         self._guests = guests
         self._via = _TxVia(self, connection)
         self._turn = asyncio.Lock()
-        # rows past one answer come in several, from a server that knows parts: 0.11 or later
-        self._parts = of_this_release(connection)
+        # a server of this release sends rows past one answer in several, 0.11 or later,
+        # and reads a statement's now
+        self._of_this_release = of_this_release(connection)
 
     @property
     def label(self) -> str:
@@ -1441,13 +1496,15 @@ class SqlTx:
 
     @overload
     def table[T](
-        self, name: str, of: type[T], *, deleted: str | None = None, version: str | None = None
+        self, name: str, of: type[T], *, deleted: str | Mark | None = None, version: str | None = None
     ) -> Table[T]: ...
     @overload
     def table(
-        self, name: str, of: None = None, *, deleted: str | None = None, version: str | None = None
+        self, name: str, of: None = None, *, deleted: str | Mark | None = None, version: str | None = None
     ) -> Table[dict[str, Any]]: ...
-    def table(self, name: str, of: Any = None, *, deleted: str | None = None, version: str | None = None) -> Table[Any]:
+    def table(
+        self, name: str, of: Any = None, *, deleted: str | Mark | None = None, version: str | None = None
+    ) -> Table[Any]:
         """A table inside the transaction: its calls are the transaction's."""
         from .query import Table
 
@@ -1508,10 +1565,9 @@ class SqlTx:
         return answer.get("body", b"")
 
     async def _call(self, statement: Sql, want: str) -> dict[str, Any]:
-        parts = want == "all" and self._parts
-        return await self._send(
-            SqlTxCall.encode(text=statement.text, values=list(statement.values), want=want, parts=parts)
-        )
+        parts = want == "all" and self._of_this_release
+        stamped = _stamped(statement, self._of_this_release)
+        return await self._send(SqlTxCall.encode(**stamped, want=want, parts=parts))
 
     async def _send(self, body: bytes) -> dict[str, Any]:
         """Sends a call and reads its answer, the rows of every part joined into one."""

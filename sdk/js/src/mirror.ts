@@ -4,7 +4,7 @@
 // says the call in TypeScript.
 
 import { InvalidError } from './errors.ts'
-import { type ColumnType, fieldOf, typedRow } from './query.ts'
+import { type ColumnType, fieldOf, type Mark, markOption, typedRow } from './query.ts'
 import { cellOf, rowsOf } from './sql.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
 import { SqlDiff, SqlMirror } from './wire/protocol.ts'
@@ -13,8 +13,8 @@ import { SqlDiff, SqlMirror } from './wire/protocol.ts'
 export interface MirrorOptions {
 	/** the columns that name a row at the source: a unique index or the table's primary key covers them */
 	key: string | readonly string[]
-	/** a column that marks what the source dropped with the store's time, unix milliseconds, instead of deleting it */
-	gone?: string | undefined
+	/** a column that marks what the source dropped with the store's time instead of deleting it: unix milliseconds, or seconds with `{ column, unit: 's' }` */
+	gone?: string | Mark | undefined
 	/** the columns whose change makes a row changed: every column the rows carry but the key's when absent */
 	changeOn?: readonly string[] | undefined
 	/** the columns SQLite keeps as 0 or 1, unix milliseconds, JSON text or an integer past 2^53, as a table's */
@@ -45,7 +45,7 @@ export type MirrorCall = (asked: (handle: number) => Uint8Array) => Promise<Uint
  * answers what was added, changed and gone. A row the list gives as it is
  * held is not written at all.
  *
- *     const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: 'gone_at', changeOn: ['grade'] })
+ *     const works = db.mirror<Work>('works', { key: ['course_id', 'id'], gone: { column: 'gone_at', unit: 's' } })
  *     const diff = await works.replace({ course_id: 1 }, fetched)
  */
 export class Mirror<T = Record<string, SqlValue>> {
@@ -95,12 +95,15 @@ export class Mirror<T = Record<string, SqlValue>> {
 		const types = this.#options.types ?? {}
 		const listed = listOf(rows as readonly Record<string, unknown>[], types)
 		const key = typeof this.#options.key === 'string' ? [this.#options.key] : [...this.#options.key]
+		const gone = markOption(this.#options.gone, "a mirror's gone option")
 		const answer = await this.#call(handle =>
 			SqlMirror.encode({
 				handle,
 				table: this.table,
 				key,
-				gone: this.#options.gone,
+				gone: gone?.column,
+				// milliseconds go unnamed, which a server older than the unit reads too
+				goneUnit: gone?.unit === 's' ? 's' : undefined,
 				changeOn: this.#options.changeOn === undefined ? undefined : [...this.#options.changeOn],
 				...asked,
 				rows: listed,

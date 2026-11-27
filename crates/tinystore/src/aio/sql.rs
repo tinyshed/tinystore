@@ -506,8 +506,8 @@ impl<T> Table<T> {
 
     /// Marks a row deleted rather than deleting it, as [`sql::Table::deleted`] does.
     #[must_use]
-    pub fn deleted(mut self, column: &str) -> Self {
-        self.query.parts.track_deleted(column);
+    pub fn deleted(mut self, mark: impl Into<sql::Mark>) -> Self {
+        self.query.parts.track_deleted(mark.into());
         self
     }
 
@@ -674,7 +674,7 @@ impl<T> Query<T> {
     /// Deletes the rows the conditions match, or marks them on a table with
     /// a deleted column, as [`sql::Query::delete`] does, and says how many.
     pub fn delete(&self) -> impl Future<Output = Result<Done>> + Send + 'static {
-        self.database.edited(self.built(self.parts.delete_sql(|| self.now_millis(), None)))
+        self.database.edited(self.built(self.parts.delete_sql(|| self.database.db.now(), None)))
     }
 
     /// The query of every row, as [`sql::Query::with_deleted`] reads them.
@@ -704,10 +704,6 @@ impl<T> Query<T> {
     /// The edits made from `version`, as [`sql::Query::if_version`] gives them.
     pub fn if_version(&self, version: i64) -> AtVersion<T> {
         AtVersion { query: self.clone(), version }
-    }
-
-    fn now_millis(&self) -> i64 {
-        sql::millis_of(self.database.db.now())
     }
 
     /// What building a statement refused, named by the database on a
@@ -812,7 +808,7 @@ impl<T> AtVersion<T> {
     /// version, all of them or none.
     pub fn delete(&self) -> impl Future<Output = Result<Done>> + Send + 'static {
         let query = &self.query;
-        query.database.edited(query.built(query.parts.delete_sql(|| query.now_millis(), Some(self.version))))
+        query.database.edited(query.built(query.parts.delete_sql(|| query.database.db.now(), Some(self.version))))
     }
 }
 

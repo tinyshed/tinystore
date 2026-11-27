@@ -9,7 +9,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::codec::{Cell, Map, Message};
 use super::protocol::{
@@ -22,7 +22,7 @@ use crate::engine::SharedFile;
 use crate::limits::{ANSWER_BYTES, Limit};
 use crate::sql::{
     Answer, Columns, Database, Direction, Done, End, First, Found, Given, Held, Keep, Kept, Key, Listed, Migrations,
-    Mode, Packed, Part, Rows, Shape, Sql, TX_HELD, Taken, Tx, Value, Walk, Walking, Wanted, Write, is_query,
+    Mode, Packed, Part, Rows, Shape, Sql, TX_HELD, Taken, Tx, Unit, Value, Walk, Walking, Wanted, Write, is_query,
 };
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, Transaction};
@@ -158,7 +158,8 @@ fn open(store: &Store, handles: &Handles, asked: SqlOpen, read_only: bool) -> An
 /// which a read connection may ask too.
 fn describe(handles: &Handles, asked: SqlStatement) -> Answered {
     let database = handles.database(asked.handle)?;
-    let columns = database.describe(statement(asked.text, asked.values)?)?;
+    let values = stamped(asked.values, asked.now.as_deref(), || database.now())?;
+    let columns = database.describe(statement(asked.text, values)?)?;
     let columns = columns.into_iter().map(|column| SqlDescribedColumn { name: column.name, declared: column.declared });
     Ok(SqlDescribed { columns: columns.collect() }.encode())
 }
@@ -178,8 +179,11 @@ pub(crate) fn submit(
 ) {
     match called {
         method::SQL_EXEC => {
-            let prepared = SqlStatement::decode(body)
-                .and_then(|asked| Ok((handles.database(asked.handle)?, statement(asked.text, asked.values)?)));
+            let prepared = SqlStatement::decode(body).and_then(|asked| {
+                let database = handles.database(asked.handle)?;
+                let values = stamped(asked.values, asked.now.as_deref(), || database.now())?;
+                Ok((database, statement(asked.text, values)?))
+            });
             match prepared {
                 Ok((database, statement)) => database.exec_then(statement, move |written| {
                     done(written.map(|written| done_of(&written).encode()).map_err(Failure::from));
@@ -216,7 +220,9 @@ pub(crate) fn submit(
 fn mirrored(handles: &Handles, asked: SqlMirror) -> Result<(Database, (Shape, Given, Mode)), Failure> {
     let database = handles.database(asked.handle)?;
     let describe = format!("sql {}: mirror {}", database.name(), asked.table);
-    let shape = Shape { table: asked.table, key: asked.key, gone: asked.gone, change_on: asked.change_on };
+    let unit = unit_named(asked.gone_unit.as_deref())
+        .map_err(|failure| Failure::invalid(format!("{describe}: gone {}", failure.message)))?;
+    let shape = Shape { table: asked.table, key: asked.key, gone: asked.gone, unit, change_on: asked.change_on };
     let mode = match asked.mode.as_str() {
         "replace" => {
             let (columns, values) = (asked.scope.unwrap_or_default(), asked.scope_values.unwrap_or_default());
@@ -275,8 +281,11 @@ pub(crate) fn query(
     done: impl FnOnce(Result<Queried, Failure>) + Send + 'static,
 ) {
     if called == method::SQL_COLUMNS {
-        let asked = SqlStatement::decode(body)
-            .and_then(|asked| Ok((handles.database(asked.handle)?, statement(asked.text, asked.values)?, Wanted::All)));
+        let asked = SqlStatement::decode(body).and_then(|asked| {
+            let database = handles.database(asked.handle)?;
+            let values = stamped(asked.values, asked.now.as_deref(), || database.now())?;
+            Ok((database, statement(asked.text, values)?, Wanted::All))
+        });
         return read_into::<Columns>(asked, link, read_only, done);
     }
     let asked = SqlQuery::decode(body);
@@ -1031,7 +1040,7 @@ fn answer(tx: &Tx<'_>, call: Result<SqlTxCall, Failure>, link: &Link, nested: Ne
             let body = nested(tx.transaction(), method, call.body.as_deref().unwrap_or_default(), link.max_body)?;
             return Ok(vec![SqlTxAnswer { body: Some(body), ..SqlTxAnswer::default() }]);
         }
-        let statement = statement(call.text, call.values)?;
+        let statement = statement(call.text, stamped(call.values, call.now.as_deref(), || tx.now())?)?;
         if call.want == "exec" {
             return Ok(vec![SqlTxAnswer { done: Some(done_of(&tx.exec(statement)?)), ..SqlTxAnswer::default() }]);
         }
@@ -1072,6 +1081,21 @@ fn write_of(text: SqlText, lend: Lend<'_>) -> Result<Write, Failure> {
     }
     let method = u16::try_from(method).map_err(|_| Failure::invalid(format!("method {method:#06x}")))?;
     lend(method, text.body.as_deref().unwrap_or_default())
+}
+
+/// A statement's values with the store's time first, in the unit `now`
+/// names, when it names one: what a table's delete marks a row with, read
+/// from the store's clock, which a test's clock moves, and not the client's.
+fn stamped(values: Vec<Cell>, now: Option<&str>, clock: impl FnOnce() -> SystemTime) -> Result<Vec<Cell>, Failure> {
+    let Some(now) = now else { return Ok(values) };
+    let unit = unit_named(Some(now))?;
+    Ok(std::iter::once(Cell::Int(unit.of(clock()))).chain(values).collect())
+}
+
+/// The unit of a mark the wire names, `s` or `ms`; milliseconds when absent.
+fn unit_named(name: Option<&str>) -> Result<Unit, Failure> {
+    let Some(name) = name else { return Ok(Unit::default()) };
+    Unit::named(name).ok_or_else(|| Failure::invalid(format!("a unit {name:?}: a mark's time is s or ms")))
 }
 
 /// A statement from its text and the cells of its `?`s.

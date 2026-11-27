@@ -142,6 +142,22 @@ fn without_a_gone_column_what_the_list_leaves_out_is_deleted_and_other_scopes_st
     assert_eq!(none.gone.len(), 2, "an empty scope is the whole table");
 }
 
+// contract: SQL-25
+#[test]
+fn gone_marks_with_the_stores_clock_in_the_unit_its_mark_names() {
+    let f = fixture();
+    let works =
+        f.db.mirror::<Work>("works").key(["course_id", "id"]).gone(sql::Mark::seconds("gone_at")).open().unwrap();
+    works.replace(&[("course_id", 1)], &three()).unwrap();
+    f.clock.advance(Duration::from_millis(2_500));
+    works.replace(&[("course_id", 1)], &three()[..2]).unwrap();
+    let seconds = unix_millis(f.clock.now()).div_euclid(1000);
+    assert_eq!(f.held()[2].3, Some(seconds), "the test clock's whole second");
+    let by_millis = f.db.mirror::<Work>("works").key(["course_id", "id"]).gone("gone_at").open().unwrap();
+    by_millis.replace(&[("course_id", 1)], &three()[..1]).unwrap();
+    assert_eq!(f.held()[1].3, Some(unix_millis(f.clock.now())), "a column alone marks in milliseconds");
+}
+
 #[test]
 fn upsert_writes_what_it_adds_and_changes_and_marks_nothing_gone() {
     let f = fixture();

@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/internal/core"
@@ -289,13 +290,31 @@ func (db *DB) exec(ctx context.Context, statement Piece) (Result, error) {
 		if err != nil {
 			return err
 		}
-		answer, err := c.Session.Call(ctx, wire.MethodSqlExec, wire.Encode(&wire.SqlStatement{Handle: handle, Text: statement.text, Values: statement.values}))
+		values, now := stamped(c, statement)
+		answer, err := c.Session.Call(ctx, wire.MethodSqlExec, wire.Encode(&wire.SqlStatement{Handle: handle, Text: statement.text, Values: values, Now: now}))
 		if err != nil {
 			return err
 		}
 		return decode(answer, &done)
 	})
 	return resultOf(done), err
+}
+
+// stamped is a statement's values and its now as they leave on a
+// connection: the server reads the store's time for the first ? from its
+// clock, a test's clock among them; a server older than this SDK, which
+// reads no now, takes this process's time first among the values.
+func stamped(c *core.Connection, statement Piece) ([]wire.Cell, *string) {
+	switch {
+	case statement.now == "":
+		return statement.values, nil
+	case c.OfThisRelease():
+		unit := string(statement.now)
+		return statement.values, &unit
+	case statement.now == Seconds:
+		return append([]wire.Cell{time.Now().Unix()}, statement.values...), nil
+	}
+	return append([]wire.Cell{time.Now().UnixMilli()}, statement.values...), nil
 }
 
 func (db *DB) each(ctx context.Context, statement Piece, order []wire.SqlOrder) iter.Seq2[[]any, error] {

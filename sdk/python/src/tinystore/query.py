@@ -18,13 +18,26 @@ from __future__ import annotations
 import base64
 import json
 import re
-import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from ._rows import SqlArg, SqlValue, check_columns, field_of, fields_of, reader, row_of, value_reader
 from .errors import ConflictError, CorruptError, InvalidError
-from .sql import Condition, Done, Sql, checked, condition_of, grouped, ident_of, joined_with, placeholders, sql
+from .sql import (
+    Condition,
+    Done,
+    Mark,
+    Sql,
+    Unit,
+    checked,
+    condition_of,
+    grouped,
+    ident_of,
+    joined_with,
+    mark_of,
+    placeholders,
+    sql,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping, Sequence
@@ -85,6 +98,8 @@ class _Parts:
     includes: tuple[_Included, ...] = field(default=())
     deleted: str | None = None
     """the column that marks a deleted row"""
+    unit: Unit = "ms"
+    """the unit of the store's time a delete marks the deleted column with"""
     sees: _Sees = "live"
     """which rows a table with a deleted column shows"""
 
@@ -306,14 +321,14 @@ class Query[T]:
             else:
                 texts.append(f"{ident_of(name)} = ?")
                 out.append(field_of(value, name))
-        return await self._edit(texts, out, self._parts.sees, if_version)
+        return await self._edit(texts, out, self._parts.sees, if_version, None)
 
     async def delete(self, *, if_version: int | None = None) -> Done:
         """Deletes the rows the conditions match, and says how many it deleted.
 
-        On a table with a deleted column it marks the live ones instead, at
-        this process's clock, and raises a versioned table's version;
-        ``if_version`` is update's.
+        On a table with a deleted column it marks the live ones instead, with
+        the store's time in the mark's unit, and raises a versioned table's
+        version; ``if_version`` is update's.
         """
         self._refuse_every_row("a delete")
         deleted = self._parts.deleted
@@ -324,7 +339,7 @@ class Query[T]:
             return await self._runner.exec_piece(
                 Sql(f"delete from {ident_of(self._parts.table)} where {where.text}", where.values)
             )
-        return await self._edit([f"{ident_of(deleted)} = ?"], [time.time_ns() // 1_000_000], "live", if_version)
+        return await self._edit([f"{ident_of(deleted)} = ?"], [], "live", if_version, self._parts.unit)
 
     def with_deleted(self) -> Query[T]:
         """The query of every row, those the deleted column marks among them."""
@@ -343,7 +358,7 @@ class Query[T]:
         deleted = self._parts.deleted
         if deleted is None:
             raise self._refusal("a restore clears a mark: open the table with a deleted column")
-        return await self._edit([f"{ident_of(deleted)} = null"], [], "deleted", None)
+        return await self._edit([f"{ident_of(deleted)} = null"], [], "deleted", None, None)
 
     async def purge(self) -> Done:
         """Deletes for good the rows the conditions match of those the handle shows.
@@ -362,13 +377,16 @@ class Query[T]:
             Sql(f"delete from {ident_of(self._parts.table)} where {where.text}", where.values)
         )
 
-    async def _edit(self, sets: list[str], values: list[SqlArg], sees: _Sees, if_version: int | None) -> Done:
+    async def _edit(
+        self, sets: list[str], values: list[SqlArg], sees: _Sees, if_version: int | None, now: Unit | None
+    ) -> Done:
         """An update of the rows sees shows of those the conditions match: update, a marking delete, restore.
 
         A versioned table's version goes up by one. With if_version, one statement
         writes every row the conditions match or none, guarded by a read of a
         row at another version, and after one that wrote none, the same read
-        in the same transaction tells a conflict from no row at all.
+        in the same transaction tells a conflict from no row at all. With now
+        the store's time in that unit goes first, the value of the first set's ?.
         """
         version = None if self._version is None else ident_of(self._version)
         if version is not None:
@@ -378,7 +396,7 @@ class Query[T]:
         if if_version is None:
             where = _conditions_text(named)
             return await self._runner.exec_piece(
-                Sql(f"update {table} set {', '.join(sets)} where {where.text}", (*values, *where.values))
+                Sql(f"update {table} set {', '.join(sets)} where {where.text}", (*values, *where.values), now=now)
             )
         if version is None:
             raise self._refusal("if_version is a versioned table's: open the table with a version column")
@@ -386,7 +404,7 @@ class Query[T]:
         other = _conditions_text((*named, _Kept(Sql(f"{version} is not ?", (at,)), True)))
         guard = _Kept(Sql(f"not exists (select 1 from {table} where {other.text})", other.values), True)
         where = _conditions_text((*named, _Kept(Sql(f"{version} = ?", (at,)), True), guard))
-        statement = Sql(f"update {table} set {', '.join(sets)} where {where.text}", (*values, *where.values))
+        statement = Sql(f"update {table} set {', '.join(sets)} where {where.text}", (*values, *where.values), now=now)
         why = Sql(f"select {version} from {table} where {other.text} limit 1", other.values)
         label, name = self._runner.label, self._parts.table
 
@@ -464,22 +482,30 @@ class Table[T](Query[T]):
     ``notes = db.table("notes", Note)``, a dataclass, a TypedDict or a
     pydantic model, whose fields are the table's columns.
 
-    ``deleted`` names a nullable integer column that marks a row deleted, in
-    unix milliseconds of this process's clock: every query and write of the
-    handle passes the marked rows by, unless ``with_deleted()`` or
-    ``deleted_only()`` asks for them, and ``delete`` marks rather than
-    deletes. ``version`` names an integer column, not null, default 0, that
-    every update of the handle raises by one, and that ``if_version`` checks.
+    ``deleted`` names a nullable integer column that marks a row deleted with
+    the store's time, in unix milliseconds or, with ``sql.Mark("deleted_at",
+    unit="s")``, seconds: every query and write of the handle passes the
+    marked rows by, unless ``with_deleted()`` or ``deleted_only()`` asks for
+    them, and ``delete`` marks rather than deletes. ``version`` names an
+    integer column, not null, default 0, that every update of the handle
+    raises by one, and that ``if_version`` checks.
     """
 
     def __init__(
-        self, runner: Runner, name: str, of: Any = None, *, deleted: str | None = None, version: str | None = None
+        self,
+        runner: Runner,
+        name: str,
+        of: Any = None,
+        *,
+        deleted: str | Mark | None = None,
+        version: str | None = None,
     ) -> None:
         table, alias, _ = _table_ref(name)
-        for option, column in (("deleted", deleted), ("version", version)):
-            if column is not None and (not isinstance(column, str) or not column):  # pyright: ignore[reportUnnecessaryIsInstance]
-                raise InvalidError(f"a table's {option} option is a column's name")
-        super().__init__(runner, of, _Parts(table, alias, deleted=deleted), version)
+        if version is not None and (not isinstance(version, str) or not version):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise InvalidError("a table's version option is a column's name")
+        mark = mark_of(deleted, "a table's deleted option")
+        parts = _Parts(table, alias) if mark is None else _Parts(table, alias, deleted=mark.column, unit=mark.unit)
+        super().__init__(runner, of, parts, version)
         self.name = table
 
     @overload

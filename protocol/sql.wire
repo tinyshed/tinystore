@@ -37,6 +37,7 @@ message sql.Statement {
   1 handle: uint
   2 text: str
   3 values: [cell]
+  4 now: str?             # s or ms: the store's time in this unit is the first ?'s value, before values: a table's delete marks with it
 }
 
 # A column a statement's rows are ordered by, named as its rows name it.
@@ -131,6 +132,7 @@ message sql.TxCall {
   5 method: uint?         # with want call: the method, its request in body
   6 body: bin?
   7 parts: bool           # with want all: the rows may come in several answers, each within the client's credit
+  8 now: str?             # s or ms: the store's time in this unit is the first ?'s value, before values, as a statement's
 }
 
 # A call's answer: its rows, what it changed, a method's answer, or why it
@@ -174,6 +176,7 @@ message sql.Mirror {
   8 scopeValues: [cell]?  # and their values, in their order
   9 rows: sql.Rows        # the list, one message at most
   10 minKept: float?      # replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
+  11 goneUnit: str?       # s or ms: the unit gone marks the store's time in; ms when absent
 }
 
 # What a mirror's call changed, each row by columns: the list's, or the

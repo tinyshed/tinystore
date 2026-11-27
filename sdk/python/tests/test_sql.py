@@ -10,13 +10,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import pytest
 
 import tinystore
 from tinystore import sql
-from ways import until
+from tinystore.testing import open_temp
+from ways import SERVED, until
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -1073,3 +1074,48 @@ async def test_an_upsert_onto_a_marked_row_brings_it_back_and_an_if_version_writ
     await sp.tx(inside)
     marked = await tasks.deleted_only().where(id=1).one()
     assert marked is not None and marked.title == "in tx"
+
+
+# contract: SQL-25
+@pytest.mark.skipif(not SERVED, reason="tinystore is not built here")
+async def test_a_tables_delete_and_a_mirrors_gone_mark_with_the_stores_clock_in_the_unit_their_column_names() -> None:
+    at = datetime(2026, 11, 27, 9, 0, 0, 750_000, tzinfo=UTC)
+    seconds = int(at.timestamp())
+    millis = seconds * 1000 + 750
+    day = 86_400
+    async with open_temp(private=True, clock=at) as store:
+        db = await store.database(
+            "uni",
+            migrations={
+                "0001_works.sql": "create table works (id text primary key, grade text, gone_at integer);"
+                "create table tasks (id integer primary key, title text, deleted_at integer)"
+            },
+        )
+        works = db.mirror("works", key=["id"], gone=sql.Mark("gone_at", unit="s"))
+        await works.replace({}, [{"id": "a", "grade": "4"}, {"id": "b", "grade": "5"}])
+        await works.replace({}, [{"id": "a", "grade": "4"}])
+        assert await db.scalar(int, "select gone_at from works where id = 'b'") == seconds
+
+        tasks = db.table("tasks", deleted=sql.Mark("deleted_at", unit="s"))
+        await tasks.insert([{"id": 1, "title": "draft"}, {"id": 2, "title": "plan"}, {"id": 3, "title": "notes"}])
+        await store.clock.advance("1d")
+        await tasks.where(id=1).delete()
+        assert await db.scalar(int, "select deleted_at from tasks where id = 1") == seconds + day
+        await db.table("tasks", deleted="deleted_at").where(id=2).delete()
+        assert await db.scalar(int, "select deleted_at from tasks where id = 2") == millis + day * 1000
+
+        async def inside(tx: tinystore.SqlTx) -> None:
+            await tx.table("tasks", deleted=sql.Mark("deleted_at", unit="s")).where(id=3).delete()
+
+        await db.tx(inside)
+        assert await db.scalar(int, "select deleted_at from tasks where id = 3") == seconds + day
+        # a purge asked in seconds finds the marks kept in seconds, and not the one in milliseconds
+        purged = await tasks.deleted_only().where("deleted_at <= ?", seconds + day).purge()
+        assert purged.changes == 2
+        assert await db.scalar(int, "select count(*) from tasks") == 1
+
+        minutes = cast("Any", "min")
+        with pytest.raises(tinystore.InvalidError, match="a table's deleted option: a unit 'min'"):
+            db.table("tasks", deleted=sql.Mark("deleted_at", unit=minutes))
+        with pytest.raises(tinystore.InvalidError, match="a mirror's gone option: a unit 'min'"):
+            db.mirror("works", key=["id"], gone=sql.Mark("gone_at", unit=minutes))

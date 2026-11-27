@@ -17,6 +17,8 @@ from .errors import InvalidError
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
 
+    from .sql import Mark
+
     MirrorCall = Callable[[Callable[[int], bytes]], Awaitable[bytes]]
     """What sends a mirror's request on the database's connection and gives back its answer."""
 
@@ -47,7 +49,7 @@ class Mirror[T]:
     of some rows, and each answers what was added, changed and gone. A row the
     list gives as it is held is not written at all.
 
-        works = db.mirror("works", Work, key=["course_id", "id"], gone="gone_at", change_on=["grade"])
+        works = db.mirror("works", Work, key=["course_id", "id"], gone=sql.Mark("gone_at", unit="s"))
         diff = await works.replace({"course_id": 1}, fetched)
     """
 
@@ -55,7 +57,7 @@ class Mirror[T]:
         self,
         table: str,
         of: Any,
-        options: tuple[list[str], str | None, list[str] | None],
+        options: tuple[list[str], Mark | None, list[str] | None],
         call: MirrorCall,
     ) -> None:
         self.table = table
@@ -87,13 +89,16 @@ class Mirror[T]:
 
     async def _run(self, rows: Sequence[T | Mapping[str, Any]], **asked: Any) -> Diff[T]:
         listed = _list_of(rows)
+        gone = self._gone
 
         def body(handle: int) -> bytes:
             return SqlMirror.encode(
                 handle=handle,
                 table=self.table,
                 key=self._key,
-                gone=self._gone,
+                gone=None if gone is None else gone.column,
+                # milliseconds go unnamed, which a server older than the unit reads too
+                gone_unit="s" if gone is not None and gone.unit == "s" else None,
                 change_on=self._change_on,
                 rows=listed,
                 **{name: value for name, value in asked.items() if value is not None},

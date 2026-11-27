@@ -351,8 +351,11 @@ type MirrorOptions struct {
 	// table's primary key covers them.
 	Key []string
 	// Gone is a column that marks what the source dropped with the store's
-	// time, unix milliseconds, instead of deleting it; empty deletes it.
+	// time instead of deleting it; empty deletes it.
 	Gone string
+	// GoneUnit is the unit Gone marks the store's time in: Millis when
+	// empty, or Seconds.
+	GoneUnit Unit
 	// ChangeOn is the columns whose change makes a row changed; every column
 	// the rows carry but the key's when nil.
 	ChangeOn []string
@@ -547,7 +550,7 @@ Count counts every row the conditions match, without the order and the limit.
 func (q *Query[T]) Delete(ctx context.Context, opts ...EditOption) (Result, error)
 ```
 
-Delete deletes the rows the conditions match, and says how many it deleted. On a table with a deleted column it marks the live ones instead, at this process's clock, and raises a versioned table's version; IfVersion is Update's.
+Delete deletes the rows the conditions match, and says how many it deleted. On a table with a deleted column it marks the live ones instead, with the store's time in the mark's unit, and raises a versioned table's version; IfVersion is Update's.
 
 ### Query.DeletedOnly
 
@@ -836,10 +839,10 @@ TableOption is how a table opens: Deleted, Version.
 ### Deleted
 
 ```go
-func Deleted(column string) TableOption
+func Deleted(column string, unit ...Unit) TableOption
 ```
 
-Deleted marks a row deleted rather than deleting it: column, a nullable integer, holds when, in unix milliseconds of this process's clock. Every query and write of the table passes the marked rows by, unless WithDeleted or DeletedOnly asks for them, and Delete marks rather than deletes.
+Deleted marks a row deleted rather than deleting it: column, a nullable integer, holds when, by the store's clock, in milliseconds, or in seconds with sqldb.Deleted("deleted\_at", sqldb.Seconds). Every query and write of the table passes the marked rows by, unless WithDeleted or DeletedOnly asks for them, and Delete marks rather than deletes.
 
 ### Version
 
@@ -898,6 +901,25 @@ func (tx *Tx) Via() core.Via
 ```
 
 Via is how a handle's calls go inside the transaction, on its stream.
+
+## Unit
+
+```go
+type Unit string
+```
+
+Unit is what a mark's number counts since 1970: Seconds, as SQLite's unixepoch() gives them, or Millis.
+
+### Millis
+
+```go
+const (
+	Millis  Unit = "ms"
+	Seconds Unit = "s"
+)
+```
+
+The units a mark keeps the store's time in.
 
 ## UpsertOption
 

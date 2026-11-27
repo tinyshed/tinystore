@@ -137,7 +137,8 @@ fn a_list_of_items_past_what_its_bytes_may_grow_into_is_limit_before_it_is_made(
     assert_eq!(refused.code, "limit", "{}", refused.message);
 
     let values = vec![Cell::Nil; 1_000_000];
-    let statement = protocol::SqlStatement { handle: 1, text: "select 1".to_owned(), values };
+    let statement =
+        protocol::SqlStatement { handle: 1, text: "select 1".to_owned(), values, now: Some("s".to_owned()) };
     assert_eq!(protocol::SqlStatement::decode(&statement.encode()).unwrap(), statement);
 }
 

@@ -177,7 +177,15 @@ export {
 } from './metrics.ts'
 export type { Diff, Mirror, MirrorOptions, ReplaceOptions } from './mirror.ts'
 export type { Fetched, Once, OnceOptions } from './once.ts'
-export type { ColumnType, Query, RowPage, Table, TableOptions, UpsertOptions } from './query.ts'
+export type {
+	ColumnType,
+	Mark,
+	Query,
+	RowPage,
+	Table,
+	TableOptions,
+	UpsertOptions,
+} from './query.ts'
 export type {
 	Aggregate as EventsAggregate,
 	AllEvents,

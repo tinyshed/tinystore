@@ -15873,6 +15873,8 @@ type SqlStatement struct {
 	Handle uint64 `wire:"1,handle"`
 	Text   string `wire:"2,text"`
 	Values []Cell `wire:"3,values"`
+	// s or ms: the store's time in this unit is the first ?'s value, before values: a table's delete marks with it
+	Now *string `wire:"4,now"`
 }
 
 func (m SqlStatement) Write(w *Writer) {
@@ -15896,6 +15898,11 @@ func (m SqlStatement) Write(w *Writer) {
 		}
 		n++
 	}
+	if m.Now != nil {
+		w.Uint(4)
+		w.Str(*m.Now)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -15916,6 +15923,9 @@ func (m *SqlStatement) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Values = v
+		case 4:
+			v := r.Str()
+			m.Now = &v
 		default:
 			r.Skip()
 		}
@@ -15927,7 +15937,8 @@ func (m *SqlStatement) Read(r *Reader) {
 func (m SqlStatement) IsZero() bool {
 	return m.Handle == 0 &&
 		m.Text == "" &&
-		len(m.Values) == 0
+		len(m.Values) == 0 &&
+		m.Now == nil
 }
 
 // SqlOrder is the schema's sql.Order.
@@ -16521,6 +16532,8 @@ type SqlTxCall struct {
 	Body   *[]byte `wire:"6,body"`
 	// with want all: the rows may come in several answers, each within the client's credit
 	Parts bool `wire:"7,parts"`
+	// s or ms: the store's time in this unit is the first ?'s value, before values, as a statement's
+	Now *string `wire:"8,now"`
 }
 
 func (m SqlTxCall) Write(w *Writer) {
@@ -16564,6 +16577,11 @@ func (m SqlTxCall) Write(w *Writer) {
 		w.Bool(m.Parts)
 		n++
 	}
+	if m.Now != nil {
+		w.Uint(8)
+		w.Str(*m.Now)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -16594,6 +16612,9 @@ func (m *SqlTxCall) Read(r *Reader) {
 			m.Body = &v
 		case 7:
 			m.Parts = r.Bool()
+		case 8:
+			v := r.Str()
+			m.Now = &v
 		default:
 			r.Skip()
 		}
@@ -16609,7 +16630,8 @@ func (m SqlTxCall) IsZero() bool {
 		!m.Commit &&
 		m.Method == nil &&
 		m.Body == nil &&
-		!m.Parts
+		!m.Parts &&
+		m.Now == nil
 }
 
 // SqlTxAnswer is the schema's sql.TxAnswer.
@@ -16819,6 +16841,8 @@ type SqlMirror struct {
 	Rows SqlRows `wire:"9,rows"`
 	// replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live
 	MinKept *float64 `wire:"10,minKept"`
+	// s or ms: the unit gone marks the store's time in; ms when absent
+	GoneUnit *string `wire:"11,goneUnit"`
 }
 
 func (m SqlMirror) Write(w *Writer) {
@@ -16886,6 +16910,11 @@ func (m SqlMirror) Write(w *Writer) {
 		w.Float(*m.MinKept)
 		n++
 	}
+	if m.GoneUnit != nil {
+		w.Uint(11)
+		w.Str(*m.GoneUnit)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -16940,6 +16969,9 @@ func (m *SqlMirror) Read(r *Reader) {
 		case 10:
 			v := r.Float()
 			m.MinKept = &v
+		case 11:
+			v := r.Str()
+			m.GoneUnit = &v
 		default:
 			r.Skip()
 		}
@@ -16958,7 +16990,8 @@ func (m SqlMirror) IsZero() bool {
 		m.Scope == nil &&
 		m.ScopeValues == nil &&
 		m.Rows.IsZero() &&
-		m.MinKept == nil
+		m.MinKept == nil &&
+		m.GoneUnit == nil
 }
 
 // SqlDiff is the schema's sql.Diff.

@@ -13892,6 +13892,8 @@ export const SqlStatement = message(
 		handle: [1, uint],
 		text: [2, str],
 		values: [3, list(sqlValue)],
+		/** s or ms: the store's time in this unit is the first ?'s value, before values: a table's delete marks with it */
+		now: [4, str],
 	},
 	{
 		write(w, v) {
@@ -13915,12 +13917,18 @@ export const SqlStatement = message(
 				}
 				n++
 			}
+			if (v.now !== undefined) {
+				w.field(4)
+				w.str(v.now)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $handle: number | undefined
 			let $text: string | undefined
 			let $values: (SqlValue | boolean)[] | undefined
+			let $now: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -13938,12 +13946,15 @@ export const SqlStatement = message(
 						$values = items0
 						break
 					}
+					case 4:
+						$now = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { handle: $handle, text: $text, values: $values }
+			return { handle: $handle, text: $text, values: $values, now: $now }
 		},
 	},
 )
@@ -14539,6 +14550,8 @@ export const SqlTxCall = message(
 		body: [6, bin],
 		/** with want all: the rows may come in several answers, each within the client's credit */
 		parts: [7, bool],
+		/** s or ms: the store's time in this unit is the first ?'s value, before values, as a statement's */
+		now: [8, str],
 	},
 	{
 		write(w, v) {
@@ -14582,6 +14595,11 @@ export const SqlTxCall = message(
 				w.bool(v.parts)
 				n++
 			}
+			if (v.now !== undefined) {
+				w.field(8)
+				w.str(v.now)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -14592,6 +14610,7 @@ export const SqlTxCall = message(
 			let $method: number | undefined
 			let $body: Uint8Array | undefined
 			let $parts: boolean | undefined
+			let $now: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -14621,6 +14640,9 @@ export const SqlTxCall = message(
 					case 7:
 						$parts = r.bool()
 						break
+					case 8:
+						$now = r.str()
+						break
 					default:
 						r.skip()
 				}
@@ -14634,6 +14656,7 @@ export const SqlTxCall = message(
 				method: $method,
 				body: $body,
 				parts: $parts,
+				now: $now,
 			}
 		},
 	},
@@ -14841,6 +14864,8 @@ export const SqlMirror = message(
 		rows: [9, SqlRows],
 		/** replace: writes nothing, and answers suspect, when fewer than this fraction of the live rows would stay live */
 		minKept: [10, float],
+		/** s or ms: the unit gone marks the store's time in; ms when absent */
+		goneUnit: [11, str],
 	},
 	{
 		write(w, v) {
@@ -14908,6 +14933,11 @@ export const SqlMirror = message(
 				w.float(v.minKept)
 				n++
 			}
+			if (v.goneUnit !== undefined) {
+				w.field(11)
+				w.str(v.goneUnit)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -14921,6 +14951,7 @@ export const SqlMirror = message(
 			let $scopeValues: (SqlValue | boolean)[] | undefined
 			let $rows: Read<typeof SqlRows.fields> | undefined
 			let $minKept: number | undefined
+			let $goneUnit: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -14977,6 +15008,9 @@ export const SqlMirror = message(
 					case 10:
 						$minKept = r.float()
 						break
+					case 11:
+						$goneUnit = r.str()
+						break
 					default:
 						r.skip()
 				}
@@ -14993,6 +15027,7 @@ export const SqlMirror = message(
 				scopeValues: $scopeValues,
 				rows: $rows,
 				minKept: $minKept,
+				goneUnit: $goneUnit,
 			}
 		},
 	},

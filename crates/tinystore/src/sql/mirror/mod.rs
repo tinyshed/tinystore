@@ -33,10 +33,12 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::database::Database;
+use super::mark::Mark;
+use super::mark::Unit;
 use super::rows::Rows;
 use super::values::{Value, row_of, to_value};
 use crate::transaction::sealed::Sealed;
-use crate::{Error, ErrorKind, Result, Transaction, TxHandle, unix_millis};
+use crate::{Error, ErrorKind, Result, Transaction, TxHandle};
 pub(crate) use list::{Found, Given, Listed, Mode, Running, Shape, mirror_on};
 
 impl Database {
@@ -45,7 +47,8 @@ impl Database {
     /// rows, and each answers what was added, changed and gone. The key,
     /// what names a row at the source, is given before it opens.
     pub fn mirror<T>(&self, table: &str) -> MirrorBuilder<T> {
-        let shape = Shape { table: table.to_owned(), key: Vec::new(), gone: None, change_on: None };
+        let shape =
+            Shape { table: table.to_owned(), key: Vec::new(), gone: None, unit: Unit::default(), change_on: None };
         MirrorBuilder { db: self.clone(), shape, row: PhantomData }
     }
 }
@@ -67,12 +70,14 @@ impl<T> MirrorBuilder<T> {
         self
     }
 
-    /// A column that marks what the source dropped with the store's time, an
-    /// integer of Unix milliseconds, instead of deleting the row. A row
-    /// marked is neither marked nor answered again, and one the source names
-    /// once more loses its mark and is added again.
-    pub fn gone(mut self, column: &str) -> Self {
-        self.shape.gone = Some(column.to_owned());
+    /// A column that marks what the source dropped with the store's time
+    /// instead of deleting the row, an integer of unix milliseconds or, with
+    /// `Mark::seconds("gone_at")`, seconds. A row marked is neither marked
+    /// nor answered again, and one the source names once more loses its mark
+    /// and is added again.
+    pub fn gone(mut self, mark: impl Into<Mark>) -> Self {
+        let mark = mark.into();
+        (self.shape.gone, self.shape.unit) = (Some(mark.column), mark.unit);
         self
     }
 
@@ -196,7 +201,8 @@ impl<T: Serialize + DeserializeOwned> Mirror<T> {
             Ok((given.weight(), given, mode))
         });
         let (weight, given, mode) = prepared.map_err(|error| error.within(self.describe()))?;
-        let (shape, memory, now) = (Arc::clone(&self.shape), Arc::clone(self.db.memory()), unix_millis(self.db.now()));
+        let (shape, memory, now) =
+            (Arc::clone(&self.shape), Arc::clone(self.db.memory()), self.shape.unit.of(self.db.now()));
         let write = Box::new(move |tx: &crate::sqlite::Tx<'_>| {
             mirror_on(tx, &shape, (&given, &mode), &Running { now, memory: &memory, answer: None })
         });
@@ -351,7 +357,8 @@ impl<T: Serialize + DeserializeOwned> TxMirror<'_, T> {
         let ran = mode.and_then(|mode| {
             let given = Given::checked(&mirror.shape, listed_of(rows)?, &mode)?;
             self.tx.takes(mirror.db.file(), &mirror.db.shown())?;
-            let running = Running { now: unix_millis(mirror.db.now()), memory: mirror.db.memory(), answer: None };
+            let now = mirror.shape.unit.of(mirror.db.now());
+            let running = Running { now, memory: mirror.db.memory(), answer: None };
             self.tx.call(|raw| mirror_on(raw, &mirror.shape, (&given, &mode), &running))
         });
         ran.and_then(Diff::of).map_err(|error| error.within(mirror.describe()))
@@ -371,7 +378,7 @@ impl Database {
         done: impl FnOnce(Result<Found>) + Send + 'static,
     ) {
         let describe = format!("{}: mirror {}", self.shown(), shape.table);
-        let (memory, now, weight) = (Arc::clone(self.memory()), unix_millis(self.now()), given.weight());
+        let (memory, now, weight) = (Arc::clone(self.memory()), shape.unit.of(self.now()), given.weight());
         if let Err(error) = refuse_on_a_copy(self, &describe) {
             return done(Err(error));
         }

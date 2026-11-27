@@ -182,6 +182,7 @@ These contracts are what does not.
 - **SQL-22** `purge` MUST be refused, `invalid`, on a handle that shows the live rows alone.
 - **SQL-23** An update or a delete with `ifVersion` MUST write every row its conditions match when each is at that version, and none otherwise, failing `conflict` with a message that names the table and the version a row is at; no row at all MUST change nothing and fail nothing.
 - **SQL-24** Every update through a versioned handle, a marking delete, a restore and an upsert's update among them, MUST raise the version by one; an update that sets the version column MUST be refused, and an insert, an upsert's among them, MUST start a row at version 0 whatever the row gives for it.
+- **SQL-25** A table's `delete` and a mirror's `gone` MUST mark a row with the store's clock, a test clock among them, in the unit the mark's column names: whole unix seconds, as `unixepoch()` gives them, or milliseconds, which a column named without a unit keeps; in every SDK, and a unit that is neither MUST be refused `invalid`.
 
 ### Blobs
 

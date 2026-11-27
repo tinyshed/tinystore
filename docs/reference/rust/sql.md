@@ -431,6 +431,38 @@ The rows of a statement, each as a `T`, as `Database::each` and
 `Query::each` give them. Dropped, it stops its read
 and gives its reader back.
 
+## Mark
+
+```rust
+pub struct Mark { /* private fields */ }
+```
+
+A column that marks a row with when it was marked, and the unit it keeps
+that time in: `Mark::seconds("deleted_at")`. A column's name alone is a
+mark in milliseconds, `"deleted_at".into()`.
+
+### Mark.millis
+
+```rust
+pub fn millis(column: impl Into<String>) -> Mark
+```
+
+A column that keeps the time in unix milliseconds.
+
+### Mark.seconds
+
+```rust
+pub fn seconds(column: impl Into<String>) -> Mark
+```
+
+A column that keeps the time in unix seconds, as `unixepoch()` does.
+
+### Mark.column
+
+```rust
+pub fn column(&self) -> &str
+```
+
 ## Migrations
 
 ```rust
@@ -575,13 +607,14 @@ unique index or the table's primary key must cover them.
 ### MirrorBuilder.gone
 
 ```rust
-pub fn gone(self, column: &str) -> Self
+pub fn gone(self, mark: impl Into<Mark>) -> Self
 ```
 
-A column that marks what the source dropped with the store's time, an
-integer of Unix milliseconds, instead of deleting the row. A row
-marked is neither marked nor answered again, and one the source names
-once more loses its mark and is added again.
+A column that marks what the source dropped with the store's time
+instead of deleting the row, an integer of unix milliseconds or, with
+`Mark::seconds("gone_at")`, seconds. A row marked is neither marked
+nor answered again, and one the source names once more loses its mark
+and is added again.
 
 ### MirrorBuilder.change_on
 
@@ -1046,7 +1079,7 @@ another's. A statement written by hand is not rewritten: they are the
 handle's.
 
 ```rust
-let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
+let tasks = db.table::<Task>("tasks").deleted(sql::Mark::seconds("deleted_at")).version("version");
 let edit = tasks.filter(sql::eq("id", &1)).if_version(0).update([("title", sql::value("from b"))]);
 if edit.as_ref().is_err_and(|error| error.kind() == ErrorKind::Conflict) {
     // sql app: table tasks: the row is at version 1, not 0
@@ -1064,11 +1097,12 @@ pub fn name(&self) -> &str
 ### Table.deleted
 
 ```rust
-pub fn deleted(self, column: &str) -> Self
+pub fn deleted(self, mark: impl Into<Mark>) -> Self
 ```
 
-Marks a row deleted rather than deleting it: `column`, a nullable
-integer, holds when, in unix milliseconds of the store's clock. Every
+Marks a row deleted rather than deleting it: the mark's column, a
+nullable integer, holds when, by the store's clock, in unix
+milliseconds or, with `Mark::seconds("deleted_at")`, seconds. Every
 query and write of the handle passes the marked rows by, unless
 `Query::with_deleted` or `Query::deleted_only` asks for them;
 `delete` marks, `Query::restore` clears the mark, and
@@ -1856,7 +1890,7 @@ pub fn name(&self) -> &str
 ### aio::sql::Table.deleted
 
 ```rust
-pub fn deleted(self, column: &str) -> Self
+pub fn deleted(self, mark: impl Into<Mark>) -> Self
 ```
 
 Marks a row deleted rather than deleting it, as `sql::Table::deleted` does.
@@ -2022,7 +2056,7 @@ The columns that name a row at the source, as `sql::MirrorBuilder::key` takes th
 ### aio::sql::MirrorBuilder.gone
 
 ```rust
-pub fn gone(self, column: &str) -> Self
+pub fn gone(self, mark: impl Into<Mark>) -> Self
 ```
 
 The column that marks what the source dropped, as `sql::MirrorBuilder::gone` says.

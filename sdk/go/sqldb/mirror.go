@@ -16,8 +16,11 @@ type MirrorOptions struct {
 	// table's primary key covers them.
 	Key []string
 	// Gone is a column that marks what the source dropped with the store's
-	// time, unix milliseconds, instead of deleting it; empty deletes it.
+	// time instead of deleting it; empty deletes it.
 	Gone string
+	// GoneUnit is the unit Gone marks the store's time in: Millis when
+	// empty, or Seconds.
+	GoneUnit Unit
 	// ChangeOn is the columns whose change makes a row changed; every column
 	// the rows carry but the key's when nil.
 	ChangeOn []string
@@ -104,9 +107,18 @@ func (m *Mirror[T]) run(ctx context.Context, asked wire.SqlMirror, rows []T) (Di
 	if err != nil {
 		return Diff[T]{}, err
 	}
+	unit, err := unitOf([]Unit{m.options.GoneUnit}, "a mirror's gone option")
+	if err != nil {
+		return Diff[T]{}, core.Errorf(core.Invalid, "%s: mirror %s: %s", m.db.describe, m.table, err)
+	}
 	asked.Table, asked.Key, asked.Rows = m.table, m.options.Key, listed
 	if m.options.Gone != "" {
 		asked.Gone = &m.options.Gone
+	}
+	// milliseconds go unnamed, which a server older than the unit reads too
+	if unit == Seconds {
+		seconds := string(Seconds)
+		asked.GoneUnit = &seconds
 	}
 	if m.options.ChangeOn != nil {
 		asked.ChangeOn = &m.options.ChangeOn

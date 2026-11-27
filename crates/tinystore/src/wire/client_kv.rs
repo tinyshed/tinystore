@@ -75,7 +75,7 @@ impl<S: Read + Write> Client<S> {
     /// and the last row it inserted.
     #[cfg(feature = "sql")]
     pub fn exec(&mut self, database: u64, statement: &str) -> Result<(u64, i64)> {
-        let statement = wire::SqlStatement { handle: database, text: statement.to_owned(), values: Vec::new() };
+        let statement = wire::SqlStatement { handle: database, text: statement.to_owned(), ..Default::default() };
         let done = self.answer::<wire::SqlDone>(method::SQL_EXEC, &statement)?;
         Ok((done.changes, done.last_insert_rowid))
     }

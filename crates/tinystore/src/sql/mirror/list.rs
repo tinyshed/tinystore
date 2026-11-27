@@ -24,6 +24,7 @@ use rusqlite::Connection;
 use super::affinity::{Affinity, Collation};
 use super::table::{self, Kept};
 use crate::limits::{Limit, MIRROR_ROWS};
+use crate::sql::mark::Unit;
 use crate::sql::pieces::quote_one;
 use crate::sql::rows::{Held, Rows};
 use crate::sql::run::{self, Wanted};
@@ -32,13 +33,14 @@ use crate::sql::values::Value;
 use crate::{Error, Memory, Result};
 
 /// What a mirror opened with: its table, the columns that name a row at the
-/// source, the column that marks what the source dropped, and the columns
-/// whose change makes a row changed.
+/// source, the column that marks what the source dropped and the unit it
+/// marks in, and the columns whose change makes a row changed.
 #[derive(Clone, Debug)]
 pub(crate) struct Shape {
     pub(crate) table: String,
     pub(crate) key: Vec<String>,
     pub(crate) gone: Option<String>,
+    pub(crate) unit: Unit,
     pub(crate) change_on: Option<Vec<String>>,
 }
 
@@ -80,8 +82,8 @@ impl Found {
     }
 }
 
-/// What a call runs with besides its list: the store's time in Unix
-/// milliseconds, the store's memory its read holds, and the bound of the
+/// What a call runs with besides its list: the store's time in the unit of
+/// the mirror's mark, the store's memory its read holds, and the bound of the
 /// bytes its answer may hold, past which it writes nothing: one message's,
 /// over the wire.
 pub(crate) struct Running<'a> {

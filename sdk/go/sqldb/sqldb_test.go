@@ -1131,3 +1131,91 @@ func TestAnUpsertOntoAMarkedRowBringsItBackAndAnIfVersionWritesEveryRowOrNone(t 
 		}
 	})
 }
+
+const marksTables = `create table works (id text primary key, grade text, gone_at integer);
+create table tasks (id integer primary key, title text, deleted_at integer);
+create table versioned (id integer primary key, title text, deleted_at integer, version integer not null default 0)`
+
+type Grade struct {
+	ID    string
+	Grade string
+}
+
+type Marked struct {
+	ID        int64
+	Title     string
+	DeletedAt *int64
+}
+
+// contract: SQL-25
+func TestATablesDeleteAndAMirrorsGoneMarkWithTheStoresClockInTheUnitTheirColumnNames(t *testing.T) {
+	at := time.Date(2026, 11, 27, 9, 0, 0, 750_000_000, time.UTC)
+	opens := []struct {
+		name  string
+		ready bool
+		opts  []tinystore.Option
+	}{
+		{"the core in this process", ways.Library() != "", []tinystore.Option{tinystore.Library(ways.Library())}},
+		{"a private child", ways.Binary() != "", []tinystore.Option{tinystore.Private(), tinystore.Binary(ways.Binary())}},
+	}
+	for _, way := range opens {
+		t.Run(way.name, func(t *testing.T) {
+			if !way.ready {
+				t.Skip("not built here")
+			}
+			defer ways.Recover(t)
+			ctx := context.Background()
+			store := ways.Must(tinystore.Open(ctx, t.TempDir(), append(way.opts, tinystore.Clock(at))...))
+			defer store.Close()
+			migrations := fstest.MapFS{"0001_marks.sql": {Data: []byte(marksTables)}}
+			db := ways.Must(sqldb.Open(ctx, store, "uni", sqldb.Migrations(migrations)))
+			scalar := func(text string) int64 { return ways.Must(sqldb.Scalar[int64](ctx, db, text)) }
+
+			works := sqldb.OpenMirror[Grade](db, "works", sqldb.MirrorOptions{Key: []string{"id"}, Gone: "gone_at", GoneUnit: sqldb.Seconds})
+			ways.Must(works.Replace(ctx, nil, []Grade{{"a", "4"}, {"b", "5"}}))
+			ways.Must(works.Replace(ctx, nil, []Grade{{"a", "4"}}))
+			seconds := at.Unix()
+			if gone := scalar(`select gone_at from works where id = 'b'`); gone != seconds {
+				t.Fatalf("gone at %d, want the clock's second %d", gone, seconds)
+			}
+
+			tasks := sqldb.OpenTable[Marked](db, "tasks", sqldb.Deleted("deleted_at", sqldb.Seconds))
+			ways.Must(tasks.InsertMany(ctx, []Marked{{ID: 1, Title: "draft"}, {ID: 2, Title: "plan"}}))
+			ways.Must(0, store.Clock().Advance(ctx, 24*time.Hour))
+			ways.Must(tasks.Where(sqldb.Eq{"id": 1}).Delete(ctx))
+			day := int64(86_400)
+			if marked := scalar(`select deleted_at from tasks where id = 1`); marked != seconds+day {
+				t.Fatalf("marked %d, want %d", marked, seconds+day)
+			}
+			ways.Must(sqldb.OpenTable[Marked](db, "tasks", sqldb.Deleted("deleted_at")).Where(sqldb.Eq{"id": 2}).Delete(ctx))
+			if marked := scalar(`select deleted_at from tasks where id = 2`); marked != at.UnixMilli()+day*1000 {
+				t.Fatalf("marked %d, want %d", marked, at.UnixMilli()+day*1000)
+			}
+			// a purge asked in seconds finds the mark kept in seconds, and not the one in milliseconds
+			purged := ways.Must(tasks.DeletedOnly().Where(sqldb.SQL("deleted_at <= ?", seconds+day)).Purge(ctx))
+			if purged.Changes != 1 {
+				t.Fatalf("purged %+v", purged)
+			}
+
+			// IfVersion's update runs in a transaction, and marks there by the same clock
+			versioned := sqldb.OpenTable[Marked](db, "versioned", sqldb.Deleted("deleted_at", sqldb.Seconds), sqldb.Version("version"))
+			ways.Must(versioned.Insert(ctx, Marked{ID: 1, Title: "kept"}))
+			ways.Must(versioned.Where(sqldb.Eq{"id": 1}).Delete(ctx, sqldb.IfVersion(0)))
+			if marked := scalar(`select deleted_at from versioned where id = 1`); marked != seconds+day {
+				t.Fatalf("marked with IfVersion %d, want %d", marked, seconds+day)
+			}
+
+			_, err := sqldb.OpenTable[Marked](db, "tasks", sqldb.Deleted("deleted_at", "min")).Count(ctx)
+			is(t, err, tinystore.ErrInvalid)
+			if !strings.Contains(err.Error(), `a table's deleted option: a unit "min": a mark's time is s or ms`) {
+				t.Fatalf("a table's unit: %v", err)
+			}
+			minutes := sqldb.OpenMirror[Grade](db, "works", sqldb.MirrorOptions{Key: []string{"id"}, Gone: "gone_at", GoneUnit: "min"})
+			_, err = minutes.Replace(ctx, nil, []Grade{{"a", "4"}})
+			is(t, err, tinystore.ErrInvalid)
+			if !strings.Contains(err.Error(), `sql uni: mirror works: a mirror's gone option: a unit "min": a mark's time is s or ms`) {
+				t.Fatalf("a mirror's unit: %v", err)
+			}
+		})
+	}
+}

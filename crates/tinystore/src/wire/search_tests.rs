@@ -321,6 +321,7 @@ fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
         handle: database,
         text: "insert into articles (id, title, done) values (7, 'rye bread', 1)".to_owned(),
         values: Vec::new(),
+        now: None,
     };
     client.call::<SqlDone>(method::SQL_EXEC, &insert).unwrap();
     let filtered = SearchQuery { r#where: Some(r#"[{"eq":["done",true]}]"#.to_owned()), ..query(handle, "bread") };

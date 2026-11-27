@@ -9,8 +9,9 @@ handle. A statement that you write by hand, such as `db.all('select …')`,
 runs exactly as you wrote it and sees every row.
 
 The table needs the two columns. `deleted_at` is a nullable integer that
-stores the time of the delete in Unix milliseconds. `version` is an integer
-that starts at 0:
+stores the time of the delete, in Unix milliseconds unless you ask for
+[seconds](#seconds-or-milliseconds). `version` is an integer that starts at
+0:
 
 ```sql
 -- 0001_tasks.sql
@@ -159,11 +160,42 @@ tasks.deleted_only().filter(sql!("deleted_at < ?", month_ago)).purge()?; // dele
   with the same key fails with a conflict error. An upsert whose key belongs
   to a marked row updates that row and clears its mark, so the task is back.
   To bring back a row by its key, upsert it.
-- In Rust, the time of the mark comes from the store's clock. In Bun, Python
-  and Go, it comes from your process's clock.
+- The time of the mark comes from the store's clock, in every language. A
+  store opened on a test clock marks rows with the time the test set.
 
 A handle with a deleted column never shows, counts or changes a marked row
 unless you ask with `withDeleted()` or `deletedOnly()` (contract SQL-21).
+
+## Seconds or milliseconds
+
+The mark is in Unix milliseconds by default. If your schema keeps its times
+in seconds, as SQLite's `unixepoch()` does, give the column with its unit:
+
+```ts
+const tasks = db.table<Task>('tasks', { deleted: { column: 'deleted_at', unit: 's' } })
+```
+
+```python
+tasks = db.table("tasks", Task, deleted=sql.Mark("deleted_at", unit="s"))
+```
+
+```go
+tasks := sqldb.OpenTable[Task](db, "tasks", sqldb.Deleted("deleted_at", sqldb.Seconds))
+```
+
+```rust
+let tasks = db.table::<Task>("tasks").deleted(sql::Mark::seconds("deleted_at"));
+```
+
+The unit is `'s'` or `'ms'`. A column name alone, as in the examples above,
+means milliseconds, so existing code keeps working. A mark in seconds is the
+whole second the store's clock is in, the same number `unixepoch()` gives
+(contract SQL-25). `restore` clears the mark whatever its unit. A condition
+you write yourself compares plain numbers, so write it in the column's unit:
+a purge of marks older than a day subtracts 86,400 from a time in seconds.
+
+The unit is an option of the handle. It is not stored in the file, so every
+handle on the table should name the same unit.
 
 ## Edits made from an old version
 

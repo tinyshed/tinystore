@@ -830,7 +830,12 @@ fn a_read_connection_opens_what_its_store_holds_as_it_is_and_binds_none_of_it() 
         let signup = RecordsNewEvent { name: "signup".to_owned(), ..RecordsNewEvent::default() };
         owner.call::<Empty>(method::RECORDS_APPEND, &RecordsAppend { handle, events: vec![signup] }).unwrap();
         let handle = owner.call::<Handle>(method::SQL_OPEN, &database).unwrap().handle;
-        let insert = SqlStatement { handle, text: "insert into notes values ('kept')".to_owned(), values: Vec::new() };
+        let insert = SqlStatement {
+            handle,
+            text: "insert into notes values ('kept')".to_owned(),
+            values: Vec::new(),
+            now: None,
+        };
         owner.call::<SqlDone>(method::SQL_EXEC, &insert).unwrap();
         drop(owner);
         store.close().unwrap();

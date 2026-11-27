@@ -10,7 +10,7 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -18,6 +18,7 @@ use serde::de::DeserializeOwned;
 use super::database::{Database, Done};
 use super::each::Each;
 use super::included::{literal_of, names_of};
+use super::mark::{Mark, Unit};
 use super::pieces::{checked, joined_with, quote, quote_all, quote_one};
 use super::rows::{Nested, Rows};
 use super::run::Wanted;
@@ -90,20 +91,15 @@ impl Runner<'_> {
         }
     }
 
-    /// The store's clock in unix milliseconds, which a delete marks a row with.
-    fn now_millis(&self) -> i64 {
-        millis_of(match self {
+    /// The store's clock, which a delete marks a row with.
+    fn now(&self) -> SystemTime {
+        match self {
             Runner::Database(database) => database.now(),
             Runner::Tx(tx) => tx.now(),
             #[cfg(test)]
-            Runner::Recorder(_) => UNIX_EPOCH,
-        })
+            Runner::Recorder(_) => std::time::UNIX_EPOCH,
+        }
     }
-}
-
-/// A time in unix milliseconds, as a deleted column keeps it.
-pub(crate) fn millis_of(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH).map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// Which rows a table with a deleted column shows: the live ones, unless a
@@ -122,6 +118,7 @@ pub(crate) enum Sees {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Tracked {
     deleted: Option<String>,
+    unit: Unit,
     version: Option<String>,
     sees: Sees,
 }
@@ -335,7 +332,7 @@ pub struct Query<'r, T> {
 /// # #[derive(serde::Serialize, serde::Deserialize)] struct Task { id: i64, title: String }
 /// # fn main() -> tinystore::Result<()> {
 /// # let db = tinystore::Store::open("data", Default::default())?.database("app").open()?;
-/// let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
+/// let tasks = db.table::<Task>("tasks").deleted(sql::Mark::seconds("deleted_at")).version("version");
 /// let edit = tasks.filter(sql::eq("id", &1)).if_version(0).update([("title", sql::value("from b"))]);
 /// if edit.as_ref().is_err_and(|error| error.kind() == ErrorKind::Conflict) {
 ///     // sql app: table tasks: the row is at version 1, not 0
@@ -383,8 +380,9 @@ impl<'r, T> Table<'r, T> {
         self.query.parts.table()
     }
 
-    /// Marks a row deleted rather than deleting it: `column`, a nullable
-    /// integer, holds when, in unix milliseconds of the store's clock. Every
+    /// Marks a row deleted rather than deleting it: the mark's column, a
+    /// nullable integer, holds when, by the store's clock, in unix
+    /// milliseconds or, with `Mark::seconds("deleted_at")`, seconds. Every
     /// query and write of the handle passes the marked rows by, unless
     /// [`Query::with_deleted`] or [`Query::deleted_only`] asks for them;
     /// `delete` marks, [`Query::restore`] clears the mark, and
@@ -393,8 +391,8 @@ impl<'r, T> Table<'r, T> {
     /// upsert whose key a marked row holds updates that row and clears its
     /// mark: the row came back.
     #[must_use]
-    pub fn deleted(mut self, column: &str) -> Self {
-        self.query.parts.track_deleted(column);
+    pub fn deleted(mut self, mark: impl Into<Mark>) -> Self {
+        self.query.parts.track_deleted(mark.into());
         self
     }
 
@@ -580,7 +578,7 @@ impl<'r, T> Query<'r, T> {
     /// On a table with a deleted column it marks the live ones instead, with
     /// the store's clock, and raises a versioned table's version.
     pub fn delete(&self) -> Result<Done> {
-        self.runner.edit(self.built(self.parts.delete_sql(|| self.runner.now_millis(), None))?)
+        self.runner.edit(self.built(self.parts.delete_sql(|| self.runner.now(), None))?)
     }
 
     /// The query of every row, those the deleted column marks among them.
@@ -656,7 +654,7 @@ impl<T> AtVersion<'_, T> {
     /// mark, on a table with a deleted column, which a delete for good is not.
     pub fn delete(&self) -> Result<Done> {
         let query = &self.query;
-        query.runner.edit(query.built(query.parts.delete_sql(|| query.runner.now_millis(), Some(self.version)))?)
+        query.runner.edit(query.built(query.parts.delete_sql(|| query.runner.now(), Some(self.version)))?)
     }
 }
 
@@ -740,9 +738,9 @@ impl Parts {
         &self.table
     }
 
-    pub(crate) fn track_deleted(&mut self, column: &str) {
-        match quote_one(column) {
-            Ok(_) => self.tracked.deleted = Some(column.to_owned()),
+    pub(crate) fn track_deleted(&mut self, mark: Mark) {
+        match quote_one(&mark.column) {
+            Ok(_) => (self.tracked.deleted, self.tracked.unit) = (Some(mark.column), mark.unit),
             Err(why) => refuse(self, why),
         }
     }
@@ -941,8 +939,9 @@ impl Parts {
     }
 
     /// What `delete` runs: a delete of the rows the conditions match, or,
-    /// on a table with a deleted column, a mark of the live ones at `now`.
-    pub(crate) fn delete_sql(&self, now: impl FnOnce() -> i64, if_version: Option<i64>) -> Result<Edit> {
+    /// on a table with a deleted column, a mark of the live ones at `now`, in
+    /// the mark's unit.
+    pub(crate) fn delete_sql(&self, now: impl FnOnce() -> SystemTime, if_version: Option<i64>) -> Result<Edit> {
         self.refuse_every_row("a delete")?;
         let Some(deleted) = &self.tracked.deleted else {
             if if_version.is_some() {
@@ -953,7 +952,7 @@ impl Parts {
             return Ok(Edit { statement, check: None });
         };
         let mark = format!("{} = ?", quote_one(deleted).map_err(Error::invalid)?);
-        self.edit(vec![mark], vec![Value::Integer(now())], Sees::Live, if_version)
+        self.edit(vec![mark], vec![Value::Integer(self.tracked.unit.of(now()))], Sees::Live, if_version)
     }
 
     /// What `restore` runs: the mark cleared of the marked rows the

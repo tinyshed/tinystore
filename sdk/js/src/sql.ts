@@ -139,13 +139,38 @@ export class Sql {
 	readonly values: readonly SqlArg[]
 	/** whether it stands beside others in an and or an or without parentheses: one column's comparison */
 	readonly bare: boolean
+	/** the unit of the store's time that the first ? takes, before values: what a table's delete marks with */
+	readonly now: Unit | undefined
 
 	/** Pieces come from `sql`. */
-	constructor(text: string, values: readonly SqlArg[], bare = false) {
+	constructor(text: string, values: readonly SqlArg[], bare = false, now?: Unit) {
 		this.text = text
 		this.values = values
 		this.bare = bare
+		this.now = now
 	}
+}
+
+/** What a mark's number counts since 1970: seconds, as SQLite's `unixepoch()` gives them, or milliseconds. */
+export type Unit = 's' | 'ms'
+
+/**
+ * A statement as it leaves on a connection: the store's time for its first
+ * ?, which the server reads from its clock, a test's clock among them; a
+ * server older than this SDK, which reads no `now`, takes this process's.
+ */
+function stampedOn(
+	connection: Connection,
+	piece: Sql,
+): { text: string; values: SqlArg[]; now?: Unit | undefined } {
+	if (piece.now === undefined) {
+		return { text: piece.text, values: [...piece.values] }
+	}
+	if (ofThisRelease(connection)) {
+		return { text: piece.text, values: [...piece.values], now: piece.now }
+	}
+	const now = piece.now === 's' ? Math.floor(Date.now() / 1000) : Date.now()
+	return { text: piece.text, values: [now, ...piece.values] }
 }
 
 /**
@@ -1259,7 +1284,7 @@ export class Database implements Runner, Home {
 		const piece = statementOf(statement)
 		const answered = await this.#link.run('write', async connection => {
 			const handle = await this.handle(connection)
-			const body = SqlStatement.encode({ handle, text: piece.text, values: [...piece.values] })
+			const body = SqlStatement.encode({ handle, ...stampedOn(connection, piece) })
 			return connection.session.call(methods['sql.exec'], body)
 		})
 		return doneOf(SqlDone.decode(answered))
@@ -1435,9 +1460,7 @@ export class SqlTx implements Runner {
 	#call(statement: Sql, want: Want | 'exec') {
 		// rows past one answer come in several, from a server that knows parts: 0.11 or later
 		const parts = want === 'all' && ofThisRelease(this.#connection)
-		return this.#send(
-			SqlTxCall.encode({ text: statement.text, values: [...statement.values], want, parts }),
-		)
+		return this.#send(SqlTxCall.encode({ ...stampedOn(this.#connection, statement), want, parts }))
 	}
 
 	/** Sends a call and reads its answer, the rows of every part joined into one. */

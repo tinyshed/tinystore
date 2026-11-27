@@ -233,6 +233,7 @@ fn note(id: &str, author_id: i64, title: &str) -> Note {
 
 struct Fixture {
     store: Store,
+    clock: Arc<TestClock>,
     // Last: fields drop in order, and Windows removes no file the store still holds.
     _dir: tempfile::TempDir,
 }
@@ -240,9 +241,9 @@ struct Fixture {
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let clock = Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_secs(1_791_547_200)));
-    let options = Options { clock: Some(clock), background: false, ..Options::default() };
+    let options = Options { clock: Some(clock.clone()), background: false, ..Options::default() };
     let store = Store::open(dir.path(), options).unwrap();
-    Fixture { _dir: dir, store }
+    Fixture { _dir: dir, clock, store }
 }
 
 const NOTES: &str = "create table notes (
@@ -639,6 +640,26 @@ fn a_second_writer_from_the_old_version_is_refused_and_a_deleted_row_is_gone_fro
     assert_eq!(one.one().unwrap().unwrap().version, 3, "a restore is an edit too");
     let plain: i64 = db.scalar("select count(*) from tasks").unwrap();
     assert_eq!(plain, 1, "a statement by hand is not rewritten");
+}
+
+// contract: SQL-25
+#[test]
+fn a_delete_marks_with_the_stores_clock_in_the_unit_its_mark_names() {
+    let f = fixture();
+    let db = tasks_db(&f);
+    let by_seconds = db.table::<Task>("tasks").deleted(sql::Mark::seconds("deleted_at"));
+    by_seconds.insert_all(&[task(1, "a"), task(2, "b")]).unwrap();
+    f.clock.advance(Duration::from_millis(1_999));
+    by_seconds.filter(sql::eq("id", &1)).delete().unwrap();
+    let marked = |id: i64| by_seconds.with_deleted().filter(sql::eq("id", &id)).one().unwrap().unwrap().deleted_at;
+    assert_eq!(marked(1), Some(NOW_MILLIS / 1000 + 1), "the whole second the test clock reads");
+
+    let by_millis = db.table::<Task>("tasks").deleted("deleted_at");
+    by_millis.filter(sql::eq("id", &2)).delete().unwrap();
+    assert_eq!(marked(2), Some(NOW_MILLIS + 1_999), "a column alone marks in milliseconds");
+    let day_ago = sql!("deleted_at < ?", NOW_MILLIS / 1000 + 1 - 86_400);
+    assert_eq!(by_seconds.deleted_only().filter(day_ago).purge().unwrap().changes, 0, "a purge asked in seconds");
+    assert_eq!(by_seconds.deleted_only().filter(sql::eq("id", &1)).restore().unwrap().changes, 1);
 }
 
 // contract: SQL-21, SQL-22

@@ -18,7 +18,10 @@ type Piece struct {
 	// bare says it stands beside others in an and or an or without
 	// parentheses: one column's comparison
 	bare bool
-	err  error
+	// now is the unit of the store's time that the first ? takes, before
+	// values: what a table's delete marks with
+	now Unit
+	err error
 	// lent is a write of another engine a batch carries in the piece's
 	// place, a queue's Adding; err refuses it anywhere else
 	lent *core.Lent
