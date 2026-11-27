@@ -407,6 +407,7 @@ The server `tinystore mcp` runs, and a program's own through the `mcp` feature.
 - **MCP-07** Every read a cancelled call makes through a store MUST stop with `Cancelled`, an awaited call's too, wherever the read's future is awaited.
 - **MCP-08** A server awaited on the program's runtime MUST answer a message that follows a call while that call awaits, a blocking tool's call among them, and a call its host cancels MUST have its future dropped and get no answer.
 - **MCP-09** A program's own MCP server, blocking or awaited, with `mcp` and `async` and no engine, MUST link no store and no SQLite.
+- **MCP-10** `kv_list` and `jobs_list` MUST answer the bare list when nothing follows it, and `{ entries | jobs, next }` when more follow, `next` passed as `after` reading on; a page cut short MUST NOT pass for the whole list.
 
 ## 10. What TinyStore does not promise
 

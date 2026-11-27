@@ -28,6 +28,7 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
         "bucket": text("the bucket"),
         "branch": text("the keys under this branch, as 42 or 42/devices"),
         "limit": count("200 at most"),
+        "after": text("the next of the page before, to read on"),
     }));
     vec![
         Tool::reads(
@@ -38,7 +39,8 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
         ),
         Tool::reads(
             "kv_list",
-            "A kv bucket's keys and values, in key order.",
+            "A kv bucket's keys and values, in key order, as a list. When more keys follow than one call answers, \
+             { entries, next } instead: pass next as after to read them.",
             schema(list, &["bucket"]),
             move |given, _| Ok(values(&all, &Arguments { tool: "kv_list", given })?),
         ),
@@ -59,8 +61,12 @@ fn values(open: &Opener, given: &Arguments) -> Result<Value, String> {
         key: None,
         branch: given.text("branch"),
     };
-    let found = entries(&opened(open)?, &reading, given.limit(MOST))?;
-    Ok(Value::Array(found.iter().map(Entry::json).collect()))
+    let (found, next) = page(&opened(open)?, &reading, given.limit(MOST), given.text("after"))?;
+    let entries: Vec<Value> = found.iter().map(Entry::json).collect();
+    Ok(match next {
+        Some(next) => json!({ "entries": entries, "next": next }),
+        None => Value::Array(entries),
+    })
 }
 
 /// The bucket read, and the key or the branch of it.
@@ -97,6 +103,31 @@ impl Entry {
 /// A bucket's entries: the one of `key`, or those under `branch`, `most` at
 /// most, in key order. An encrypted bucket opens with the store's key.
 pub fn entries(store: &Store, reading: &Reading, most: usize) -> Result<Vec<Entry>, String> {
+    let opened = bucket(store, reading)?;
+    let found: crate::Result<Vec<Entry>> = match reading.key {
+        Some(key) => opened.entry(key).map(|entry| entry.into_iter().map(Entry::of).collect()),
+        None => under(&opened, reading.branch).all().take(most).map(|entry| entry.map(Entry::of)).collect(),
+    };
+    found.map_err(|error| error.to_string())
+}
+
+/// A page of the entries under the reading's branch, `limit` at most, after
+/// the page that ended at `after`, and where the next starts when more keys
+/// follow.
+fn page(
+    store: &Store,
+    reading: &Reading,
+    limit: usize,
+    after: Option<&str>,
+) -> Result<(Vec<Entry>, Option<String>), String> {
+    let opened = under(&bucket(store, reading)?, reading.branch);
+    let page = opened.list(limit, after).map_err(|error| error.to_string())?;
+    Ok((page.entries.into_iter().map(Entry::of).collect(), page.next))
+}
+
+/// The bucket a reading names, opened with the store's key where its values
+/// are encrypted.
+fn bucket(store: &Store, reading: &Reading) -> Result<Bucket<Stored>, String> {
     let at = Kept::at(store, reading.database)?;
     let encrypted = match at.bucket(reading.bucket).open() {
         Err(error) if error.to_string().contains("encrypted") => true,
@@ -105,12 +136,7 @@ pub fn entries(store: &Store, reading: &Reading, most: usize) -> Result<Vec<Entr
     };
     let builder = at.bucket(reading.bucket);
     let opened = if encrypted { builder.encrypted().open() } else { builder.open() };
-    let opened = opened.map_err(|error| error.to_string())?;
-    let found: crate::Result<Vec<Entry>> = match reading.key {
-        Some(key) => opened.entry(key).map(|entry| entry.into_iter().map(Entry::of).collect()),
-        None => under(&opened, reading.branch).all().take(most).map(|entry| entry.map(Entry::of)).collect(),
-    };
-    found.map_err(|error| error.to_string())
+    opened.map_err(|error| error.to_string())
 }
 
 /// Where a bucket is kept: kv.db, or the database a program opened it from.

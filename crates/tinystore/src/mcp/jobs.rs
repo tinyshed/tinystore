@@ -19,10 +19,12 @@ pub(super) fn tools(open: &Opener) -> Vec<Tool> {
         "prefix": text("the jobs whose ids start with it"),
         "state": text("scheduled, waiting, running, done or failed"),
         "limit": count("200 at most"),
+        "after": text("the next of the page before, to read on"),
     }));
-    let description = "A queue's jobs with their state, attempts and last error: those with ids in the order of their \
-                       ids, then, with no prefix, those without as they run, then those without that failed; or, with \
-                       state failed and no prefix, its failed jobs, the last failed first.";
+    let description = "A queue's jobs with their state, attempts and last error, as a list: those with ids in the \
+                       order of their ids, then, with no prefix, those without as they run, then those without that \
+                       failed; or, with state failed and no prefix, its failed jobs, the last failed first. When more \
+                       jobs follow than one call answers, { jobs, next } instead: pass next as after to read them.";
     vec![Tool::reads("jobs_list", description, schema(takes, &["queue"]), move |given, _| {
         Ok(page(&open, &Arguments { tool: "jobs_list", given })?)
     })]
@@ -35,8 +37,12 @@ fn page(open: &Opener, given: &Arguments) -> Result<Value, String> {
         prefix: given.text("prefix"),
         state: given.text("state"),
     };
-    let page = listed(&opened(open)?, &listing, given.limit(MOST), None)?;
-    Ok(Value::Array(page.jobs.iter().map(json).collect()))
+    let page = listed(&opened(open)?, &listing, given.limit(MOST), given.text("after"))?;
+    let jobs: Vec<Value> = page.jobs.iter().map(json).collect();
+    Ok(match page.next {
+        Some(next) => json!({ "jobs": jobs, "next": next }),
+        None => Value::Array(jobs),
+    })
 }
 
 /// The queue read, and which of its jobs.

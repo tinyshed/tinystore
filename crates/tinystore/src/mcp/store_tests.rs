@@ -85,6 +85,40 @@ fn the_stores_tools_write_nothing_and_see_what_was_committed_before_each_call() 
     assert!(beside.bucket::<Value>("sesions").open().is_err(), "a misspelt bucket is not made");
 }
 
+// contract: MCP-10
+#[cfg(all(feature = "kv", feature = "jobs"))]
+#[test]
+fn a_list_past_its_page_says_next_and_after_reads_on_to_the_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = held(dir.path());
+    let sessions = store.bucket::<u32>("sessions").open().unwrap();
+    let reminders = store.queue::<u32>("reminders").open().unwrap();
+    // two transactions, since kv.db and jobs.db commit apart
+    let keys = store.tx(|tx| (0..201).try_for_each(|at| tx.with(&sessions).set(format!("{at:03}"), &at)));
+    keys.unwrap();
+    let jobs = store.tx(|tx| (0..201).try_for_each(|at| tx.with(&reminders).id(format!("{at:03}")).add(&at).map(drop)));
+    jobs.unwrap();
+    for (tool, asked, items) in [
+        ("kv_list", json!({ "bucket": "sessions" }), "entries"),
+        ("jobs_list", json!({ "queue": "reminders" }), "jobs"),
+    ] {
+        let first = called(&store, tool, asked.clone()).unwrap();
+        assert_eq!(first[items].as_array().unwrap().len(), 200, "{tool}: 200 a call");
+        let next = first["next"].as_str().expect("a page cut short says where the next starts");
+        let mut after = asked.clone();
+        after["after"] = next.into();
+        // the last page is the bare list a call answered before pages, with no next
+        let rest = called(&store, tool, after).unwrap();
+        let keys: Vec<&str> =
+            rest.as_array().unwrap().iter().map(|item| item["key"].as_str().or(item["id"].as_str()).unwrap()).collect();
+        assert_eq!(keys, ["200"], "{tool}: the last page");
+        let mut small = asked.clone();
+        small["limit"] = 2.into();
+        let cut = called(&store, tool, small).unwrap();
+        assert_eq!((cut[items].as_array().unwrap().len(), cut["next"].is_string()), (2, true), "{tool}");
+    }
+}
+
 #[cfg(all(feature = "kv", feature = "jobs", feature = "sql"))]
 #[test]
 fn a_bucket_and_a_queue_a_program_opened_from_its_database_are_read_with_that_database() {

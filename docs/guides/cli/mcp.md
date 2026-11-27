@@ -16,15 +16,15 @@ arguments `mcp` and the store's directory.
 
 ## Tools
 
-| Tool          | Takes                                           | Gives                                                     |
-|---------------|-------------------------------------------------|-----------------------------------------------------------|
-| `status`      | nothing                                         | the store's files and sizes, its server, its node         |
-| `logs`        | `since`, `level`, `grep`, `stream`, `limit`     | the latest lines and events, newest last; 50, 200 at most |
-| `kv_get`      | `bucket`, `key`, `database`                     | one value                                                 |
-| `kv_list`     | `bucket`, `branch`, `database`, `limit`         | a bucket's keys and values, in key order                  |
-| `jobs_list`   | `queue`, `prefix`, `state`, `database`, `limit` | jobs with their state, attempts and last error            |
-| `sql_query`   | `database`, `query`                             | the rows of one statement that reads, 200 at most         |
-| `search_list` | nothing                                         | the store's search indexes, with their documents          |
+| Tool          | Takes                                                    | Gives                                                                   |
+|---------------|----------------------------------------------------------|-------------------------------------------------------------------------|
+| `status`      | nothing                                                  | the store's files and sizes, its server, its node                       |
+| `logs`        | `since`, `level`, `grep`, `stream`, `limit`              | the latest lines and events, newest last; 50, 200 at most               |
+| `kv_get`      | `bucket`, `key`, `database`                              | one value                                                               |
+| `kv_list`     | `bucket`, `branch`, `database`, `limit`, `after`         | a bucket's keys and values, in key order; 200 a page, then `next`       |
+| `jobs_list`   | `queue`, `prefix`, `state`, `database`, `limit`, `after` | jobs with their state, attempts and last error; 200 a page, then `next` |
+| `sql_query`   | `database`, `query`                                      | the rows of one statement that reads, 200 at most                       |
+| `search_list` | nothing                                                  | the store's search indexes, with their documents                        |
 
 - Every tool reads as [every read](README.md#how-it-behaves) of the command
   line does, beside whoever holds the directory (contract CLI-01).
@@ -32,6 +32,11 @@ arguments `mcp` and the store's directory.
   refused. A query that gives more than 200 rows is refused too, rather than
   cut, so that an agent never takes the first 200 rows for all of them: it
   pages with `limit` and `offset`.
+- `kv_list` and `jobs_list` answer a list. When more follow than one call
+  answers, they answer `{ "entries": [...], "next": "..." }` and
+  `{ "jobs": [...], "next": "..." }` instead: pass `next` back as `after` to
+  read the next page. A bare list is the whole rest, so an agent never takes
+  the first 200 for all of them (contract MCP-10).
 - `jobs_list` with `state: 'failed'` and no prefix gives a queue's failed
   jobs, the last failed first: where a question about an error usually
   starts.
