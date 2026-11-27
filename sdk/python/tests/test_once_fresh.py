@@ -1,7 +1,8 @@
 """once opened with fresh, as docs/guides/kv/once.md has it.
 
 A kept answer answered at once while one new one is made, and kept while the
-source is down, through the ways a store runs on a test's clock.
+source is down, through the ways a store runs on a test's clock, and on the
+real clock through a sidecar and a remote server, which take none.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import pytest
 import tinystore
 from tinystore.once import Fetched
 from tinystore.testing import open_temp
-from ways import CORE, SERVED
+from ways import CORE, SERVED, WAYS, until
 
 if TYPE_CHECKING:
     from typing import Any
