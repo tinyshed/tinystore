@@ -166,6 +166,22 @@ fn a_hit_says_where_its_columns_matched_as_its_row_holds_them_inside_a_transacti
     assert_eq!(shown(inside.unwrap()), [pair("title", "ёлка")], "the row as the transaction wrote it");
 }
 
+// contract: SRCH-23
+#[test]
+fn a_tables_index_finds_a_row_by_a_synonym_of_its_columns_words() {
+    let f = fixture();
+    f.insert(1, "Machine learning", "a first course");
+    f.insert(2, "Notes", "what ML is for");
+    let opened = f.db.search_index::<Article>("articles_search").table("articles").field("title", 2.0);
+    let articles = opened.field("body", 1.0).synonyms([("ml", "machine learning")]).open().unwrap();
+    f.ready(&articles);
+    let by_short = articles.search("ml").run().unwrap();
+    let mut found = ids(&by_short);
+    found.sort_unstable();
+    assert_eq!(found, ["1", "2"]);
+    assert_eq!(ids(&articles.search("learning").run().unwrap()).len(), 2, "the phrase's words in the short form's row");
+}
+
 // contract: SRCH-22
 #[test]
 fn a_hit_s_snippet_is_cut_of_its_column_as_its_row_holds_it() {

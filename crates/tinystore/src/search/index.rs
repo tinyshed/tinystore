@@ -103,6 +103,23 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
         self
     }
 
+    /// Pairs each short form, one word, with the phrase of 1 to 8 words it
+    /// stands for, both ways: `("кмзи", "криптографические методы защиты
+    /// информации")`. A search for the short form finds a document whose
+    /// field holds the phrase, its words adjacent and in order by their
+    /// stems, and a search for the phrase's words finds one that holds the
+    /// short form; `matches` and snippets mark the text that stands there.
+    /// The words are read when a document is set, so a search pays nothing,
+    /// and they count in no field's length. At most 1,000 pairs, a short
+    /// form of 64 bytes at most; other synonyms on an index that holds
+    /// documents read them again, as a field added does. An open without
+    /// them leaves the index none.
+    pub fn synonyms<S: AsRef<str>, P: AsRef<str>>(mut self, pairs: impl IntoIterator<Item = (S, P)>) -> Self {
+        let pairs = pairs.into_iter().map(|(short, phrase)| (short.as_ref().to_owned(), phrase.as_ref().to_owned()));
+        self.wanted.synonyms.extend(pairs);
+        self
+    }
+
     /// Keeps a vector of `dimensions` numbers with each document, which the
     /// program's own model gives it, and finds documents by their cosine
     /// with a search's.

@@ -240,7 +240,9 @@ pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<An
     let sought = match &asked.query.matches {
         Some(ask) if !matches!(mode, Mode::Vector) => Some(sought(connection, &asked, ask)?),
         // a search by its vector alone matched no word, and cuts each snippet at its field's start
-        Some(ask) if ask.snippet.is_some() => Some(Sought::new(ask.clone(), &asked.settings.fields)),
+        Some(ask) if ask.snippet.is_some() => {
+            Some(Sought::new(ask.clone(), &asked.settings.fields, &asked.settings.synonyms))
+        }
         _ => None,
     };
     let total = asked.query.total.then(|| total(connection, &asked, held)).transpose()?;
@@ -261,7 +263,7 @@ fn check_snippet(asked: &Asked<'_>) -> Result<()> {
 /// its query word: every form of each word as [`lists`] reads it, and in
 /// each field the words each prefix chose, as [`prefixed`] chooses them.
 fn sought(connection: &Connection, asked: &Asked<'_>, ask: &Ask) -> Result<Sought> {
-    let mut sought = Sought::new(ask.clone(), &asked.settings.fields);
+    let mut sought = Sought::new(ask.clone(), &asked.settings.fields, &asked.settings.synonyms);
     for (at, word) in asked.query.words.iter().enumerate() {
         for form in forms(std::slice::from_ref(word), asked.settings) {
             sought.key(form, at);

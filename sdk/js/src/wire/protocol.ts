@@ -14393,6 +14393,8 @@ export const SearchOpen = message(
 		layouts: [15, list(str)],
 		/** a key of several columns, in place of key: their values unique together */
 		keys: [16, list(str)],
+		/** each short form, one word, with the phrase of 1 to 8 words it stands for */
+		synonyms: [17, names(str)],
 	},
 	{
 		write(w, v) {
@@ -14490,6 +14492,11 @@ export const SearchOpen = message(
 				}
 				n++
 			}
+			if (v.synonyms !== undefined) {
+				w.field(17)
+				writeNames(w, v.synonyms, str.write)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -14509,6 +14516,7 @@ export const SearchOpen = message(
 			let $vectorColumn: string | undefined
 			let $layouts: string[] | undefined
 			let $keys: string[] | undefined
+			let $synonyms: Record<string, string> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -14583,6 +14591,9 @@ export const SearchOpen = message(
 						$keys = items0
 						break
 					}
+					case 17:
+						$synonyms = readNames(r, str.read)
+						break
 					default:
 						r.skip()
 				}
@@ -14605,6 +14616,7 @@ export const SearchOpen = message(
 				vectorColumn: $vectorColumn,
 				layouts: $layouts,
 				keys: $keys,
+				synonyms: $synonyms,
 			}
 		},
 	},

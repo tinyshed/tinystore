@@ -7,6 +7,10 @@
 //! changes them. An index without layouts keeps no `layouts`, and a
 //! release before them reads past the key, as one before `unicode` does past
 //! it: an index without it was read by what those releases were built with.
+//! An index of synonyms keeps their pairs as given, `"synonyms":[["ml",
+//! "machine learning"]]`, and one of none keeps no key; the release before
+//! them refuses the file at its open (0004), since it would read past the
+//! key and set documents without their synonyms' words.
 //!
 //! ```text
 //! {"fields":[{"path":"title","weight":2.0,"number":0}],"next_field":1,"typo_tolerance":true,"analysis":1,
@@ -20,6 +24,7 @@ use serde_json::{Value, json};
 
 use super::analyzer::{self, Unicode};
 use super::layouts::{self, Layout};
+use super::synonyms::Synonyms;
 use super::vectors::MOST_DIMENSIONS;
 use crate::limits::VECTOR_DIMENSIONS;
 use crate::{Error, Result};
@@ -54,6 +59,7 @@ pub(crate) struct Settings {
     pub(crate) vectors: Option<Vectors>,
     pub(crate) hybrid: Hybrid,
     pub(crate) table: Option<Table>,
+    pub(crate) synonyms: Synonyms,
 }
 
 /// The table of a database that a table's index follows: its rows are the
@@ -135,6 +141,8 @@ pub(crate) struct Wanted {
     /// Whether a change that needs the index read again waits for `reindex`.
     pub(crate) manual: bool,
     pub(crate) table: Option<Table>,
+    /// Each short form with its phrase, as the open gave them.
+    pub(crate) synonyms: Vec<(String, String)>,
 }
 
 impl Default for Wanted {
@@ -151,6 +159,7 @@ impl Default for Wanted {
             rerank: false,
             manual: false,
             table: None,
+            synonyms: Vec::new(),
         }
     }
 }
@@ -231,6 +240,7 @@ impl Wanted {
             }
         }
         layouts::layouts(&self.layouts)?;
+        Synonyms::new(&self.synonyms)?;
         self.check_table()?;
         self.check_vectors()
     }
@@ -317,6 +327,8 @@ impl Settings {
             vectors: wanted.dimensions.map(|dimensions| Vectors { dimensions, recall: wanted.recall }),
             hybrid: Hybrid::of(wanted),
             table: wanted.table.clone(),
+            // an open checks its synonyms before it reads them
+            synonyms: Synonyms::new(&wanted.synonyms).unwrap_or_default(),
         }
     }
 
@@ -376,6 +388,7 @@ impl Settings {
             });
             changed.layouts = layouts;
         }
+        changed.change_synonyms(wanted, documents, (&mut said, &mut rebuild));
         if self.analysis != analyzer::VERSION {
             rebuild.needs("words read by another release".to_owned());
         }
@@ -402,6 +415,27 @@ impl Settings {
             && self.analysis == other.analysis
             && self.unicode == other.unicode
             && self.table == other.table
+            && self.synonyms == other.synonyms
+    }
+
+    /// Keeps the synonyms `wanted` gives, none where it gives none: at once
+    /// while the index holds no document, and by reading them again once it
+    /// does, the index answering by the synonyms it had until then.
+    fn change_synonyms(&mut self, wanted: &Wanted, documents: u64, (said, rebuild): (&mut Vec<String>, &mut Rebuild)) {
+        let synonyms = Synonyms::new(&wanted.synonyms).unwrap_or_default();
+        if synonyms == self.synonyms {
+            return;
+        }
+        let change = match synonyms.given().count() {
+            0 => "synonyms removed".to_owned(),
+            count => format!("{count} synonyms"),
+        };
+        if documents > 0 {
+            rebuild.needs(change);
+            return;
+        }
+        said.push(change);
+        self.synonyms = synonyms;
     }
 
     /// Asks a table's index of another table or key to read the new one
@@ -597,6 +631,9 @@ impl Settings {
         if !self.layouts.is_empty() {
             settings["layouts"] = json!(names(&self.layouts));
         }
+        if let Some(synonyms) = self.synonyms.to_json() {
+            settings["synonyms"] = synonyms;
+        }
         settings.to_string()
     }
 
@@ -642,6 +679,7 @@ impl Settings {
                 rerank: hybrid["rerank"].as_bool().ok_or_else(broken)?,
             },
             table,
+            synonyms: Synonyms::from_json(&settings["synonyms"]).ok_or_else(broken)?,
         })
     }
 }
@@ -692,6 +730,7 @@ mod tests {
             rerank: false,
             manual: false,
             table: None,
+            synonyms: Vec::new(),
         }
     }
 

@@ -11110,6 +11110,8 @@ pub(crate) struct SearchOpen {
     pub(crate) layouts: Vec<String>,
     /// A key of several columns, in place of key: their values unique together.
     pub(crate) keys: Vec<String>,
+    /// Each short form, one word, with the phrase of 1 to 8 words it stands for.
+    pub(crate) synonyms: BTreeMap<String, String>,
 }
 
 #[cfg(feature = "search")]
@@ -11137,6 +11139,7 @@ impl Message for SearchOpen {
                 14 => message.vector_column = Some(codec::str(r, "vectorColumn")?),
                 15 => message.layouts = codec::list(r, "layouts", codec::str)?,
                 16 => message.keys = codec::list(r, "keys", codec::str)?,
+                17 => message.synonyms = codec::names(r, "synonyms", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -11209,6 +11212,10 @@ impl Message for SearchOpen {
             map.field(out, 16);
             codec::write_list(out, &self.keys, codec::write_str);
         }
+        if !self.synonyms.is_empty() {
+            map.field(out, 17);
+            codec::write_names(out, &self.synonyms, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -11230,6 +11237,7 @@ impl Message for SearchOpen {
             + self.vector_column.as_ref().map_or(0, |vector_column| 1 + 5 + vector_column.len())
             + 1 + codec::list_size(&self.layouts, |item| 5 + item.len())
             + 1 + codec::list_size(&self.keys, |item| 5 + item.len())
+            + 1 + codec::names_size(&self.synonyms, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -11249,6 +11257,7 @@ impl Message for SearchOpen {
             && self.vector_column.is_none()
             && self.layouts.is_empty()
             && self.keys.is_empty()
+            && self.synonyms.is_empty()
     }
 }
 

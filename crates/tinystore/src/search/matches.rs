@@ -27,6 +27,7 @@ use super::document;
 use super::score::Part;
 use super::settings::Field;
 use super::snippet::{Cut, Snippet};
+use super::synonyms::{Standing, Synonyms};
 
 /// Where a search's word matched a hit: a range of a field's text, and the
 /// query's word that found it. `&text[at.clone()]` is the whole word for a
@@ -98,6 +99,8 @@ pub(crate) struct Marked {
 pub(crate) struct Sought {
     ask: Ask,
     fields: Vec<Keys>,
+    /// The index's synonyms, whose words a search finds a text by too.
+    synonyms: Synonyms,
 }
 
 /// The keys of one field a search read.
@@ -114,7 +117,7 @@ struct Keys {
 }
 
 impl Sought {
-    pub(crate) fn new(ask: Ask, fields: &[Field]) -> Sought {
+    pub(crate) fn new(ask: Ask, fields: &[Field], synonyms: &Synonyms) -> Sought {
         let keys = |field: &Field| Keys {
             path: field.path.clone(),
             number: field.number,
@@ -122,7 +125,7 @@ impl Sought {
             stems: HashMap::new(),
             begun: HashMap::new(),
         };
-        Sought { ask, fields: fields.iter().map(keys).collect() }
+        Sought { ask, fields: fields.iter().map(keys).collect(), synonyms: synonyms.clone() }
     }
 
     /// A key the query word at `word` found documents by; of several words
@@ -164,7 +167,7 @@ impl Sought {
             let Ok(texts) = document::texts(document, &keys.path) else { continue };
             let mut first = None;
             for (item, text) in texts {
-                let (ranges, words): (Vec<_>, Vec<_>) = keys.ranges(text).into_iter().unzip();
+                let (ranges, words): (Vec<_>, Vec<_>) = keys.ranges(text, &self.synonyms).into_iter().unzip();
                 if let Some(cut) = snipped
                     && marked.snippet.is_none()
                     && (!ranges.is_empty() || first.is_none())
@@ -190,20 +193,43 @@ impl Sought {
 
 impl Keys {
     /// The bytes of `text` that the search's words matched, in its order and
-    /// apart, each with its query word's place.
-    fn ranges(&self, text: &str) -> Vec<(Range<usize>, usize)> {
+    /// apart, each with its query word's place: a word itself, and the text
+    /// a synonym stands for where a search found it by the synonym, a
+    /// phrase whole for its short form and a short form for its phrase's
+    /// words.
+    fn ranges(&self, text: &str, synonyms: &Synonyms) -> Vec<(Range<usize>, usize)> {
         let Some(mapped) = analyzer::mapped(text) else { return Vec::new() };
+        let words = analyzer::words_of(&mapped.normal);
         let mut found = Vec::new();
-        for word in analyzer::words_of(&mapped.normal) {
-            let by_stem = word.stem.as_ref().and_then(|stem| self.stems.get(stem));
-            if let Some(&at) = [self.written.get(&word.text), by_stem].into_iter().flatten().min() {
+        for word in &words {
+            if let Some(at) = self.sought(word) {
                 found.push((mapped.original(word.at.clone()), at));
             }
             if let Some(&(at, letters)) = self.begun.get(&word.text) {
-                found.push((mapped.original(typed(&mapped.normal, &word, letters)), at));
+                found.push((mapped.original(typed(&mapped.normal, word, letters)), at));
+            }
+        }
+        if !synonyms.is_empty() {
+            for standing in synonyms.standing(&words) {
+                let (from, at) = match standing {
+                    Standing::Phrase { words: run, short } => {
+                        (words[run.start].at.start..words[run.end - 1].at.end, self.sought(short))
+                    }
+                    Standing::Short { word, phrase } => {
+                        (words[word].at.clone(), phrase.iter().filter_map(|word| self.sought(word)).min())
+                    }
+                };
+                found.extend(at.map(|at| (mapped.original(from), at)));
             }
         }
         merged(found)
+    }
+
+    /// The place of the query word that found `word`, as written or by its
+    /// stem; of two, the first.
+    fn sought(&self, word: &Word) -> Option<usize> {
+        let by_stem = word.stem.as_ref().and_then(|stem| self.stems.get(stem));
+        [self.written.get(&word.text), by_stem].into_iter().flatten().min().copied()
     }
 }
 

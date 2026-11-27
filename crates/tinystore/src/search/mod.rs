@@ -64,6 +64,7 @@ mod score;
 mod segments;
 mod settings;
 mod snippet;
+mod synonyms;
 mod table;
 #[cfg(feature = "sql")]
 mod table_index;

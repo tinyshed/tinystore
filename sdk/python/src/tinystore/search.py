@@ -421,6 +421,7 @@ def index_open(
     filters: Sequence[str] = (),
     typo_tolerance: bool | None = None,
     layouts: Sequence[KeyboardLayout] = (),
+    synonyms: Mapping[str, str] | None = None,
     vectors: Vectors | None = None,
     hybrid: Hybrid | None = None,
     rebuild: Literal["automatic", "manual"] | None = None,
@@ -444,6 +445,7 @@ def index_open(
         typo_tolerance=typo_tolerance,
         # none left out, so that a server before layouts reads the open
         layouts=list(layouts) or None,
+        synonyms=dict(synonyms or {}),
         dimensions=None if vectors is None else vectors.dimensions,
         recall=None if vectors is None else vectors.recall,
         vector_weight=None if hybrid is None else hybrid.vector_weight,

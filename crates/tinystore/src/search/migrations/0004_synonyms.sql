@@ -1,0 +1,6 @@
+-- From here on an index may hold synonyms: their pairs in its settings,
+-- and in its postings the words a document holds for them, which count in
+-- no field's length. No table changes, and an index without synonyms reads
+-- as before. The step is here so that a release before it refuses the file
+-- at its open: it would read past the settings' key and set documents
+-- without their synonyms' words, and open the index again without them.

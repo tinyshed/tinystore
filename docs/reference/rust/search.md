@@ -401,6 +401,24 @@ the same keys type in the other layout, when it finds something
 there, and `corrected` says so: `rhbgnj` reads as `крипто`. None
 unless said; `ru` and `en` are the layouts known.
 
+### IndexBuilder.synonyms
+
+```rust
+pub fn synonyms<S: AsRef<str>, P: AsRef<str>>(self, pairs: impl IntoIterator<Item = (S, P)>) -> Self
+```
+
+Pairs each short form, one word, with the phrase of 1 to 8 words it
+stands for, both ways: `("кмзи", "криптографические методы защиты
+информации")`. A search for the short form finds a document whose
+field holds the phrase, its words adjacent and in order by their
+stems, and a search for the phrase's words finds one that holds the
+short form; `matches` and snippets mark the text that stands there.
+The words are read when a document is set, so a search pays nothing,
+and they count in no field's length. At most 1,000 pairs, a short
+form of 64 bytes at most; other synonyms on an index that holds
+documents read them again, as a field added does. An open without
+them leaves the index none.
+
 ### IndexBuilder.vectors
 
 ```rust
@@ -854,6 +872,15 @@ pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self
 
 As [`IndexBuilder::layouts`](super::IndexBuilder::layouts).
 
+### TableIndexBuilder.synonyms
+
+```rust
+pub fn synonyms<S: AsRef<str>, P: AsRef<str>>(self, pairs: impl IntoIterator<Item = (S, P)>) -> Self
+```
+
+As [`IndexBuilder::synonyms`](super::IndexBuilder::synonyms), each
+phrase found in the columns the index reads.
+
 ### TableIndexBuilder.vectors
 
 ```rust
@@ -1017,6 +1044,14 @@ pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self
 ```
 
 As `crate::search::IndexBuilder::layouts`.
+
+### aio::search::IndexBuilder.synonyms
+
+```rust
+pub fn synonyms<S: AsRef<str>, P: AsRef<str>>(self, pairs: impl IntoIterator<Item = (S, P)>) -> Self
+```
+
+As `crate::search::IndexBuilder::synonyms`.
 
 ### aio::search::IndexBuilder.vectors
 
@@ -1410,6 +1445,14 @@ pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self
 ```
 
 As `crate::search::TableIndexBuilder::layouts`.
+
+### aio::search::TableIndexBuilder.synonyms
+
+```rust
+pub fn synonyms<S: AsRef<str>, P: AsRef<str>>(self, pairs: impl IntoIterator<Item = (S, P)>) -> Self
+```
+
+As `crate::search::TableIndexBuilder::synonyms`.
 
 ### aio::search::TableIndexBuilder.vectors
 

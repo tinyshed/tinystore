@@ -490,6 +490,14 @@ type Status struct {
 
 Status is where an index stands: ready, rebuilding with how much is Done, or a rebuild that failed and why. Error beside Ready and Rebuilding is the last maintenance pass's failure while the passes keep failing.
 
+## Synonyms
+
+```go
+type Synonyms map[string]string
+```
+
+Synonyms pair each short form, one word, with the phrase of 1 to 8 words it stands for, search.Synonyms{"ml": "machine learning"}: a search for the short form finds a document that holds the phrase, its words adjacent and in order, and a search for the phrase's words one that holds the short form. They are read when a document is set, so a search pays nothing; other synonyms read an index that holds documents again, and an open without them leaves it none.
+
 ## Vectors
 
 ```go

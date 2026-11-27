@@ -433,6 +433,7 @@ def index[T](
     filters: Sequence[str] = (),
     typo_tolerance: bool | None = None,
     layouts: Sequence[KeyboardLayout] = (),
+    synonyms: Mapping[str, str] | None = None,
     vectors: Vectors | None = None,
     hybrid: Hybrid | None = None,
     rebuild: Literal['automatic', 'manual'] | None = None,
@@ -446,6 +447,7 @@ def index(
     filters: Sequence[str] = (),
     typo_tolerance: bool | None = None,
     layouts: Sequence[KeyboardLayout] = (),
+    synonyms: Mapping[str, str] | None = None,
     vectors: Vectors | None = None,
     hybrid: Hybrid | None = None,
     rebuild: Literal['automatic', 'manual'] | None = None,
@@ -458,6 +460,7 @@ def index(
     filters: Sequence[str] = (),
     typo_tolerance: bool | None = None,
     layouts: Sequence[KeyboardLayout] = (),
+    synonyms: Mapping[str, str] | None = None,
     vectors: Vectors | None = None,
     hybrid: Hybrid | None = None,
     rebuild: Literal['automatic', 'manual'] | None = None,
@@ -478,7 +481,10 @@ rows answering until the new ones switch in; ``rebuild="manual"``
 waits for ``store.reindex``. With ``layouts=["ru", "en"]``, a word
 that finds nothing as typed is read as the same keys type in the
 other keyboard layout, when it finds something there, and
-``corrected`` says so.
+``corrected`` says so. With ``synonyms={"ml": "machine learning"}``,
+a search for each short form, one word, finds a document that holds
+its phrase, of 1 to 8 words adjacent and in order, and a search for
+the phrase's words one that holds the short form.
 
 ### Store.reindex
 
@@ -491,6 +497,7 @@ async def reindex(
     filters: Sequence[str] = (),
     typo_tolerance: bool | None = None,
     layouts: Sequence[KeyboardLayout] = (),
+    synonyms: Mapping[str, str] | None = None,
     vectors: Vectors | None = None,
     hybrid: Hybrid | None = None,
     rebuild: Literal['automatic', 'manual'] | None = None,

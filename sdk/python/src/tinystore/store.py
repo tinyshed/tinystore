@@ -76,7 +76,7 @@ from .tx import Tx, run_tx
 
 if TYPE_CHECKING:
     import ssl
-    from collections.abc import Awaitable, Callable, Iterable, Sequence
+    from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
     from datetime import datetime
     from types import TracebackType
     from typing import TextIO
@@ -498,6 +498,7 @@ class Store:
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
         layouts: Sequence[KeyboardLayout] = (),
+        synonyms: Mapping[str, str] | None = None,
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -512,6 +513,7 @@ class Store:
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
         layouts: Sequence[KeyboardLayout] = (),
+        synonyms: Mapping[str, str] | None = None,
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -525,6 +527,7 @@ class Store:
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
         layouts: Sequence[KeyboardLayout] = (),
+        synonyms: Mapping[str, str] | None = None,
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -543,7 +546,10 @@ class Store:
         waits for ``store.reindex``. With ``layouts=["ru", "en"]``, a word
         that finds nothing as typed is read as the same keys type in the
         other keyboard layout, when it finds something there, and
-        ``corrected`` says so.
+        ``corrected`` says so. With ``synonyms={"ml": "machine learning"}``,
+        a search for each short form, one word, finds a document that holds
+        its phrase, of 1 to 8 words adjacent and in order, and a search for
+        the phrase's words one that holds the short form.
         """
         opener = index_open(
             name,
@@ -551,6 +557,7 @@ class Store:
             filters=filters,
             typo_tolerance=typo_tolerance,
             layouts=layouts,
+            synonyms=synonyms,
             vectors=vectors,
             hybrid=hybrid,
             rebuild=rebuild,
@@ -566,6 +573,7 @@ class Store:
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
         layouts: Sequence[KeyboardLayout] = (),
+        synonyms: Mapping[str, str] | None = None,
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -577,6 +585,7 @@ class Store:
             filters=filters,
             typo_tolerance=typo_tolerance,
             layouts=layouts,
+            synonyms=synonyms,
             vectors=vectors,
             hybrid=hybrid,
             rebuild=rebuild,
