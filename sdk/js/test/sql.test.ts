@@ -42,6 +42,20 @@ const NOTES = `create table notes (
 	raw        blob
 ) strict`
 
+const TASKS = `create table tasks (
+	id         integer primary key,
+	title      text not null,
+	deleted_at integer,
+	version    integer not null default 0
+) strict`
+
+interface Task {
+	id: number
+	title: string
+	deleted_at: number | null
+	version: number
+}
+
 interface Note {
 	id: string
 	author_id: number
@@ -57,14 +71,19 @@ for (const way of ways) {
 		let dir: string
 		let store: Store
 		let app: Database
+		let sp: Database
 
 		beforeAll(async () => {
 			dir = mkdtempSync(join(tmpdir(), 'tinystore-sql-'))
 			const migrations = join(dir, 'migrations')
 			mkdirSync(migrations)
 			writeFileSync(join(migrations, '0001_notes.sql'), NOTES)
+			const tasks = join(dir, 'tasks')
+			mkdirSync(tasks)
+			writeFileSync(join(tasks, '0001_tasks.sql'), TASKS)
 			store = await way.open(dir)
 			app = await store.database('app', { migrations })
+			sp = await store.database('sp', { migrations: tasks })
 		})
 
 		afterAll(async () => {
@@ -602,6 +621,122 @@ for (const way of ways) {
 			).toBeInstanceOf(InvalidError)
 			expect((await notes.where({ author_id: 6, done: true }).delete()).changes).toBe(1)
 			expect(await notes.where({ author_id: 6 }).count()).toBe(1)
+		})
+
+		// contract: SQL-21, SQL-23, SQL-24
+		test('a second writer from the old version is refused, and a deleted row is gone from the handle', async () => {
+			const tasks = sp.table<Task>('tasks', { deleted: 'deleted_at', version: 'version' })
+			await tasks.insert({ id: 1, title: 'first' })
+			const one = tasks.where({ id: 1 })
+			const seen = (await one.one())!.version
+			expect((await one.update({ title: 'from a' }, { expect: seen })).changes).toBe(1)
+			const b = await caught(one.update({ title: 'from b' }, { expect: seen }))
+			expect(b).toBeInstanceOf(ConflictError)
+			expect((b as Error).message).toBe('sql sp: table tasks: the row is at version 1, not 0')
+			expect((await one.one())?.title).toBe('from a')
+
+			expect((await one.delete()).changes).toBe(1)
+			expect(await tasks.count()).toBe(0)
+			expect(await one.one()).toBeUndefined()
+			const marked = await tasks.withDeleted().where({ id: 1 }).one()
+			expect(marked?.version).toBe(2)
+			expect(typeof marked?.deleted_at).toBe('number')
+			expect((await one.restore()).changes).toBe(1)
+			expect((await one.one())?.version).toBe(3)
+			expect(await sp.scalar<number>`select count(*) from tasks`).toBe(1)
+			await sp.exec`delete from tasks`
+		})
+
+		// contract: SQL-21, SQL-22
+		test('every call of a handle with a deleted column passes the marked rows by unless asked', async () => {
+			const tasks = sp.table<Task>('tasks', { deleted: 'deleted_at' })
+			await tasks.insert([
+				{ id: 1, title: 'a' },
+				{ id: 2, title: 'b' },
+				{ id: 3, title: 'c' },
+			])
+			expect((await tasks.where({ id: 2 }).delete()).changes).toBe(1)
+			expect((await tasks.where({ id: 2 }).delete()).changes).toBe(0)
+			const byId = tasks.orderBy('id')
+			const titles = (rows: Task[]) => rows.map(row => row.title)
+			expect(titles(await byId.all())).toEqual(['a', 'c'])
+			expect(titles((await byId.list({ limit: 10 })).rows)).toEqual(['a', 'c'])
+			const walked: Task[] = []
+			for await (const row of byId.each()) walked.push(row)
+			expect(titles(walked)).toEqual(['a', 'c'])
+			expect((await tasks.where('id > ?', 0).update({ title: 'x' })).changes).toBe(2)
+			expect((await tasks.where({ id: 2 }).update({ title: 'x' })).changes).toBe(0)
+			expect(titles(await tasks.deletedOnly().all())).toEqual(['b'])
+			expect(await tasks.withDeleted().count()).toBe(3)
+
+			const live = await caught(tasks.where('id > ?', 0).purge())
+			expect(live).toBeInstanceOf(InvalidError)
+			expect((live as Error).message).toContain('sql sp: table tasks: a purge deletes for good')
+			expect((await tasks.deletedOnly().where('id > ?', 0).purge()).changes).toBe(1)
+			await tasks.where({ id: 3 }).delete()
+			expect((await tasks.withDeleted().where('id > ?', 0).purge()).changes).toBe(2)
+			expect(() => sp.table<Task>('tasks').withDeleted()).toThrow(InvalidError)
+		})
+
+		// contract: SQL-21, SQL-24
+		test('an insert starts a row at version 0, and a marked row keeps its key from an insert', async () => {
+			const tasks = sp.table<Task>('tasks', { deleted: 'deleted_at', version: 'version' })
+			expect((await tasks.insert({ id: 1, title: 'a', version: 7 })).version).toBe(0)
+			const upserted = await tasks.upsert(
+				{ id: 2, title: 'b', version: 5 },
+				{ conflict: 'id', update: ['title'] },
+			)
+			expect(upserted?.version).toBe(0)
+			await tasks.where({ id: 1 }).delete()
+			expect(await caught(tasks.insert({ id: 1, title: 'again' }))).toBeInstanceOf(ConflictError)
+			const back = await tasks.upsert(
+				{ id: 1, title: 'again' },
+				{ conflict: 'id', update: ['title'] },
+			)
+			expect([back?.title, back?.deleted_at]).toEqual(['again', null])
+			await sp.exec`delete from tasks`
+		})
+
+		// contract: SQL-23, SQL-24
+		test('an upsert onto a marked row brings it back, and an expect writes every row or none', async () => {
+			const tasks = sp.table<Task>('tasks', { deleted: 'deleted_at', version: 'version' })
+			await tasks.insert([
+				{ id: 1, title: 'a' },
+				{ id: 2, title: 'b' },
+			])
+			await tasks.where({ id: 1 }).delete()
+			const back = await tasks.upsert(
+				{ id: 1, title: 'back' },
+				{ conflict: 'id', update: ['title'] },
+			)
+			expect([back?.title, back?.deleted_at, back?.version]).toEqual(['back', null, 2])
+			expect(
+				await caught(tasks.upsert({ id: 1, version: 5 }, { conflict: 'id', update: ['version'] })),
+			).toBeInstanceOf(InvalidError)
+			expect(await caught(tasks.where({ id: 1 }).update({ version: 9 }))).toBeInstanceOf(
+				InvalidError,
+			)
+
+			const both = tasks.where({ id: [1, 2] })
+			const refused = await caught(both.update({ title: 'z' }, { expect: 0 }))
+			expect((refused as Error).message).toBe('sql sp: table tasks: the row is at version 2, not 0')
+			expect((await tasks.where({ id: 2 }).one())?.title).toBe('b')
+			await tasks.where({ id: 2 }).update({ title: 'b2' })
+			await tasks.where({ id: 2 }).update({ title: 'b3' })
+			expect((await both.update({ title: 'z' }, { expect: 2 })).changes).toBe(2)
+			expect((await tasks.where({ id: 9 }).update({ title: 'z' }, { expect: 0 })).changes).toBe(0)
+			const plain = sp.table<Task>('tasks').where({ id: 1 })
+			expect(await caught(plain.update({ title: 'z' }, { expect: 3 }))).toBeInstanceOf(InvalidError)
+
+			await sp.tx(async tx => {
+				const inside = tx.table<Task>('tasks', { deleted: 'deleted_at', version: 'version' })
+				const one = inside.where({ id: 1 })
+				expect((await one.update({ title: 'in tx' }, { expect: 3 })).changes).toBe(1)
+				expect(await caught(one.delete({ expect: 3 }))).toBeInstanceOf(ConflictError)
+				expect((await one.delete({ expect: 4 })).changes).toBe(1)
+			})
+			expect((await tasks.deletedOnly().where({ id: 1 }).one())?.title).toBe('in tx')
+			await sp.exec`delete from tasks`
 		})
 
 		test('an upsert sets only what it names, on the row its owner holds', async () => {

@@ -62,7 +62,9 @@ use super::oneshot::{Answer, Pending, pending};
 use super::run;
 use crate::polled;
 use crate::pool::Pool;
-use crate::sql::{self, Direction, Done, Migrations, Page, Paging, Parts, Rows, Sql, Tx, Upsert, Wanted, Write};
+use crate::sql::{
+    self, Direction, Done, Edit, Migrations, Page, Paging, Parts, Rows, Sees, Sql, Tx, Upsert, Wanted, Write,
+};
 use crate::{Durability, Error, Result};
 pub use each::Each;
 
@@ -385,6 +387,36 @@ impl Database {
         })
     }
 
+    /// An edit of a table's rows, as [`sql::Query::update`] runs one: alone,
+    /// or, with `if_version`, in a transaction in the database's line, with
+    /// the read that tells why it changed no row; on a copy of a node,
+    /// passed on to its home from a thread of its own, as `exec` is.
+    fn edited(&self, edit: Result<Edit>) -> impl Future<Output = Result<Done>> + Send + 'static {
+        let (alone, check) = match edit {
+            Ok(edit) if edit.checks_version() && !self.db.file().is_copy() => {
+                (None, Some(self.tx(move |tx| edit.run_in(tx))))
+            }
+            alone => {
+                let db = self.db.clone();
+                let written = run::write(&self.pool, self.what("a write"), move |answer| match alone {
+                    Ok(edit) if edit.checks_version() => {
+                        std::thread::spawn(move || answer.send(edit.passed_on(&db)));
+                    }
+                    Ok(edit) => db.exec_then(edit.into_statement(), move |done| answer.send(done)),
+                    Err(error) => answer.send(Err(error)),
+                });
+                (Some(written), None)
+            }
+        };
+        async move {
+            match (alone, expected) {
+                (Some(alone), _) => alone.await,
+                (None, Some(expected)) => expected.await,
+                (None, None) => Err(Error::internal("an edit with nothing to run")),
+            }
+        }
+    }
+
     /// A call of the database as its errors name it: `sql app: a read`.
     fn what(&self, call: &str) -> String {
         format!("{}: {call}", self.db.shown())
@@ -464,6 +496,20 @@ impl<T> Table<T> {
     pub fn name(&self) -> &str {
         self.query.parts.table()
     }
+
+    /// Marks a row deleted rather than deleting it, as [`sql::Table::deleted`] does.
+    #[must_use]
+    pub fn deleted(mut self, column: &str) -> Self {
+        self.query.parts.track_deleted(column);
+        self
+    }
+
+    /// Counts a row's versions, as [`sql::Table::version`] does.
+    #[must_use]
+    pub fn version(mut self, column: &str) -> Self {
+        self.query.parts.track_version(column);
+        self
+    }
 }
 
 impl<T: Serialize + DeserializeOwned + Send + 'static> Table<T> {
@@ -477,7 +523,7 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Table<T> {
     /// Inserts rows of one shape as one write, all of them or none, as
     /// [`sql::Table::insert_all`] does.
     pub fn insert_all(&self, rows: &[T]) -> impl Future<Output = Result<Vec<T>>> + Send + 'static {
-        let statement = (!rows.is_empty()).then(|| sql::insert_sql(self.name(), rows)).transpose();
+        let statement = (!rows.is_empty()).then(|| sql::insert_sql(&self.query.parts, rows)).transpose();
         let written = statement.map(|statement| {
             statement.map(|statement| self.query.database.written(statement, Wanted::All, Rows::decode::<T>))
         });
@@ -493,7 +539,8 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Table<T> {
     /// [`sql::Table::upsert`] does; `None` when the upsert's condition kept
     /// that row.
     pub fn upsert(&self, row: &T, upsert: Upsert) -> impl Future<Output = Result<Option<T>>> + Send + 'static {
-        let written = sql::upsert_sql(self.name(), std::slice::from_ref(row), upsert).map(|statement| {
+        let statement = self.query.built(sql::upsert_sql(&self.query.parts, std::slice::from_ref(row), upsert));
+        let written = statement.map(|statement| {
             self.query.database.written(statement, Wanted::One, |rows| Ok(rows.decode::<T>()?.into_iter().next()))
         });
         async move { written?.await }
@@ -505,7 +552,8 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Table<T> {
     pub fn upsert_all(&self, rows: &[T], upsert: Upsert) -> impl Future<Output = Result<Vec<T>>> + Send + 'static {
         let statement = upsert
             .check()
-            .and_then(|()| (!rows.is_empty()).then(|| sql::upsert_sql(self.name(), rows, upsert)).transpose());
+            .and_then(|()| (!rows.is_empty()).then(|| sql::upsert_sql(&self.query.parts, rows, upsert)).transpose());
+        let statement = self.query.built(statement);
         let written = statement.map(|statement| {
             statement.map(|statement| self.query.database.written(statement, Wanted::All, Rows::decode::<T>))
         });
@@ -613,12 +661,52 @@ impl<T> Query<T> {
         I: IntoIterator<Item = (S, Sql)>,
         S: AsRef<str>,
     {
-        self.database.exec_of(self.parts.update_sql(sets))
+        self.database.edited(self.built(self.parts.update_sql(sets, None)))
     }
 
-    /// Deletes the rows the conditions match, and says how many it deleted.
+    /// Deletes the rows the conditions match, or marks them on a table with
+    /// a deleted column, as [`sql::Query::delete`] does, and says how many.
     pub fn delete(&self) -> impl Future<Output = Result<Done>> + Send + 'static {
-        self.database.exec_of(self.parts.delete_sql())
+        self.database.edited(self.built(self.parts.delete_sql(|| self.now_millis(), None)))
+    }
+
+    /// The query of every row, as [`sql::Query::with_deleted`] reads them.
+    #[must_use]
+    pub fn with_deleted(&self) -> Self {
+        self.with(|parts| parts.sees(Sees::All))
+    }
+
+    /// The query of the marked rows alone, as [`sql::Query::deleted_only`] reads them.
+    #[must_use]
+    pub fn deleted_only(&self) -> Self {
+        self.with(|parts| parts.sees(Sees::Deleted))
+    }
+
+    /// Clears the mark of the marked rows the conditions match, as
+    /// [`sql::Query::restore`] does.
+    pub fn restore(&self) -> impl Future<Output = Result<Done>> + Send + 'static {
+        self.database.edited(self.built(self.parts.restore_sql()))
+    }
+
+    /// Deletes for good what the handle shows of the rows the conditions
+    /// match, as [`sql::Query::purge`] does; refused on the live rows alone.
+    pub fn purge(&self) -> impl Future<Output = Result<Done>> + Send + 'static {
+        self.database.exec_of(self.built(self.parts.purge_sql()))
+    }
+
+    /// The edits made from `version`, as [`sql::Query::expect`] gives them.
+    pub fn expect(&self, version: i64) -> Expecting<T> {
+        Expecting { query: self.clone(), version }
+    }
+
+    fn now_millis(&self) -> i64 {
+        sql::millis_of(self.database.db.now())
+    }
+
+    /// What building a statement refused, named by the database on a
+    /// handle that keeps a column.
+    fn built<R>(&self, built: Result<R>) -> Result<R> {
+        if self.parts.tracks() { built.map_err(|error| error.within(self.database.db.shown())) } else { built }
     }
 
     fn with(&self, change: impl FnOnce(&mut Parts)) -> Self {
@@ -691,6 +779,39 @@ impl<T: DeserializeOwned + Send + 'static> Query<T> {
     {
         let read = self.parts.to_sql().map(|statement| self.database.rows(statement, wanted, finish));
         async move { read?.await }
+    }
+}
+
+/// The awaited edits made from a version a program saw, as
+/// [`sql::Expecting`] has them.
+#[must_use = "an expect is an edit's: update or delete"]
+pub struct Expecting<T> {
+    query: Query<T>,
+    version: i64,
+}
+
+impl<T> Expecting<T> {
+    /// An update of the rows at the version, all of them or none.
+    pub fn update<I, S>(&self, sets: I) -> impl Future<Output = Result<Done>> + Send + 'static
+    where
+        I: IntoIterator<Item = (S, Sql)>,
+        S: AsRef<str>,
+    {
+        let query = &self.query;
+        query.database.edited(query.built(query.parts.update_sql(sets, Some(self.version))))
+    }
+
+    /// A delete, a mark on a table with a deleted column, of the rows at the
+    /// version, all of them or none.
+    pub fn delete(&self) -> impl Future<Output = Result<Done>> + Send + 'static {
+        let query = &self.query;
+        query.database.edited(query.built(query.parts.delete_sql(|| query.now_millis(), Some(self.version))))
+    }
+}
+
+impl<T> fmt::Debug for Expecting<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Expecting").field("query", &self.query).field("version", &self.version).finish()
     }
 }
 

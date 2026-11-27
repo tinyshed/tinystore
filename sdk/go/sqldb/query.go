@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/wire"
@@ -75,8 +76,21 @@ type parts struct {
 	limit        *int64
 	offset       *int64
 	includes     []included
-	err          error
+	// deleted is the column that marks a deleted row, and sees which rows the query shows.
+	deleted string
+	sees    sees
+	err     error
 }
+
+// sees is which rows a table with a deleted column shows: the live ones,
+// unless a handle asks for the marked ones too, or alone.
+type sees int
+
+const (
+	seesLive sees = iota
+	seesAll
+	seesDeleted
+)
 
 func (p parts) with(change func(*parts)) parts {
 	next := p
@@ -100,8 +114,9 @@ func (p *parts) fail(err error) {
 // the first stays as it was. All, One, Count, Each and List read; Update and
 // Delete write.
 type Query[T any] struct {
-	runner Runner
-	parts  parts
+	runner  Runner
+	parts   parts
+	version string
 }
 
 // queried is any query, whatever its rows' type: what Select and Include take.
@@ -113,7 +128,7 @@ type queried interface {
 func (q *Query[T]) queryParts() parts   { return q.parts }
 func (q *Query[T]) queryRunner() Runner { return q.runner }
 func (q *Query[T]) with(change func(*parts)) *Query[T] {
-	return &Query[T]{q.runner, q.parts.with(change)}
+	return &Query[T]{q.runner, q.parts.with(change), q.version}
 }
 
 // Table is a table: its queries, and its rows' inserts and upserts. Its rows
@@ -125,17 +140,52 @@ type Table[T any] struct {
 
 var tableRef = regexp.MustCompile(`(?i)^\s*([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?\s*$`)
 
+// TableOption is how a table opens: Deleted, Version.
+type TableOption interface{ table(*tableOptions) }
+
+type tableOptions struct{ deleted, version string }
+
+type deletedOption string
+
+// Deleted marks a row deleted rather than deleting it: column, a nullable
+// integer, holds when, in unix milliseconds of this process's clock. Every
+// query and write of the table passes the marked rows by, unless WithDeleted
+// or DeletedOnly asks for them, and Delete marks rather than deletes.
+func Deleted(column string) TableOption { return deletedOption(column) }
+
+func (d deletedOption) table(o *tableOptions) { o.deleted = string(d) }
+
+type versionOption string
+
+// Version counts a row's versions in column, an integer, not null, default
+// 0: every update of the table raises it by one, and an edit with Expect
+// writes only rows at the version it names.
+func Version(column string) TableOption { return versionOption(column) }
+
+func (v versionOption) table(o *tableOptions) { o.version = string(v) }
+
 // OpenTable is a table of a database, or of a transaction of it, "orders" or
 // "orders as o", typed where it opens. It costs nothing until its first call.
-func OpenTable[T any](r Runner, name string) *Table[T] {
+//
+//	tasks := sqldb.OpenTable[Task](db, "tasks", sqldb.Deleted("deleted_at"), sqldb.Version("version"))
+func OpenTable[T any](r Runner, name string, opts ...TableOption) *Table[T] {
+	var o tableOptions
+	for _, opt := range opts {
+		opt.table(&o)
+	}
 	matched := tableRef.FindStringSubmatch(name)
-	p := parts{}
+	p := parts{deleted: o.deleted}
 	if matched == nil {
 		p.err = core.Errorf(core.Invalid, "the table %q: a table is its name, and an alias after as", name)
 	} else {
 		p.table, p.alias = matched[1], matched[2]
 	}
-	return &Table[T]{&Query[T]{r, p}, p.table}
+	for _, column := range []string{o.deleted, o.version} {
+		if _, err := identOf(column); column != "" && err != nil {
+			p.fail(err)
+		}
+	}
+	return &Table[T]{&Query[T]{r, p, o.version}, p.table}
 }
 
 // Name is the table's name.
@@ -179,7 +229,7 @@ func Select[R any](q queried, columns string) *Query[R] {
 		p.fail(selected.err)
 		p.selected = &selected
 	})
-	return &Query[R]{q.queryRunner(), p}
+	return &Query[R]{runner: q.queryRunner(), parts: p}
 }
 
 // Include gives each row the rows of another query as a list under name, from
@@ -490,8 +540,35 @@ func (q *Query[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error
 	return Page[T]{rows, cursorText(values, digest)}, nil
 }
 
-// Update sets columns of the rows the conditions match, and says how many changed.
-func (q *Query[T]) Update(ctx context.Context, set Set) (Result, error) {
+// EditOption is how an Update or a Delete writes: Expect.
+type EditOption interface{ edit(*editOptions) }
+
+type editOptions struct{ expect *int64 }
+
+type expectOption int64
+
+// Expect writes only if every row the conditions match is at version, all of
+// them, and otherwise nothing, failing with tinystore.ErrConflict and the
+// version a row is at. No row at all is no conflict: the edit changes none.
+func Expect(version int64) EditOption { return expectOption(version) }
+
+func (e expectOption) edit(o *editOptions) {
+	version := int64(e)
+	o.expect = &version
+}
+
+func editOf(opts []EditOption) editOptions {
+	var o editOptions
+	for _, opt := range opts {
+		opt.edit(&o)
+	}
+	return o
+}
+
+// Update sets columns of the rows the conditions match, and says how many
+// changed. A versioned table's version goes up by one, and with Expect the
+// update writes only rows at that version.
+func (q *Query[T]) Update(ctx context.Context, set Set, opts ...EditOption) (Result, error) {
 	if err := q.refuseEveryRow("an update"); err != nil {
 		return Result{}, err
 	}
@@ -506,6 +583,9 @@ func (q *Query[T]) Update(ctx context.Context, set Set) (Result, error) {
 	var texts []string
 	var values []any
 	for _, name := range names {
+		if name == q.version {
+			return Result{}, q.refusal("the version column is the handle's to raise: set the others")
+		}
 		column, err := identOf(name)
 		if err != nil {
 			return Result{}, err
@@ -526,18 +606,157 @@ func (q *Query[T]) Update(ctx context.Context, set Set) (Result, error) {
 		texts = append(texts, column+" = ?")
 		values = append(values, cell)
 	}
-	where := conditionsText(q.parts.conditions)
-	text := "update " + mustIdent(q.parts.table) + " set " + strings.Join(texts, ", ") + " where " + where.text
-	return q.runner.exec(ctx, Piece{text: text, values: append(values, where.values...), err: where.err})
+	return q.edit(ctx, texts, values, q.parts.sees, editOf(opts).expect)
 }
 
-// Delete deletes the rows the conditions match, and says how many it deleted.
-func (q *Query[T]) Delete(ctx context.Context) (Result, error) {
+// Delete deletes the rows the conditions match, and says how many it
+// deleted. On a table with a deleted column it marks the live ones instead,
+// at this process's clock, and raises a versioned table's version; Expect is
+// Update's.
+func (q *Query[T]) Delete(ctx context.Context, opts ...EditOption) (Result, error) {
 	if err := q.refuseEveryRow("a delete"); err != nil {
 		return Result{}, err
 	}
-	where := conditionsText(q.parts.conditions)
+	expect := editOf(opts).expect
+	if q.parts.deleted == "" {
+		if expect != nil {
+			return Result{}, q.refusal("expect on a delete is a mark's: open the table with a deleted column")
+		}
+		where := conditionsText(q.parts.conditions)
+		return q.runner.exec(ctx, Piece{text: "delete from " + mustIdent(q.parts.table) + " where " + where.text, values: where.values, err: where.err})
+	}
+	mark := []string{mustIdent(q.parts.deleted) + " = ?"}
+	return q.edit(ctx, mark, []any{time.Now().UnixMilli()}, seesLive, expect)
+}
+
+// WithDeleted is the query of every row, those the deleted column marks among them.
+func (q *Query[T]) WithDeleted() *Query[T] { return q.seeing(seesAll) }
+
+// DeletedOnly is the query of the rows the deleted column marks, and of no other.
+func (q *Query[T]) DeletedOnly() *Query[T] { return q.seeing(seesDeleted) }
+
+func (q *Query[T]) seeing(s sees) *Query[T] {
+	return q.with(func(p *parts) {
+		if p.deleted == "" {
+			p.fail(q.refusal("only a table with a deleted column has marked rows to show"))
+		}
+		p.sees = s
+	})
+}
+
+// Restore clears the mark of the marked rows the conditions match, whichever
+// rows the query shows, and says how many came back; a versioned table's
+// version goes up by one.
+func (q *Query[T]) Restore(ctx context.Context) (Result, error) {
+	if err := q.refuseEveryRow("a restore"); err != nil {
+		return Result{}, err
+	}
+	if q.parts.deleted == "" {
+		return Result{}, q.refusal("a restore clears a mark: open the table with a deleted column")
+	}
+	return q.edit(ctx, []string{mustIdent(q.parts.deleted) + " = null"}, nil, seesDeleted, nil)
+}
+
+// Purge deletes for good the rows the conditions match of those the query
+// shows: the marked ones of DeletedOnly, or every one of WithDeleted. A
+// query that shows the live rows alone refuses it, so that nothing live is
+// purged by a query that forgot to ask.
+func (q *Query[T]) Purge(ctx context.Context) (Result, error) {
+	if err := q.refuseEveryRow("a purge"); err != nil {
+		return Result{}, err
+	}
+	if q.parts.sees == seesLive {
+		return Result{}, q.refusal("a purge deletes for good, and only what DeletedOnly or WithDeleted shows: ask one first")
+	}
+	where := conditionsText(withMark(q.parts.conditions, markOf(q.parts, q.parts.sees, "")))
 	return q.runner.exec(ctx, Piece{text: "delete from " + mustIdent(q.parts.table) + " where " + where.text, values: where.values, err: where.err})
+}
+
+// edit is an update of the rows s shows of those the conditions match, which
+// Update, a marking Delete and Restore are. A versioned table's version goes
+// up by one. With expect, one statement writes every row the conditions
+// match or none, guarded by a read of a row at another version, and after
+// one that wrote none, the same read in the same transaction tells a
+// conflict from no row at all.
+func (q *Query[T]) edit(ctx context.Context, sets []string, values []any, s sees, expect *int64) (Result, error) {
+	version := ""
+	if q.version != "" {
+		version = mustIdent(q.version)
+		sets = append(sets, version+" = "+version+" + 1")
+	}
+	table := mustIdent(q.parts.table)
+	named := withMark(q.parts.conditions, markOf(q.parts, s, ""))
+	if expect == nil {
+		where := conditionsText(named)
+		text := "update " + table + " set " + strings.Join(sets, ", ") + " where " + where.text
+		return q.runner.exec(ctx, Piece{text: text, values: append(values, where.values...), err: where.err})
+	}
+	if version == "" {
+		return Result{}, q.refusal("expect is a versioned table's: open the table with a version column")
+	}
+	at := func(test string) kept {
+		return kept{Piece{text: version + " " + test + " ?", values: []any{*expect}}, true}
+	}
+	other := conditionsText(append(append([]kept{}, named...), at("is not")))
+	guard := kept{Piece{text: "not exists (select 1 from " + table + " where " + other.text + ")", values: other.values}, true}
+	where := conditionsText(append(append([]kept{}, named...), at("="), guard))
+	if where.err != nil {
+		return Result{}, where.err
+	}
+	statement := Piece{text: "update " + table + " set " + strings.Join(sets, ", ") + " where " + where.text, values: append(values, where.values...)}
+	why := Piece{text: "select " + version + " from " + table + " where " + other.text + " limit 1", values: other.values}
+	edit := func(on Runner) (Result, error) {
+		done, err := on.exec(ctx, statement)
+		if err != nil || done.Changes > 0 {
+			return done, err
+		}
+		found, err := on.rows(ctx, why, "one")
+		if err != nil || len(found.rows) == 0 {
+			return done, err
+		}
+		return done, core.Errorf(core.Conflict, "%s: table %s: the row is at version %v, not %d", q.runner.describeIt(), q.parts.table, found.rows[0][0], *expect)
+	}
+	db, ok := q.runner.(*DB)
+	if !ok {
+		return edit(q.runner)
+	}
+	var done Result
+	err := db.Tx(ctx, func(tx *Tx) error {
+		var err error
+		done, err = edit(tx)
+		return err
+	})
+	return done, err
+}
+
+func (q *Query[T]) refusal(why string) error {
+	return core.Errorf(core.Invalid, "%s: table %s: %s", q.runner.describeIt(), q.parts.table, why)
+}
+
+// withMark is a query's conditions, and the deleted column's condition last.
+func withMark(conditions []kept, mark *kept) []kept {
+	if mark == nil {
+		return conditions
+	}
+	return append(append([]kept{}, conditions...), *mark)
+}
+
+// markOf is the condition that shows the rows s asks for of a table with a
+// deleted column, its column named by owner, a read's alias; nil on a table
+// without one, or for every row.
+func markOf(p parts, s sees, owner string) *kept {
+	if p.deleted == "" || s == seesAll {
+		return nil
+	}
+	column := p.deleted
+	if owner != "" {
+		column = owner + "." + column
+	}
+	test := " is null"
+	if s == seesDeleted {
+		test = " is not null"
+	}
+	return &kept{Piece{text: mustIdent(column) + test}, true}
 }
 
 // refuseEveryRow refuses an update or a delete of every row, which SQL says plainly.
@@ -971,8 +1190,14 @@ func columnsText(p parts) Piece {
 func filtersText(p parts) Piece {
 	var text string
 	var values []any
-	if len(p.conditions) > 0 {
-		where := conditionsText(p.conditions)
+	// a join's columns of the same name would make the bare deleted column ambiguous
+	owner := p.alias
+	if owner == "" && len(p.joins) > 0 {
+		owner = p.table
+	}
+	conditions := withMark(p.conditions, markOf(p, p.sees, owner))
+	if len(conditions) > 0 {
+		where := conditionsText(conditions)
 		if where.err != nil {
 			return where
 		}
@@ -1181,7 +1406,8 @@ func cursorOf(cursor, digest string) ([]any, error) {
 }
 
 // Insert inserts a row and gives it back as the file keeps it: the defaults
-// and the generated columns the database filled.
+// and the generated columns the database filled. On a versioned table the row
+// starts at version 0, whatever it gives for the column.
 func (t *Table[T]) Insert(ctx context.Context, row T) (T, error) {
 	var zero T
 	rows, err := t.InsertMany(ctx, []T{row})
@@ -1204,7 +1430,7 @@ func (t *Table[T]) InsertMany(ctx context.Context, rows []T) ([]T, error) {
 	for i, row := range rows {
 		given[i] = row
 	}
-	statement := insertOf(t.name, given)
+	statement := insertOf(t.name, given, t.version)
 	if statement.err != nil {
 		return nil, statement.err
 	}
@@ -1249,7 +1475,9 @@ func (w whereOption) upsert(o *upsertOptions) { o.where = w.c }
 
 // Upsert inserts a row, or, when the columns Conflict names are taken, sets
 // the columns Update names on the row that holds them, when that row meets
-// Where: its Changes is 0 when Where kept it.
+// Where: its Changes is 0 when Where kept it. On a table with a deleted
+// column the update clears a row's mark, since the row came back, and on a
+// versioned one it raises the version.
 func (t *Table[T]) Upsert(ctx context.Context, row T, opts ...UpsertOption) (Result, error) {
 	return t.upsert(ctx, []any{row}, "one", opts)
 }
@@ -1282,7 +1510,7 @@ func (t *Table[T]) upsert(ctx context.Context, rows []any, want string, opts []U
 	if len(rows) == 0 {
 		return Result{}, nil
 	}
-	insert := insertOf(t.name, rows)
+	insert := insertOf(t.name, rows, t.version)
 	if insert.err != nil {
 		return Result{}, insert.err
 	}
@@ -1290,9 +1518,18 @@ func (t *Table[T]) upsert(ctx context.Context, rows []any, want string, opts []U
 	for i, key := range o.conflict {
 		keys[i] = mustIdent(key)
 	}
-	sets := make([]string, len(o.update))
-	for i, name := range o.update {
-		sets[i] = mustIdent(name) + " = excluded." + mustIdent(name)
+	sets := make([]string, 0, len(o.update)+2)
+	for _, name := range o.update {
+		if name == t.version {
+			return Result{}, t.refusal("the version column is the handle's to raise: update the others")
+		}
+		sets = append(sets, mustIdent(name)+" = excluded."+mustIdent(name))
+	}
+	if t.parts.deleted != "" {
+		sets = append(sets, mustIdent(t.parts.deleted)+" = null")
+	}
+	if t.version != "" {
+		sets = append(sets, mustIdent(t.version)+" = "+mustIdent(t.version)+" + 1")
 	}
 	text := insert.text + " on conflict (" + strings.Join(keys, ", ") + ") do update set " + strings.Join(sets, ", ")
 	values := insert.values
@@ -1310,8 +1547,9 @@ func (t *Table[T]) upsert(ctx context.Context, rows []any, want string, opts []U
 	return Result{Changes: int64(len(got.rows))}, err
 }
 
-// insertOf is an insert of rows of the same columns, the first row's.
-func insertOf(table string, rows []any) Piece {
+// insertOf is an insert of rows of the same columns, the first row's, each
+// row's version 0 on a versioned table whatever the row gave.
+func insertOf(table string, rows []any, version string) Piece {
 	names, _, err := rowFields(rows[0])
 	if err != nil {
 		return Piece{err: err}
@@ -1336,6 +1574,9 @@ func insertOf(table string, rows []any) Piece {
 			cell, err := fieldOf(fields[name], name)
 			if err != nil {
 				return Piece{err: err}
+			}
+			if version != "" && name == version {
+				cell = int64(0)
 			}
 			values = append(values, cell)
 		}

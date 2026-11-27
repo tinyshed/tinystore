@@ -21,6 +21,7 @@ interface Upserting {
 interface Case {
 	name: string
 	table: string
+	options?: { deleted?: string; version?: string }
 	steps?: Step[]
 	update?: [string, unknown][]
 	delete?: true
@@ -28,6 +29,8 @@ interface Case {
 	upsert?: [[string, unknown][], Upserting]
 	upserts?: [[string, unknown][][], Upserting]
 	count?: true
+	restore?: true
+	purge?: true
 	list?: { limit: number }
 	text?: string
 	values?: unknown[]
@@ -96,6 +99,10 @@ function apply(query: Query<Record<string, unknown>>, step: Step): Query<Record<
 				direction,
 			)
 		}
+		case 'withDeleted':
+			return query.withDeleted()
+		case 'deletedOnly':
+			return query.deletedOnly()
 		case 'limit':
 			return query.limit(argument as number)
 		case 'offset':
@@ -137,7 +144,7 @@ function upserting(options: Upserting): UpsertOptions<Record<string, unknown>> {
 /** What a vector's steps and the call it ends in send. */
 async function sent(vector: Case): Promise<{ text: string; values: readonly SqlArg[] }> {
 	const recorder = new Recorder()
-	const table = new Table<Record<string, unknown>>(recorder, vector.table)
+	const table = new Table<Record<string, unknown>>(recorder, vector.table, vector.options)
 	const query = (vector.steps ?? []).reduce(apply, table as Query<Record<string, unknown>>)
 	if (vector.update !== undefined) {
 		await query.update(written(Object.fromEntries(vector.update)))
@@ -156,6 +163,10 @@ async function sent(vector: Case): Promise<{ text: string; values: readonly SqlA
 		)
 	} else if (vector.count) {
 		await query.count()
+	} else if (vector.restore) {
+		await query.restore()
+	} else if (vector.purge) {
+		await query.purge()
 	} else if (vector.list !== undefined) {
 		await query.list({ limit: vector.list.limit })
 	} else {

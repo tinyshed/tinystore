@@ -1,5 +1,5 @@
 {
-  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}. A row, and an update's columns, are [name, value] pairs, in their order. An include step is [name, {table, steps}], the query whose rows the row holds under the name. An orderBy step is [column, direction], or [{sql: [text, ...values]}, direction] for a piece of SQL. A list is the statement of a page's first read, {limit}. A query with refused in place of its text and values is refused invalid, by its steps or by the call it ends in, and its error holds those words.",
+  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}. A row, and an update's columns, are [name, value] pairs, in their order. An include step is [name, {table, steps}], the query whose rows the row holds under the name. An orderBy step is [column, direction], or [{sql: [text, ...values]}, direction] for a piece of SQL. A list is the statement of a page's first read, {limit}. A query with refused in place of its text and values is refused invalid, by its steps or by the call it ends in, and its error holds those words. A table's options, {deleted, version}, are the columns it marks a deleted row in and counts a row's versions in; a withDeleted or a deletedOnly step shows the marked rows too or alone; restore and purge are calls a query ends in.",
   "queries": [
     {
       "name": "equal values in the order of their names, a group of alternatives, an order and a limit",
@@ -1211,6 +1211,315 @@
       "values": [
         0
       ]
+    },
+    {
+      "name": "a table with a deleted column reads its live rows alone, after the caller's conditions",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "steps": [
+        {
+          "where": {
+            "or": [
+              {
+                "equal": {
+                  "owner": 7
+                }
+              },
+              {
+                "sql": [
+                  "shared = 1"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "orderBy": [
+            "id",
+            "asc"
+          ]
+        }
+      ],
+      "text": "select * from \"tasks\" where (\"owner\" = ? or shared = 1) and \"deleted_at\" is null order by \"id\" asc",
+      "values": [
+        7
+      ]
+    },
+    {
+      "name": "a table with a deleted column and no condition reads its live rows",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "count": true,
+      "text": "select count(*) from \"tasks\" where \"deleted_at\" is null",
+      "values": []
+    },
+    {
+      "name": "the marked rows alone, named by the table's alias",
+      "table": "tasks as t",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "steps": [
+        {
+          "deletedOnly": true
+        },
+        {
+          "where": {
+            "sql": [
+              "t.owner = ?",
+              7
+            ]
+          }
+        }
+      ],
+      "text": "select * from \"tasks\" as \"t\" where t.owner = ? and \"t\".\"deleted_at\" is not null",
+      "values": [
+        7
+      ]
+    },
+    {
+      "name": "every row, the marked ones among them",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "steps": [
+        {
+          "withDeleted": true
+        },
+        {
+          "where": {
+            "equal": {
+              "id": 1
+            }
+          }
+        }
+      ],
+      "text": "select * from \"tasks\" where \"id\" = ?",
+      "values": [
+        1
+      ]
+    },
+    {
+      "name": "an update of a versioned table raises the version of the live rows it changes",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "steps": [
+        {
+          "where": {
+            "equal": {
+              "id": 1
+            }
+          }
+        }
+      ],
+      "update": [
+        [
+          "title",
+          "from b"
+        ]
+      ],
+      "text": "update \"tasks\" set \"title\" = ?, \"version\" = \"version\" + 1 where \"id\" = ? and \"deleted_at\" is null",
+      "values": [
+        "from b",
+        1
+      ]
+    },
+    {
+      "name": "an update that sets the version column itself is refused",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "steps": [
+        {
+          "where": {
+            "equal": {
+              "id": 1
+            }
+          }
+        }
+      ],
+      "update": [
+        [
+          "title",
+          "a"
+        ],
+        [
+          "version",
+          9
+        ]
+      ],
+      "refused": "the version column is the handle's to raise"
+    },
+    {
+      "name": "a restore clears the mark of the marked rows the conditions name",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "steps": [
+        {
+          "where": {
+            "equal": {
+              "id": 1
+            }
+          }
+        }
+      ],
+      "restore": true,
+      "text": "update \"tasks\" set \"deleted_at\" = null, \"version\" = \"version\" + 1 where \"id\" = ? and \"deleted_at\" is not null",
+      "values": [
+        1
+      ]
+    },
+    {
+      "name": "a purge deletes the marked rows the conditions name for good",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at"
+      },
+      "steps": [
+        {
+          "deletedOnly": true
+        },
+        {
+          "where": {
+            "sql": [
+              "deleted_at < ?",
+              1790000000000
+            ]
+          }
+        }
+      ],
+      "purge": true,
+      "text": "delete from \"tasks\" where deleted_at < ? and \"deleted_at\" is not null",
+      "values": [
+        1790000000000
+      ]
+    },
+    {
+      "name": "a purge of every row the conditions name, marked or not",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at"
+      },
+      "steps": [
+        {
+          "withDeleted": true
+        },
+        {
+          "where": {
+            "equal": {
+              "id": 1
+            }
+          }
+        }
+      ],
+      "purge": true,
+      "text": "delete from \"tasks\" where \"id\" = ?",
+      "values": [
+        1
+      ]
+    },
+    {
+      "name": "a purge of the live rows is refused",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at"
+      },
+      "steps": [
+        {
+          "where": {
+            "equal": {
+              "id": 1
+            }
+          }
+        }
+      ],
+      "purge": true,
+      "refused": "a purge deletes for good"
+    },
+    {
+      "name": "the marked rows of a table without a deleted column are refused",
+      "table": "tasks",
+      "steps": [
+        {
+          "withDeleted": true
+        }
+      ],
+      "refused": "only a table with a deleted column"
+    },
+    {
+      "name": "an upsert onto a marked row clears its mark and raises its version",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "upsert": [
+        [
+          [
+            "id",
+            1
+          ],
+          [
+            "title",
+            "back"
+          ]
+        ],
+        {
+          "conflict": "id",
+          "update": [
+            "title"
+          ]
+        }
+      ],
+      "text": "insert into \"tasks\" (\"id\", \"title\") values (?, ?) on conflict (\"id\") do update set \"title\" = excluded.\"title\", \"deleted_at\" = null, \"version\" = \"version\" + 1 returning *",
+      "values": [
+        1,
+        "back"
+      ]
+    },
+    {
+      "name": "an upsert that updates the version column itself is refused",
+      "table": "tasks",
+      "options": {
+        "deleted": "deleted_at",
+        "version": "version"
+      },
+      "upsert": [
+        [
+          [
+            "id",
+            1
+          ],
+          [
+            "version",
+            3
+          ]
+        ],
+        {
+          "conflict": "id",
+          "update": [
+            "version"
+          ]
+        }
+      ],
+      "refused": "the version column is the handle's to raise"
     }
   ]
 }

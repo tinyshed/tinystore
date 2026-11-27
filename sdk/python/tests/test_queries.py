@@ -81,6 +81,10 @@ def applied(query: Query[Any], step: dict[str, Any]) -> Query[Any]:
         case "orderBy":
             column, direction = argument
             return query.order_by(column if isinstance(column, str) else condition_of(column), direction)
+        case "withDeleted":
+            return query.with_deleted()
+        case "deletedOnly":
+            return query.deleted_only()
         case "limit":
             return query.limit(argument)
         case "offset":
@@ -122,7 +126,7 @@ def upserting(options: dict[str, Any]) -> dict[str, Any]:
 async def sent(vector: dict[str, Any]) -> tuple[str, list[Any]]:
     """What a vector's steps and the call it ends in send."""
     recorder = Recorder()
-    table: Table[Any] = Table(recorder, vector["table"])
+    table: Table[Any] = Table(recorder, vector["table"], **vector.get("options", {}))
     query: Query[Any] = table
     for step in vector.get("steps", []):
         query = applied(query, step)
@@ -140,6 +144,10 @@ async def sent(vector: dict[str, Any]) -> tuple[str, list[Any]]:
         await table.upsert([dict(pairs) for pairs in rows], **upserting(options))
     elif vector.get("count"):
         await query.count()
+    elif vector.get("restore"):
+        await query.restore()
+    elif vector.get("purge"):
+        await query.purge()
     elif "list" in vector:
         await query.list(limit=vector["list"]["limit"])
     if recorder.last is not None:

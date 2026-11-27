@@ -63,6 +63,16 @@ impl<'t> Tx<'t> {
         self.transaction
     }
 
+    /// The database as an error names it: `sql app`.
+    pub(crate) fn shown(&self) -> String {
+        self.base.describe()
+    }
+
+    /// The store's clock, as the database reads it.
+    pub(crate) fn now(&self) -> std::time::SystemTime {
+        self.base.now()
+    }
+
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
         self.transaction.call(|raw| run::write(raw, statement, wanted, Held::of(&self.base.memory)))
     }

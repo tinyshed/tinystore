@@ -10,6 +10,7 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -17,14 +18,14 @@ use serde::de::DeserializeOwned;
 use super::database::{Database, Done};
 use super::each::Each;
 use super::included::{literal_of, names_of};
-use super::pieces::{checked, joined_with, quote, quote_all};
+use super::pieces::{checked, joined_with, quote, quote_all, quote_one};
 use super::rows::{Nested, Rows};
 use super::run::Wanted;
 use super::statement::Sql;
 use super::tx::Tx;
 use super::values::{Value, row_of};
 use super::walk::Key;
-use crate::{Error, Result};
+use crate::{Error, ErrorKind, Result};
 
 /// What runs a table's statements: the database, or a transaction of it.
 #[derive(Clone, Debug)]
@@ -60,6 +61,133 @@ impl Runner<'_> {
                 Ok(Done::default())
             }
         }
+    }
+
+    /// Runs an edit of a table's rows: alone, as a write of a shared commit,
+    /// or, with `if_version`, in a transaction with the read that tells why
+    /// it changed no row, so that both see one state; on a copy of a node,
+    /// which holds no transaction, passed on to its home as `exec` is.
+    fn edit(&self, edit: Edit) -> Result<Done> {
+        if !edit.expects() {
+            return self.exec_of(edit.into_statement());
+        }
+        match self {
+            Runner::Database(database) if database.file().is_copy() => edit.passed_on(database),
+            Runner::Database(database) => database.tx(|tx| edit.run_in(tx)),
+            Runner::Tx(tx) => edit.run_in(tx),
+            #[cfg(test)]
+            Runner::Recorder(_) => self.exec_of(edit.into_statement()),
+        }
+    }
+
+    /// The database as an error names it: `sql app`.
+    fn shown(&self) -> String {
+        match self {
+            Runner::Database(database) => database.shown(),
+            Runner::Tx(tx) => tx.shown(),
+            #[cfg(test)]
+            Runner::Recorder(_) => "sql vectors".to_owned(),
+        }
+    }
+
+    /// The store's clock in unix milliseconds, which a delete marks a row with.
+    fn now_millis(&self) -> i64 {
+        millis_of(match self {
+            Runner::Database(database) => database.now(),
+            Runner::Tx(tx) => tx.now(),
+            #[cfg(test)]
+            Runner::Recorder(_) => UNIX_EPOCH,
+        })
+    }
+}
+
+/// A time in unix milliseconds, as a deleted column keeps it.
+pub(crate) fn millis_of(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH).map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// Which rows a table with a deleted column shows: the live ones, unless a
+/// handle asks for the marked ones too, or for them alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Sees {
+    #[default]
+    Live,
+    All,
+    Deleted,
+}
+
+/// The columns a table's handle keeps for its rows, from [`Table::deleted`]
+/// and [`Table::version`], and which rows it shows. A handle with neither
+/// writes the statements a plain one does.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Tracked {
+    deleted: Option<String>,
+    version: Option<String>,
+    sees: Sees,
+}
+
+/// A write of a table's rows: its statement, and, with `expect`, what tells
+/// a row at another version from no row at all when it changed none.
+#[derive(Debug)]
+pub(crate) struct Edit {
+    statement: Sql,
+    expected: Option<Expected>,
+}
+
+#[derive(Debug)]
+struct Expected {
+    table: String,
+    version: i64,
+    /// The version of a row the edit's conditions name that is not `version`.
+    other: Sql,
+}
+
+impl Edit {
+    /// Whether the edit has `expect`, and runs in a transaction with
+    /// [`Edit::run_in`]; one without it is its statement, run alone.
+    pub(crate) fn expects(&self) -> bool {
+        self.expected.is_some()
+    }
+
+    pub(crate) fn into_statement(self) -> Sql {
+        self.statement
+    }
+
+    /// Runs the edit inside `tx`: its statement, which writes every row its
+    /// conditions name or none, and after one that changed none, the read
+    /// that tells a row at another version, a conflict, from no row.
+    pub(crate) fn run_in(self, tx: &Tx<'_>) -> Result<Done> {
+        let done = tx.exec(self.statement)?;
+        let Some(expected) = self.expected else { return Ok(done) };
+        if done.changes > 0 {
+            return Ok(done);
+        }
+        check.answer(done, tx.one::<i64>(check.other.clone())?, &tx.shown())
+    }
+
+    /// Runs the edit on a copy of a node: its statement passed on to the
+    /// file's home, as `exec` passes one, and after one that changed none,
+    /// the read that tells why on this copy, which holds the home's commit
+    /// by then. The two are one state only as nearly as the copy follows its
+    /// home: an edit at the home between them may be read as a conflict
+    /// where the statement found no row.
+    pub(crate) fn passed_on(self, database: &Database) -> Result<Done> {
+        let done = database.exec(self.statement)?;
+        let Some(check) = self.check else { return Ok(done) };
+        if done.changes > 0 {
+            return Ok(done);
+        }
+        check.answer(done, database.one::<i64>(check.other.clone())?, &database.shown())
+    }
+}
+
+impl VersionCheck {
+    /// An edit that changed no row: no conflict when no row its conditions
+    /// name is at another version, `found`, and one naming it otherwise.
+    fn answer(&self, done: Done, found: Option<i64>, database: &str) -> Result<Done> {
+        let Some(at) = found else { return Ok(done) };
+        let why = format!("table {}: the row is at version {at}, not {}", self.table, self.version);
+        Err(Error::new(ErrorKind::Conflict, why).within(database))
     }
 }
 
@@ -161,6 +289,7 @@ pub(crate) struct Parts {
     limit: Option<u64>,
     offset: Option<u64>,
     includes: Vec<Included>,
+    tracked: Tracked,
     /// The first piece the query could not take, told when it runs.
     refused: Option<String>,
 }
@@ -193,6 +322,29 @@ pub struct Query<'r, T> {
 
 /// A table: its queries, and its rows' inserts and upserts. `Deref`s to the
 /// query of all its rows.
+///
+/// A table may keep two columns of its rows for the program: `deleted`, which
+/// marks a row deleted rather than deleting it, so that every query and write
+/// of the handle passes it by, and `version`, which every update raises, so
+/// that an edit made from an old version is refused rather than written over
+/// another's. A statement written by hand is not rewritten: they are the
+/// handle's.
+///
+/// ```no_run
+/// # use tinystore::{ErrorKind, sql};
+/// # #[derive(serde::Serialize, serde::Deserialize)] struct Task { id: i64, title: String }
+/// # fn main() -> tinystore::Result<()> {
+/// # let db = tinystore::Store::open("data", Default::default())?.database("app").open()?;
+/// let tasks = db.table::<Task>("tasks").deleted("deleted_at").version("version");
+/// let edit = tasks.filter(sql::eq("id", &1)).expect(0).update([("title", sql::value("from b"))]);
+/// if edit.as_ref().is_err_and(|error| error.kind() == ErrorKind::Conflict) {
+///     // sql app: table tasks: the row is at version 1, not 0
+/// }
+/// tasks.filter(sql::eq("id", &1)).delete()?; // marks deleted_at; no query of tasks finds it
+/// tasks.deleted_only().filter(sql::eq("id", &1)).restore()?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 pub struct Table<'r, T> {
     query: Query<'r, T>,
@@ -231,6 +383,33 @@ impl<'r, T> Table<'r, T> {
         self.query.parts.table()
     }
 
+    /// Marks a row deleted rather than deleting it: `column`, a nullable
+    /// integer, holds when, in unix milliseconds of the store's clock. Every
+    /// query and write of the handle passes the marked rows by, unless
+    /// [`Query::with_deleted`] or [`Query::deleted_only`] asks for them;
+    /// `delete` marks, [`Query::restore`] clears the mark, and
+    /// [`Query::purge`] deletes for good. A marked row is still in the file
+    /// and holds its key, so an insert of that key fails `Conflict`; an
+    /// upsert whose key a marked row holds updates that row and clears its
+    /// mark: the row came back.
+    #[must_use]
+    pub fn deleted(mut self, column: &str) -> Self {
+        self.query.parts.track_deleted(column);
+        self
+    }
+
+    /// Counts a row's versions in `column`, an integer, not null, default 0:
+    /// every update, delete, restore and upsert of the handle raises it by
+    /// one, and an edit after [`Query::if_version`] writes only rows at the
+    /// version it names. The handle sets the column itself: an update or an
+    /// upsert's update that names it is `Invalid`, and an insert starts a row
+    /// at version 0 whatever the row gives for it.
+    #[must_use]
+    pub fn version(mut self, column: &str) -> Self {
+        self.query.parts.track_version(column);
+        self
+    }
+
     /// A table whose statements a test reads rather than runs.
     #[cfg(test)]
     pub(crate) fn recorded(name: &str, last: std::sync::Arc<std::sync::Mutex<Option<Sql>>>) -> Self {
@@ -240,7 +419,9 @@ impl<'r, T> Table<'r, T> {
 
 impl<T: Serialize + DeserializeOwned> Table<'_, T> {
     /// Inserts a row, every field it has, and gives it back as the file keeps
-    /// it: the defaults and the generated columns the database filled.
+    /// it: the defaults and the generated columns the database filled. On a
+    /// versioned table the row starts at version 0, whatever it gives for
+    /// the column, since the version is the handle's to count.
     pub fn insert(&self, row: &T) -> Result<T> {
         let mut rows = self.insert_all(std::slice::from_ref(row))?;
         rows.pop().ok_or_else(|| Error::internal("an insert that gave back no row"))
@@ -251,14 +432,16 @@ impl<T: Serialize + DeserializeOwned> Table<'_, T> {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
-        self.query.runner.rows_of(&insert_sql(self.name(), rows)?, Wanted::All)?.decode()
+        self.query.runner.rows_of(&insert_sql(&self.query.parts, rows)?, Wanted::All)?.decode()
     }
 
     /// Inserts a row, or, when its key is taken, sets the columns `update`
     /// names on the row that holds it, if that row meets the upsert's
-    /// condition; `None` when the condition kept it.
+    /// condition; `None` when the condition kept it. On a table with a
+    /// deleted column the update clears a mark, and on a versioned one it
+    /// raises the version.
     pub fn upsert(&self, row: &T, upsert: Upsert) -> Result<Option<T>> {
-        let statement = upsert_sql(self.name(), std::slice::from_ref(row), upsert)?;
+        let statement = self.query.built(upsert_sql(&self.query.parts, std::slice::from_ref(row), upsert))?;
         let rows: Vec<T> = self.query.runner.rows_of(&statement, Wanted::One)?.decode()?;
         Ok(rows.into_iter().next())
     }
@@ -272,7 +455,8 @@ impl<T: Serialize + DeserializeOwned> Table<'_, T> {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
-        self.query.runner.rows_of(&upsert_sql(self.name(), rows, upsert)?, Wanted::All)?.decode()
+        let statement = self.query.built(upsert_sql(&self.query.parts, rows, upsert))?;
+        self.query.runner.rows_of(&statement, Wanted::All)?.decode()
     }
 }
 
@@ -382,24 +566,97 @@ impl<'r, T> Query<'r, T> {
     }
 
     /// Sets columns of the rows the conditions match, each a value from
-    /// `sql::value` or a piece of SQL, and says how many changed.
+    /// `sql::value` or a piece of SQL, and says how many changed. A versioned
+    /// table's version goes up by one.
     pub fn update<I, S>(&self, sets: I) -> Result<Done>
     where
         I: IntoIterator<Item = (S, Sql)>,
         S: AsRef<str>,
     {
-        self.runner.exec_of(self.parts.update_sql(sets)?)
+        self.runner.edit(self.built(self.parts.update_sql(sets, None))?)
     }
 
     /// Deletes the rows the conditions match, and says how many it deleted.
+    /// On a table with a deleted column it marks the live ones instead, with
+    /// the store's clock, and raises a versioned table's version.
     pub fn delete(&self) -> Result<Done> {
-        self.runner.exec_of(self.parts.delete_sql()?)
+        self.runner.edit(self.built(self.parts.delete_sql(|| self.runner.now_millis(), None))?)
+    }
+
+    /// The query of every row, those the deleted column marks among them.
+    #[must_use]
+    pub fn with_deleted(&self) -> Self {
+        self.with(|parts| parts.sees(Sees::All))
+    }
+
+    /// The query of the rows the deleted column marks, and of no other.
+    #[must_use]
+    pub fn deleted_only(&self) -> Self {
+        self.with(|parts| parts.sees(Sees::Deleted))
+    }
+
+    /// Clears the mark of the marked rows the conditions match, whichever
+    /// rows the handle shows, and says how many came back; a versioned
+    /// table's version goes up by one.
+    pub fn restore(&self) -> Result<Done> {
+        self.runner.edit(self.built(self.parts.restore_sql())?)
+    }
+
+    /// Deletes for good the rows the conditions match of those the handle
+    /// shows: the marked ones of [`Query::deleted_only`], or every one of
+    /// [`Query::with_deleted`]. A handle that shows the live rows alone
+    /// refuses it, `Invalid`, so that nothing live is purged by a handle
+    /// that forgot to ask.
+    pub fn purge(&self) -> Result<Done> {
+        self.runner.exec_of(self.built(self.parts.purge_sql())?)
+    }
+
+    /// The edits of a versioned table made from `version`: they write only
+    /// when every row the conditions match is at it, all of those rows, and
+    /// otherwise nothing, failing `Conflict` with the version a row is at.
+    /// No row at all is no conflict: the edit changes none.
+    pub fn expect(&self, version: i64) -> Expecting<'r, T> {
+        Expecting { query: self.with(|_| {}), version }
+    }
+
+    /// What building a statement refused, named by the database on a
+    /// handle that keeps a column, whose refusals name their table.
+    fn built<R>(&self, built: Result<R>) -> Result<R> {
+        if self.parts.tracks() { built.map_err(|error| error.within(self.runner.shown())) } else { built }
     }
 
     fn with(&self, change: impl FnOnce(&mut Parts)) -> Self {
         let mut parts = self.parts.clone();
         change(&mut parts);
         Query { runner: self.runner.clone(), parts, row: PhantomData }
+    }
+}
+
+/// The edits of a query made from a version a program saw, from
+/// [`Query::expect`]: `tasks.filter(sql::eq("id", &1)).expect(3).update(…)`.
+#[derive(Clone, Debug)]
+#[must_use = "an expect is an edit's: update or delete"]
+pub struct Expecting<'r, T> {
+    query: Query<'r, T>,
+    version: i64,
+}
+
+impl<T> Expecting<'_, T> {
+    /// [`Query::update`] of the rows at the version, all of them or none.
+    pub fn update<I, S>(&self, sets: I) -> Result<Done>
+    where
+        I: IntoIterator<Item = (S, Sql)>,
+        S: AsRef<str>,
+    {
+        let query = &self.query;
+        query.runner.edit(query.built(query.parts.update_sql(sets, Some(self.version)))?)
+    }
+
+    /// [`Query::delete`] of the rows at the version, all of them or none: a
+    /// mark, on a table with a deleted column, which a delete for good is not.
+    pub fn delete(&self) -> Result<Done> {
+        let query = &self.query;
+        query.runner.edit(query.built(query.parts.delete_sql(|| query.runner.now_millis(), Some(self.version)))?)
     }
 }
 
@@ -474,12 +731,44 @@ impl Parts {
             limit: None,
             offset: None,
             includes: Vec::new(),
+            tracked: Tracked::default(),
             refused,
         }
     }
 
     pub(crate) fn table(&self) -> &str {
         &self.table
+    }
+
+    pub(crate) fn track_deleted(&mut self, column: &str) {
+        match quote_one(column) {
+            Ok(_) => self.tracked.deleted = Some(column.to_owned()),
+            Err(why) => refuse(self, why),
+        }
+    }
+
+    pub(crate) fn track_version(&mut self, column: &str) {
+        match quote_one(column) {
+            Ok(_) => self.tracked.version = Some(column.to_owned()),
+            Err(why) => refuse(self, why),
+        }
+    }
+
+    pub(crate) fn sees(&mut self, sees: Sees) {
+        if self.tracked.deleted.is_none() {
+            let why = format!("table {}: only a table with a deleted column has marked rows to show", self.table);
+            return refuse(self, why);
+        }
+        self.tracked.sees = sees;
+    }
+
+    /// Whether the handle keeps a deleted or a version column.
+    pub(crate) fn tracks(&self) -> bool {
+        self.tracked.deleted.is_some() || self.tracked.version.is_some()
+    }
+
+    fn refusal(&self, why: &str) -> Error {
+        Error::invalid(format!("table {}: {why}", self.table))
     }
 
     pub(crate) fn filter(&mut self, condition: Sql) {
@@ -624,8 +913,8 @@ impl Parts {
     }
 
     /// What `update` runs: the columns `sets` names set on the rows the
-    /// conditions match.
-    pub(crate) fn update_sql<I, S>(&self, sets: I) -> Result<Sql>
+    /// conditions match, of those the handle shows.
+    pub(crate) fn update_sql<I, S>(&self, sets: I, expect: Option<i64>) -> Result<Edit>
     where
         I: IntoIterator<Item = (S, Sql)>,
         S: AsRef<str>,
@@ -634,6 +923,9 @@ impl Parts {
         let mut texts = Vec::new();
         let mut values = Vec::new();
         for (column, value) in sets {
+            if self.tracked.version.as_deref() == Some(column.as_ref()) {
+                return Err(self.refusal("the version column is the handle's to raise: set the others"));
+            }
             let column = quote(column.as_ref()).map_err(Error::invalid)?;
             let (text, value_values, refused) = checked(value).into_parts();
             if let Some(why) = refused {
@@ -645,23 +937,113 @@ impl Parts {
         if texts.is_empty() {
             return Err(Error::invalid("an update sets at least one column"));
         }
-        let (table, condition, condition_values) = self.target()?;
-        values.extend(condition_values);
-        let text = format!("update {table} set {} where {condition}", texts.join(", "));
-        Ok(Sql::piece(text, values, false))
+        self.edit(texts, values, self.tracked.sees, expect)
     }
 
-    /// What `delete` runs: a delete of the rows the conditions match.
-    pub(crate) fn delete_sql(&self) -> Result<Sql> {
+    /// What `delete` runs: a delete of the rows the conditions match, or,
+    /// on a table with a deleted column, a mark of the live ones at `now`.
+    pub(crate) fn delete_sql(&self, now: impl FnOnce() -> i64, expect: Option<i64>) -> Result<Edit> {
         self.refuse_every_row("a delete")?;
-        let (table, condition, values) = self.target()?;
+        let Some(deleted) = &self.tracked.deleted else {
+            if expect.is_some() {
+                return Err(self.refusal("expect on a delete is a mark's: open the table with a deleted column"));
+            }
+            let (table, condition, values) = self.target(None)?;
+            let statement = Sql::piece(format!("delete from {table} where {condition}"), values, false);
+            return Ok(Edit { statement, expected: None });
+        };
+        let mark = format!("{} = ?", quote_one(deleted).map_err(Error::invalid)?);
+        self.edit(vec![mark], vec![Value::Integer(now())], Sees::Live, if_version)
+    }
+
+    /// What `restore` runs: the mark cleared of the marked rows the
+    /// conditions match.
+    pub(crate) fn restore_sql(&self) -> Result<Edit> {
+        self.refuse_every_row("a restore")?;
+        let Some(deleted) = &self.tracked.deleted else {
+            return Err(self.refusal("a restore clears a mark: open the table with a deleted column"));
+        };
+        let cleared = format!("{} = null", quote_one(deleted).map_err(Error::invalid)?);
+        self.edit(vec![cleared], Vec::new(), Sees::Deleted, None)
+    }
+
+    /// What `purge` runs: a delete for good of the rows the conditions match
+    /// of those the handle shows, which are never the live ones alone.
+    pub(crate) fn purge_sql(&self) -> Result<Sql> {
+        self.refuse_every_row("a purge")?;
+        if self.tracked.sees == Sees::Live {
+            return Err(self.refusal(
+                "a purge deletes for good, and only what deleted_only() or with_deleted() shows: ask one first",
+            ));
+        }
+        let (table, condition, values) = self.target(self.mark(self.tracked.sees, None))?;
         Ok(Sql::piece(format!("delete from {table} where {condition}"), values, false))
     }
 
+    /// An update of the rows `sees` shows of those the conditions match,
+    /// which `update`, a marking `delete` and `restore` are. A versioned
+    /// table's version goes up by one; with `expect`, the update writes only
+    /// when no row the conditions match is at another version, so that one
+    /// statement writes every row or none:
+    ///
+    /// ```text
+    /// update "tasks" set "title" = ?, "version" = "version" + 1
+    ///   where "id" = ? and "deleted_at" is null and "version" = ?
+    ///   and not exists (select 1 from "tasks" where "id" = ? and "deleted_at" is null and "version" is not ?)
+    /// ```
+    fn edit(&self, mut sets: Vec<String>, mut values: Vec<Value>, sees: Sees, if_version: Option<i64>) -> Result<Edit> {
+        let version = self.tracked.version.as_deref().map(quote_one).transpose().map_err(Error::invalid)?;
+        if let Some(version) = &version {
+            sets.push(format!("{version} = {version} + 1"));
+        }
+        let mark = self.mark(sees, None);
+        let Some(expect) = expect else {
+            let (table, condition, condition_values) = self.target(mark)?;
+            values.extend(condition_values);
+            let statement =
+                Sql::piece(format!("update {table} set {} where {condition}", sets.join(", ")), values, false);
+            return Ok(Edit { statement, expected: None });
+        };
+        let Some(version) = version else {
+            return Err(self.refusal("expect is a versioned table's: open the table with a version column"));
+        };
+        let table = quote(&self.table).map_err(Error::invalid)?;
+        let named = self.conditions.iter().cloned().chain(mark);
+        let at = |test: &str| Sql::piece(format!("{version} {test} ?"), vec![Value::Integer(expect)], true);
+        let (other, other_values) = conditions_text(&named.clone().chain([at("is not")]).collect::<Vec<_>>())?;
+        let guard = format!("not exists (select 1 from {table} where {other})");
+        let guarded = named.chain([at("="), Sql::piece(guard, other_values.clone(), true)]).collect::<Vec<_>>();
+        let (condition, condition_values) = conditions_text(&guarded)?;
+        values.extend(condition_values);
+        let statement = Sql::piece(format!("update {table} set {} where {condition}", sets.join(", ")), values, false);
+        let other = Sql::piece(format!("select {version} from {table} where {other} limit 1"), other_values, false);
+        Ok(Edit { statement, expected: Some(Expected { table: self.table.clone(), version: expect, other }) })
+    }
+
+    /// The condition that shows the rows `sees` asks for of a table with a
+    /// deleted column, its column named by `owner`, the alias of a read;
+    /// none on a table without one, or for every row.
+    fn mark(&self, sees: Sees, owner: Option<&str>) -> Option<Sql> {
+        let column = self.tracked.deleted.as_deref()?;
+        let test = match sees {
+            Sees::Live => "is null",
+            Sees::Deleted => "is not null",
+            Sees::All => return None,
+        };
+        // the column is the table's own, a dot in its name its own too
+        let column = quote_one(column).unwrap_or_default();
+        let named =
+            owner.map_or_else(|| column.clone(), |owner| format!("{}.{column}", quote(owner).unwrap_or_default()));
+        Some(Sql::piece(format!("{named} {test}"), Vec::new(), true))
+    }
+
     /// The table an update or a delete writes, quoted, and the condition
-    /// that picks its rows, with the condition's values.
-    fn target(&self) -> Result<(String, String, Vec<Value>)> {
-        let (condition, values) = conditions_text(&self.conditions)?;
+    /// that picks its rows, `mark` last, with the condition's values.
+    fn target(&self, mark: Option<Sql>) -> Result<(String, String, Vec<Value>)> {
+        let (condition, values) = match mark {
+            None => conditions_text(&self.conditions)?,
+            Some(mark) => conditions_text(&self.conditions.iter().cloned().chain([mark]).collect::<Vec<_>>())?,
+        };
         Ok((quote(&self.table).map_err(Error::invalid)?, condition, values))
     }
 
@@ -750,26 +1132,40 @@ pub(crate) fn read_on(statement: &Sql, key: &[Key], after: &[Value]) -> Result<S
 
 /// What `insert` and `insert_all` run: an insert of rows of one shape that
 /// gives each back as the file keeps it.
-pub(crate) fn insert_sql<T: Serialize>(table: &str, rows: &[T]) -> Result<Sql> {
-    let (text, values, _) = insert_of(table, rows)?.into_parts();
+pub(crate) fn insert_sql<T: Serialize>(parts: &Parts, rows: &[T]) -> Result<Sql> {
+    let (text, values, _) = insert_of(parts, rows)?.into_parts();
     Ok(Sql::piece(format!("{text} returning *"), values, false))
 }
 
 /// What `upsert` and `upsert_all` run: an insert of `rows` that, when a
 /// row's key is taken, sets the columns the upsert names on the row that
 /// holds it, and gives back the rows it wrote, without those the upsert's
-/// condition kept.
-pub(crate) fn upsert_sql<T: Serialize>(table: &str, rows: &[T], upsert: Upsert) -> Result<Sql> {
+/// condition kept. The update clears a deleted column's mark, since the row
+/// came back, and raises a version column.
+pub(crate) fn upsert_sql<T: Serialize>(parts: &Parts, rows: &[T], upsert: Upsert) -> Result<Sql> {
     upsert.check()?;
-    let insert = insert_of(table, rows)?;
+    let tracked = &parts.tracked;
+    if let Some(version) = &tracked.version
+        && upsert.update.contains(version)
+    {
+        return Err(parts.refusal("the version column is the handle's to raise: update the others"));
+    }
+    let insert = insert_of(parts, rows)?;
     let (insert_text, mut values, _) = insert.into_parts();
     let conflict = quote_all(&upsert.conflict)?;
-    let sets = upsert
+    let mut sets = upsert
         .update
         .iter()
         .map(|name| quote(name).map(|quoted| format!("{quoted} = excluded.{quoted}")))
         .collect::<Result<Vec<_>, _>>()
         .map_err(Error::invalid)?;
+    if let Some(deleted) = &tracked.deleted {
+        sets.push(format!("{} = null", quote_one(deleted).map_err(Error::invalid)?));
+    }
+    if let Some(version) = &tracked.version {
+        let version = quote_one(version).map_err(Error::invalid)?;
+        sets.push(format!("{version} = {version} + 1"));
+    }
     let mut text = format!("{insert_text} on conflict ({}) do update set {}", conflict.join(", "), sets.join(", "));
     if let Some(condition) = upsert.only_if {
         // in an upsert's update, a column is the row's that holds the key
@@ -861,10 +1257,21 @@ fn render(parts: &Parts) -> Result<Sql> {
         text.push_str(join.text());
         values.extend(join.values().iter().cloned());
     }
-    if !parts.conditions.is_empty() {
-        let (condition, condition_values) = conditions_text(&parts.conditions)?;
-        text.push_str(&format!(" where {condition}"));
-        values.extend(condition_values);
+    // a join's columns of the same name would make the bare column ambiguous
+    let owner = parts.alias.as_deref().or((!parts.joins.is_empty()).then_some(parts.table.as_str()));
+    match parts.mark(parts.tracked.sees, owner) {
+        None if parts.conditions.is_empty() => {}
+        None => {
+            let (condition, condition_values) = conditions_text(&parts.conditions)?;
+            text.push_str(&format!(" where {condition}"));
+            values.extend(condition_values);
+        }
+        Some(mark) => {
+            let all: Vec<Sql> = parts.conditions.iter().cloned().chain([mark]).collect();
+            let (condition, condition_values) = conditions_text(&all)?;
+            text.push_str(&format!(" where {condition}"));
+            values.extend(condition_values);
+        }
     }
     if !parts.groups.is_empty() {
         text.push_str(&format!(" group by {}", parts.groups.join(", ")));
@@ -971,8 +1378,10 @@ fn included_text(included: &Included) -> Result<Sql> {
     Ok(Sql::piece(text, inner.values().to_vec(), false))
 }
 
-/// An insert of rows of one shape, the first row's columns.
-fn insert_of<T: Serialize>(table: &str, rows: &[T]) -> Result<Sql> {
+/// An insert of rows of one shape, the first row's columns, each row's
+/// version 0 on a versioned table whatever the row gave.
+fn insert_of<T: Serialize>(parts: &Parts, rows: &[T]) -> Result<Sql> {
+    let version = parts.tracked.version.as_deref();
     let mut columns: Option<Vec<String>> = None;
     let mut values = Vec::new();
     let mut tuples = Vec::with_capacity(rows.len());
@@ -990,14 +1399,16 @@ fn insert_of<T: Serialize>(table: &str, rows: &[T]) -> Result<Sql> {
             Some(_) => {}
         }
         tuples.push(format!("({})", vec!["?"; fields.len()].join(", ")));
-        values.extend(fields.into_iter().map(|(_, value)| value));
+        let first =
+            |(name, value): (String, Value)| if Some(name.as_str()) == version { Value::Integer(0) } else { value };
+        values.extend(fields.into_iter().map(first));
     }
     let columns = columns.unwrap_or_default();
     if columns.is_empty() {
         return Err(Error::invalid("a row to insert with no column"));
     }
     let quoted = quote_all(&columns)?;
-    let table = quote(table).map_err(Error::invalid)?;
+    let table = quote(&parts.table).map_err(Error::invalid)?;
     let text = format!("insert into {table} ({}) values {}", quoted.join(", "), tuples.join(", "));
     Ok(Sql::piece(text, values, false))
 }

@@ -411,6 +411,8 @@ the same steps (contract SQL-10).
 ## See also
 
 - [SQL](README.md): the engine's overview.
+- [Deleted rows and versions](deleted-and-versions.md): a table that hides
+  its deleted rows and refuses an edit made from an old version.
 - [Rows that include rows](include.md): each row with the rows of another
   query.
 - [Read a chat, a page at a time](../../handbook/chat/messages.md#read-a-chat-a-page-at-a-time)

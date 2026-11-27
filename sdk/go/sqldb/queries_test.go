@@ -39,8 +39,12 @@ func (r *recorder) each(context.Context, Piece, []wire.SqlOrder) iter.Seq2[[]any
 func (r *recorder) describeIt() string { return "sql vectors" }
 
 type vector struct {
-	Name    string            `json:"name"`
-	Table   string            `json:"table"`
+	Name    string `json:"name"`
+	Table   string `json:"table"`
+	Options struct {
+		Deleted string `json:"deleted"`
+		Version string `json:"version"`
+	} `json:"options"`
 	Steps   []json.RawMessage `json:"steps"`
 	Update  [][]any           `json:"update"`
 	Delete  bool              `json:"delete"`
@@ -48,6 +52,8 @@ type vector struct {
 	Upsert  []json.RawMessage `json:"upsert"`
 	Upserts []json.RawMessage `json:"upserts"`
 	Count   bool              `json:"count"`
+	Restore bool              `json:"restore"`
+	Purge   bool              `json:"purge"`
 	List    *struct {
 		Limit int `json:"limit"`
 	} `json:"list"`
@@ -142,6 +148,10 @@ func applied(t *testing.T, q *Query[Row], step json.RawMessage) *Query[Row] {
 				return q.OrderBy(conditionOf(t, piece).condition(), Direction(items[1].(string)))
 			}
 			return q.OrderBy(items[0].(string), Direction(items[1].(string)))
+		case "withDeleted":
+			return q.WithDeleted()
+		case "deletedOnly":
+			return q.DeletedOnly()
 		case "limit":
 			return q.Limit(int(argument.(float64)))
 		case "offset":
@@ -220,7 +230,14 @@ func TestEveryQueryVectorIsWrittenAlike(t *testing.T) {
 			// each vector's own, so that the refusal of the one before stays there
 			var err error
 			r := &recorder{}
-			table := OpenTable[Row](r, v.Table)
+			var opts []TableOption
+			if v.Options.Deleted != "" {
+				opts = append(opts, Deleted(v.Options.Deleted))
+			}
+			if v.Options.Version != "" {
+				opts = append(opts, Version(v.Options.Version))
+			}
+			table := OpenTable[Row](r, v.Table, opts...)
 			q := table.Query
 			for _, step := range v.Steps {
 				q = applied(t, q, step)
@@ -243,12 +260,12 @@ func TestEveryQueryVectorIsWrittenAlike(t *testing.T) {
 				for _, row := range v.Insert {
 					rows = append(rows, orderedRow(row))
 				}
-				statement := insertOf(table.name, rows)
+				statement := insertOf(table.name, rows, table.version)
 				_, err = r.rows(ctx, Piece{text: statement.text + " returning *", values: statement.values, err: statement.err}, "all")
 			case v.Upsert != nil:
 				var pairs [][]any
 				_ = json.Unmarshal(v.Upsert[0], &pairs)
-				anyTable := OpenTable[any](r, v.Table)
+				anyTable := OpenTable[any](r, v.Table, opts...)
 				_, err = anyTable.Upsert(ctx, orderedRow(pairs), upserting(t, v.Upsert[1])...)
 			case v.Upserts != nil:
 				var given [][][]any
@@ -257,10 +274,14 @@ func TestEveryQueryVectorIsWrittenAlike(t *testing.T) {
 				for i, pairs := range given {
 					rows[i] = orderedRow(pairs)
 				}
-				anyTable := OpenTable[any](r, v.Table)
+				anyTable := OpenTable[any](r, v.Table, opts...)
 				_, err = anyTable.UpsertMany(ctx, rows, upserting(t, v.Upserts[1])...)
 			case v.Count:
 				_, err = q.Count(ctx)
+			case v.Restore:
+				_, err = q.Restore(ctx)
+			case v.Purge:
+				_, err = q.Purge(ctx)
 			case v.List != nil:
 				_, err = q.List(ctx, Limit(v.List.Limit))
 			}

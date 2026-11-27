@@ -923,3 +923,131 @@ async def test_a_worker_runs_a_job_its_batch_added_once_the_batch_commits(app: t
     await until(lambda: len(seen) == 1)
     await worker.stop()
     assert seen == ["w2"]
+
+
+TASKS = """create table tasks (
+    id         integer primary key,
+    title      text not null,
+    deleted_at integer,
+    version    integer not null default 0
+) strict"""
+
+
+@dataclass
+class Task:
+    id: int
+    title: str
+    deleted_at: int | None = None
+    version: int = 0
+
+
+async def sp_of(store: tinystore.Store) -> tinystore.Database:
+    return await store.database("sp", migrations={"0001_tasks.sql": TASKS})
+
+
+# contract: SQL-21, SQL-23, SQL-24
+async def test_a_second_writer_from_the_old_version_is_refused_and_a_deleted_row_is_gone_from_the_handle(
+    store: tinystore.Store,
+) -> None:
+    sp = await sp_of(store)
+    tasks = sp.table("tasks", Task, deleted="deleted_at", version="version")
+    await tasks.insert({"id": 1, "title": "first"})
+    one = tasks.where(id=1)
+    seen = await one.one()
+    assert seen is not None
+    assert (await one.update({"title": "from a"}, expect=seen.version)).changes == 1
+    with pytest.raises(tinystore.ConflictError) as b:
+        await one.update({"title": "from b"}, expect=seen.version)
+    assert str(b.value) == "sql sp: table tasks: the row is at version 1, not 0"
+    assert (await one.one()) == Task(1, "from a", None, 1)
+
+    assert (await one.delete()).changes == 1
+    assert await tasks.count() == 0
+    assert await one.one() is None
+    marked = await tasks.with_deleted().where(id=1).one()
+    assert marked is not None and marked.version == 2 and isinstance(marked.deleted_at, int)
+    assert (await one.restore()).changes == 1
+    restored = await one.one()
+    assert restored is not None and restored.version == 3
+    assert await sp.scalar(int, "select count(*) from tasks") == 1
+
+
+# contract: SQL-21, SQL-22
+async def test_every_call_of_a_handle_with_a_deleted_column_passes_the_marked_rows_by_unless_asked(
+    store: tinystore.Store,
+) -> None:
+    sp = await sp_of(store)
+    tasks = sp.table("tasks", Task, deleted="deleted_at")
+    await tasks.insert([Task(1, "a"), Task(2, "b"), Task(3, "c")])
+    assert (await tasks.where(id=2).delete()).changes == 1
+    assert (await tasks.where(id=2).delete()).changes == 0
+    by_id = tasks.order_by("id")
+    assert [row.title for row in await by_id.all()] == ["a", "c"]
+    assert [row.title for row in (await by_id.list(limit=10)).rows] == ["a", "c"]
+    assert [row.title async for row in by_id.each()] == ["a", "c"]
+    assert (await tasks.where("id > ?", 0).update(title="x")).changes == 2
+    assert (await tasks.where(id=2).update(title="x")).changes == 0
+    assert [row.title for row in await tasks.deleted_only().all()] == ["b"]
+    assert await tasks.with_deleted().count() == 3
+
+    with pytest.raises(tinystore.InvalidError, match="sql sp: table tasks: a purge deletes for good"):
+        await tasks.where("id > ?", 0).purge()
+    assert (await tasks.deleted_only().where("id > ?", 0).purge()).changes == 1
+    await tasks.where(id=3).delete()
+    assert (await tasks.with_deleted().where("id > ?", 0).purge()).changes == 2
+    with pytest.raises(tinystore.InvalidError):
+        sp.table("tasks", Task).with_deleted()
+
+
+# contract: SQL-21, SQL-24
+async def test_an_insert_starts_a_row_at_version_0_and_a_marked_row_keeps_its_key_from_an_insert(
+    store: tinystore.Store,
+) -> None:
+    sp = await sp_of(store)
+    tasks = sp.table("tasks", Task, deleted="deleted_at", version="version")
+    assert (await tasks.insert(Task(1, "a", None, 7))).version == 0
+    upserted = await tasks.upsert(Task(2, "b", None, 5), conflict="id", update=["title"])
+    assert upserted == Task(2, "b", None, 0)
+    await tasks.where(id=1).delete()
+    with pytest.raises(tinystore.ConflictError):
+        await tasks.insert(Task(1, "again"))
+    back = await tasks.upsert(Task(1, "again"), conflict="id", update=["title"])
+    assert back is not None and back.title == "again" and back.deleted_at is None
+
+
+# contract: SQL-23, SQL-24
+async def test_an_upsert_onto_a_marked_row_brings_it_back_and_an_expect_writes_every_row_or_none(
+    store: tinystore.Store,
+) -> None:
+    sp = await sp_of(store)
+    tasks = sp.table("tasks", Task, deleted="deleted_at", version="version")
+    await tasks.insert([Task(1, "a"), Task(2, "b")])
+    await tasks.where(id=1).delete()
+    back = await tasks.upsert({"id": 1, "title": "back"}, conflict="id", update=["title"])
+    assert back == Task(1, "back", None, 2)
+    with pytest.raises(tinystore.InvalidError):
+        await tasks.upsert({"id": 1, "version": 5}, conflict="id", update=["version"])
+    with pytest.raises(tinystore.InvalidError):
+        await tasks.where(id=1).update(version=9)
+
+    both = tasks.where(id=[1, 2])
+    with pytest.raises(tinystore.ConflictError, match="the row is at version 2, not 0"):
+        await both.update(title="z", expect=0)
+    assert (await tasks.where(id=2).one()) == Task(2, "b", None, 0)
+    await tasks.where(id=2).update(title="b2")
+    await tasks.where(id=2).update(title="b3")
+    assert (await both.update(title="z", expect=2)).changes == 2
+    assert (await tasks.where(id=9).update(title="z", expect=0)).changes == 0
+    with pytest.raises(tinystore.InvalidError):
+        await sp.table("tasks", Task).where(id=1).update(title="z", expect=3)
+
+    async def inside(tx: tinystore.SqlTx) -> None:
+        one = tx.table("tasks", Task, deleted="deleted_at", version="version").where(id=1)
+        assert (await one.update(title="in tx", expect=3)).changes == 1
+        with pytest.raises(tinystore.ConflictError):
+            await one.delete(expect=3)
+        assert (await one.delete(expect=4)).changes == 1
+
+    await sp.tx(inside)
+    marked = await tasks.deleted_only().where(id=1).one()
+    assert marked is not None and marked.title == "in tx"

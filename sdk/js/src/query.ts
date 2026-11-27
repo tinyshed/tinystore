@@ -3,7 +3,7 @@
 // around names, and nothing else. It runs in this process; the server sees
 // the text and the values, as it would a statement written by hand.
 
-import { CorruptError, InvalidError } from './errors.ts'
+import { ConflictError, CorruptError, InvalidError } from './errors.ts'
 import { check, type StandardSchemaV1 } from './schema.ts'
 import {
 	type Condition,
@@ -33,6 +33,25 @@ export interface TableOptions {
 	types?: Record<string, ColumnType>
 	/** a Standard Schema, zod's or valibot's, that checks each row read */
 	schema?: StandardSchemaV1
+	/**
+	 * a nullable integer column that marks a row deleted, in unix
+	 * milliseconds of this process's clock: every query and write of the
+	 * handle passes the marked rows by, unless `withDeleted` or
+	 * `deletedOnly` asks for them, and `delete` marks rather than deletes
+	 */
+	deleted?: string
+	/**
+	 * an integer column, not null, default 0, that every update of the handle
+	 * raises by one; an update or a delete with `expect` writes only rows at
+	 * the version it names
+	 */
+	version?: string
+}
+
+/** An edit made from the version a program saw: every row the where names must be at it. */
+export interface EditOptions {
+	/** the version every row must be at, or nothing is written and the call fails ConflictError */
+	expect?: number
 }
 
 /** What an upsert does when the row's key is taken. */
@@ -53,6 +72,9 @@ export interface RowPage<T> {
 
 type Direction = 'asc' | 'desc'
 
+/** Which rows a table with a deleted column shows: the live ones, unless a handle asks for the marked ones too, or alone. */
+type Sees = 'live' | 'all' | 'deleted'
+
 /** A condition of a query, and whether it may stand in an and without parentheses. */
 interface Kept {
 	piece: Sql
@@ -71,6 +93,9 @@ interface Parts {
 	limit?: number | undefined
 	offset?: number | undefined
 	includes: Included[]
+	/** the column that marks a deleted row, and which rows the query shows */
+	deleted?: string | undefined
+	sees: Sees
 }
 
 /** A query whose rows each row of another holds as a list under a name. */
@@ -83,11 +108,12 @@ interface Included {
 	columns: string[]
 }
 
-/** How a table reads and writes: its runner, its name, and how its rows read. */
+/** How a table reads and writes: its runner, its name, how its rows read, and its version column. */
 interface Source {
 	runner: Runner
 	types: Record<string, ColumnType>
 	schema?: StandardSchemaV1 | undefined
+	version?: string | undefined
 }
 
 /**
@@ -340,8 +366,18 @@ export class Query<T = Row> implements Embeddable {
 		return answered.rows.map(row => String(row[detail] ?? ''))
 	}
 
-	/** Sets columns of the rows the conditions match, and says how many changed. */
-	async update(values: { [K in keyof T]?: T[K] | Sql } & Record<string, unknown>): Promise<Done> {
+	/**
+	 * Sets columns of the rows the conditions match, and says how many
+	 * changed. A versioned table's version goes up by one; with `expect`, the
+	 * update writes every row only if each is at that version, and otherwise
+	 * nothing, failing ConflictError.
+	 *
+	 *     await tasks.where({ id: 1 }).update({ title: 'from b' }, { expect: seen.version })
+	 */
+	async update(
+		values: { [K in keyof T]?: T[K] | Sql } & Record<string, unknown>,
+		options: EditOptions = {},
+	): Promise<Done> {
 		this.#refuseEveryRow('an update')
 		const names = Object.keys(values)
 		if (names.length === 0) {
@@ -350,6 +386,9 @@ export class Query<T = Row> implements Embeddable {
 		const sets: string[] = []
 		const out: SqlArg[] = []
 		for (const name of names) {
+			if (name === this.#source.version) {
+				throw this.#refusal("the version column is the handle's to raise: set the others")
+			}
 			const value = values[name]
 			if (value instanceof Sql) {
 				const set = checked(value)
@@ -360,19 +399,72 @@ export class Query<T = Row> implements Embeddable {
 				out.push(fieldOf(value, name, this.#source.types))
 			}
 		}
-		const where = conditionsText(this.#parts.conditions)
-		return this.#source.runner.exec(
-			new Sql(`update ${tableName(this.#parts)} set ${sets.join(', ')} where ${where.text}`, [
-				...out,
-				...where.values,
-			]),
-		)
+		return this.#edit(sets, out, this.#parts.sees, options.expect)
 	}
 
-	/** Deletes the rows the conditions match, and says how many it deleted. */
-	async delete(): Promise<Done> {
+	/**
+	 * Deletes the rows the conditions match, and says how many it deleted. On
+	 * a table with a deleted column it marks the live ones instead, at this
+	 * process's clock, and raises a versioned table's version; `expect` is
+	 * update's.
+	 */
+	async delete(options: EditOptions = {}): Promise<Done> {
 		this.#refuseEveryRow('a delete')
-		const where = conditionsText(this.#parts.conditions)
+		const deleted = this.#parts.deleted
+		if (deleted === undefined) {
+			if (options.expect !== undefined) {
+				throw this.#refusal("expect on a delete is a mark's: open the table with a deleted column")
+			}
+			const where = conditionsText(this.#parts.conditions)
+			return this.#source.runner.exec(
+				new Sql(`delete from ${tableName(this.#parts)} where ${where.text}`, where.values),
+			)
+		}
+		return this.#edit([`${identOf(deleted)} = ?`], [Date.now()], 'live', options.expect)
+	}
+
+	/** The query of every row, those the deleted column marks among them. */
+	withDeleted(): Query<T> {
+		return this.#seeing('all')
+	}
+
+	/** The query of the rows the deleted column marks, and of no other. */
+	deletedOnly(): Query<T> {
+		return this.#seeing('deleted')
+	}
+
+	/**
+	 * Clears the mark of the marked rows the conditions match, whichever rows
+	 * the handle shows, and says how many came back; a versioned table's
+	 * version goes up by one.
+	 */
+	async restore(): Promise<Done> {
+		this.#refuseEveryRow('a restore')
+		const deleted = this.#parts.deleted
+		if (deleted === undefined) {
+			throw this.#refusal('a restore clears a mark: open the table with a deleted column')
+		}
+		return this.#edit([`${identOf(deleted)} = null`], [], 'deleted', undefined)
+	}
+
+	/**
+	 * Deletes for good the rows the conditions match of those the handle
+	 * shows: the marked ones of `deletedOnly()`, or every one of
+	 * `withDeleted()`. A handle that shows the live rows alone refuses it, so
+	 * that nothing live is purged by a handle that forgot to ask.
+	 *
+	 *     await tasks.deletedOnly().where`deleted_at < ${monthAgo}`.purge()
+	 */
+	async purge(): Promise<Done> {
+		this.#refuseEveryRow('a purge')
+		if (this.#parts.sees === 'live') {
+			throw this.#refusal(
+				'a purge deletes for good, and only what deletedOnly() or withDeleted() shows: ask one first',
+			)
+		}
+		const where = conditionsText(
+			withMark(this.#parts.conditions, markOf(this.#parts, this.#parts.sees)),
+		)
 		return this.#source.runner.exec(
 			new Sql(`delete from ${tableName(this.#parts)} where ${where.text}`, where.values),
 		)
@@ -412,6 +504,81 @@ export class Query<T = Row> implements Embeddable {
 
 	#with(changed: Partial<Parts>): Query<T> {
 		return new Query<T>(this.#source, { ...this.#parts, ...changed })
+	}
+
+	#seeing(sees: Sees): Query<T> {
+		if (this.#parts.deleted === undefined) {
+			throw this.#refusal('only a table with a deleted column has marked rows to show')
+		}
+		return this.#with({ sees })
+	}
+
+	#refusal(why: string): InvalidError {
+		return new InvalidError(`${this.#source.runner.label}: table ${this.#parts.table}: ${why}`)
+	}
+
+	/**
+	 * An update of the rows `sees` shows of those the conditions match, which
+	 * `update`, a marking `delete` and `restore` are. A versioned table's
+	 * version goes up by one; with `expect`, one statement writes every row
+	 * the conditions match or none, guarded by a read of a row at another
+	 * version, and after one that wrote none, the same read in the same
+	 * transaction tells a conflict from no row at all.
+	 */
+	async #edit(
+		sets: string[],
+		values: SqlArg[],
+		sees: Sees,
+		expect: number | undefined,
+	): Promise<Done> {
+		const version = this.#source.version === undefined ? undefined : identOf(this.#source.version)
+		if (version !== undefined) {
+			sets.push(`${version} = ${version} + 1`)
+		}
+		const table = tableName(this.#parts)
+		const named = withMark(this.#parts.conditions, markOf(this.#parts, sees))
+		const runner = this.#source.runner
+		if (expect === undefined) {
+			const where = conditionsText(named)
+			return runner.exec(
+				new Sql(`update ${table} set ${sets.join(', ')} where ${where.text}`, [
+					...values,
+					...where.values,
+				]),
+			)
+		}
+		if (version === undefined) {
+			throw this.#refusal("expect is a versioned table's: open the table with a version column")
+		}
+		const at = (test: string): Kept => ({
+			piece: new Sql(`${version} ${test} ?`, [whole(expect, 'a version')]),
+			bare: true,
+		})
+		const other = conditionsText([...named, at('is not')])
+		const guard = {
+			piece: new Sql(`not exists (select 1 from ${table} where ${other.text})`, other.values),
+			bare: true,
+		}
+		const where = conditionsText([...named, at('='), guard])
+		const statement = new Sql(`update ${table} set ${sets.join(', ')} where ${where.text}`, [
+			...values,
+			...where.values,
+		])
+		const why = new Sql(`select ${version} from ${table} where ${other.text} limit 1`, other.values)
+		const edit = async (on: Runner): Promise<Done> => {
+			const done = await on.exec(statement)
+			if (done.changes > 0) {
+				return done
+			}
+			const found = await on.rows(why, 'one')
+			if (found.rows.length === 0) {
+				return done
+			}
+			throw new ConflictError(
+				`${runner.label}: table ${this.#parts.table}: the row is at version ${found.rows[0]![0]}, not ${expect}`,
+			)
+		}
+		return runner.tx === undefined ? edit(runner) : runner.tx(edit)
 	}
 
 	#joined(kind: string, table: string, on: string | Sql): Query<T> {
@@ -462,13 +629,22 @@ export class Table<T = Row> extends Query<T> {
 	constructor(runner: Runner, name: string, options: TableOptions = {}) {
 		const ref = tableRef(name)
 		super(
-			{ runner, types: options.types ?? {}, schema: options.schema },
-			emptyParts(ref.name, ref.alias),
+			{
+				runner,
+				types: options.types ?? {},
+				schema: options.schema,
+				version: columnOf(options.version, 'version'),
+			},
+			{ ...emptyParts(ref.name, ref.alias), deleted: columnOf(options.deleted, 'deleted') },
 		)
 		this.name = ref.name
 	}
 
-	/** Inserts a row and gives it back as the file keeps it; a list of rows is one write, all of them or none. */
+	/**
+	 * Inserts a row and gives it back as the file keeps it; a list of rows is
+	 * one write, all of them or none. On a versioned table the row starts at
+	 * version 0, whatever it gives for the column.
+	 */
 	insert(row: Partial<T>): Promise<T>
 	insert(rows: readonly Partial<T>[]): Promise<T[]>
 	async insert(given: Partial<T> | readonly Partial<T>[]): Promise<T | T[]> {
@@ -476,11 +652,7 @@ export class Table<T = Row> extends Query<T> {
 		if (rows.length === 0) {
 			return []
 		}
-		const statement = insertOf(
-			this.name,
-			rows as readonly Record<string, unknown>[],
-			this.source.types,
-		)
+		const statement = insertOf(this.name, this.#started(rows), this.source.types)
 		const answered = await this.source.runner.rows(
 			new Sql(`${statement.text} returning *`, statement.values),
 			'all',
@@ -494,7 +666,9 @@ export class Table<T = Row> extends Query<T> {
 	 * names on the row that holds it, if that row meets `where`. It gives
 	 * back the row as the file keeps it, or undefined when `where` kept it.
 	 * A list of rows is one statement, all of them or none, and gives back
-	 * the rows it wrote, without those whose key `where` kept.
+	 * the rows it wrote, without those whose key `where` kept. On a table
+	 * with a deleted column the update clears a row's mark, since the row
+	 * came back, and on a versioned one it raises the version.
 	 */
 	upsert(row: Partial<T>, options: UpsertOptions<T>): Promise<T | undefined>
 	upsert(rows: readonly Partial<T>[], options: UpsertOptions<T>): Promise<T[]>
@@ -517,14 +691,22 @@ export class Table<T = Row> extends Query<T> {
 		const conflict = (
 			typeof options.conflict === 'string' ? [options.conflict] : [...options.conflict]
 		).map(identOf)
-		const insert = insertOf(
-			this.name,
-			rows as readonly Record<string, unknown>[],
-			this.source.types,
-		)
-		const sets = options.update
-			.map(name => `${identOf(name)} = excluded.${identOf(name)}`)
-			.join(', ')
+		const insert = insertOf(this.name, this.#started(rows), this.source.types)
+		const { deleted } = this.parts
+		const { version } = this.source
+		if (version !== undefined && options.update.includes(version as keyof T & string)) {
+			throw new InvalidError(
+				`${this.source.runner.label}: table ${this.name}: the version column is the handle's to raise: update the others`,
+			)
+		}
+		const named = options.update.map(name => `${identOf(name)} = excluded.${identOf(name)}`)
+		if (deleted !== undefined) {
+			named.push(`${identOf(deleted)} = null`)
+		}
+		if (version !== undefined) {
+			named.push(`${identOf(version)} = ${identOf(version)} + 1`)
+		}
+		const sets = named.join(', ')
 		let text = `${insert.text} on conflict (${conflict.join(', ')}) do update set ${sets}`
 		const values = [...insert.values]
 		if (options.where !== undefined) {
@@ -539,6 +721,16 @@ export class Table<T = Row> extends Query<T> {
 		)
 		const read = await this.#rowsOf(answered)
 		return many ? read : read[0]
+	}
+
+	/** The rows as an insert writes them: on a versioned table each at version 0, whatever it gave. */
+	#started(rows: readonly Partial<T>[]): readonly Record<string, unknown>[] {
+		const given = rows as readonly Record<string, unknown>[]
+		const { version } = this.source
+		if (version === undefined) {
+			return given
+		}
+		return given.map(row => (Object.hasOwn(row, version) ? { ...row, [version]: 0 } : row))
 	}
 
 	/** The rows a write gave back, each as the table's types and schema read it. */
@@ -565,6 +757,36 @@ function emptyParts(table: string, alias?: string): Parts {
 		having: [],
 		order: [],
 		includes: [],
+		sees: 'live',
+	}
+}
+
+/** A column a table's option names, checked where the table opens. */
+function columnOf(column: string | undefined, option: string): string | undefined {
+	if (column !== undefined && (typeof column !== 'string' || column.length === 0)) {
+		throw new InvalidError(`a table's ${option} option is a column's name`)
+	}
+	return column
+}
+
+/** The conditions of a query, and the deleted column's condition last. */
+function withMark(conditions: readonly Kept[], mark: Kept | undefined): readonly Kept[] {
+	return mark === undefined ? conditions : [...conditions, mark]
+}
+
+/**
+ * The condition that shows the rows `sees` asks for of a table with a
+ * deleted column, its column named by `owner`, a read's alias; none on a
+ * table without one, or for every row.
+ */
+function markOf(parts: Parts, sees: Sees, owner?: string): Kept | undefined {
+	if (parts.deleted === undefined || sees === 'all') {
+		return undefined
+	}
+	const column = identOf(owner === undefined ? parts.deleted : `${owner}.${parts.deleted}`)
+	return {
+		piece: new Sql(`${column} ${sees === 'live' ? 'is null' : 'is not null'}`, []),
+		bare: true,
 	}
 }
 
@@ -892,8 +1114,11 @@ function render(parts: Parts): Sql {
 		text += ` ${join.text}`
 		values.push(...join.values)
 	}
-	if (parts.conditions.length > 0) {
-		const where = conditionsText(parts.conditions)
+	// a join's columns of the same name would make the bare deleted column ambiguous
+	const owner = parts.alias ?? (parts.joins.length > 0 ? parts.table : undefined)
+	const conditions = withMark(parts.conditions, markOf(parts, parts.sees, owner))
+	if (conditions.length > 0) {
+		const where = conditionsText(conditions)
 		text += ` where ${where.text}`
 		values.push(...where.values)
 	}

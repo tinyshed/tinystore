@@ -145,6 +145,7 @@ it matters.
 | [Writes and transactions](writes.md)                      | `exec`, `batch`, `tx`, errors and `outcome unknown`     |
 | [Stopping a slow query](cancel.md)                        | a cancel or a timeout that stops a query                |
 | [Tables and queries](tables.md)                           | the builder: conditions, joins, pages, updates, deletes |
+| [Deleted rows and versions](deleted-and-versions.md)      | a deleted mark, restore, purge, edits from a version    |
 | [Rows that include rows](include.md)                      | `include`: each row with the rows of a query            |
 | [Mirrors](mirror.md)                                      | another system's list in a table, and what changed      |
 | [Buckets and queues in a database](buckets-and-queues.md) | keys, jobs, files and events that commit with rows      |
