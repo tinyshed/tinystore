@@ -15938,8 +15938,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
 
 /// A body of the message `name` read and written again, and the size the message
 /// says it takes, for the test that the vectors' bytes are what this codec writes
-/// within that size; `None` for a name it lacks.
-#[cfg(test)]
+/// within that size, and for the wire's fuzz target; `None` for a name it lacks.
+#[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize), Failure>> {
     let rewritten = match name {
         #[cfg(feature = "backup")]

@@ -14,6 +14,9 @@ pub(crate) mod codec;
 #[cfg(feature = "config")]
 mod config;
 pub(crate) mod frame;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzzing;
 #[cfg(feature = "jobs")]
 mod jobs;
 mod kv;

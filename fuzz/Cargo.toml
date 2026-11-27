@@ -9,7 +9,10 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-tinystore = { path = "../crates/tinystore", default-features = false, features = ["fuzzing"] }
+# every engine whose messages the wire's target reads
+tinystore = { path = "../crates/tinystore", default-features = false, features = [
+    "fuzzing", "kv", "config", "locks", "channels", "jobs", "sql", "blobs", "search", "backup",
+] }
 
 # A workspace of its own: the targets build on nightly through cargo-fuzz,
 # never with the pinned toolchain the library's workspace builds on.
@@ -47,6 +50,13 @@ bench = false
 [[bin]]
 name = "records_rows"
 path = "fuzz_targets/records_rows.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wire_messages"
+path = "fuzz_targets/wire_messages.rs"
 test = false
 doc = false
 bench = false
