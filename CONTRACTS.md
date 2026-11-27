@@ -81,6 +81,7 @@ These contracts are what does not.
 - **KV-17** A build in the background that fails MUST leave the kept answer as it was until `keep` ends, and no other build of its key MUST start for a tenth of `fresh`, a second at least and a minute at most; past `keep` a failed build MUST give its error to its caller and keep nothing.
 - **KV-18** An answer MUST say its age at the store's clock, within `[0, keep]`, and MUST be stale only when it is older than the `fresh` its answers opened with.
 - **KV-19** A clear of once's answers MUST remove the answers of its branch and of every branch under it in one commit, and none beside it.
+- **KV-20** An option `once` does not know MUST be refused when it opens, naming the option, before anything is sent.
 
 ### Config
 

@@ -46,6 +46,13 @@ let receipt = charges.run(&idempotency_key, || stripe.charge(&order, &order.id))
 A run of the same key inside its own run, awaited or blocking, is `invalid`,
 because it would wait for itself (contract DUR-07).
 
+An option `once` doesn't know is refused when you open it, naming the
+option, before anything is sent (contract KV-20). In TypeScript a typo like
+`{ keeps: '1h' }` throws
+``InvalidError: kv once grade-books: no field `keeps`; did you mean `keep`?``.
+Python raises `TypeError` for an unknown keyword, and in Go and Rust an
+option that doesn't exist doesn't compile.
+
 ## A memo
 
 ```ts

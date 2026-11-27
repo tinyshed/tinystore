@@ -8,6 +8,7 @@
 import { currentSignal, withoutSignal } from './cancel.ts'
 import type { Link } from './connection.ts'
 import { OutcomeUnknownError, ProtocolError } from './errors.ts'
+import { refuseUnknown } from './fields.ts'
 import { checkName, handleOn } from './handles.ts'
 import { callOn, jsonValues, keyText, underField, type Values } from './kv.ts'
 import { withoutHolding } from './locks.ts'
@@ -26,6 +27,9 @@ export interface OnceOptions {
 	 */
 	fresh?: Duration | undefined
 }
+
+/** The options a once takes: any other is refused by name, since it would go nowhere. */
+const onceFields: readonly (keyof OnceOptions)[] = ['keep', 'fresh']
 
 /** An answer with how old it is: stale once older than the `fresh` its answers opened with. */
 export interface Fetched<T> {
@@ -258,6 +262,7 @@ class Run {
  */
 export function onceOpen(name: string, options: OnceOptions = {}): OnceOpens {
 	checkName(name, 'once')
+	refuseUnknown(`kv once ${name}`, options, onceFields)
 	const keep = options.keep === undefined ? undefined : ms(options.keep)
 	const fresh = options.fresh === undefined ? undefined : ms(options.fresh)
 	const aged = KvOnceOpen.encode({ name, keep, fresh, aged: true })

@@ -357,6 +357,20 @@ for (const way of ways) {
 				expect(await charges.run('order-1', charge)).toEqual({ receipt: 'r-2' })
 			})
 
+			// contract: KV-20
+			test('an option once does not know is refused by name before anything is sent', () => {
+				const guessed = { keep: '1h', secret: true } as never
+				expect(() => store.once<string>('grade-books', guessed)).toThrow(InvalidError)
+				expect(() => store.once<string>('grade-books', guessed)).toThrow(
+					'kv once grade-books: no field `secret`',
+				)
+				const plural = { keeps: '1h' } as never
+				expect(() => store.once<string>('grade-books', plural)).toThrow('did you mean `keep`?')
+				expect(() =>
+					store.once<string>('grade-books', { keep: '1h', fresh: undefined }),
+				).not.toThrow()
+			})
+
 			test('an error keeps nothing, so the next run runs again', async () => {
 				const charges = store.once<string>('declines', { keep: '1h' })
 				const err = await caught(

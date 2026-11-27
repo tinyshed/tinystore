@@ -356,6 +356,13 @@ async def test_a_run_keeps_its_answer_and_the_next_run_of_the_key_gets_it_withou
     assert await charges.run("order-1", charge) == {"receipt": "r-2"}
 
 
+# contract: KV-20
+async def test_an_option_once_does_not_know_is_refused_by_name(store: tinystore.Store) -> None:
+    opened: Any = store.once
+    with pytest.raises(TypeError, match="secret"):
+        opened("grade-books", str, keep="1h", secret=True)
+
+
 async def test_an_error_keeps_nothing_so_the_next_run_runs_again(store: tinystore.Store) -> None:
     charges = store.once("declines", str, keep="1h")
 
