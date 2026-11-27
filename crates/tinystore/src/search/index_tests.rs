@@ -2213,9 +2213,9 @@ fn a_dropped_index_refuses_its_handles_and_leaves_no_row() {
 fn a_store_beside_a_holder_that_has_not_migrated_search_db_yet_says_so_without_copies_or_homes() {
     let fixture = fixture();
     fixture.articles::<Article>("articles").set("a", &article("Rye", "bread")).unwrap();
-    // search.db as the release before 0004 left it, as before its holder opens search
+    // search.db as the release before its last step left it, as before its holder opens search
     let file = rusqlite::Connection::open(fixture.dir.path().join("search.db")).unwrap();
-    file.execute("delete from _tinystore_migrations where history = 'search' and version = 4", []).unwrap();
+    file.execute("delete from _tinystore_migrations where history = 'search' and version >= 4", []).unwrap();
     drop(file);
     let beside = crate::Store::open_beside(fixture.dir.path()).unwrap();
     let refused = crate::search::list(&beside).unwrap_err();
