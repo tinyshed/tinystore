@@ -690,6 +690,75 @@ for (const way of ways) {
 			expect(String(hours)).toContain('a day at least')
 			const ranged = await caught(store.metrics.compare({ ...asked, since: '1h' } as never))
 			expect(String(ranged)).toContain('no field `since`')
+			const grouped = await caught(store.metrics.compare({ ...asked, by: ['source'] } as never))
+			expect(String(grouped)).toContain('no field `by`')
+		})
+
+		// contract: MET-34
+		test('compareGroups given limit come in pages that walk on to every group', async () => {
+			const now = Date.now()
+			const hosts = Array.from({ length: 12 }, (_, host) => ({
+				name: 'paged_rtt',
+				kind: 'gauge' as const,
+				labels: { host: String(host).padStart(2, '0') },
+				samples: [
+					[now - 5_400_000, 1],
+					[now - 60_000, host + 1],
+				] as const,
+			}))
+			await store.metrics.ingest(hosts)
+			const asked = {
+				name: 'paged_rtt',
+				by: ['host'],
+				op: 'avg',
+				window: '1h',
+				against: '3h',
+				limit: 5,
+			} as const
+			const page = await store.metrics.compareGroups(asked)
+			expect([page.groups.length, page.next === undefined]).toEqual([5, false])
+			expect(page.groups[1]).toEqual({
+				name: 'paged_rtt',
+				labels: { host: '01' },
+				value: 2,
+				usual: 1,
+				ratio: 2,
+				samples: 1,
+				windows: 1,
+			})
+			const groups = []
+			for await (const group of page) {
+				groups.push(group)
+			}
+			const { groups: whole, next } = await store.metrics.compareGroups({
+				...asked,
+				limit: undefined,
+			})
+			expect([groups, next]).toEqual([whole, undefined])
+			const one = await store.metrics.compareGroups({ ...asked, by: undefined })
+			expect(one.groups.map(group => [group.labels, group.value])).toEqual([[{}, 6.5]])
+		})
+
+		// contract: MET-35
+		test('an aggregate given fill and limit fills each page, its empty buckets counted', async () => {
+			const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000
+			const samples = [[hour - 5 * 3_600_000 + 60_000, 1] as const]
+			await store.metrics.ingest({ name: 'filled_pages', kind: 'gauge', labels: {}, samples })
+			const query = {
+				name: 'filled_pages',
+				since: '1d',
+				every: '1h',
+				op: 'max',
+				fill: true,
+			} as const
+			const whole = await store.metrics.aggregate(query)
+			const page = await store.metrics.aggregate({ ...query, limit: 10 })
+			expect([page.groups[0]?.buckets.length, page.next === undefined]).toEqual([10, false])
+			const walked = []
+			for await (const group of page) {
+				walked.push(group)
+			}
+			expect(walked).toEqual(whole.groups)
 		})
 
 		// contract: MET-25

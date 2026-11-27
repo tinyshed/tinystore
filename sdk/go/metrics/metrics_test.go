@@ -780,6 +780,72 @@ func TestCompareSetsTheNewestWindowAgainstTheMedianOfTheWindowsBefore(t *testing
 		asked.Against = 1002 * time.Minute
 		_, err := metrics.Compare(ctx, store, asked)
 		is(t, err, tinystore.ErrInvalid)
+		asked.Against, asked.By = 10*time.Minute, []string{"source"}
+		_, err = metrics.Compare(ctx, store, asked)
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
+// contract: MET-34
+func TestCompareGroupsGivenLimitWalkOnAPageAtATime(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		now := time.Now()
+		var hosts []metrics.Series
+		for host := range 12 {
+			samples := []metrics.Sample{{At: now.Add(-90 * time.Minute), Value: 1}, {At: now.Add(-time.Minute), Value: float64(host + 1)}}
+			hosts = append(hosts, metrics.Series{Name: "paged_rtt", Kind: metrics.KindGauge, Labels: metrics.Labels{"host": fmt.Sprintf("%02d", host)}, Samples: samples})
+		}
+		ways.Must(0, metrics.Ingest(ctx, store, hosts...))
+		asked := metrics.Comparison{Name: "paged_rtt", By: []string{"host"}, Op: metrics.Avg, Window: time.Hour, Against: 3 * time.Hour, Limit: 5}
+		page := ways.Must(metrics.CompareGroups(ctx, store, asked))
+		if len(page.Groups) != 5 || page.Next == "" {
+			t.Fatalf("a page of five groups: %+v", page)
+		}
+		second := page.Groups[1]
+		if second.Labels["host"] != "01" || *second.Value != 2 || *second.Usual != 1 || *second.Ratio != 2 || second.Windows != 1 {
+			t.Fatalf("host 01: %+v", second)
+		}
+		var walked []metrics.ComparedGroup
+		for group, err := range page.All(ctx) {
+			ways.Must(0, err)
+			walked = append(walked, group)
+		}
+		asked.Limit = 0
+		whole := ways.Must(metrics.CompareGroups(ctx, store, asked))
+		if !reflect.DeepEqual(walked, whole.Groups) || whole.Next != "" {
+			t.Fatalf("the pages walked: %+v, one call: %+v", walked, whole)
+		}
+		asked.By = nil
+		one := ways.Must(metrics.CompareGroups(ctx, store, asked)).Groups
+		if len(one) != 1 || len(one[0].Labels) != 0 || *one[0].Value != 6.5 {
+			t.Fatalf("every series one group: %+v", one)
+		}
+	})
+}
+
+// contract: MET-35
+func TestAnAggregateGivenFillAndLimitFillsEachPage(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		hour := time.Now().UTC().Truncate(time.Hour)
+		samples := []metrics.Sample{{At: hour.Add(-5*time.Hour + time.Minute), Value: 1}}
+		ways.Must(0, metrics.Ingest(ctx, store, metrics.Series{Name: "filled_pages", Kind: metrics.KindGauge, Samples: samples}))
+		query := metrics.Query{Name: "filled_pages", Since: 24 * time.Hour, Every: time.Hour, Op: metrics.Max, Fill: true}
+		whole := ways.Must(metrics.Aggregate(ctx, store, query))
+		query.Limit = 10
+		page := ways.Must(metrics.Aggregate(ctx, store, query))
+		if len(page.Groups[0].Buckets) != 10 || page.Next == "" {
+			t.Fatalf("a page of ten buckets, empty ones too: %+v", page)
+		}
+		var walked []metrics.Group
+		for group, err := range page.All(ctx) {
+			ways.Must(0, err)
+			walked = append(walked, group)
+		}
+		if !reflect.DeepEqual(walked, whole.Groups) {
+			t.Fatalf("the pages walked: %+v, one call: %+v", walked, whole.Groups)
+		}
 	})
 }
 

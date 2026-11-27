@@ -60,15 +60,18 @@ let now = store
 - A day is 24 hours, in no time zone. So in the week after a clock change,
   `sameHour` compares with hours that are one hour off from local time.
 - Without `sameHour`, the windows are counted back from the newest one, not
-  from a grid that starts in 1970. There can be at most 1000 of them. More
-  fails with `invalid`, which asks for a wider window or a shorter
-  `against`. With `sameHour`, the window can be a day at most, and `against`
-  must be a day at least.
+  from a grid that starts in 1970. There can be at most 1000 earlier
+  windows. More fails with `invalid`. It has no pages on purpose: a median
+  over more windows answers a different question, so ask it with a wider
+  window or a shorter `against`. With `sameHour`, the window can be a day at
+  most, and `against` must be a day at least.
 - Each window is one aggregate of the series that the query finds, merged
   the way an aggregate without `by` merges them. So a window that lies
   inside one packed block is answered from the block's summary. The query's
   bounds apply to all the windows together. For example, past 1000 series
-  the call fails with `limit`.
+  the call fails with `limit`. The way past it is
+  [`compareGroups` with `limit`](#each-group-a-page-at-a-time), which reads
+  a group of any size in parts.
 - Each window reads the blocks it reaches on its own. If a packed block
   spans several windows, it is decoded once per window, and its samples
   count against the query's bounds each time. So minute windows over blocks
@@ -103,6 +106,71 @@ bounds of its buckets, so it isn't one number that you can compare.
 `compare` refuses it with `invalid` unless the query asks for the
 `estimate` (`estimate: true`, `estimate=True`, `Estimate: true`,
 `.estimate()`). Then it compares the estimate, as the aggregate returns it.
+
+## Each group, a page at a time
+
+`compareGroups` answers the same thing for each group of series apart:
+which host is slower than usual, not only whether the fleet is. Groups work
+as in an [aggregate](aggregates.md#groups): `by` keeps labels, `without`
+drops them, and with neither every series of the name is one group. Each
+group comes with its `name` and `labels` beside the fields of `compare`'s
+answer. A group with no sample in any window is left out.
+
+```ts
+const page = await store.metrics.compareGroups({
+	name: 'rpc_ms', by: ['host'], op: 'avg', window: '15m', against: '1d', limit: 100,
+})
+for await (const host of page) {
+	if ((host.ratio ?? 0) > 2) console.log(`${host.labels.host} is slow: ${host.value} ms, usually ${host.usual}`)
+}
+```
+
+```python
+page = await store.metrics.compare_groups("rpc_ms", by=["host"], op="avg", window="15m", against="1d", limit=100)
+async for host in page:
+    if (host.ratio or 0) > 2:
+        print(f"{host.labels['host']} is slow: {host.value} ms, usually {host.usual}")
+```
+
+```go
+page, err := metrics.CompareGroups(ctx, store, metrics.Comparison{
+	Name: "rpc_ms", By: []string{"host"}, Op: metrics.Avg,
+	Window: 15 * time.Minute, Against: 24 * time.Hour, Limit: 100,
+})
+for host, err := range page.All(ctx) {
+	if err == nil && host.Ratio != nil && *host.Ratio > 2 {
+		fmt.Println(host.Labels["host"], "is slow:", *host.Value)
+	}
+}
+```
+
+```rust
+let hosts = store.metrics()?.query().name("rpc_ms").by(&["host"]).limit(100)
+    .compare(Op::Avg, Duration::from_mins(15)).against(Duration::from_hours(24));
+for host in hosts.groups()?.all() {
+    let host = host?;
+    if host.ratio.is_some_and(|ratio| ratio > 2.0) {
+        println!("{} is slow: {:?} ms, usually {:?}", host.labels["host"], host.value, host.usual);
+    }
+}
+```
+
+- Without `limit` you get every group in one answer, read from one
+  snapshot. Past a bound, such as 1000 series, it fails with `limit`.
+- With `limit`, a page holds at most that many groups, and at most 1000
+  series between them. Each page is read from one snapshot, and `next`
+  points at the page after it. Walking the page (`for await`, `async for`,
+  `All`, `all()`) reads the pages one at a time. The pages compare the same
+  windows, since they keep the first page's clock. A page that is not the
+  last always holds a group.
+- A page stops before a group whose windows would pass a bound of a query.
+  A group that passes one on its own fails with `limit`.
+- A group of more than 1000 series is alone on its page and is read in
+  parts of 1000 series, each part from its own snapshot. This works for
+  every `op` but a percentile, which needs all of a group's samples at
+  once, so such a group fails with `limit`. So
+  `compareGroups({ name, op: 'avg', …, limit: 10 })` without `by` is the way
+  to compare one name of 5000 series as a whole.
 
 ## Alerting with what exists
 

@@ -4117,6 +4117,13 @@
         "against": {
           "uint": "1500"
         },
+        "by": {
+          "list": [
+            {
+              "str": "by"
+            }
+          ]
+        },
         "estimate": {
           "bool": true
         },
@@ -4174,9 +4181,16 @@
         },
         "window": {
           "uint": "1500"
+        },
+        "without": {
+          "list": [
+            {
+              "str": "without"
+            }
+          ]
         }
       },
-      "hex": "87018701a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0006cd025f07a5616674657202a26f7003cd05dc04cd05dc05c306c307c3",
+      "hex": "89018701a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0006cd025f07a5616674657202a26f7003cd05dc04cd05dc05c306c307c30891a262790991a7776974686f7574",
       "message": "metrics.CompareAsked",
       "name": "metrics.CompareAsked with every field"
     },
@@ -4213,6 +4227,93 @@
       "hex": "80",
       "message": "metrics.Compared",
       "name": "metrics.Compared with no field"
+    },
+    {
+      "fields": {
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "name": {
+          "str": "name"
+        },
+        "ratio": {
+          "float": "3ff8000000000000"
+        },
+        "samples": {
+          "uint": "607"
+        },
+        "usual": {
+          "float": "3ff8000000000000"
+        },
+        "value": {
+          "float": "3ff8000000000000"
+        },
+        "windows": {
+          "uint": "707"
+        }
+      },
+      "hex": "8701a46e616d650281a161a66c6162656c7303cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c3",
+      "message": "metrics.ComparedGroup",
+      "name": "metrics.ComparedGroup with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.ComparedGroup",
+      "name": "metrics.ComparedGroup with no field"
+    },
+    {
+      "fields": {
+        "groups": {
+          "list": [
+            {
+              "fields": {
+                "labels": {
+                  "names": {
+                    "a": {
+                      "str": "labels"
+                    }
+                  }
+                },
+                "name": {
+                  "str": "name"
+                },
+                "ratio": {
+                  "float": "3ff8000000000000"
+                },
+                "samples": {
+                  "uint": "607"
+                },
+                "usual": {
+                  "float": "3ff8000000000000"
+                },
+                "value": {
+                  "float": "3ff8000000000000"
+                },
+                "windows": {
+                  "uint": "707"
+                }
+              }
+            }
+          ]
+        },
+        "next": {
+          "str": "next"
+        }
+      },
+      "hex": "8201918701a46e616d650281a161a66c6162656c7303cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c302a46e657874",
+      "message": "metrics.ComparedGroups",
+      "name": "metrics.ComparedGroups with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.ComparedGroups",
+      "name": "metrics.ComparedGroups with no field"
     },
     {
       "fields": {
@@ -9145,6 +9246,7 @@
     "locks.state": 2308,
     "metrics.aggregate": 1539,
     "metrics.compare": 1555,
+    "metrics.compareGroups": 1556,
     "metrics.damaged": 1545,
     "metrics.delete": 1548,
     "metrics.describe": 1547,

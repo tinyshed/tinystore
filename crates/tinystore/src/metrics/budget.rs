@@ -39,12 +39,20 @@ pub(super) struct Budget {
     /// An aggregate's page, which stops before every bound but a bucket's
     /// own: its refusal asks for smaller buckets, never for pages.
     paged: bool,
+    /// A comparison's, whose windows are its buckets: its refusal asks for
+    /// fewer windows, or for its groups a page at a time.
+    comparing: bool,
 }
 
 impl Budget {
     /// The budget of an aggregate's page.
     pub(super) fn paged() -> Budget {
         Budget { paged: true, ..Budget::default() }
+    }
+
+    /// The budget of a comparison, or of a page of its groups when `paged`.
+    pub(super) fn comparing(paged: bool) -> Budget {
+        Budget { comparing: true, paged, ..Budget::default() }
     }
 
     /// The budget of a gauge's `replace`, bounded as a query is.
@@ -120,7 +128,7 @@ impl Budget {
     /// Spends nothing more: what a page took of a group it then leaves out
     /// is given back, so that a bucket alone is tried with the whole bounds.
     pub(super) fn reset(&mut self) {
-        *self = Budget { planning: self.planning, paged: self.paged, ..Budget::default() };
+        *self = Budget { planning: self.planning, paged: self.paged, comparing: self.comparing, ..Budget::default() };
     }
 
     /// Begins the next part of a group read in parts: each part is bounded
@@ -163,6 +171,18 @@ impl Budget {
         }
         let refused = if self.replacing {
             format!("a replace past {} {}: replace a shorter range, in several calls", bound.bound, bound.name)
+        } else if self.comparing && self.paged {
+            format!(
+                "a group's windows past {} {}, which no page splits: a shorter `against`, a wider window, or fewer \
+                 series a group, `by` more labels",
+                bound.bound, bound.name
+            )
+        } else if self.comparing {
+            format!(
+                "a comparison past {} {}: a shorter `against`, a wider window, or its `groups` a page at a time with \
+                 `limit`",
+                bound.bound, bound.name
+            )
         } else if self.paged {
             format!(
                 "a bucket past {} {}, which no page splits: a narrower `every`, a shorter range, or fewer series",

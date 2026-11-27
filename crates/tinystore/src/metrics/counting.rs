@@ -33,6 +33,8 @@ use crate::{Error, Reservation, Result};
 /// What a bucket of a group holds of the store's memory while it is counted.
 const BUCKET_HELD: u64 = 512;
 
+mod windows;
+
 impl Engine {
     /// The groups of an aggregate, whole; or those of a page, and the place
     /// the page after it begins, none on the last.
@@ -77,7 +79,7 @@ impl Engine {
         shape: &Shape,
         ranges: &[(i64, i64)],
     ) -> Result<Vec<Vec<Aggregate>>> {
-        let mut budget = Budget::default();
+        let mut budget = Budget::comparing(false);
         let taken = self.take_ranges(asked, shape, ranges, &mut budget)?;
         let mut held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: a comparison", PATIENCE)?;
         let mut zstd = self.codecs.take();
@@ -118,11 +120,13 @@ struct WideCounted {
 
 /// The parts of a wide group joined: where the first of them ended, the
 /// window of the series whose range begins first, which says what retention
-/// keeps of the group, and the first group after it.
+/// keeps of the group, the first group after it, and whether a part met a
+/// sample of it.
 struct WideJoined {
     end: i64,
     kept: Option<Window>,
     after: Option<(String, Labels)>,
+    seen: bool,
 }
 
 impl Engine {
@@ -172,10 +176,12 @@ impl Engine {
         let mut joining = Joining::new(shape);
         let parts = self.wide_parts(asked, wide, (&mut zstd, &mut budget, &mut joining));
         self.codecs.give_back(zstd);
-        let WideJoined { end, kept, after } = parts?;
+        let WideJoined { end, kept, after, seen } = parts?;
         let end = joining.cut(end, wide.left);
         let buckets = joining.answer()?;
-        let Some(kept) = kept.filter(|_| !buckets.is_empty()) else {
+        // with `fill`, a group a page before held a sample of is filled here too
+        let fills = shape.fills() && (seen || wide.at != i64::MIN);
+        let Some(kept) = kept.filter(|_| !buckets.is_empty() || fills) else {
             return Ok(WideCounted { buckets: None, end, after });
         };
         let held = buckets.len();
@@ -194,11 +200,13 @@ impl Engine {
         let shape = joining.shape;
         let mut sums = self.memory.reserve_for_read(0, "metrics: an aggregate's buckets", PATIENCE)?;
         let (mut end, mut from, mut kept, mut after) = (wide.to, i64::MIN, None::<Window>, None);
+        let mut seen = false;
         loop {
             crate::cancel::check(|| "an aggregate".to_owned())?;
             budget.next_part();
             let part = self.take_wide(asked, shape, Wide { to: end, ..wide }, from, budget)?;
             end = end.min(part.end);
+            seen |= part.seen;
             after = [after, part.after].into_iter().flatten().min();
             let mut held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: an aggregate", PATIENCE)?;
             let joined = joining.joined.len();
@@ -213,7 +221,7 @@ impl Engine {
             sums.grow((joining.joined.len() - joined) as u64 * BUCKET_HELD, "metrics: an aggregate's buckets")?;
             match part.beyond {
                 Some(next) => from = next,
-                None => return Ok(WideJoined { end, kept, after }),
+                None => return Ok(WideJoined { end, kept, after, seen }),
             }
         }
     }
@@ -228,7 +236,7 @@ fn grouped(taken: Vec<Taken>, shape: &Shape) -> Result<Vec<TakenGroup>> {
         let group = shape.group_of(&series.found).map_err(|error| error.within(&series.found.kept))?;
         groups.entry(group).or_default().push(series);
     }
-    let group = |((name, labels), members)| TakenGroup { name, labels, members, more: false };
+    let group = |((name, labels), members)| TakenGroup { name, labels, members, more: false, fills: false };
     Ok(groups.into_iter().map(group).collect())
 }
 
@@ -249,11 +257,11 @@ impl Counting<'_> {
     /// left out.
     fn groups(&mut self, groups: Vec<TakenGroup>) -> Result<Vec<Aggregate>> {
         let mut answer = Vec::with_capacity(groups.len());
-        for TakenGroup { name, labels, members, more } in groups {
+        for TakenGroup { name, labels, members, more, fills } in groups {
             // what retention keeps of the group: where its name's keep begins, or the range
             let kept = members.iter().map(|series| series.window).min_by_key(|window| window.from);
             let buckets = self.group(members)?;
-            let Some(kept) = kept.filter(|_| !buckets.is_empty()) else { continue };
+            let Some(kept) = kept.filter(|_| !buckets.is_empty() || fills) else { continue };
             let held = buckets.len();
             let buckets = self.shape.filled(buckets, (kept.from, kept.to), kept.cutoff, self.asked.now);
             self.budget.take_answer(buckets.len() - held)?;

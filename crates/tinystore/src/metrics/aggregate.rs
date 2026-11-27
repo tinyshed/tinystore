@@ -275,25 +275,41 @@ impl Shape {
     }
 
     /// Refuses a `fill` the range cannot bound before the read starts: one
-    /// with no start, whose first bucket is 1970's, one in pages, which do
-    /// not fill yet, and one of more buckets than an answer holds (MET-07).
+    /// with no start, whose first bucket is 1970's, and one of more buckets
+    /// a group than an answer holds (MET-07). A page is bounded by its
+    /// `limit` instead, which counts the empty buckets it fills (MET-35).
     pub(super) fn check_fill(&self, from: i64, to: i64, paged: bool) -> Result<()> {
         if !self.fill {
             return Ok(());
         }
-        if paged {
-            return Err(Error::invalid("`fill` gives the whole range, which pages do not split yet: not with `limit`"));
-        }
         if from == i64::MIN {
             return Err(Error::invalid("`fill` fills from the range's start: a query gives it `since` or `from`"));
+        }
+        if paged {
+            return Ok(());
         }
         let most = QUERY_ANSWER.bound;
         let buckets = self.starts(from, to).take(usize::try_from(most).unwrap_or(usize::MAX) + 1).count() as u64;
         if buckets > most {
-            let what = format!("`fill` of more than {most} buckets a group: a wider `every`, or a shorter range");
+            let what = format!(
+                "`fill` of more than {most} buckets a group: a wider `every`, a shorter range, or a page at a time \
+                 with `limit`"
+            );
             return Err(QUERY_ANSWER.refuse(buckets, what));
         }
         Ok(())
+    }
+
+    /// Whether the aggregate gives every bucket of its range, one without
+    /// samples empty: `fill`, over buckets of a grid.
+    pub(super) fn fills(&self) -> bool {
+        self.fill && self.grid.is_some()
+    }
+
+    /// How many buckets begin in `[from, to)`, the one that holds `from`
+    /// first.
+    pub(super) fn buckets_in(&self, from: i64, to: i64) -> usize {
+        self.starts(from, to).count()
     }
 
     /// A group's buckets with every bucket of `[from, to)` the grid has, one

@@ -22,7 +22,7 @@ use std::vec::IntoIter;
 
 use futures_core::Stream;
 
-use super::{Aggregate, Op, Query, Series};
+use super::{Aggregate, Compare, ComparedGroup, Op, Query, Series};
 use crate::Result;
 use crate::metrics::page::{Parts, group_parts};
 
@@ -70,6 +70,30 @@ impl AggregatePage {
         let (query, op) = (self.query, self.op);
         All::of(self.groups, self.next, group_parts(), move |after| {
             let read = query.clone().after(after).aggregate(op);
+            Box::pin(async move { read.await.map(|page| (page.groups, page.next)) })
+        })
+    }
+}
+
+/// One page of an awaited comparison's groups: each group's comparison,
+/// and `next` while there is more.
+#[derive(Clone, Debug)]
+pub struct ComparePage {
+    pub groups: Vec<ComparedGroup>,
+    pub next: Option<String>,
+    compare: Compare,
+}
+
+impl ComparePage {
+    pub(super) fn of(page: crate::metrics::ComparePage, compare: Compare) -> ComparePage {
+        ComparePage { groups: page.groups, next: page.next, compare }
+    }
+
+    /// The page's groups, then those of each page after it, as a stream.
+    pub fn all(self) -> All<ComparedGroup> {
+        let compare = self.compare;
+        All::of(self.groups, self.next, None, move |after| {
+            let read = compare.after(after).groups();
             Box::pin(async move { read.await.map(|page| (page.groups, page.next)) })
         })
     }

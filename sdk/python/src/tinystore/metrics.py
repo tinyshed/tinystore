@@ -33,6 +33,7 @@ from ._wire.protocol import (
     MetricsAggregates,
     MetricsCompareAsked,
     MetricsCompared,
+    MetricsComparedGroups,
     MetricsDamages,
     MetricsDeleted,
     MetricsDescription,
@@ -167,7 +168,8 @@ class AggregateQuery(SeriesQuery, total=False):
     skip_nan: bool
     """a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused"""
     fill: bool
-    """every bucket of the range retention keeps, an empty one with samples 0 and no value; with since or from_"""
+    """every bucket of the range retention keeps, an empty one with samples 0 and no value; with since or from_,
+    and a page's limit counts the empty ones too"""
 
 
 @dataclass(slots=True)
@@ -323,6 +325,39 @@ class Compared:
     """the samples of the newest window"""
     windows: int
     """the windows the usual stands on"""
+
+
+@dataclass(frozen=True, slots=True)
+class ComparedGroup:
+    """What compare_groups found of one group: its name and labels, and what compare finds."""
+
+    name: str
+    labels: dict[str, str]
+    """the labels by kept or without left"""
+    value: float | None
+    usual: float | None
+    ratio: float | None
+    samples: int
+    windows: int
+
+
+@dataclass(frozen=True, slots=True)
+class ComparePage:
+    """One page of compare_groups: its groups, and next while there is more, walked as a SeriesPage is."""
+
+    groups: list[ComparedGroup]
+    next: str | None
+    """where the page after it begins; none on the last"""
+    _read_on: Callable[[str], Awaitable[ComparePage]] = field(repr=False, compare=False)
+
+    async def __aiter__(self) -> AsyncIterator[ComparedGroup]:
+        page = self
+        while True:
+            for group in page.groups:
+                yield group
+            if page.next is None:
+                return
+            page = await page._read_on(page.next)
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,6 +620,77 @@ class Metrics:
         return Compared(
             got.get("value"), got.get("usual"), got.get("ratio"), got.get("samples", 0), got.get("windows", 0)
         )
+
+    async def compare_groups(
+        self,
+        name: str,
+        *,
+        op: Op | str,
+        window: Duration,
+        against: Duration,
+        where: Mapping[str, Condition] | None = None,
+        by: Sequence[str] | None = None,
+        without: Sequence[str] | None = None,
+        same_hour: bool = False,
+        estimate: bool = False,
+        skip_nan: bool = False,
+        limit: int | None = None,
+        after: str | None = None,
+    ) -> ComparePage:
+        """What compare finds, for each group of the series apart, as an aggregate groups them by labels.
+
+        Without limit every group, or a LimitError naming its bound; with limit a page of that many groups at
+        most and next while there is more. A group past the series one query finds is read in parts, for every
+        op but a percentile.
+        """
+        query: dict[str, Any] = {"name": name, "where": where or {}}
+        if limit is not None:
+            query["limit"] = limit
+        if after is not None:
+            query["after"] = after
+        asked = MetricsCompareAsked.encode(
+            query=_query_of(query),
+            op=op,
+            window=ms(window, "compare's window"),
+            against=ms(against, "compare's against"),
+            same_hour=same_hour,
+            estimate=estimate,
+            skip_nan=skip_nan,
+            by=None if by is None else list(by),
+            without=None if without is None else list(without),
+        )
+        parts = [MetricsComparedGroups.decode(part) for part in await self._download("metrics.compareGroups", asked)]
+        groups = [
+            ComparedGroup(
+                each.get("name", ""),
+                dict(each.get("labels", {})),
+                each.get("value"),
+                each.get("usual"),
+                each.get("ratio"),
+                each.get("samples", 0),
+                each.get("windows", 0),
+            )
+            for part in parts
+            for each in part.get("groups", [])
+        ]
+
+        async def read_on(next_page: str) -> ComparePage:
+            return await self.compare_groups(
+                name,
+                op=op,
+                window=window,
+                against=against,
+                where=where,
+                by=by,
+                without=without,
+                same_hour=same_hour,
+                estimate=estimate,
+                skip_nan=skip_nan,
+                limit=limit,
+                after=next_page,
+            )
+
+        return ComparePage(groups, parts[-1].get("next") if parts else None, read_on)
 
     async def names(self, *, prefix: str | None = None, limit: int | None = None, after: str | None = None) -> NamePage:
         """A page of the names the store holds samples of, in the byte order of their text."""

@@ -37,6 +37,7 @@ import {
 	MetricsAggregates,
 	MetricsCompareAsked,
 	MetricsCompared,
+	MetricsComparedGroups,
 	MetricsDamages,
 	MetricsDeleted,
 	MetricsDescription,
@@ -199,7 +200,7 @@ export interface AggregateQuery<O extends Op = Op, F extends boolean = boolean> 
 	estimate?: boolean | undefined
 	/** a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused */
 	skipNaN?: boolean | undefined
-	/** every bucket of the range retention keeps, one without samples with samples 0 and no value; with since or from, not limit */
+	/** every bucket of the range retention keeps, one without samples with samples 0 and no value; with since or from, and a page's limit counts the empty ones too */
 	fill?: F | undefined
 }
 
@@ -236,6 +237,38 @@ export interface Compared {
 	samples: number
 	/** the windows the usual stands on */
 	windows: number
+}
+
+/**
+ * compareGroups' query: compare's, each group of the series apart, as an
+ * aggregate groups them, and a page of groups with limit.
+ */
+export interface CompareGroupsQuery extends CompareQuery {
+	/** the labels a group keeps; without by and without, every series of the name is one group */
+	by?: readonly string[] | undefined
+	/** the labels a group leaves out, keeping every other; [] keeps every series apart */
+	without?: readonly string[] | undefined
+	/** a page of this many groups at most; without it, every group, or a limit error */
+	limit?: number | undefined
+	/** the page after the one whose next this is, asked with the same query and limit */
+	after?: string | undefined
+}
+
+/** What compareGroups found of one group: its name and labels, and what compare finds. */
+export interface ComparedGroup extends Compared {
+	name: string
+	/** the labels by kept or without left */
+	labels: Labels
+}
+
+/**
+ * One page of compareGroups: its groups, and next while there is more,
+ * walked as a SeriesPage is.
+ */
+export interface ComparePage extends AsyncIterable<ComparedGroup> {
+	groups: ComparedGroup[]
+	/** where the page after it begins; absent on the last */
+	next?: string
 }
 
 /** What every bucket of an aggregate says of itself. */
@@ -606,28 +639,50 @@ export class Metrics {
 	 */
 	async compare(query: CompareQuery): Promise<Compared> {
 		refuseUnknown('metrics compare', query, compareFields)
-		if (query.against === undefined) {
-			throw new InvalidError(
-				'metrics compare: against says how far back the windows compared with reach',
-			)
-		}
-		const asked = {
-			query: queryOf({ name: query.name, where: query.where }),
-			op: query.op,
-			window: ms(query.window),
-			against: ms(query.against),
-			sameHour: query.sameHour === true,
-			estimate: query.estimate === true,
-			skipNan: query.skipNaN === true,
-		}
 		const answer = MetricsCompared.decode(
-			await this.#read('metrics.compare', MetricsCompareAsked.encode(asked)),
+			await this.#read('metrics.compare', MetricsCompareAsked.encode(compareOf('compare', query))),
 		)
-		const compared: Compared = { samples: answer.samples ?? 0, windows: answer.windows ?? 0 }
-		if (answer.value !== undefined) compared.value = answer.value
-		if (answer.usual !== undefined) compared.usual = answer.usual
-		if (answer.ratio !== undefined) compared.ratio = answer.ratio
-		return compared
+		return comparedOf(answer)
+	}
+
+	/**
+	 * What compare finds, for each group of the series apart, as an aggregate groups them:
+	 * `{ name: 'rpc_ms', by: ['host'], op: 'avg', window: '15m', against: '1d', limit: 100 }`.
+	 * Without limit every group, or a limit error naming its bound; with limit a page of that
+	 * many groups at most and next while there is more. A group past the series one query
+	 * finds is read in parts, for every op but a percentile.
+	 */
+	async compareGroups(query: CompareGroupsQuery): Promise<ComparePage> {
+		refuseUnknown('metrics compareGroups', query, compareGroupsFields)
+		const asked = {
+			...compareOf('compareGroups', query),
+			query: queryOf({
+				name: query.name,
+				where: query.where,
+				limit: query.limit,
+				after: query.after,
+			}),
+			by: query.by === undefined ? undefined : [...query.by],
+			without: query.without === undefined ? undefined : [...query.without],
+		}
+		const parts = (
+			await this.#download('metrics.compareGroups', MetricsCompareAsked.encode(asked))
+		).map(part => MetricsComparedGroups.decode(part))
+		const groups = parts.flatMap(part =>
+			(part.groups ?? []).map(group => ({
+				name: group.name ?? '',
+				labels: group.labels ?? {},
+				...comparedOf(group),
+			})),
+		)
+		const next = parts.at(-1)?.next
+		const page: { groups: ComparedGroup[]; next?: string } =
+			next === undefined ? { groups } : { groups, next }
+		return walked(
+			page,
+			at => at.groups,
+			after => this.compareGroups({ ...query, after }),
+		)
 	}
 
 	/** A page of the names the store holds samples of, in the byte order of their text. */
@@ -815,7 +870,7 @@ export class Metrics {
  * from the page after, so that the walk gives it once, whole (MET-28); a
  * read's series come in their parts, since a series is what pages bound.
  */
-function walked<P extends { next?: string }, T extends { more: boolean }>(
+function walked<P extends { next?: string }, T>(
 	page: P,
 	items: (page: P) => readonly T[],
 	readOn: (after: string) => Promise<P>,
@@ -828,7 +883,8 @@ function walked<P extends { next?: string }, T extends { more: boolean }>(
 				for (const part of items(at)) {
 					const item = held === undefined || join === undefined ? part : join(held, part)
 					held = undefined
-					if (join !== undefined && item.more) {
+					// only an item a walk joins says whether a page cut it
+					if (join !== undefined && (item as { more?: boolean }).more === true) {
 						held = item
 						continue
 					}
@@ -890,6 +946,22 @@ const compareFields = Object.keys({
 	skipNaN: 0,
 } satisfies Record<keyof CompareQuery, 0>)
 
+/** A comparison's fields, and those of a page of its groups. */
+const compareGroupsFields = Object.keys({
+	name: 0,
+	where: 0,
+	op: 0,
+	window: 0,
+	against: 0,
+	sameHour: 0,
+	estimate: 0,
+	skipNaN: 0,
+	by: 0,
+	without: 0,
+	limit: 0,
+	after: 0,
+} satisfies Record<keyof CompareGroupsQuery, 0>)
+
 /**
  * Refuses a field a call's query does not take, naming it: an aggregate's on
  * a read or latest as an aggregate's, any other as no field of a query.
@@ -904,6 +976,42 @@ function checked(call: string, query: object, known: readonly string[]): void {
 }
 
 /** A query as the wire carries it; a condition given as undefined is refused, never left out. */
+/** A comparison's windows and op as the wire takes them; `call` names it in a refusal. */
+function compareOf(
+	call: string,
+	query: CompareQuery,
+): Parameters<typeof MetricsCompareAsked.encode>[0] {
+	if (query.against === undefined) {
+		throw new InvalidError(
+			`metrics ${call}: against says how far back the windows compared with reach`,
+		)
+	}
+	return {
+		query: queryOf({ name: query.name, where: query.where }),
+		op: query.op,
+		window: ms(query.window),
+		against: ms(query.against),
+		sameHour: query.sameHour === true,
+		estimate: query.estimate === true,
+		skipNan: query.skipNaN === true,
+	}
+}
+
+/** What compare found of a group, a value it could not give absent. */
+function comparedOf(answer: {
+	value?: number | undefined
+	usual?: number | undefined
+	ratio?: number | undefined
+	samples?: number | undefined
+	windows?: number | undefined
+}): Compared {
+	const compared: Compared = { samples: answer.samples ?? 0, windows: answer.windows ?? 0 }
+	if (answer.value !== undefined) compared.value = answer.value
+	if (answer.usual !== undefined) compared.usual = answer.usual
+	if (answer.ratio !== undefined) compared.ratio = answer.ratio
+	return compared
+}
+
 function queryOf(query: Query): Parameters<typeof MetricsQuery.encode>[0] {
 	const where: Record<string, { values?: string[]; not?: boolean; prefix?: string }> = {}
 	for (const [label, condition] of Object.entries(query.where ?? {})) {

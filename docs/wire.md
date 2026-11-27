@@ -850,27 +850,28 @@ Metrics are one store of series, each named by its labels, so none opens a
 handle.
 
 <!-- written from protocol/*.wire by `just protocol`: methods of metrics -->
-| method   | name                     | may   | request                  | answer                                                   |
-|----------|--------------------------|-------|--------------------------|----------------------------------------------------------|
-| `0x0601` | metrics.read             | read  | `metrics.Query`          | download `metrics.Read` until `metrics.Read`             |
-| `0x0602` | metrics.latest           | read  | `metrics.Query`          | download `metrics.Latest` until `metrics.Latest`         |
-| `0x0603` | metrics.aggregate        | read  | `metrics.AggregateAsked` | download `metrics.Aggregates` until `metrics.Aggregates` |
-| `0x0604` | metrics.explain          | read  | `metrics.AggregateAsked` | `metrics.Plan`                                           |
-| `0x0605` | metrics.names            | read  | `metrics.PageAsked`      | `metrics.NamePage`                                       |
-| `0x0606` | metrics.labelNames       | read  | `metrics.PageAsked`      | `metrics.TextPage`                                       |
-| `0x0607` | metrics.labelValues      | read  | `metrics.PageAsked`      | `metrics.TextPage`                                       |
-| `0x0608` | metrics.description      | read  | `metrics.NameAsked`      | `metrics.Description`                                    |
-| `0x0609` | metrics.damaged          | read  | `Empty`                  | `metrics.Damages`                                        |
-| `0x060a` | metrics.ingest           | write | `metrics.Ingest`         | `Empty`                                                  |
-| `0x060b` | metrics.describe         | write | `metrics.Description`    | `Empty`                                                  |
-| `0x060c` | metrics.delete           | write | `metrics.SeriesNamed`    | `metrics.Deleted`                                        |
-| `0x060d` | metrics.flush            | write | `Empty`                  | `Empty`                                                  |
-| `0x060e` | metrics.instruments      | write | `metrics.Session`        | exchange `metrics.Ack` for `metrics.Batch`               |
-| `0x060f` | metrics.ingestPrometheus | write | `metrics.Exposition`     | `Empty`                                                  |
-| `0x0610` | metrics.uploadPrometheus | write | `metrics.Upload`         | exchange `Empty` for `metrics.Piece`                     |
-| `0x0611` | metrics.replace          | write | `metrics.Replace`        | `Empty`                                                  |
-| `0x0612` | metrics.upload           | write | `metrics.IngestUpload`   | exchange `Empty` for `metrics.Piece`                     |
-| `0x0613` | metrics.compare          | read  | `metrics.CompareAsked`   | `metrics.Compared`                                       |
+| method   | name                     | may   | request                  | answer                                                           |
+|----------|--------------------------|-------|--------------------------|------------------------------------------------------------------|
+| `0x0601` | metrics.read             | read  | `metrics.Query`          | download `metrics.Read` until `metrics.Read`                     |
+| `0x0602` | metrics.latest           | read  | `metrics.Query`          | download `metrics.Latest` until `metrics.Latest`                 |
+| `0x0603` | metrics.aggregate        | read  | `metrics.AggregateAsked` | download `metrics.Aggregates` until `metrics.Aggregates`         |
+| `0x0604` | metrics.explain          | read  | `metrics.AggregateAsked` | `metrics.Plan`                                                   |
+| `0x0605` | metrics.names            | read  | `metrics.PageAsked`      | `metrics.NamePage`                                               |
+| `0x0606` | metrics.labelNames       | read  | `metrics.PageAsked`      | `metrics.TextPage`                                               |
+| `0x0607` | metrics.labelValues      | read  | `metrics.PageAsked`      | `metrics.TextPage`                                               |
+| `0x0608` | metrics.description      | read  | `metrics.NameAsked`      | `metrics.Description`                                            |
+| `0x0609` | metrics.damaged          | read  | `Empty`                  | `metrics.Damages`                                                |
+| `0x060a` | metrics.ingest           | write | `metrics.Ingest`         | `Empty`                                                          |
+| `0x060b` | metrics.describe         | write | `metrics.Description`    | `Empty`                                                          |
+| `0x060c` | metrics.delete           | write | `metrics.SeriesNamed`    | `metrics.Deleted`                                                |
+| `0x060d` | metrics.flush            | write | `Empty`                  | `Empty`                                                          |
+| `0x060e` | metrics.instruments      | write | `metrics.Session`        | exchange `metrics.Ack` for `metrics.Batch`                       |
+| `0x060f` | metrics.ingestPrometheus | write | `metrics.Exposition`     | `Empty`                                                          |
+| `0x0610` | metrics.uploadPrometheus | write | `metrics.Upload`         | exchange `Empty` for `metrics.Piece`                             |
+| `0x0611` | metrics.replace          | write | `metrics.Replace`        | `Empty`                                                          |
+| `0x0612` | metrics.upload           | write | `metrics.IngestUpload`   | exchange `Empty` for `metrics.Piece`                             |
+| `0x0613` | metrics.compare          | read  | `metrics.CompareAsked`   | `metrics.Compared`                                               |
+| `0x0614` | metrics.compareGroups    | read  | `metrics.CompareAsked`   | download `metrics.ComparedGroups` until `metrics.ComparedGroups` |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/metrics.wire`. A read, the newest samples and an

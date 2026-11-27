@@ -20,19 +20,19 @@ use std::time::Duration;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsBucket,
-    MetricsCompareAsked, MetricsCompared, MetricsCondition, MetricsDamage, MetricsDamages, MetricsDeleted,
-    MetricsDescription, MetricsExceeds, MetricsExposition, MetricsGroup, MetricsIngest, MetricsIngestUpload,
-    MetricsLatest, MetricsName, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsNewest, MetricsPageAsked,
-    MetricsPiece, MetricsPlan, MetricsQuery, MetricsRead, MetricsRefused, MetricsReplace, MetricsSeries,
-    MetricsSeriesNamed, MetricsSession, MetricsTextPage, MetricsUpload, method,
+    MetricsCompareAsked, MetricsCompared, MetricsComparedGroup, MetricsComparedGroups, MetricsCondition, MetricsDamage,
+    MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExceeds, MetricsExposition, MetricsGroup, MetricsIngest,
+    MetricsIngestUpload, MetricsLatest, MetricsName, MetricsNameAsked, MetricsNamePage, MetricsNewSeries,
+    MetricsNewest, MetricsPageAsked, MetricsPiece, MetricsPlan, MetricsQuery, MetricsRead, MetricsRefused,
+    MetricsReplace, MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage, MetricsUpload, method,
 };
 use super::{Link, Route};
 use crate::clock::from_unix_millis;
 use crate::limits::TEXT_BYTES;
 use crate::memory::PATIENCE;
 use crate::metrics::{
-    Ack, AggregatePage, Batch, Buckets, Change, Condition, Declared, Description, Latest, List, Metrics, Op,
-    Prometheus, Query, Remote, Series, SeriesPage, Set, Value,
+    Ack, AggregatePage, Batch, Buckets, Change, Compare, ComparePage, Condition, Declared, Description, Latest, List,
+    Metrics, Op, Prometheus, Query, Remote, Series, SeriesPage, Set, Value,
 };
 use crate::sync::lock;
 use crate::{Calendar, Memory, Reservation, Store, unix_millis};
@@ -51,6 +51,9 @@ const SAMPLE: usize = 16;
 /// bytes a number and its key, three of them a percentile's bounds, and two
 /// a flag.
 const BUCKET: usize = 80;
+/// What a group of a comparison takes of a part past its name and labels:
+/// its map, and ten bytes a number and its key, five of them.
+const COMPARED: usize = ENVELOPE + 50;
 /// The longest text an upload gathers: one text's 32 MiB, as the engine
 /// bounds what its series weigh. It bounds what the session holds for a
 /// client, so it is refused before a byte of the text comes.
@@ -60,7 +63,9 @@ const UPLOADED: &str = "metrics: an uploaded text";
 
 pub(crate) fn route(called: u16) -> Route {
     match called {
-        method::METRICS_READ | method::METRICS_LATEST | method::METRICS_AGGREGATE => Route::Parts,
+        method::METRICS_READ | method::METRICS_LATEST | method::METRICS_AGGREGATE | method::METRICS_COMPARE_GROUPS => {
+            Route::Parts
+        }
         method::METRICS_INSTRUMENTS => Route::Instruments,
         method::METRICS_UPLOAD_PROMETHEUS | method::METRICS_UPLOAD => Route::Gather,
         _ => Route::Worker,
@@ -179,6 +184,10 @@ pub(crate) fn parts(
     match called {
         method::METRICS_READ => Ok(read_parts(query(&metrics, MetricsQuery::decode(body)?)?.read()?, bound)),
         method::METRICS_LATEST => Ok(latest_parts(query(&metrics, MetricsQuery::decode(body)?)?.latest()?, bound)),
+        method::METRICS_COMPARE_GROUPS => {
+            let compare = comparing(&metrics, MetricsCompareAsked::decode(body)?)?;
+            Ok(compared_parts(compare.groups()?, bound))
+        }
         _ => {
             let asked = MetricsAggregateAsked::decode(body)?;
             let op = op_of(asked.op.as_deref())?;
@@ -293,7 +302,8 @@ fn explain(metrics: &Metrics, asked: MetricsAggregateAsked) -> Answered {
     Ok(MetricsPlan { series: plan.series, bytes: plan.bytes, decoded: plan.decoded, exceeds }.encode())
 }
 
-fn compare(metrics: &Metrics, asked: MetricsCompareAsked) -> Answered {
+/// A comparison as the engine takes it: its query, groups, windows and `op`.
+fn comparing(metrics: &Metrics, asked: MetricsCompareAsked) -> Result<Compare, Failure> {
     let op = op_of(Some(&asked.op))?;
     let mut query = query(metrics, asked.query)?;
     if asked.estimate {
@@ -302,12 +312,22 @@ fn compare(metrics: &Metrics, asked: MetricsCompareAsked) -> Answered {
     if asked.skip_nan {
         query = query.skip_nan();
     }
+    if let Some(by) = &asked.by {
+        query = query.by(&by.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+    if let Some(without) = &asked.without {
+        query = query.without(&without.iter().map(String::as_str).collect::<Vec<_>>());
+    }
     let mut compare =
         query.compare(op, Duration::from_millis(asked.window)).against(Duration::from_millis(asked.against));
     if asked.same_hour {
         compare = compare.same_hour();
     }
-    let compared = compare.run()?;
+    Ok(compare)
+}
+
+fn compare(metrics: &Metrics, asked: MetricsCompareAsked) -> Answered {
+    let compared = comparing(metrics, asked)?.run()?;
     let (value, usual, ratio) = (compared.value, compared.usual, compared.ratio);
     Ok(MetricsCompared { value, usual, ratio, samples: compared.samples, windows: u64::from(compared.windows) }
         .encode())
@@ -511,6 +531,28 @@ fn latest_parts(latest: Vec<Latest>, bound: usize) -> VecDeque<Vec<u8>> {
         parts.take(weight, |part| part.series.push(newest));
     }
     parts.finish()
+}
+
+/// A page of a comparison's groups in parts of at most `bound` bytes, its
+/// `next` on the last.
+fn compared_parts(page: ComparePage, bound: usize) -> VecDeque<Vec<u8>> {
+    let mut parts: Parts<MetricsComparedGroups> = Parts::new(bound);
+    for group in page.groups {
+        let weight = group.name.len() + labels_weight(&group.labels) + COMPARED;
+        parts.room(weight, 0);
+        let compared = MetricsComparedGroup {
+            name: group.name,
+            labels: group.labels,
+            value: group.value,
+            usual: group.usual,
+            ratio: group.ratio,
+            samples: group.samples,
+            windows: u64::from(group.windows),
+        };
+        parts.take(weight, |part| part.groups.push(compared));
+    }
+    let next = page.next;
+    parts.last(next.as_ref().map_or(0, String::len), |part| part.next = next)
 }
 
 /// An aggregate's groups in parts of at most `bound` bytes: a group longer

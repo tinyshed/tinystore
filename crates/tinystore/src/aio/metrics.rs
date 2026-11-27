@@ -67,14 +67,14 @@ use crate::cancel;
 use crate::pool::Pool;
 
 pub use crate::metrics::{
-    Aggregate, Bucket, Buckets, Builder, Compared, Condition, Counter, Damage, Description, Exceeds, Gauge, GaugeFunc,
-    Histogram, Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading, Recorder, Sample,
-    Series, Timer, Timing, Value, ValuePage, Values, Written, exponential_buckets,
+    Aggregate, Bucket, Buckets, Builder, Compared, ComparedGroup, Condition, Counter, Damage, Description, Exceeds,
+    Gauge, GaugeFunc, Histogram, Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading,
+    Recorder, Sample, Series, Timer, Timing, Value, ValuePage, Values, Written, exponential_buckets,
 };
 
 mod page;
 
-pub use page::{AggregatePage, All, SeriesPage};
+pub use page::{AggregatePage, All, ComparePage, SeriesPage};
 
 /// What an awaited ingest names in its errors, as its blocking twin names
 /// its wait for memory.
@@ -441,6 +441,19 @@ impl Compare {
     pub fn run(&self) -> impl Future<Output = Result<Compared>> + Send + 'static {
         let compare = self.blocking.clone();
         checked_then_read(&self.pool, "metrics: a comparison", move || compare.checked_run())
+    }
+
+    /// What `run` finds, for each group of the query's series apart, whole
+    /// or a page of them, as [`crate::metrics::Compare::groups`] gives them.
+    pub fn groups(&self) -> impl Future<Output = Result<ComparePage>> + Send + 'static {
+        let (compare, walk) = (self.blocking.clone(), self.clone());
+        let read = checked_then_read(&self.pool, "metrics: a comparison", move || compare.checked_groups());
+        async move { read.await.map(|page| ComparePage::of(page, walk)) }
+    }
+
+    /// The comparison the page after one reads, from the page's `next`.
+    fn after(&self, next: &str) -> Compare {
+        Compare { blocking: self.blocking.after(next), pool: Arc::clone(&self.pool) }
     }
 }
 

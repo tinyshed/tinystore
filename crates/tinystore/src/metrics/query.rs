@@ -26,12 +26,12 @@ use std::time::{Duration, SystemTime};
 use sha2::{Digest, Sha256};
 
 use super::aggregate::{Asking, Op, Shape};
-use super::compare::{self, Compare, Compared, Windows};
+use super::compare::{self, Compare, Compared, ComparedGroup, Windows};
 use super::engine::Engine;
 use super::explain::Plan;
 use super::labels::{MOST_LABELS, MOST_NAME_BYTES, MOST_VALUE_BYTES, NAME};
 use super::latest::Latest;
-use super::page::{AggregatePage, Cursor, MOST, Paging, SeriesPage, Start};
+use super::page::{AggregatePage, ComparePage, Cursor, MOST, Paging, SeriesPage, Start};
 use crate::calendar::Calendar;
 use crate::{Error, Not, Prefix, Result, unix_millis};
 
@@ -297,8 +297,10 @@ impl Query {
     /// no samples and `partial` as its span gives it: a chart draws every
     /// hour of a day, an empty one as it chooses. A group without a sample
     /// is still left out, since nothing names it. It takes `since` or
-    /// `from`, and no `limit`; past 100,000 buckets a group it is `limit`,
-    /// before anything is read.
+    /// `from`. Without `limit`, past 100,000 buckets a group it is `limit`,
+    /// before anything is read; with `limit` each page fills the stretch of
+    /// each group it holds, and its `limit` counts the empty buckets too, so
+    /// that the pages give the buckets one call gives.
     ///
     /// ```no_run
     /// # use std::time::Duration;
@@ -388,7 +390,8 @@ impl Query {
     /// The `op` over the newest `window` against the median of the windows
     /// before it, which [`Compare::against`] reaches back over: the query's
     /// name and conditions, and its `estimate` and `skip_nan`, as an
-    /// aggregate takes them; no range, buckets, groups or pages.
+    /// aggregate takes them; no range, buckets or `fill`. Its `by`,
+    /// `without`, `limit` and `after` are [`Compare::groups`]'s.
     pub fn compare(&self, op: Op, window: Duration) -> Compare {
         Compare::of(self.clone(), op, window)
     }
@@ -405,6 +408,32 @@ impl Query {
         self.once_checked(Fresh::Written, check, move |engine, (asked, shape)| {
             let ranges = windows.ranges(asked.now);
             compare::compared(engine.aggregate_ranges(&asked, &shape, &ranges)?, estimate)
+        })
+    }
+
+    /// [`Compare::groups`] in its two steps, as [`Query::checked_read`] is
+    /// `read`: a page's groups, each window's aggregate of each group.
+    pub(super) fn checked_compare_groups(
+        &self,
+        compare: Compare,
+        op: Op,
+        windows: Windows,
+    ) -> Result<Checked<ComparePage>> {
+        let check = move |query: &Query| {
+            query.windowed()?;
+            let shape = query.shape(op)?;
+            Ok((query.paged_as(Some(op), &format!("compare~{windows:?}"))?, shape))
+        };
+        let estimate = self.estimate;
+        self.once_checked(Fresh::Written, check, move |engine, ((asked, paging), shape)| {
+            let ranges = windows.ranges(asked.now);
+            let (groups, place) = engine.compare_groups(&asked, &shape, &ranges, paging.as_ref())?;
+            let groups = groups.into_iter().map(|(group, windows)| {
+                compare::compared_buckets(windows, estimate).map(|compared| ComparedGroup::of(group, compared))
+            });
+            let groups = groups.collect::<Result<Vec<_>>>()?;
+            let next = place.zip(paging).map(|(place, paging)| Cursor::after(&asked, &paging, Start::Group(place)));
+            Ok(ComparePage::of(groups, next.map(|next| next.written()), compare))
         })
     }
 
@@ -508,15 +537,13 @@ impl Query {
         Ok(())
     }
 
-    /// Refuses what a comparison chooses itself, its windows and its one
-    /// group, and asks for the name whose series it compares.
-    fn uncut(&self) -> Result<()> {
+    /// Refuses what a comparison chooses itself, its windows, and asks for
+    /// the name whose series it compares.
+    fn windowed(&self) -> Result<()> {
         let ranged = self.since.is_some() || self.from.is_some() || self.to.is_some();
-        let grouped = self.every.is_some() || self.calendar.is_some() || self.by.is_some() || self.without.is_some();
-        if ranged || grouped || self.fill || self.limit.is_some() || self.after.is_some() {
+        if ranged || self.every.is_some() || self.calendar.is_some() || self.fill {
             return Err(Error::invalid(
-                "compare chooses its windows and answers one group: no `since`, `from`, `to`, `every`, `calendar`, \
-                 `by`, `without`, `fill`, `limit` or `after`",
+                "compare chooses its windows: no `since`, `from`, `to`, `every`, `calendar` or `fill`",
             ));
         }
         if self.name.is_none() {
@@ -525,11 +552,24 @@ impl Query {
         Ok(())
     }
 
-    /// Refuses `limit` and `after`, which only a read and an aggregate take.
+    /// Refuses what a comparison chooses itself, and what only its `groups`
+    /// take: `run` answers one group of every series it finds, whole.
+    fn uncut(&self) -> Result<()> {
+        self.windowed()?;
+        if self.by.is_some() || self.without.is_some() || self.limit.is_some() || self.after.is_some() {
+            return Err(Error::invalid(
+                "compare's `run` answers one group: `by`, `without`, `limit` and `after` are its `groups`'",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuses `limit` and `after`, which only a call that answers pages
+    /// takes.
     fn unpaged(&self, call: &str) -> Result<()> {
         if self.limit.is_some() || self.after.is_some() {
             return Err(Error::invalid(format!(
-                "`limit` and `after` are a read's and an aggregate's: {call} takes neither"
+                "`limit` and `after` are those of a read, an aggregate and compare's groups: {call} takes neither"
             )));
         }
         Ok(())
@@ -539,6 +579,13 @@ impl Query {
     /// read's or the aggregate's of `op`: the first, or the one `after`
     /// names, whose range and clock replace those the query would read now.
     pub(super) fn paged(&self, op: Option<Op>) -> Result<(Asked, Option<Paging>)> {
+        self.paged_as(op, "")
+    }
+
+    /// `paged` for a call that names itself in the cursor, `call`, so that
+    /// another call's `next` is refused: latest's, a comparison's with its
+    /// windows.
+    fn paged_as(&self, op: Option<Op>, call: &str) -> Result<(Asked, Option<Paging>)> {
         let mut asked = self.asked()?;
         let Some(limit) = self.limit else {
             if self.after.is_some() {
@@ -549,7 +596,7 @@ impl Query {
         if limit == 0 || limit > MOST {
             return Err(Error::invalid(format!("a page of 1 to {MOST} samples or buckets, not {limit}")));
         }
-        let query = self.digest(&asked, op);
+        let query = self.digest(&asked, op, call);
         let Some(after) = &self.after else { return Ok((asked, Some(Paging { limit, query, from: Start::First }))) };
         let cursor = Cursor::read(after)?;
         if cursor.query != query {
@@ -562,7 +609,7 @@ impl Query {
     /// The query a cursor goes on with, as its conditions, its range and an
     /// aggregate's `op` and buckets were given, before `since` was read
     /// against the clock: sixteen hex digits of their SHA-256.
-    fn digest(&self, asked: &Asked, op: Option<Op>) -> String {
+    fn digest(&self, asked: &Asked, op: Option<Op>, call: &str) -> String {
         let (from, to) = (self.from.map(unix_millis), self.to.map(unix_millis));
         let mut given = format!("{:?}~{from:?}~{to:?}~{op:?}~{:?}~{:?}", self.since, self.every, self.calendar);
         given.push_str(&format!("~{:?}~{:?}~{}", self.by, self.without, self.estimate));
@@ -572,6 +619,9 @@ impl Query {
         }
         if self.fill {
             given.push_str("~fill");
+        }
+        if !call.is_empty() {
+            given.push_str(&format!("~{call}"));
         }
         for (label, condition) in &asked.conditions {
             given.push_str(&format!("~{label:?}={condition:?}"));

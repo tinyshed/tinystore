@@ -136,6 +136,35 @@ type Bucket struct {
 
 Bucket is a bucket of an aggregate. One of count … last has its Value; a percentile's is a gauge's sample at the rank, or a timer's bucket of its spread that holds it, from Lower to Upper, and with Estimate asked a point between them.
 
+## ComparePage
+
+```go
+type ComparePage struct {
+	Groups []ComparedGroup
+	// Next is where the page after it begins; empty on the last.
+	Next string
+	// contains filtered or unexported fields
+}
+```
+
+ComparePage is one page of CompareGroups: its groups, and Next while there is more. All walks it and every page after it.
+
+### CompareGroups
+
+```go
+func CompareGroups(ctx context.Context, store *tinystore.Store, c Comparison) (ComparePage, error)
+```
+
+CompareGroups is what Compare finds, for each group of the series apart, as an aggregate groups them By labels. Without Limit it is every group, or a Limit error naming its bound; with Limit a page of that many groups at most, and Next while there is more. A group past the series one query finds is read in parts, for every Op but a percentile.
+
+### ComparePage.All
+
+```go
+func (p ComparePage) All(ctx context.Context) iter.Seq2[ComparedGroup, error]
+```
+
+All is the page's groups, then those of each page after it, read one page at a time as the walk reaches the end of the one it holds.
+
 ## Compared
 
 ```go
@@ -163,6 +192,18 @@ func Compare(ctx context.Context, store *tinystore.Store, c Comparison) (Compare
 
 Compare sets the newest window's Op against the median of the windows before it. A window without a sample counts in no median.
 
+## ComparedGroup
+
+```go
+type ComparedGroup struct {
+	Name   string
+	Labels Labels
+	Compared
+}
+```
+
+ComparedGroup is what CompareGroups found of one group: its name, the labels By kept, and what Compare finds of a group.
+
 ## Comparison
 
 ```go
@@ -178,6 +219,17 @@ type Comparison struct {
 	// Estimate makes a timer's percentile compare its estimate; without it such a percentile is refused.
 	Estimate bool
 	SkipNaN  bool
+
+	// By is the labels a group of CompareGroups keeps; without By and
+	// Without, every series of the name is one group. Compare takes none.
+	By []string
+	// Without is the labels a group of CompareGroups leaves out.
+	Without []string
+	// Limit makes CompareGroups a page of this many groups at most;
+	// without it, every group. Compare takes none.
+	Limit int
+	// After is the page after the one whose Next this is.
+	After string
 }
 ```
 
@@ -682,7 +734,7 @@ type Query struct {
 	SkipNaN bool
 	// Fill answers every bucket of the range retention keeps, an empty one
 	// with Samples 0 and Value nil, which is no zero; it takes Since or
-	// From, and no Limit.
+	// From, and a page's Limit counts the empty buckets too.
 	Fill bool
 }
 ```

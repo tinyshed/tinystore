@@ -13,6 +13,17 @@
 //! buckets met         10:00  10:07  10:09  10:12
 //! the page            [from … 10:12)       three buckets; the next page begins at 10:12
 //! ```
+//!
+//! An aggregate that fills gives every bucket, so there its `limit` counts
+//! the empty ones too: the page ends `most` buckets after it begins, once it
+//! knows the group holds a sample, on it, after it, or on a page before it.
+//! A group of no sample at all is left out, as a call without pages leaves
+//! it out, so until a sample is met the page looks on to the range's end.
+//!
+//! ```text
+//! limit 3, every 1m, fill   samples at 10:05:10  10:07:05
+//! the page                  [10:00 … 10:03)      three empty buckets: the group has a sample later
+//! ```
 
 use std::collections::BTreeSet;
 
@@ -31,24 +42,44 @@ pub(super) struct Sampled<'s> {
     /// The bucket the last sample fell in, `[start, end)`, so that a run of
     /// samples in one bucket finds it once.
     last: (i64, i64),
+    /// With `fill`, where the `most` buckets from the range's start end,
+    /// empty ones counted: the page ends there at most once `seen`.
+    filled: Option<i64>,
+    /// The group holds a sample: one was met, or a page before held one.
+    seen: bool,
 }
 
 impl<'s> Sampled<'s> {
     pub(super) fn new(shape: &'s Shape, range_from: i64, most: usize, to: i64) -> Sampled<'s> {
-        Sampled { shape, range_from, to, most, starts: BTreeSet::new(), last: (i64::MAX, i64::MIN) }
+        let filled = shape.fills().then(|| shape.after_buckets(range_from, most, to));
+        let last = (i64::MAX, i64::MIN);
+        Sampled { shape, range_from, to, most, starts: BTreeSet::new(), last, filled, seen: false }
+    }
+
+    /// The group's page goes on from a page before, which held a sample of
+    /// it: an aggregate that fills gives its buckets whether or not this
+    /// page meets one.
+    pub(super) fn seen_before(mut self) -> Sampled<'s> {
+        self.seen = true;
+        self
     }
 
     /// Where the page ends at most: the start of the first bucket past the
     /// `most` it holds, or the range's end while it holds no more.
     pub(super) fn end(&self) -> i64 {
-        match self.starts.last() {
+        let end = match self.starts.last() {
             Some(&after) if self.starts.len() > self.most => after,
             _ => self.to,
+        };
+        match self.filled {
+            Some(filled) if self.seen => end.min(filled),
+            _ => end,
         }
     }
 
     /// A sample's time: the bucket it falls in is met.
     pub(super) fn meet(&mut self, at: i64) {
+        self.seen = true;
         if at >= self.last.0 && at < self.last.1 {
             return;
         }
@@ -92,9 +123,15 @@ impl<'s> Sampled<'s> {
         true
     }
 
-    /// How many of the buckets met begin before `end`.
+    /// How many of the buckets met begin before `end`; with `fill`, how many
+    /// of the range's begin there, empty ones too, none of a group without
+    /// a sample.
     pub(super) fn before(&self, end: i64) -> usize {
-        self.starts.range(..end).count()
+        match self.filled {
+            None => self.starts.range(..end).count(),
+            Some(_) if !self.seen => 0,
+            Some(filled) => self.shape.buckets_in(self.range_from, end.min(filled)),
+        }
     }
 }
 
@@ -150,5 +187,23 @@ mod tests {
         let mut short = Sampled::new(&shape, 0, 2, 60 * MINUTE);
         assert!(short.meet_run(0, 9 * MINUTE, 10), "past where the page ends a run's buckets count nothing");
         assert_eq!((short.end(), short.before(short.end())), (2 * MINUTE, 2));
+    }
+
+    // contract: MET-35
+    #[test]
+    fn a_page_that_fills_counts_its_empty_buckets_once_the_group_holds_a_sample() {
+        let asking = Asking { every: Some(Duration::from_mins(1)), fill: true, ..Asking::default() };
+        let shape = Shape::of(Op::Count, asking).unwrap();
+        let mut sampled = Sampled::new(&shape, 0, 3, 60 * MINUTE);
+        assert_eq!((sampled.end(), sampled.before(60 * MINUTE)), (60 * MINUTE, 0), "no sample yet: left out");
+        sampled.meet(5 * MINUTE + 10_000);
+        assert_eq!((sampled.end(), sampled.before(sampled.end())), (3 * MINUTE, 3), "three empty buckets");
+        let mut later = Sampled::new(&shape, 10 * MINUTE, 3, 60 * MINUTE).seen_before();
+        assert_eq!((later.end(), later.before(later.end())), (13 * MINUTE, 3), "a page before held a sample");
+        later.meet(11 * MINUTE);
+        assert_eq!(later.end(), 13 * MINUTE);
+        let mut short = Sampled::new(&shape, 58 * MINUTE, 3, 60 * MINUTE);
+        short.meet(59 * MINUTE);
+        assert_eq!((short.end(), short.before(short.end())), (60 * MINUTE, 2), "the range ends first");
     }
 }

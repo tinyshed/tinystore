@@ -495,6 +495,40 @@ async def test_compare_sets_the_newest_window_against_the_median_of_the_windows_
         await store.metrics.compare("compared_ms", op="max", window="1m", against="1002m")
 
 
+# contract: MET-34
+async def test_compare_groups_given_limit_walk_on_a_page_at_a_time(store: tinystore.Store) -> None:
+    now = datetime.now(UTC)
+    hosts = [
+        Series(
+            name="paged_rtt",
+            kind="gauge",
+            labels={"host": f"{host:02}"},
+            samples=[(now - timedelta(minutes=90), 1.0), (now - timedelta(minutes=1), float(host + 1))],
+        )
+        for host in range(12)
+    ]
+    await store.metrics.ingest(hosts)
+    page = await store.metrics.compare_groups("paged_rtt", by=["host"], op="avg", window="1h", against="3h", limit=5)
+    assert (len(page.groups), page.next is None) == (5, False)
+    assert page.groups[1] == tinystore.ComparedGroup("paged_rtt", {"host": "01"}, 2.0, 1.0, 2.0, 1, 1)
+    walked = [group async for group in page]
+    whole = await store.metrics.compare_groups("paged_rtt", by=["host"], op="avg", window="1h", against="3h")
+    assert (walked, whole.next) == (whole.groups, None)
+    [one] = (await store.metrics.compare_groups("paged_rtt", op="avg", window="1h", against="3h")).groups
+    assert (one.labels, one.value) == ({}, 6.5)
+
+
+# contract: MET-35
+async def test_an_aggregate_given_fill_and_limit_fills_each_page(store: tinystore.Store) -> None:
+    hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    samples = [(hour - timedelta(hours=5, minutes=-1), 1.0)]
+    await store.metrics.ingest(Series(name="filled_pages", kind="gauge", labels={}, samples=samples))
+    whole = await store.metrics.aggregate(name="filled_pages", since="1d", every="1h", op="max", fill=True)
+    page = await store.metrics.aggregate(name="filled_pages", since="1d", every="1h", op="max", fill=True, limit=10)
+    assert (len(page.groups[0].buckets), page.next is None) == (10, False)
+    assert [group async for group in page] == whole.groups
+
+
 async def test_a_query_is_refused_before_it_leaves(store: tinystore.Store) -> None:
     with pytest.raises(tinystore.InvalidError, match="not both"):
         await store.metrics.read(name="cpu", since="1h", from_=datetime.now(UTC))

@@ -127,28 +127,29 @@ const (
 	MethodMetricsReplace = 0x0611
 	// An ingest's message in pieces, as uploadPrometheus takes a text: written
 	// once the last piece came, every series or none.
-	MethodMetricsUpload     = 0x0612
-	MethodMetricsCompare    = 0x0613
-	MethodRecordsOpen       = 0x0501
-	MethodRecordsAppend     = 0x0502
-	MethodRecordsList       = 0x0503
-	MethodRecordsCount      = 0x0504
-	MethodRecordsTop        = 0x0505
-	MethodRecordsAggregate  = 0x0506
-	MethodRecordsStreams    = 0x0507
-	MethodRecordsFieldNames = 0x0508
-	MethodRecordsPoll       = 0x0509
-	MethodRecordsTail       = 0x050a
-	MethodRecordsLines      = 0x050b
-	MethodRecordsDamaged    = 0x050c
-	MethodRecordsDrop       = 0x050d
-	MethodRecordsFields     = 0x050e
-	MethodRecordsLargest    = 0x050f
-	MethodRecordsDelete     = 0x0510
-	MethodRecordsSessions   = 0x0511
-	MethodSearchOpen        = 0x0b01
-	MethodSearchSet         = 0x0b02
-	MethodSearchSetMany     = 0x0b03
+	MethodMetricsUpload        = 0x0612
+	MethodMetricsCompare       = 0x0613
+	MethodMetricsCompareGroups = 0x0614
+	MethodRecordsOpen          = 0x0501
+	MethodRecordsAppend        = 0x0502
+	MethodRecordsList          = 0x0503
+	MethodRecordsCount         = 0x0504
+	MethodRecordsTop           = 0x0505
+	MethodRecordsAggregate     = 0x0506
+	MethodRecordsStreams       = 0x0507
+	MethodRecordsFieldNames    = 0x0508
+	MethodRecordsPoll          = 0x0509
+	MethodRecordsTail          = 0x050a
+	MethodRecordsLines         = 0x050b
+	MethodRecordsDamaged       = 0x050c
+	MethodRecordsDrop          = 0x050d
+	MethodRecordsFields        = 0x050e
+	MethodRecordsLargest       = 0x050f
+	MethodRecordsDelete        = 0x0510
+	MethodRecordsSessions      = 0x0511
+	MethodSearchOpen           = 0x0b01
+	MethodSearchSet            = 0x0b02
+	MethodSearchSetMany        = 0x0b03
 	// Answers whether the index held the document.
 	MethodSearchDelete = 0x0b04
 	MethodSearchGet    = 0x0b05
@@ -278,6 +279,7 @@ var methodNames = []struct {
 	{"metrics.replace", MethodMetricsReplace},
 	{"metrics.upload", MethodMetricsUpload},
 	{"metrics.compare", MethodMetricsCompare},
+	{"metrics.compareGroups", MethodMetricsCompareGroups},
 	{"records.open", MethodRecordsOpen},
 	{"records.append", MethodRecordsAppend},
 	{"records.list", MethodRecordsList},
@@ -564,6 +566,10 @@ func NewMessage(name string) Message {
 		return &MetricsCompareAsked{}
 	case "metrics.Compared":
 		return &MetricsCompared{}
+	case "metrics.ComparedGroup":
+		return &MetricsComparedGroup{}
+	case "metrics.ComparedGroups":
+		return &MetricsComparedGroups{}
 	case "metrics.Plan":
 		return &MetricsPlan{}
 	case "metrics.Exceeds":
@@ -8324,7 +8330,7 @@ type MetricsQuery struct {
 	From  *int64                      `wire:"4,from"`
 	// excluded; now, a sample taken now in the range, unless given
 	To *int64 `wire:"5,to"`
-	// a page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take
+	// a page's samples, buckets or groups at most, 100,000 at most: a page, which read, aggregate and compareGroups take
 	Limit *uint64 `wire:"6,limit"`
 	// a page's next, with limit
 	After *string `wire:"7,after"`
@@ -8723,7 +8729,7 @@ type MetricsAggregateAsked struct {
 	TimeZone *string `wire:"8,timeZone"`
 	// a NaN sample counts in no bucket, which says how many it passed over: skipped
 	SkipNan bool `wire:"9,skipNan"`
-	// every bucket of the range retention keeps, one without samples with no value; with since or from, without limit
+	// every bucket of the range retention keeps, one without samples with no value; with since or from, and a page's limit counts the empty ones too
 	Fill bool `wire:"10,fill"`
 }
 
@@ -9138,7 +9144,8 @@ func (m MetricsAggregates) IsZero() bool {
 //
 // The newest window's aggregate against the median of the windows before it:
 // the same hours of each earlier day with sameHour, every window before
-// otherwise. The query gives its name and where, and no range or page.
+// otherwise. The query gives its name and where, and no range; compare
+// takes no page, and compareGroups a page of groups with limit and after.
 type MetricsCompareAsked struct {
 	Query MetricsQuery `wire:"1,query"`
 	// as an aggregate's
@@ -9150,6 +9157,10 @@ type MetricsCompareAsked struct {
 	// a timer's percentile compares its estimate
 	Estimate bool `wire:"6,estimate"`
 	SkipNan  bool `wire:"7,skipNan"`
+	// compareGroups': the labels a group keeps, as an aggregate's
+	By *[]string `wire:"8,by"`
+	// compareGroups': the labels a group leaves out
+	Without *[]string `wire:"9,without"`
 }
 
 func (m MetricsCompareAsked) Write(w *Writer) {
@@ -9190,6 +9201,22 @@ func (m MetricsCompareAsked) Write(w *Writer) {
 		w.Bool(m.SkipNan)
 		n++
 	}
+	if m.By != nil {
+		w.Uint(8)
+		w.Array(len(*m.By))
+		for _, item0 := range *m.By {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Without != nil {
+		w.Uint(9)
+		w.Array(len(*m.Without))
+		for _, item0 := range *m.Without {
+			w.Str(item0)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -9212,6 +9239,22 @@ func (m *MetricsCompareAsked) Read(r *Reader) {
 			m.Estimate = r.Bool()
 		case 7:
 			m.SkipNan = r.Bool()
+		case 8:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.By = &v
+		case 9:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Without = &v
 		default:
 			r.Skip()
 		}
@@ -9227,7 +9270,9 @@ func (m MetricsCompareAsked) IsZero() bool {
 		m.Against == 0 &&
 		!m.SameHour &&
 		!m.Estimate &&
-		!m.SkipNan
+		!m.SkipNan &&
+		m.By == nil &&
+		m.Without == nil
 }
 
 // MetricsCompared is the schema's metrics.Compared.
@@ -9309,6 +9354,171 @@ func (m MetricsCompared) IsZero() bool {
 		m.Ratio == nil &&
 		m.Samples == 0 &&
 		m.Windows == 0
+}
+
+// MetricsComparedGroup is the schema's metrics.ComparedGroup.
+//
+// What compareGroups found of one group: its name and the labels by kept,
+// and what compare finds of a group.
+type MetricsComparedGroup struct {
+	Name    string            `wire:"1,name"`
+	Labels  map[string]string `wire:"2,labels"`
+	Value   *float64          `wire:"3,value"`
+	Usual   *float64          `wire:"4,usual"`
+	Ratio   *float64          `wire:"5,ratio"`
+	Samples uint64            `wire:"6,samples"`
+	Windows uint64            `wire:"7,windows"`
+}
+
+func (m MetricsComparedGroup) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Name != "" {
+		w.Uint(1)
+		w.Str(m.Name)
+		n++
+	}
+	if len(m.Labels) > 0 {
+		w.Uint(2)
+		w.Map(len(m.Labels))
+		for _, name0 := range SortedNames(m.Labels) {
+			w.Str(name0)
+			w.Str(m.Labels[name0])
+		}
+		n++
+	}
+	if m.Value != nil {
+		w.Uint(3)
+		w.Float(*m.Value)
+		n++
+	}
+	if m.Usual != nil {
+		w.Uint(4)
+		w.Float(*m.Usual)
+		n++
+	}
+	if m.Ratio != nil {
+		w.Uint(5)
+		w.Float(*m.Ratio)
+		n++
+	}
+	if m.Samples != 0 {
+		w.Uint(6)
+		w.Uint(m.Samples)
+		n++
+	}
+	if m.Windows != 0 {
+		w.Uint(7)
+		w.Uint(m.Windows)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsComparedGroup) Read(r *Reader) {
+	*m = MetricsComparedGroup{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Name = r.Str()
+		case 2:
+			v := map[string]string{}
+			seen0 := map[string]struct{}{}
+			for k0 := r.Map(); k0 > 0; k0-- {
+				name0 := r.Name(seen0)
+				item0 := r.Str()
+				v[name0] = item0
+			}
+			r.Leave()
+			m.Labels = v
+		case 3:
+			v := r.Float()
+			m.Value = &v
+		case 4:
+			v := r.Float()
+			m.Usual = &v
+		case 5:
+			v := r.Float()
+			m.Ratio = &v
+		case 6:
+			m.Samples = r.Uint()
+		case 7:
+			m.Windows = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsComparedGroup writes as no field at all.
+func (m MetricsComparedGroup) IsZero() bool {
+	return m.Name == "" &&
+		len(m.Labels) == 0 &&
+		m.Value == nil &&
+		m.Usual == nil &&
+		m.Ratio == nil &&
+		m.Samples == 0 &&
+		m.Windows == 0
+}
+
+// MetricsComparedGroups is the schema's metrics.ComparedGroups.
+//
+// A page of compareGroups, or a part of it.
+type MetricsComparedGroups struct {
+	Groups []MetricsComparedGroup `wire:"1,groups"`
+	// on the last part of a page that has more, to a request that gave limit
+	Next *string `wire:"2,next"`
+}
+
+func (m MetricsComparedGroups) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Groups) > 0 {
+		w.Uint(1)
+		w.Array(len(m.Groups))
+		for _, item0 := range m.Groups {
+			item0.Write(w)
+		}
+		n++
+	}
+	if m.Next != nil {
+		w.Uint(2)
+		w.Str(*m.Next)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsComparedGroups) Read(r *Reader) {
+	*m = MetricsComparedGroups{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []MetricsComparedGroup{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 MetricsComparedGroup
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Groups = v
+		case 2:
+			v := r.Str()
+			m.Next = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsComparedGroups writes as no field at all.
+func (m MetricsComparedGroups) IsZero() bool {
+	return len(m.Groups) == 0 &&
+		m.Next == nil
 }
 
 // MetricsPlan is the schema's metrics.Plan.

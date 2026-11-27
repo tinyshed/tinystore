@@ -195,8 +195,14 @@ let hours: Vec<f64> = groups[0].buckets.iter().map(|hour| hour.value.exact().unw
   names it. Without `every` or `calendar` the range is one bucket, which a
   group has already.
 - `fill` takes `since` or `from`, since a range from 1970 has no first
-  bucket to fill, and no `limit` yet: both are `invalid`. A range of more
-  than 100,000 buckets a group is a `limit` error before anything is read.
+  bucket to fill: without one it is `invalid`. Without `limit`, a range of
+  more than 100,000 buckets a group is a `limit` error before anything is
+  read.
+- With `limit`, `fill` works in [pages](#aggregate-in-pages) too, and the
+  pages give the buckets one call gives. There `limit` counts every bucket
+  a page answers, the empty ones too, so a page of `limit: 1000` holds 1000
+  buckets whether or not they have samples. This is the way to fill a year
+  of minutes: 525,601 buckets in six pages of `limit: 100_000`.
 
 ## NaN from an exporter
 
@@ -388,7 +394,7 @@ for group in page.all() {
   walk of a read's pages gives a series in its parts, since a series is what
   pages exist to bound.
 - `limit` counts only buckets that hold samples, so a stretch with none costs
-  a page nothing. A page holds fewer than `limit` buckets only when it is the
+  a page nothing, unless the aggregate fills, when it counts every bucket. A page holds fewer than `limit` buckets only when it is the
   last, when a bound stops it, when a short gap lies inside samples dense
   enough to have one in every bucket, whose empty buckets count so that the
   page needn't read every sample's time, or when a timer measured nothing in
@@ -458,7 +464,7 @@ let paid = total.value(); // 1.0 for ten amounts of 0.1, where a float sum gives
 | `invalid` | an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket holding an infinity, or a NaN without [`skipNaN`](#nan-from-an-exporter); a counter below zero |
 | `invalid` | samples you hold: series of two names or kinds, or two samples of one series in the same millisecond                                                                             |
 | `limit`   | without `limit`, past 100,000 buckets or a bound of the query, which it names; with it, one bucket or one group that passes a bound                                              |
-| `invalid` | `fill` without `since` or `from`, or with `limit`                                                                                                                                |
+| `invalid` | `fill` without `since` or `from`                                                                                                                                                 |
 
 ## See also
 

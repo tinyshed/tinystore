@@ -2,8 +2,9 @@ use std::time::{Duration, SystemTime};
 
 use super::*;
 use crate::ErrorKind;
+use crate::Result;
 use crate::metrics::fixture::{DAY, Fixture, HOUR, MINUTE, SECOND, fixture};
-use crate::metrics::{AggregatePage, Series, Value, maintain};
+use crate::metrics::{AggregatePage, Query, Series, Value, maintain};
 
 const WINDOW: Duration = Duration::from_mins(15);
 const WEEK: Duration = Duration::from_hours(7 * 24);
@@ -133,6 +134,99 @@ fn what_compare_cannot_answer_is_refused() {
     assert!(refused(ranged).contains("compare chooses its windows"));
     let unnamed = f.metrics().query().filter("source", "server").compare(Op::Avg, MINUTE).against(HOUR);
     assert!(refused(unnamed).contains("the query gives `name`"));
+    let grouped = f.metrics().query().name("call_ms").by(&["source"]).compare(Op::Avg, MINUTE).against(HOUR);
+    assert!(refused(grouped.clone()).contains("`by`, `without`, `limit` and `after` are its `groups`'"));
+    assert!(grouped.groups().is_ok(), "its groups take them");
+    let filled = f.metrics().query().name("call_ms").fill().compare(Op::Avg, MINUTE).against(HOUR);
+    assert!(filled.groups().unwrap_err().to_string().contains("compare chooses its windows"));
+}
+
+/// A gauge of `host`'s calls: `now` a minute before the clock, and twice
+/// that the same minute of the day before.
+fn host_calls(host: u32, now: SystemTime) -> Series {
+    let value = f64::from(host + 1);
+    let series = Series::gauge("call_ms").label("host", format!("{host:04}"));
+    series.sample(now - DAY - MINUTE, 2.0 * value).sample(now - MINUTE, value)
+}
+
+/// What each group of a comparison's pages gives, walked by hand, each page
+/// checked to hold at most `limit` groups and one unless it is the last.
+fn walked(compare: impl Fn() -> Compare, limit: usize) -> Vec<ComparedGroup> {
+    let mut page = compare().groups().unwrap();
+    let mut groups = Vec::new();
+    loop {
+        assert!(page.groups.len() <= limit, "a page of {limit} holds {}", page.groups.len());
+        let held = page.groups.len();
+        groups.extend(page.groups);
+        let Some(next) = page.next else { break };
+        assert!(held > 0, "a page with next holds a group");
+        page = compare().after(&next).groups().unwrap();
+    }
+    groups
+}
+
+// contract: MET-34, MET-33
+#[test]
+fn groups_compare_each_group_apart_as_run_compares_one() {
+    let f = fixture();
+    let now = f.now();
+    let mut series: Vec<Series> = (0..10).map(|host| host_calls(host, now)).collect();
+    // a host of the day before alone, and one before what `against` reaches
+    series.push(Series::gauge("call_ms").label("host", "0010").sample(now - DAY - MINUTE, 1.0));
+    series.push(Series::gauge("call_ms").label("host", "0011").sample(now - 3 * DAY, 1.0));
+    f.metrics().ingest(&series).unwrap();
+    let by_host = || f.metrics().query().name("call_ms").by(&["host"]);
+    let compare = |query: Query| query.compare(Op::Avg, WINDOW).against(DAY).same_hour();
+    let whole = compare(by_host()).groups().unwrap();
+    assert_eq!((whole.groups.len(), whole.next.as_deref()), (11, None), "a group of no sample is left out");
+    for group in &whole.groups {
+        let host = &group.labels["host"];
+        let alone = compare(f.metrics().query().name("call_ms").filter("host", host.as_str())).run().unwrap();
+        let ComparedGroup { value, usual, ratio, samples, windows, .. } = group.clone();
+        assert_eq!(Compared { value, usual, ratio, samples, windows }, alone, "{host}");
+    }
+    assert_eq!(whole.groups[3].ratio, Some(0.5));
+    assert_eq!((whole.groups[10].value, whole.groups[10].usual), (None, Some(1.0)));
+    for limit in [1, 3, 11, 100] {
+        let paged = walked(|| compare(by_host().limit(limit)), limit);
+        assert_eq!(paged, whole.groups, "limit {limit}");
+        let all = compare(by_host().limit(limit)).groups().unwrap().all().collect::<Result<Vec<_>>>();
+        assert_eq!(all.unwrap(), whole.groups, "limit {limit}, walked");
+    }
+    let next = compare(by_host().limit(2)).groups().unwrap().next.unwrap();
+    let other = by_host().limit(2).after(&next).compare(Op::Avg, WINDOW).against(2 * DAY).same_hour();
+    assert!(other.groups().unwrap_err().to_string().contains("another query"), "another windows' next");
+}
+
+// contract: MET-34, MET-20
+#[test]
+fn groups_go_past_the_series_one_query_finds_a_group_at_a_time() {
+    let f = fixture();
+    let now = f.now();
+    let series: Vec<Series> = (0..2500).map(|host| host_calls(host, now)).collect();
+    f.metrics().ingest(&series).unwrap();
+    let query = || f.metrics().query().name("call_ms");
+    let compare = |query: Query, op| query.compare(op, WINDOW).against(DAY).same_hour();
+    // one group of every series: `run` is `limit`, and its groups read it in parts
+    let refused = compare(query(), Op::Avg).run().unwrap_err();
+    assert_eq!((refused.kind(), refused.fact("limit")), (ErrorKind::Limit, Some("series")), "{refused}");
+    assert!(refused.to_string().contains("its `groups` a page at a time with `limit`"), "{refused}");
+    let all = walked(|| compare(query().limit(10), Op::Avg), 10);
+    assert_eq!(all.len(), 1);
+    let (value, usual) = (all[0].value.unwrap(), all[0].usual.unwrap());
+    assert_eq!((value, usual, all[0].samples, all[0].windows), (1250.5, 2501.0, 2500, 1));
+    let sum = walked(|| compare(query().limit(10), Op::Sum), 10);
+    assert_eq!((sum[0].value, sum[0].usual), (Some(3_126_250.0), Some(6_252_500.0)));
+    let ranked = compare(query().limit(10), Op::Percentile(50.0)).groups().unwrap_err();
+    assert_eq!((ranked.kind(), ranked.fact("limit")), (ErrorKind::Limit, Some("series")), "{ranked}");
+    // a group a host: pages of as many series as one query finds
+    let by_host = || query().by(&["host"]);
+    for limit in [7, 1000, 5000] {
+        let hosts = walked(|| compare(by_host().limit(limit), Op::Avg), limit.min(1000));
+        assert_eq!(hosts.len(), 2500, "limit {limit}");
+        let each = hosts.iter().zip(1..).all(|(host, n)| host.value == Some(f64::from(n)) && host.ratio == Some(0.5));
+        assert!(each, "limit {limit}");
+    }
 }
 
 // contract: MET-33

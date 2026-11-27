@@ -204,6 +204,32 @@ A timer's percentile is a number only with the query's
 that `op` is `invalid`, since the bounds it lies between are no
 number to compare.
 
+More than 1000 earlier windows is `invalid`, with no pages: a wider
+window or a shorter `against` asks for fewer. Past a bound of a
+query it is `limit`, whose way on for
+series is `groups` with `limit`, where a group of
+any count of series is read in parts.
+
+### Compare.groups
+
+```rust
+pub fn groups(&self) -> Result<ComparePage>
+```
+
+What `run` finds, for each group of the query's series apart: those
+of a name that share the labels `by` keeps, or every label but those
+`without` leaves, in the order of their names and labels. A group
+without a sample in any window is left out. Without `limit` it is one
+page, whole, from one snapshot, and past a bound it is `limit`. With
+`limit` a page holds that many groups at most, whole, of as many
+series as one query finds together, each from one snapshot, and gives
+`next` while there is more; it stops before a group that would pass a
+bound, and a group that alone passes one is `limit`. A group of more
+series than one query finds is alone on its page and read in parts,
+each from a snapshot of its own, for every `op` but a percentile,
+which ranks every series of its group at once: such a group is
+`limit`, and the groups before it are not.
+
 ## Compared
 
 ```rust
@@ -218,6 +244,23 @@ pub struct Compared {
 
 What `compare` found: the newest window's value, the usual one, and what
 each stands on. A value it could not give is none, never zero.
+
+## ComparedGroup
+
+```rust
+pub struct ComparedGroup {
+    pub name: String,
+    pub labels: Labels,
+    pub value: Option<f64>,
+    pub usual: Option<f64>,
+    pub ratio: Option<f64>,
+    pub samples: u64,
+    pub windows: u32,
+}
+```
+
+What `groups` found of one group: its name and the labels the query
+kept, and what `run` finds of a group, each field as `Compared`'s.
 
 ## Damage
 
@@ -994,6 +1037,28 @@ pub struct All<T> { /* private fields */ }
 The series or the groups of a page and of every page after it, one page
 held at a time.
 
+## ComparePage
+
+```rust
+pub struct ComparePage {
+    pub groups: Vec<ComparedGroup>,
+    pub next: Option<String>,
+}
+```
+
+One page of a comparison's groups: each group's comparison, and `next`
+while there is more. Without `limit` it is one page, whole, without
+`next`.
+
+### ComparePage.all
+
+```rust
+pub fn all(self) -> All<ComparedGroup>
+```
+
+The page's groups, then those of each page after it, read one page at
+a time as the walk reaches the end of the one it holds.
+
 ## SeriesPage
 
 ```rust
@@ -1206,8 +1271,10 @@ bucket without samples `Value::Empty`, with
 no samples and `partial` as its span gives it: a chart draws every
 hour of a day, an empty one as it chooses. A group without a sample
 is still left out, since nothing names it. It takes `since` or
-`from`, and no `limit`; past 100,000 buckets a group it is `limit`,
-before anything is read.
+`from`. Without `limit`, past 100,000 buckets a group it is `limit`,
+before anything is read; with `limit` each page fills the stretch of
+each group it holds, and its `limit` counts the empty buckets too, so
+that the pages give the buckets one call gives.
 
 ```rust
 use tinystore::metrics::Op;
@@ -1276,7 +1343,8 @@ pub fn compare(&self, op: Op, window: Duration) -> Compare
 The `op` over the newest `window` against the median of the windows
 before it, which `Compare::against` reaches back over: the query's
 name and conditions, and its `estimate` and `skip_nan`, as an
-aggregate takes them; no range, buckets, groups or pages.
+aggregate takes them; no range, buckets or `fill`. Its `by`,
+`without`, `limit` and `after` are `Compare::groups`'s.
 
 ### Query.latest
 
@@ -1730,6 +1798,26 @@ read stops as a dropped read does.
 
 `Stream`: futures_core::Stream
 
+## aio::metrics::ComparePage
+
+```rust
+pub struct ComparePage {
+    pub groups: Vec<ComparedGroup>,
+    pub next: Option<String>,
+}
+```
+
+One page of an awaited comparison's groups: each group's comparison,
+and `next` while there is more.
+
+### aio::metrics::ComparePage.all
+
+```rust
+pub fn all(self) -> All<ComparedGroup>
+```
+
+The page's groups, then those of each page after it, as a stream.
+
 ## aio::metrics::SeriesPage
 
 ```rust
@@ -2177,6 +2265,15 @@ pub fn run(&self) -> impl Future<Output = Result<Compared>> + Send + 'static
 ```
 
 The newest window's `op` against the median of the earlier windows'.
+
+### aio::metrics::Compare.groups
+
+```rust
+pub fn groups(&self) -> impl Future<Output = Result<ComparePage>> + Send + 'static
+```
+
+What `run` finds, for each group of the query's series apart, whole
+or a page of them, as `crate::metrics::Compare::groups` gives them.
 
 ## aio::metrics::List
 

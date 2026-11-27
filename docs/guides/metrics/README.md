@@ -75,16 +75,16 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 
 ## In these guides
 
-| Page                                       | Covers                                                     |
-|--------------------------------------------|------------------------------------------------------------|
-| [Instruments](instruments.md)              | counters, gauges, gauge functions, timers, histograms      |
-| [Reading](reading.md)                      | `read`, pages of a long range, `latest`, names, labels     |
-| [Aggregates](aggregates.md)                | `op`, `every`, `by`, percentiles, gaps and partial buckets |
-| [Compare now with usual](compare.md)       | `compare`: a window against the median of earlier ones     |
-| [Ingesting](ingesting.md)                  | samples from elsewhere, `replace`, `keep`, exporters' text |
-| [To Prometheus](exposition.md)             | the newest samples in the text that Prometheus scrapes     |
-| [The store's own metrics](self-metrics.md) | `selfMetrics` and the `tinystore_` series                  |
-| [The metrics crate](metrics-crate.md)      | Rust's `metrics` macros recorded into the store            |
+| Page                                       | Covers                                                                            |
+|--------------------------------------------|-----------------------------------------------------------------------------------|
+| [Instruments](instruments.md)              | counters, gauges, gauge functions, timers, histograms                             |
+| [Reading](reading.md)                      | `read`, pages of a long range, `latest`, names, labels                            |
+| [Aggregates](aggregates.md)                | `op`, `every`, `by`, percentiles, gaps and partial buckets                        |
+| [Compare now with usual](compare.md)       | `compare`: a window against the median of earlier ones, each group apart in pages |
+| [Ingesting](ingesting.md)                  | samples from elsewhere, `replace`, `keep`, exporters' text                        |
+| [To Prometheus](exposition.md)             | the newest samples in the text that Prometheus scrapes                            |
+| [The store's own metrics](self-metrics.md) | `selfMetrics` and the `tinystore_` series                                         |
+| [The metrics crate](metrics-crate.md)      | Rust's `metrics` macros recorded into the store                                   |
 
 New to Metrics? [How fast it is](../../handbook/chat/how-fast-it-is.md) in
 the Handbook times a chat's model calls, and [How logs and metrics
@@ -130,6 +130,7 @@ you add `.await`:
 | `stats.replace(&series, from..to)?`                      | `stats.replace(&series, from..to).await?`                       |
 | `stats.prometheus().ingest(&body)?`                      | `stats.prometheus().ingest(&body).await?`                       |
 | `query.read()?`, `aggregate`, `latest`, `explain`        | `query.read().await?`, `aggregate`, `latest`, `explain`         |
+| `query.compare(op, window).against(d).run()?`, `groups`  | `query.compare(op, window).against(d).run().await?`, `groups`   |
 | `stats.names().page()?`, `label_names`, `label_values`   | `stats.names().page().await?`, `label_names`, `label_values`    |
 | `stats.describe("cpu", description)?`                    | `stats.describe("cpu", description).await?`                     |
 | `stats.description("cpu")?`                              | `stats.description("cpu").await?`                               |

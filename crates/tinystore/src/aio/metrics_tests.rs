@@ -457,3 +457,27 @@ async fn an_awaited_page_walks_on_as_a_stream_as_its_blocking_twin_walks() {
     let once = stats.query().name("paged").since(HOUR).every(MINUTE).by(&["host"]).aggregate(Op::Avg).await.unwrap();
     assert_eq!(joined, once.groups, "each group once, whole");
 }
+
+// contract: MET-34
+#[tokio::test]
+async fn awaited_pages_of_a_comparisons_groups_walk_on_as_a_stream() {
+    let f = fixture();
+    let (_store, stats) = awaited(&f);
+    let now = f.now();
+    let hosts: Vec<Series> = (0..5)
+        .map(|host| Series::gauge("rtt").label("host", host).sample(now - 2 * HOUR, 1.0).sample(now - MINUTE, 2.0))
+        .collect();
+    stats.ingest(&hosts).await.unwrap();
+    let query = || stats.query().name("rtt").limit(2);
+    let compare = || query().by(&["host"]).compare(Op::Avg, HOUR).against(3 * HOUR);
+    let page = compare().groups().await.unwrap();
+    assert_eq!(page.groups.len(), 2);
+    let mut walk = page.all();
+    let mut groups = Vec::new();
+    while let Some(group) = std::future::poll_fn(|context| Pin::new(&mut walk).poll_next(context)).await {
+        groups.push(group.unwrap());
+    }
+    let whole = stats.blocking().query().name("rtt").by(&["host"]).compare(Op::Avg, HOUR).against(3 * HOUR);
+    assert_eq!(groups, whole.groups().unwrap().groups);
+    assert_eq!((groups[0].value, groups[0].usual, groups[0].ratio), (Some(2.0), Some(1.0), Some(2.0)));
+}

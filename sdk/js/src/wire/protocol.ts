@@ -170,6 +170,7 @@ export const methods = {
 	 */
 	'metrics.upload': 0x0612,
 	'metrics.compare': 0x0613,
+	'metrics.compareGroups': 0x0614,
 	'records.open': 0x0501,
 	'records.append': 0x0502,
 	'records.list': 0x0503,
@@ -7567,7 +7568,7 @@ export const MetricsQuery = message(
 		from: [4, int],
 		/** excluded; now, a sample taken now in the range, unless given */
 		to: [5, int],
-		/** a page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take */
+		/** a page's samples, buckets or groups at most, 100,000 at most: a page, which read, aggregate and compareGroups take */
 		limit: [6, uint],
 		/** a page's next, with limit */
 		after: [7, str],
@@ -7943,7 +7944,7 @@ export const MetricsAggregateAsked = message(
 		timeZone: [8, str],
 		/** a NaN sample counts in no bucket, which says how many it passed over: skipped */
 		skipNan: [9, bool],
-		/** every bucket of the range retention keeps, one without samples with no value; with since or from, without limit */
+		/** every bucket of the range retention keeps, one without samples with no value; with since or from, and a page's limit counts the empty ones too */
 		fill: [10, bool],
 	},
 	{
@@ -8372,7 +8373,8 @@ export const MetricsAggregates = message(
 /**
  * The newest window's aggregate against the median of the windows before it:
  * the same hours of each earlier day with sameHour, every window before
- * otherwise. The query gives its name and where, and no range or page.
+ * otherwise. The query gives its name and where, and no range; compare
+ * takes no page, and compareGroups a page of groups with limit and after.
  */
 export const MetricsCompareAsked = message(
 	'metrics.CompareAsked',
@@ -8387,6 +8389,10 @@ export const MetricsCompareAsked = message(
 		/** a timer's percentile compares its estimate */
 		estimate: [6, bool],
 		skipNan: [7, bool],
+		/** compareGroups': the labels a group keeps, as an aggregate's */
+		by: [8, list(str)],
+		/** compareGroups': the labels a group leaves out */
+		without: [9, list(str)],
 	},
 	{
 		write(w, v) {
@@ -8427,6 +8433,22 @@ export const MetricsCompareAsked = message(
 				w.bool(v.skipNan)
 				n++
 			}
+			if (v.by !== undefined) {
+				w.field(8)
+				w.array(v.by.length)
+				for (const item0 of v.by) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.without !== undefined) {
+				w.field(9)
+				w.array(v.without.length)
+				for (const item0 of v.without) {
+					w.str(item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -8437,6 +8459,8 @@ export const MetricsCompareAsked = message(
 			let $sameHour: boolean | undefined
 			let $estimate: boolean | undefined
 			let $skipNan: boolean | undefined
+			let $by: string[] | undefined
+			let $without: string[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -8460,6 +8484,24 @@ export const MetricsCompareAsked = message(
 					case 7:
 						$skipNan = r.bool()
 						break
+					case 8: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$by = items0
+						break
+					}
+					case 9: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$without = items0
+						break
+					}
 					default:
 						r.skip()
 				}
@@ -8473,6 +8515,8 @@ export const MetricsCompareAsked = message(
 				sameHour: $sameHour,
 				estimate: $estimate,
 				skipNan: $skipNan,
+				by: $by,
+				without: $without,
 			}
 		},
 	},
@@ -8555,6 +8599,167 @@ export const MetricsCompared = message(
 			}
 			r.leave()
 			return { value: $value, usual: $usual, ratio: $ratio, samples: $samples, windows: $windows }
+		},
+	},
+)
+
+/**
+ * What compareGroups found of one group: its name and the labels by kept,
+ * and what compare finds of a group.
+ */
+export const MetricsComparedGroup = message(
+	'metrics.ComparedGroup',
+	{
+		name: [1, str],
+		labels: [2, names(str)],
+		value: [3, float],
+		usual: [4, float],
+		ratio: [5, float],
+		samples: [6, uint],
+		windows: [7, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(2)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(3)
+				w.float(v.value)
+				n++
+			}
+			if (v.usual !== undefined) {
+				w.field(4)
+				w.float(v.usual)
+				n++
+			}
+			if (v.ratio !== undefined) {
+				w.field(5)
+				w.float(v.ratio)
+				n++
+			}
+			if (v.samples !== undefined) {
+				w.field(6)
+				w.uint(v.samples)
+				n++
+			}
+			if (v.windows !== undefined) {
+				w.field(7)
+				w.uint(v.windows)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $labels: Record<string, string> | undefined
+			let $value: number | undefined
+			let $usual: number | undefined
+			let $ratio: number | undefined
+			let $samples: number | undefined
+			let $windows: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$labels = readNames(r, str.read)
+						break
+					case 3:
+						$value = r.float()
+						break
+					case 4:
+						$usual = r.float()
+						break
+					case 5:
+						$ratio = r.float()
+						break
+					case 6:
+						$samples = r.uint()
+						break
+					case 7:
+						$windows = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				name: $name,
+				labels: $labels,
+				value: $value,
+				usual: $usual,
+				ratio: $ratio,
+				samples: $samples,
+				windows: $windows,
+			}
+		},
+	},
+)
+
+/**
+ * A page of compareGroups, or a part of it.
+ */
+export const MetricsComparedGroups = message(
+	'metrics.ComparedGroups',
+	{
+		groups: [1, list(MetricsComparedGroup)],
+		/** on the last part of a page that has more, to a request that gave limit */
+		next: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.groups !== undefined) {
+				w.field(1)
+				w.array(v.groups.length)
+				for (const item0 of v.groups) {
+					MetricsComparedGroup.write(w, item0)
+				}
+				n++
+			}
+			if (v.next !== undefined) {
+				w.field(2)
+				w.str(v.next)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $groups: Read<typeof MetricsComparedGroup.fields>[] | undefined
+			let $next: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof MetricsComparedGroup.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsComparedGroup.read(r))
+						}
+						r.leave()
+						$groups = items0
+						break
+					}
+					case 2:
+						$next = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { groups: $groups, next: $next }
 		},
 	},
 )

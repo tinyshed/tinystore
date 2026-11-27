@@ -322,7 +322,7 @@ type Query struct {
 	SkipNaN bool
 	// Fill answers every bucket of the range retention keeps, an empty one
 	// with Samples 0 and Value nil, which is no zero; it takes Since or
-	// From, and no Limit.
+	// From, and a page's Limit counts the empty buckets too.
 	Fill bool
 }
 
@@ -553,6 +553,31 @@ func Latest(ctx context.Context, store *tinystore.Store, q Query) ([]Point, erro
 	return points, nil
 }
 
+// walk is a page's items, then those of each page after it, read one page at
+// a time as the walk reaches the end of the one it holds.
+func walk[P, T any](ctx context.Context, first P, items func(P) []T, next func(P) string, readOn func(P, string) (P, error)) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		for page := first; ; {
+			for _, item := range items(page) {
+				if !yield(item, nil) {
+					return
+				}
+			}
+			after := next(page)
+			if after == "" {
+				return
+			}
+			read, err := readOn(page, after)
+			if err != nil {
+				var none T
+				yield(none, err)
+				return
+			}
+			page = read
+		}
+	}
+}
+
 // Bucket is a bucket of an aggregate. One of count … last has its Value; a
 // percentile's is a gauge's sample at the rank, or a timer's bucket of its
 // spread that holds it, from Lower to Upper, and with Estimate asked a point
@@ -757,6 +782,17 @@ type Comparison struct {
 	// Estimate makes a timer's percentile compare its estimate; without it such a percentile is refused.
 	Estimate bool
 	SkipNaN  bool
+
+	// By is the labels a group of CompareGroups keeps; without By and
+	// Without, every series of the name is one group. Compare takes none.
+	By []string
+	// Without is the labels a group of CompareGroups leaves out.
+	Without []string
+	// Limit makes CompareGroups a page of this many groups at most;
+	// without it, every group. Compare takes none.
+	Limit int
+	// After is the page after the one whose Next this is.
+	After string
 }
 
 // Compared is what Compare found; a value it could not give is nil, never zero.
@@ -773,24 +809,99 @@ type Compared struct {
 	Windows int
 }
 
-// Compare sets the newest window's Op against the median of the windows
-// before it. A window without a sample counts in no median.
-func Compare(ctx context.Context, store *tinystore.Store, c Comparison) (Compared, error) {
-	query, err := Query{Name: c.Name, Where: c.Where}.asked()
+// asked is the comparison as the wire takes it.
+func (c Comparison) asked() (wire.MetricsCompareAsked, error) {
+	query, err := Query{Name: c.Name, Where: c.Where, Limit: c.Limit, After: c.After}.asked()
 	if err != nil {
-		return Compared{}, err
+		return wire.MetricsCompareAsked{}, err
 	}
 	window, err := core.Millis(c.Window, "compare's window")
 	if err != nil {
-		return Compared{}, err
+		return wire.MetricsCompareAsked{}, err
 	}
 	against, err := core.Millis(c.Against, "compare's against")
 	if err != nil {
-		return Compared{}, err
+		return wire.MetricsCompareAsked{}, err
 	}
 	asked := wire.MetricsCompareAsked{
 		Query: query, Op: string(c.Op), Window: window, Against: against,
 		SameHour: c.SameHour, Estimate: c.Estimate, SkipNan: c.SkipNaN,
+	}
+	if c.By != nil {
+		asked.By = &c.By
+	}
+	if c.Without != nil {
+		asked.Without = &c.Without
+	}
+	return asked, nil
+}
+
+// ComparedGroup is what CompareGroups found of one group: its name, the
+// labels By kept, and what Compare finds of a group.
+type ComparedGroup struct {
+	Name   string
+	Labels Labels
+	Compared
+}
+
+// ComparePage is one page of CompareGroups: its groups, and Next while there
+// is more. All walks it and every page after it.
+type ComparePage struct {
+	Groups []ComparedGroup
+	// Next is where the page after it begins; empty on the last.
+	Next       string
+	store      *tinystore.Store
+	comparison Comparison
+}
+
+// All is the page's groups, then those of each page after it, read one page
+// at a time as the walk reaches the end of the one it holds.
+func (p ComparePage) All(ctx context.Context) iter.Seq2[ComparedGroup, error] {
+	return walk(ctx, p, func(page ComparePage) []ComparedGroup { return page.Groups }, func(page ComparePage) string { return page.Next },
+		func(page ComparePage, after string) (ComparePage, error) {
+			c := page.comparison
+			c.After = after
+			return CompareGroups(ctx, page.store, c)
+		})
+}
+
+// CompareGroups is what Compare finds, for each group of the series apart,
+// as an aggregate groups them By labels. Without Limit it is every group, or
+// a Limit error naming its bound; with Limit a page of that many groups at
+// most, and Next while there is more. A group past the series one query
+// finds is read in parts, for every Op but a percentile.
+func CompareGroups(ctx context.Context, store *tinystore.Store, c Comparison) (ComparePage, error) {
+	asked, err := c.asked()
+	if err != nil {
+		return ComparePage{}, err
+	}
+	parts, err := download(ctx, store, wire.MethodMetricsCompareGroups, wire.Encode(&asked))
+	if err != nil {
+		return ComparePage{}, err
+	}
+	page := ComparePage{store: store, comparison: c}
+	for _, part := range parts {
+		var groups wire.MetricsComparedGroups
+		if err := decode(part, &groups); err != nil {
+			return ComparePage{}, err
+		}
+		for _, each := range groups.Groups {
+			compared := Compared{Value: each.Value, Usual: each.Usual, Ratio: each.Ratio, Samples: int(each.Samples), Windows: int(each.Windows)}
+			page.Groups = append(page.Groups, ComparedGroup{Name: each.Name, Labels: each.Labels, Compared: compared})
+		}
+		if groups.Next != nil {
+			page.Next = *groups.Next
+		}
+	}
+	return page, nil
+}
+
+// Compare sets the newest window's Op against the median of the windows
+// before it. A window without a sample counts in no median.
+func Compare(ctx context.Context, store *tinystore.Store, c Comparison) (Compared, error) {
+	asked, err := c.asked()
+	if err != nil {
+		return Compared{}, err
 	}
 	answer, err := linkOf(store).Call(ctx, core.Reading, wire.MethodMetricsCompare, wire.Encode(&asked))
 	if err != nil {

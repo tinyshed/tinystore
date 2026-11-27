@@ -13,6 +13,9 @@
 //! samples past the page's `limit`, which counts no bucket without any. A
 //! group with no sample in the range answers nothing and is left out, and a
 //! page whose groups all were goes on past them, as a walk of `next` would.
+//! An aggregate that fills counts its empty buckets toward `limit` too, as
+//! `sampled.rs` says, and fills a group the page holds no sample of when a
+//! page before held one.
 //!
 //! ```text
 //! a group's series   a ──────────╳            a stopped inside 10:05's bucket
@@ -52,6 +55,9 @@ pub(in crate::metrics) struct TakenGroup {
     pub(in crate::metrics) labels: Labels,
     pub(in crate::metrics) members: Vec<Taken>,
     pub(in crate::metrics) more: bool,
+    /// An aggregate that fills gives its buckets even where none holds a
+    /// sample: the page met one of the group's, on it or on a page before.
+    pub(in crate::metrics) fills: bool,
 }
 
 /// What a page of an aggregate takes: its groups, and where the page after
@@ -85,6 +91,8 @@ pub(in crate::metrics) struct WidePart {
     pub(in crate::metrics) end: i64,
     pub(in crate::metrics) beyond: Option<i64>,
     pub(in crate::metrics) after: Option<(String, Labels)>,
+    /// A series of the part met a sample in the range, before where it ends.
+    pub(in crate::metrics) seen: bool,
 }
 
 impl Holds for (Vec<Taken>, Option<Place>) {
@@ -216,8 +224,8 @@ impl Engine {
                 }
             }
             let asked = Asked { to: wide.to, ..asked.clone() };
-            let (members, end) = reading.wide_members(self, &members, &asked, shape, wide)?;
-            Ok(WidePart { members, end, beyond, after })
+            let (members, end, seen) = reading.wide_members(self, &members, &asked, shape, wide)?;
+            Ok(WidePart { members, end, beyond, after, seen })
         })
     }
 
@@ -242,7 +250,7 @@ impl Engine {
 /// The groups of an aggregate's page, from every series its query finds:
 /// each is checked against the `op`, and those of groups before the one
 /// where the page begins are left out.
-fn chosen(
+pub(super) fn chosen(
     connection: &Connection,
     asked: &Asked,
     shape: &Shape,
@@ -265,7 +273,7 @@ fn chosen(
 }
 
 /// A group as Prometheus prints a series: `rpc_ms{fn="lookup"}`.
-fn named((name, labels): &(String, Labels)) -> String {
+pub(super) fn named((name, labels): &(String, Labels)) -> String {
     let mut named = String::new();
     labels::format(&mut named, name, labels.iter()).ok();
     named
@@ -333,7 +341,7 @@ impl Reading<'_, '_> {
             left = left.saturating_sub(ended.buckets);
             let (name, labels) = group.clone();
             let more = ended.end < asked.to;
-            page.push(TakenGroup { name, labels, members: ended.members, more });
+            page.push(TakenGroup { name, labels, members: ended.members, more, fills: shape.fills() });
             if more {
                 return Ok((page, place(ended.end)));
             }
@@ -363,6 +371,10 @@ impl Reading<'_, '_> {
         let count = members.len();
         let share = (self.budget.decoded_left() / count, self.budget.bytes_left() / count);
         let mut sampled = Sampled::new(shape, from, left, asked.to);
+        if at != i64::MIN {
+            // a page cut the group before this one, after a sample of it
+            sampled = sampled.seen_before();
+        }
         let mut stopped_at = asked.to;
         for series in &mut members {
             series.window.to = sampled.end().min(stopped_at);
@@ -385,6 +397,8 @@ impl Reading<'_, '_> {
     /// each up to where the part ends: as a page takes a group, by its share
     /// of the page's bounds, the part ending with none where they held no
     /// bucket with samples; or whole, where a series past a bound is `limit`.
+    /// It says too whether the part's share held a bucket, which with `fill`
+    /// is whether it met a sample.
     fn wide_members(
         &mut self,
         engine: &Engine,
@@ -392,18 +406,18 @@ impl Reading<'_, '_> {
         asked: &Asked,
         shape: &Shape,
         wide: Wide<'_>,
-    ) -> Result<(Vec<Taken>, i64)> {
+    ) -> Result<(Vec<Taken>, i64, bool)> {
         let Some(left) = wide.left else {
             let mut members = self.members(engine, found, asked, shape, wide.at);
             for series in &mut members {
                 let filled = self.fill(series, asked.now, Want::Buckets(shape));
                 filled.map_err(|error| self.met(&series.found, error))?;
             }
-            return Ok((ended_at(members, asked.to), asked.to));
+            return Ok((ended_at(members, asked.to), asked.to, false));
         };
         Ok(match self.group_page(engine, found, asked, shape, (wide.at, left))? {
-            Paged::Ended(ended) => (ended.members, ended.end),
-            Paged::Stopped(end) => (Vec::new(), end),
+            Paged::Ended(ended) => (ended.members, ended.end, ended.buckets > 0),
+            Paged::Stopped(end) => (Vec::new(), end, false),
         })
     }
 

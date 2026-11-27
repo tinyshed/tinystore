@@ -29,7 +29,7 @@ class AggregateQuery(SeriesQuery, total=False):
     without: Sequence[str]  # the labels a group leaves out, keeping every other; [] keeps every series apart
     estimate: bool  # a timer's percentile also gives a point between its bounds, interpolated: an estimate
     skip_nan: bool  # a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused
-    fill: bool  # every bucket of the range retention keeps, an empty one with samples 0 and no value; with since or from_
+    fill: bool  # every bucket of the range retention keeps, an empty one with samples 0 and no value; with since or from_, and a page's limit counts the empty ones too
 ```
 
 An aggregate: a query cut into buckets of every, each one exact value of op, by groups.
@@ -118,6 +118,22 @@ class Compared:
 ```
 
 What compare found; a value it could not give is None, never zero.
+
+## ComparedGroup
+
+```python
+@dataclass(frozen=True, slots=True)
+class ComparedGroup:
+    name: str
+    labels: dict[str, str]  # the labels by kept or without left
+    value: float | None
+    usual: float | None
+    ratio: float | None
+    samples: int
+    windows: int
+```
+
+What compare_groups found of one group: its name and labels, and what compare finds.
 
 ## Plan
 
@@ -286,6 +302,32 @@ op over the newest window, [now - window, now], against the median of the window
 The windows before reach back over against: the same hours of each earlier day with same_hour, a day
 24 hours in no time zone, or every window before otherwise, 1000 at most. A window without a sample
 counts in no median, and a timer's percentile compares only with estimate.
+
+### Metrics.compare_groups
+
+```python
+async def compare_groups(
+    name: str,
+    *,
+    op: Op | str,
+    window: Duration,
+    against: Duration,
+    where: Mapping[str, Condition] | None = None,
+    by: Sequence[str] | None = None,
+    without: Sequence[str] | None = None,
+    same_hour: bool = False,
+    estimate: bool = False,
+    skip_nan: bool = False,
+    limit: int | None = None,
+    after: str | None = None,
+) -> ComparePage: ...
+```
+
+What compare finds, for each group of the series apart, as an aggregate groups them by labels.
+
+Without limit every group, or a LimitError naming its bound; with limit a page of that many groups at
+most and next while there is more. A group past the series one query finds is read in parts, for every
+op but a percentile.
 
 ### Metrics.names
 

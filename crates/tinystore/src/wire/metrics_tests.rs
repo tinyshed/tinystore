@@ -7,10 +7,10 @@ use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
     Empty, Hello, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsChange,
-    MetricsCompareAsked, MetricsCompared, MetricsCondition, MetricsDamages, MetricsDeleted, MetricsDescription,
-    MetricsExposition, MetricsIngest, MetricsIngestUpload, MetricsInstrument, MetricsLatest, MetricsNameAsked,
-    MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsPiece, MetricsQuery, MetricsRead, MetricsReplace,
-    MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, MetricsUpload, method,
+    MetricsCompareAsked, MetricsCompared, MetricsComparedGroups, MetricsCondition, MetricsDamages, MetricsDeleted,
+    MetricsDescription, MetricsExposition, MetricsIngest, MetricsIngestUpload, MetricsInstrument, MetricsLatest,
+    MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsPiece, MetricsQuery, MetricsRead,
+    MetricsReplace, MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, MetricsUpload, method,
 };
 use crate::{Options, Store, unix_millis};
 
@@ -135,8 +135,47 @@ fn a_comparison_answers_over_the_wire_and_refuses_what_it_cannot_compare() {
     let many = MetricsCompareAsked { against: 60_000 * 1002, ..asked.clone() };
     let refused = client.call::<MetricsCompared>(method::METRICS_COMPARE, &many).unwrap_err();
     assert_eq!(refused.code, "invalid", "{refused:?}");
+    let grouped = MetricsCompareAsked { by: Some(vec!["source".to_owned()]), ..asked.clone() };
+    assert_eq!(client.call::<MetricsCompared>(method::METRICS_COMPARE, &grouped).unwrap_err().code, "invalid");
     let ranged = MetricsCompareAsked { query: named("call_ms"), ..asked };
     assert_eq!(client.call::<MetricsCompared>(method::METRICS_COMPARE, &ranged).unwrap_err().code, "invalid");
+}
+
+// contract: MET-34
+#[test]
+fn a_comparisons_groups_given_limit_answer_a_page_and_its_next_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let mut client = client(&store, 4096);
+    let at = now();
+    let hosts: Vec<MetricsNewSeries> = (0..30)
+        .map(|host| {
+            let host = format!("{host:02}");
+            series("rtt", "gauge", &[("host", &host)], &[(at - 5_400_000, 1.0), (at - 60_000, 3.0)])
+        })
+        .collect();
+    ingest(&mut client, hosts);
+    let mut compare = MetricsCompareAsked {
+        query: MetricsQuery { name: Some("rtt".to_owned()), limit: Some(4), ..MetricsQuery::default() },
+        op: "avg".to_owned(),
+        window: 3_600_000,
+        against: 3 * 3_600_000,
+        by: Some(vec!["host".to_owned()]),
+        ..MetricsCompareAsked::default()
+    };
+    let mut groups = Vec::new();
+    loop {
+        let parts: Vec<MetricsComparedGroups> = downloaded(&mut client, method::METRICS_COMPARE_GROUPS, &compare);
+        let page: Vec<_> = parts.iter().flat_map(|part| &part.groups).cloned().collect();
+        assert!(!page.is_empty() && page.len() <= 4, "{} groups", page.len());
+        groups.extend(page);
+        let Some(next) = parts.last().unwrap().next.clone() else { break };
+        compare.query.after = Some(next);
+    }
+    assert_eq!(groups.len(), 30);
+    let first = &groups[0];
+    let answered = (first.labels["host"].as_str(), first.value, first.usual, first.ratio, first.windows);
+    assert_eq!(answered, ("00", Some(3.0), Some(1.0), Some(3.0), 1));
 }
 
 // contract: MET-04

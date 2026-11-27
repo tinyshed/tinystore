@@ -107,18 +107,20 @@ of repeating them.
 
 ## Records and metrics
 
-| What                          | Limit or default                           |
-|-------------------------------|--------------------------------------------|
-| a stream's `keep`             | 14 days                                    |
-| a logger's buffer             | 1,024 lines, written every second          |
-| a page of events              | 1,000, at most 10,000                      |
-| a list in a records `where`   | 1 to 1,000 values, each at most 4 KiB      |
-| a `top` or a `largest`        | 10 answers, at most 1,000                  |
-| a name's `keep` in metrics    | 30 days                                    |
-| instruments' writes           | 15 seconds, `flush`, a read, and close     |
-| sets of labels per instrument | 2,000 between two sends, then `__overflow` |
-| series in a store             | 100,000                                    |
-| buckets of an aggregate       | 100,000                                    |
+| What                           | Limit or default                           |
+|--------------------------------|--------------------------------------------|
+| a stream's `keep`              | 14 days                                    |
+| a logger's buffer              | 1,024 lines, written every second          |
+| a page of events               | 1,000, at most 10,000                      |
+| a list in a records `where`    | 1 to 1,000 values, each at most 4 KiB      |
+| a `top` or a `largest`         | 10 answers, at most 1,000                  |
+| a name's `keep` in metrics     | 30 days                                    |
+| instruments' writes            | 15 seconds, `flush`, a read, and close     |
+| sets of labels per instrument  | 2,000 between two sends, then `__overflow` |
+| series in a store              | 100,000                                    |
+| buckets of an aggregate        | 100,000, past it a page at a time          |
+| series of a metrics query      | 1,000, past it a page at a time            |
+| earlier windows of a `compare` | 1,000                                      |
 
 ## Nodes
 

@@ -36,6 +36,7 @@ use std::fmt;
 use std::vec::IntoIter;
 
 use super::aggregate::{Aggregate, Op};
+use super::compare::{Compare, ComparedGroup};
 use super::query::{Asked, Query};
 use super::series::{Labels, Series};
 use crate::{Error, Result};
@@ -100,6 +101,32 @@ impl AggregatePage {
         let (query, op) = (self.query, self.op);
         All::of(self.groups, self.next, group_parts(), move |after| {
             query.clone().after(after).aggregate(op).map(|page| (page.groups, page.next))
+        })
+    }
+}
+
+/// One page of a comparison's groups: each group's comparison, and `next`
+/// while there is more. Without `limit` it is one page, whole, without
+/// `next`.
+#[derive(Clone, Debug)]
+pub struct ComparePage {
+    pub groups: Vec<ComparedGroup>,
+    pub next: Option<String>,
+    /// The comparison that gave the page, which a walk reads the next one by.
+    compare: Compare,
+}
+
+impl ComparePage {
+    pub(super) fn of(groups: Vec<ComparedGroup>, next: Option<String>, compare: Compare) -> ComparePage {
+        ComparePage { groups, next, compare }
+    }
+
+    /// The page's groups, then those of each page after it, read one page at
+    /// a time as the walk reaches the end of the one it holds.
+    pub fn all(self) -> All<ComparedGroup> {
+        let compare = self.compare;
+        All::of(self.groups, self.next, None, move |after| {
+            compare.after(after).groups().map(|page| (page.groups, page.next))
         })
     }
 }

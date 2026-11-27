@@ -36,8 +36,10 @@ use crate::{Error, ErrorKind, Result};
 mod chosen;
 mod paging;
 mod sampled;
+mod windows;
 
 pub(super) use paging::{PageTaken, TakenGroup, Wide};
+pub(super) use windows::{GroupWindows, WindowsTaken};
 
 /// The decoded clocks a snapshot keeps, since series written together share
 /// theirs. Series written a second apart for a minute have sixty between

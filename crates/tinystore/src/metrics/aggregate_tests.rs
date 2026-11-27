@@ -3,8 +3,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::*;
 use crate::metrics::fixture::{DAY, Fixture, HOUR, MINUTE, SECOND, fixture};
 use crate::metrics::labels::Kept;
-use crate::metrics::{Query, Series, maintain};
-use crate::{Calendar, ErrorKind};
+use crate::metrics::{AggregatePage, Query, Series, maintain};
+use crate::{Calendar, ErrorKind, Result};
 
 /// `series` with a sample of each value, a `step` apart from `first`.
 fn run(mut series: Series, first: SystemTime, step: Duration, values: impl IntoIterator<Item = f64>) -> Series {
@@ -702,16 +702,82 @@ fn a_fill_the_range_cannot_bound_is_refused_before_the_read() {
         unbounded.kind() == ErrorKind::Invalid && unbounded.to_string().contains("`since` or `from`"),
         "{unbounded}"
     );
-    let paged = refused(query().since(HOUR).limit(10));
-    assert!(paged.kind() == ErrorKind::Invalid && paged.to_string().contains("`limit`"), "{paged}");
     let year = refused(query().since(365 * DAY));
     assert_eq!(
         (year.kind(), year.fact("limit"), year.fact("bound")),
         (ErrorKind::Limit, Some("answer"), Some("100000"))
     );
+    assert!(year.to_string().contains("a page at a time with `limit`"), "{year}");
     let read = f.metrics().query().name("cpu").since(HOUR).fill().read().unwrap_err();
     assert!(read.to_string().contains("`fill` are an aggregate's"), "{read}");
     // one bucket without `every`: the group holds it already
     let whole = f.metrics().query().name("cpu").since(HOUR).fill().aggregate(Op::Max).unwrap().groups;
     assert_eq!(values(&whole), [1.0]);
+}
+
+/// Every page of an aggregate from its first, each checked to hold at most
+/// `limit` buckets, and a bucket unless it is the last (MET-21).
+fn every_page(query: &Query, op: Op, limit: usize) -> Vec<AggregatePage> {
+    let mut pages = vec![query.clone().limit(limit).aggregate(op).unwrap()];
+    while let Some(next) = pages.last().unwrap().next.clone() {
+        pages.push(query.clone().limit(limit).after(&next).aggregate(op).unwrap());
+    }
+    for page in &pages {
+        let buckets: usize = page.groups.iter().map(|group| group.buckets.len()).sum();
+        assert!(buckets <= limit && (buckets > 0 || page.next.is_none()), "{buckets} buckets, limit {limit}");
+    }
+    pages
+}
+
+// contract: MET-35, MET-26, MET-17
+#[test]
+fn fill_in_pages_gives_the_buckets_one_call_gives() {
+    let f = fixture();
+    let now = f.now();
+    // a group early in the day, one late, one between, and one before the range alone
+    let at = |host: &str, ago: Duration, value: f64| Series::gauge("cpu").label("host", host).sample(now - ago, value);
+    let dense = Series::gauge("cpu").label("host", "a");
+    let ingested = [
+        run(dense, now - 23 * HOUR, MINUTE, (0..300).map(f64::from)),
+        at("b", 3 * HOUR, 3.0),
+        at("b", MINUTE, 4.0),
+        at("c", 12 * HOUR, 5.0),
+        at("d", 2 * DAY, 6.0),
+    ];
+    for one in &ingested {
+        f.metrics().ingest(std::slice::from_ref(one)).unwrap();
+    }
+    let day = f.metrics().query().name("cpu").since(DAY).every(10 * MINUTE).by(&["host"]).fill();
+    for packed in [false, true] {
+        if packed {
+            assert!(maintain(&f.store).unwrap().blocks > 0);
+        }
+        let whole = day.aggregate(Op::Max).unwrap().groups;
+        assert_eq!(whole.len(), 3, "a group without a sample in the range is left out");
+        for limit in [1, 7, 100, 145, 1000] {
+            let pages = every_page(&day, Op::Max, limit);
+            let walked: Vec<Aggregate> = pages[0].clone().all().collect::<Result<_>>().unwrap();
+            assert_eq!(walked, whole, "limit {limit}, packed: {packed}");
+        }
+        let one = every_page(&day, Op::Max, 100);
+        assert_eq!(one[0].groups[0].buckets.len(), 100, "a page counts its empty buckets");
+    }
+}
+
+// contract: MET-35, MET-26
+#[test]
+fn fill_past_what_one_call_answers_goes_on_a_page_at_a_time() {
+    let f = fixture();
+    let now = f.now();
+    let cpu = Series::gauge("cpu").keep(400 * DAY).sample(now - 300 * DAY, 1.0).sample(now - DAY, 2.0);
+    f.metrics().ingest(&[cpu]).unwrap();
+    let year = f.metrics().query().name("cpu").since(365 * DAY).every(MINUTE).fill();
+    assert_eq!(year.aggregate(Op::Max).unwrap_err().fact("limit"), Some("answer"));
+    let pages = every_page(&year, Op::Max, 100_000);
+    assert_eq!(pages.len(), 6, "525,601 minutes, 100,000 a page");
+    let buckets: Vec<Bucket> = pages[0].clone().all().map(|group| group.unwrap().buckets).next().unwrap();
+    assert_eq!(buckets.len(), 365 * 24 * 60 + 1);
+    let values: Vec<f64> = buckets.iter().filter_map(|minute| minute.value.exact()).collect();
+    assert_eq!(values, [1.0, 2.0]);
+    assert!(buckets.windows(2).all(|two| two[1].at.duration_since(two[0].at).unwrap() == MINUTE));
 }

@@ -20,7 +20,7 @@ message metrics.Query {
   3 since: duration?
   4 from: time?
   5 to: time?           # excluded; now, a sample taken now in the range, unless given
-  6 limit: uint?        # a page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take
+  6 limit: uint?        # a page's samples, buckets or groups at most, 100,000 at most: a page, which read, aggregate and compareGroups take
   7 after: str?         # a page's next, with limit
 }
 
@@ -65,7 +65,7 @@ message metrics.AggregateAsked {
   7 calendar: str?      # day, week or month: buckets of a calendar in timeZone, in place of every
   8 timeZone: str?      # an IANA name, UTC among them, which calendar takes
   9 skipNan: bool       # a NaN sample counts in no bucket, which says how many it passed over: skipped
-  10 fill: bool         # every bucket of the range retention keeps, one without samples with no value; with since or from, without limit
+  10 fill: bool         # every bucket of the range retention keeps, one without samples with no value; with since or from, and a page's limit counts the empty ones too
 }
 
 # A bucket of an aggregate: its value, or a timer's percentile's bounds.
@@ -99,7 +99,8 @@ message metrics.Aggregates {
 
 # The newest window's aggregate against the median of the windows before it:
 # the same hours of each earlier day with sameHour, every window before
-# otherwise. The query gives its name and where, and no range or page.
+# otherwise. The query gives its name and where, and no range; compare
+# takes no page, and compareGroups a page of groups with limit and after.
 message metrics.CompareAsked {
   1 query: metrics.Query
   2 op: str             # as an aggregate's
@@ -108,6 +109,8 @@ message metrics.CompareAsked {
   5 sameHour: bool
   6 estimate: bool      # a timer's percentile compares its estimate
   7 skipNan: bool
+  8 by: [str]?          # compareGroups': the labels a group keeps, as an aggregate's
+  9 without: [str]?     # compareGroups': the labels a group leaves out
 }
 
 # What compare found; a value it could not give is none, never zero.
@@ -117,6 +120,24 @@ message metrics.Compared {
   3 ratio: float?       # value / usual; none when either is none or usual is 0
   4 samples: uint       # the newest window's
   5 windows: uint       # the windows the usual stands on
+}
+
+# What compareGroups found of one group: its name and the labels by kept,
+# and what compare finds of a group.
+message metrics.ComparedGroup {
+  1 name: str
+  2 labels: {str}
+  3 value: float?
+  4 usual: float?
+  5 ratio: float?
+  6 samples: uint
+  7 windows: uint
+}
+
+# A page of compareGroups, or a part of it.
+message metrics.ComparedGroups {
+  1 groups: [metrics.ComparedGroup]
+  2 next: str?          # on the last part of a page that has more, to a request that gave limit
 }
 
 # What a call would spend of each bound, and the bound it would stop at.
@@ -344,3 +365,4 @@ write 0x0611 metrics.replace(metrics.Replace)             -> Empty
 # once the last piece came, every series or none.
 write 0x0612 metrics.upload(metrics.IngestUpload)         -> exchange Empty for metrics.Piece
 read  0x0613 metrics.compare(metrics.CompareAsked)        -> metrics.Compared
+read  0x0614 metrics.compareGroups(metrics.CompareAsked)  -> download metrics.ComparedGroups until metrics.ComparedGroups

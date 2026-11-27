@@ -154,7 +154,7 @@ interface AggregateQuery<O extends Op = Op, F extends boolean = boolean> extends
     estimate?: boolean | undefined
     /** a NaN sample counts in no bucket, which says how many it passed over in skipped; an infinity is still refused */
     skipNaN?: boolean | undefined
-    /** every bucket of the range retention keeps, one without samples with samples 0 and no value; with since or from, not limit */
+    /** every bucket of the range retention keeps, one without samples with samples 0 and no value; with since or from, and a page's limit counts the empty ones too */
     fill?: F | undefined
 }
 ```
@@ -203,6 +203,49 @@ interface Compared {
 ```
 
 What compare found; a value it could not give is absent, never zero.
+
+## CompareGroupsQuery
+
+```ts
+interface CompareGroupsQuery extends CompareQuery {
+    /** the labels a group keeps; without by and without, every series of the name is one group */
+    by?: readonly string[] | undefined
+    /** the labels a group leaves out, keeping every other; [] keeps every series apart */
+    without?: readonly string[] | undefined
+    /** a page of this many groups at most; without it, every group, or a limit error */
+    limit?: number | undefined
+    /** the page after the one whose next this is, asked with the same query and limit */
+    after?: string | undefined
+}
+```
+
+compareGroups' query: compare's, each group of the series apart, as an
+aggregate groups them, and a page of groups with limit.
+
+## ComparedGroup
+
+```ts
+interface ComparedGroup extends Compared {
+    name: string
+    /** the labels by kept or without left */
+    labels: Labels
+}
+```
+
+What compareGroups found of one group: its name and labels, and what compare finds.
+
+## ComparePage
+
+```ts
+interface ComparePage extends AsyncIterable<ComparedGroup> {
+    groups: ComparedGroup[]
+    /** where the page after it begins; absent on the last */
+    next?: string
+}
+```
+
+One page of compareGroups: its groups, and next while there is more,
+walked as a SeriesPage is.
 
 ## ValueBucket
 
@@ -485,6 +528,18 @@ compare(query: CompareQuery): Promise<Compared>
 
 op over the newest window against the median of the windows before it:
 `{ name: 'moodle_call', op: 'p50', window: '15m', against: '7d', sameHour: true }`.
+
+### Metrics.compareGroups
+
+```ts
+compareGroups(query: CompareGroupsQuery): Promise<ComparePage>
+```
+
+What compare finds, for each group of the series apart, as an aggregate groups them:
+`{ name: 'rpc_ms', by: ['host'], op: 'avg', window: '15m', against: '1d', limit: 100 }`.
+Without limit every group, or a limit error naming its bound; with limit a page of that
+many groups at most and next while there is more. A group past the series one query
+finds is read in parts, for every op but a percentile.
 
 ### Metrics.names
 

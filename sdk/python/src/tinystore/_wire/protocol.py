@@ -138,6 +138,7 @@ methods: dict[str, int] = {
     # once the last piece came, every series or none.
     "metrics.upload": 0x0612,
     "metrics.compare": 0x0613,
+    "metrics.compareGroups": 0x0614,
     "records.open": 0x0501,
     "records.append": 0x0502,
     "records.list": 0x0503,
@@ -6170,7 +6171,8 @@ MetricsQuery = Message(
         "from": (4, int_),
         # excluded; now, a sample taken now in the range, unless given
         "to": (5, int_),
-        # a page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take
+        # a page's samples, buckets or groups at most, 100,000 at most: a page, which read, aggregate and compareGroups
+        # take
         "limit": (6, uint),
         # a page's next, with limit
         "after": (7, str_),
@@ -6514,8 +6516,8 @@ MetricsAggregateAsked = Message(
         "time_zone": (8, str_),
         # a NaN sample counts in no bucket, which says how many it passed over: skipped
         "skip_nan": (9, bool_),
-        # every bucket of the range retention keeps, one without samples with no value; with since or from, without
-        # limit
+        # every bucket of the range retention keeps, one without samples with no value; with since or from, and a page's
+        # limit counts the empty ones too
         "fill": (10, bool_),
     },
     _write_metrics_aggregate_asked,
@@ -6780,6 +6782,18 @@ def _write_metrics_compare_asked(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(7)
         w.bool(x)
         n += 1
+    if (x := v.get("by")) is not None:
+        w.uint(8)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("without")) is not None:
+        w.uint(9)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
     w.close_map(head, n)
 
 
@@ -6802,6 +6816,14 @@ def _read_metrics_compare_asked(r: Reader) -> dict[str, Any]:
                 read["estimate"] = r.bool()
             case 7:
                 read["skip_nan"] = r.bool()
+            case 8:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["by"] = items0
+            case 9:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["without"] = items0
             case _:
                 r.skip()
     r.leave()
@@ -6810,7 +6832,8 @@ def _read_metrics_compare_asked(r: Reader) -> dict[str, Any]:
 
 # The newest window's aggregate against the median of the windows before it:
 # the same hours of each earlier day with sameHour, every window before
-# otherwise. The query gives its name and where, and no range or page.
+# otherwise. The query gives its name and where, and no range; compare
+# takes no page, and compareGroups a page of groups with limit and after.
 MetricsCompareAsked = Message(
     "metrics.CompareAsked",
     {
@@ -6824,6 +6847,10 @@ MetricsCompareAsked = Message(
         # a timer's percentile compares its estimate
         "estimate": (6, bool_),
         "skip_nan": (7, bool_),
+        # compareGroups': the labels a group keeps, as an aggregate's
+        "by": (8, list_(str_)),
+        # compareGroups': the labels a group leaves out
+        "without": (9, list_(str_)),
     },
     _write_metrics_compare_asked,
     _read_metrics_compare_asked,
@@ -6894,6 +6921,138 @@ MetricsCompared = Message(
     },
     _write_metrics_compared,
     _read_metrics_compared,
+)
+
+
+def _write_metrics_compared_group(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("name")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("labels")) is not None:
+        w.uint(2)
+        w.map(len(x))
+        for name0 in sorted(x):
+            w.str(name0)
+            w.str(x[name0])
+        n += 1
+    if (x := v.get("value")) is not None:
+        w.uint(3)
+        w.float(x)
+        n += 1
+    if (x := v.get("usual")) is not None:
+        w.uint(4)
+        w.float(x)
+        n += 1
+    if (x := v.get("ratio")) is not None:
+        w.uint(5)
+        w.float(x)
+        n += 1
+    if (x := v.get("samples")) is not None:
+        w.uint(6)
+        w.uint(x)
+        n += 1
+    if (x := v.get("windows")) is not None:
+        w.uint(7)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_compared_group(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["name"] = r.str()
+            case 2:
+                named0: dict[str, Any] = {}
+                names0: set[str] = set()
+                for _ in range(r.map()):
+                    name0 = r.name(names0)
+                    named0[name0] = r.str()
+                r.leave()
+                read["labels"] = named0
+            case 3:
+                read["value"] = r.float()
+            case 4:
+                read["usual"] = r.float()
+            case 5:
+                read["ratio"] = r.float()
+            case 6:
+                read["samples"] = r.uint()
+            case 7:
+                read["windows"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# What compareGroups found of one group: its name and the labels by kept,
+# and what compare finds of a group.
+MetricsComparedGroup = Message(
+    "metrics.ComparedGroup",
+    {
+        "name": (1, str_),
+        "labels": (2, names(str_)),
+        "value": (3, float_),
+        "usual": (4, float_),
+        "ratio": (5, float_),
+        "samples": (6, uint),
+        "windows": (7, uint),
+    },
+    _write_metrics_compared_group,
+    _read_metrics_compared_group,
+)
+
+
+def _write_metrics_compared_groups(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("groups")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            MetricsComparedGroup.write(w, item0)
+        n += 1
+    if (x := v.get("next")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_compared_groups(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [MetricsComparedGroup.read(r) for _ in range(r.array())]
+                r.leave()
+                read["groups"] = items0
+            case 2:
+                read["next"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A page of compareGroups, or a part of it.
+MetricsComparedGroups = Message(
+    "metrics.ComparedGroups",
+    {
+        "groups": (1, list_(MetricsComparedGroup)),
+        # on the last part of a page that has more, to a request that gave limit
+        "next": (2, str_),
+    },
+    _write_metrics_compared_groups,
+    _read_metrics_compared_groups,
 )
 
 
@@ -13921,6 +14080,8 @@ messages: dict[str, Message] = {
     "metrics.Aggregates": MetricsAggregates,
     "metrics.CompareAsked": MetricsCompareAsked,
     "metrics.Compared": MetricsCompared,
+    "metrics.ComparedGroup": MetricsComparedGroup,
+    "metrics.ComparedGroups": MetricsComparedGroups,
     "metrics.Exceeds": MetricsExceeds,
     "metrics.NewSeries": MetricsNewSeries,
     "metrics.Ingest": MetricsIngest,

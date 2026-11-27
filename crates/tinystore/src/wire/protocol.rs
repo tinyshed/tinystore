@@ -7164,7 +7164,7 @@ pub(crate) struct MetricsQuery {
     pub(crate) from: Option<i64>,
     /// Excluded; now, a sample taken now in the range, unless given. Unix milliseconds.
     pub(crate) to: Option<i64>,
-    /// A page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take.
+    /// A page's samples, buckets or groups at most, 100,000 at most: a page, which read, aggregate and compareGroups take.
     pub(crate) limit: Option<u64>,
     /// A page's next, with limit.
     pub(crate) after: Option<String>,
@@ -7513,7 +7513,7 @@ pub(crate) struct MetricsAggregateAsked {
     pub(crate) time_zone: Option<String>,
     /// A NaN sample counts in no bucket, which says how many it passed over: skipped.
     pub(crate) skip_nan: bool,
-    /// Every bucket of the range retention keeps, one without samples with no value; with since or from, without limit.
+    /// Every bucket of the range retention keeps, one without samples with no value; with since or from, and a page's limit counts the empty ones too.
     pub(crate) fill: bool,
 }
 
@@ -7864,7 +7864,8 @@ impl Message for MetricsAggregates {
 
 /// The newest window's aggregate against the median of the windows before it:
 /// the same hours of each earlier day with sameHour, every window before
-/// otherwise. The query gives its name and where, and no range or page.
+/// otherwise. The query gives its name and where, and no range; compare
+/// takes no page, and compareGroups a page of groups with limit and after.
 #[cfg(feature = "metrics")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MetricsCompareAsked {
@@ -7879,6 +7880,10 @@ pub(crate) struct MetricsCompareAsked {
     /// A timer's percentile compares its estimate.
     pub(crate) estimate: bool,
     pub(crate) skip_nan: bool,
+    /// CompareGroups': the labels a group keeps, as an aggregate's.
+    pub(crate) by: Option<Vec<String>>,
+    /// CompareGroups': the labels a group leaves out.
+    pub(crate) without: Option<Vec<String>>,
 }
 
 #[cfg(feature = "metrics")]
@@ -7897,6 +7902,8 @@ impl Message for MetricsCompareAsked {
                 5 => message.same_hour = codec::bool(r, "sameHour")?,
                 6 => message.estimate = codec::bool(r, "estimate")?,
                 7 => message.skip_nan = codec::bool(r, "skipNan")?,
+                8 => message.by = Some(codec::list(r, "by", codec::str)?),
+                9 => message.without = Some(codec::list(r, "without", codec::str)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -7933,6 +7940,14 @@ impl Message for MetricsCompareAsked {
             map.field(out, 7);
             codec::write_bool(out, &self.skip_nan);
         }
+        if let Some(by) = &self.by {
+            map.field(out, 8);
+            codec::write_list(out, by, codec::write_str);
+        }
+        if let Some(without) = &self.without {
+            map.field(out, 9);
+            codec::write_list(out, without, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -7945,6 +7960,8 @@ impl Message for MetricsCompareAsked {
             + 2
             + 2
             + 2
+            + self.by.as_ref().map_or(0, |by| 1 + codec::list_size(by, |item| 5 + item.len()))
+            + self.without.as_ref().map_or(0, |without| 1 + codec::list_size(without, |item| 5 + item.len()))
     }
 
     fn is_zero(&self) -> bool {
@@ -7955,6 +7972,8 @@ impl Message for MetricsCompareAsked {
             && !self.same_hour
             && !self.estimate
             && !self.skip_nan
+            && self.by.is_none()
+            && self.without.is_none()
     }
 }
 
@@ -8034,6 +8053,148 @@ impl Message for MetricsCompared {
             && self.ratio.is_none()
             && self.samples == 0
             && self.windows == 0
+    }
+}
+
+/// What compareGroups found of one group: its name and the labels by kept,
+/// and what compare finds of a group.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsComparedGroup {
+    pub(crate) name: String,
+    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) value: Option<f64>,
+    pub(crate) usual: Option<f64>,
+    pub(crate) ratio: Option<f64>,
+    pub(crate) samples: u64,
+    pub(crate) windows: u64,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsComparedGroup {
+    const NAME: &'static str = "metrics.ComparedGroup";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.labels = codec::names(r, "labels", codec::str)?,
+                3 => message.value = Some(codec::float(r, "value")?),
+                4 => message.usual = Some(codec::float(r, "usual")?),
+                5 => message.ratio = Some(codec::float(r, "ratio")?),
+                6 => message.samples = codec::uint(r, "samples")?,
+                7 => message.windows = codec::uint(r, "windows")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 2);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 3);
+            codec::write_float(out, value);
+        }
+        if let Some(usual) = &self.usual {
+            map.field(out, 4);
+            codec::write_float(out, usual);
+        }
+        if let Some(ratio) = &self.ratio {
+            map.field(out, 5);
+            codec::write_float(out, ratio);
+        }
+        if self.samples != 0 {
+            map.field(out, 6);
+            codec::write_uint(out, &self.samples);
+        }
+        if self.windows != 0 {
+            map.field(out, 7);
+            codec::write_uint(out, &self.windows);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+            + self.value.map_or(0, |_| 10)
+            + self.usual.map_or(0, |_| 10)
+            + self.ratio.map_or(0, |_| 10)
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.labels.is_empty()
+            && self.value.is_none()
+            && self.usual.is_none()
+            && self.ratio.is_none()
+            && self.samples == 0
+            && self.windows == 0
+    }
+}
+
+/// A page of compareGroups, or a part of it.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsComparedGroups {
+    pub(crate) groups: Vec<MetricsComparedGroup>,
+    /// On the last part of a page that has more, to a request that gave limit.
+    pub(crate) next: Option<String>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsComparedGroups {
+    const NAME: &'static str = "metrics.ComparedGroups";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.groups = codec::list(r, "groups", codec::message::<MetricsComparedGroup>)?,
+                2 => message.next = Some(codec::str(r, "next")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.groups.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.groups, codec::write_message);
+        }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.groups, codec::message_size)
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.groups.is_empty()
+            && self.next.is_none()
     }
 }
 
@@ -15601,6 +15762,8 @@ pub(crate) mod method {
     pub(crate) const METRICS_UPLOAD: u16 = 0x0612;
     #[cfg(feature = "metrics")]
     pub(crate) const METRICS_COMPARE: u16 = 0x0613;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_COMPARE_GROUPS: u16 = 0x0614;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_OPEN: u16 = 0x0501;
     #[cfg(feature = "records")]
@@ -15890,6 +16053,8 @@ pub(crate) mod method {
             METRICS_UPLOAD => Some(Access::Write),
             #[cfg(feature = "metrics")]
             METRICS_COMPARE => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_COMPARE_GROUPS => Some(Access::Read),
             #[cfg(feature = "records")]
             RECORDS_OPEN => Some(Access::Read),
             #[cfg(feature = "records")]
@@ -16171,6 +16336,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("metrics.upload", 0x0612, "exchange"),
     #[cfg(feature = "metrics")]
     ("metrics.compare", 0x0613, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.compareGroups", 0x0614, "download"),
     #[cfg(feature = "records")]
     ("records.open", 0x0501, "call"),
     #[cfg(feature = "records")]
@@ -16482,6 +16649,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "metrics.CompareAsked" => MetricsCompareAsked::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Compared" => MetricsCompared::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.ComparedGroup" => MetricsComparedGroup::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.ComparedGroups" => MetricsComparedGroups::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Plan" => MetricsPlan::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
