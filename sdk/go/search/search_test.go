@@ -251,6 +251,38 @@ func TestAShortFormFindsItsPhraseAndThePhraseItsShortForm(t *testing.T) {
 	})
 }
 
+// contract: SRCH-30, SRCH-31
+func TestADocumentsAliasesFindItAloneAsAMatchOfTheirField(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		courses := ways.Must(search.OpenIndex[listed](store, "aliased", search.Fields{"name": 1}))
+		kmzi := "Криптографические методы защиты информации"
+		ways.Must(0, courses.Set(ctx, "1", listed{Name: kmzi}, search.Aliases{"кмзи": "name"}))
+		ways.Must(0, courses.SetMany(ctx, []search.Doc[listed]{
+			{ID: "2", Value: listed{Name: "Теория принятия решений"}, Aliases: search.Aliases{"тп": "name"}},
+			{ID: "3", Value: listed{Name: "Технологии программирования"}, Aliases: search.Aliases{"тп": "name"}},
+			{ID: "4", Value: listed{Name: "Теория вероятностей"}},
+		}))
+		found := ids(ways.Must(courses.Search(ctx, "тп")))
+		sort.Strings(found)
+		if !reflect.DeepEqual(found, []string{"2", "3"}) {
+			t.Fatalf("found %v", found)
+		}
+		hits := ways.Must(courses.Search(ctx, "КМЗИ", search.Matches())).Hits
+		if len(hits) != 1 || len(hits[0].Matches) != 1 {
+			t.Fatalf("hits %v", hits)
+		}
+		if matched := hits[0].Matches[0]; matched.Field != "name" || matched.Start != 0 || matched.End != len(kmzi) {
+			t.Fatalf("matched %v, not the name whole", matched)
+		}
+		ways.Must(0, courses.Set(ctx, "2", listed{Name: "Теория принятия решений"}))
+		if found := ids(ways.Must(courses.Search(ctx, "тп"))); !reflect.DeepEqual(found, []string{"3"}) {
+			t.Fatalf("found %v after a set without aliases", found)
+		}
+		is(t, courses.Set(ctx, "5", listed{Name: kmzi}, search.Aliases{"кмзи": "title"}), tinystore.ErrInvalid)
+	})
+}
+
 type page struct {
 	Title string `json:"title"`
 	Plain string `json:"plain"`

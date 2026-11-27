@@ -26,6 +26,14 @@ func Vector(v []float32) vector
 
 Vector is a document's vector on a set, or a search's on a search, of the index's dimensions, as the program's own model gave it.
 
+## Aliases
+
+```go
+type Aliases map[string]string
+```
+
+Aliases are a document's own words for the whole text of its fields, each alias, one word, with the field's path: search.Aliases{"кмзи": "name"}. A search for one finds the document as a match of that field and marks the field's text; a set without them leaves the document none.
+
 ## AmongOption
 
 ```go
@@ -82,10 +90,11 @@ type Doc[T any] struct {
 	Value    T
 	Vector   []float32
 	NoVector bool
+	Aliases  Aliases
 }
 ```
 
-Doc is a document SetMany sets: its id, its value and what it says of its vector.
+Doc is a document SetMany sets: its id, its value, what it says of its vector, and its aliases.
 
 ## Fields
 
@@ -549,7 +558,7 @@ type SetOption interface {
 }
 ```
 
-SetOption is what a set says of its document's vector.
+SetOption is what a set says of its document: Vector, NoVector, Aliases.
 
 ### NoVector
 

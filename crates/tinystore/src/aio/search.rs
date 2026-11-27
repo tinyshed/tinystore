@@ -70,7 +70,7 @@ use crate::{Key, Result};
 #[cfg(feature = "sql")]
 pub use crate::search::TxTableIndex;
 pub use crate::search::{
-    Among, Condition, Document, Found, Group, Hit, Listed, ManyFound, Match, Merged, Rebuild, Searched, Snippet,
+    Among, Condition, Doc, Document, Found, Group, Hit, Listed, ManyFound, Match, Merged, Rebuild, Searched, Snippet,
     Status, and, eq, is_in, missing, or, range,
 };
 
@@ -276,13 +276,13 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Index<T> {
     /// future is ready. On an index with vectors a set gives its vector, or
     /// says it has none, through [`id`](Self::id).
     pub fn set(&self, id: impl Key, value: &T) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.set_encoded(Encoded::new(id.text().into_owned(), value, None))
+        self.set_encoded(Encoded::new(id.text().into_owned(), value, None, Vec::new()))
     }
 
-    /// A set of the document `id` with its vector, run by its awaited last
-    /// step: `products.id("p-3").vector(&embedding).set(&product).await`.
+    /// A set of the document `id` with its vector or its aliases, run by its
+    /// awaited last step: `products.id("p-3").vector(&embedding).set(&product).await`.
     pub fn id(&self, id: impl Key) -> DocumentCall<'_, T> {
-        DocumentCall { index: self, id: id.text().into_owned(), vector: None }
+        DocumentCall { index: self, id: id.text().into_owned(), vector: None, aliases: Vec::new() }
     }
 
     /// Sets each document to its value, all of them in one commit or none,
@@ -297,8 +297,9 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Index<T> {
         let documents: Vec<Encoded> = documents
             .into_iter()
             .map(|document| {
+                let aliases = document.aliased();
                 let (id, value, vector) = document.parts();
-                Encoded::new(id, value, vector)
+                Encoded::new(id, value, vector, aliases)
             })
             .collect();
         let index = self.index.clone();
@@ -324,12 +325,14 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Index<T> {
     }
 }
 
-/// A set of one document with its vector, run by [`DocumentCall::set`].
+/// A set of one document with its vector or its aliases, run by
+/// [`DocumentCall::set`].
 #[must_use = "a document is set at `set`"]
 pub struct DocumentCall<'a, T> {
     index: &'a Index<T>,
     id: String,
     vector: Option<Option<&'a [f32]>>,
+    aliases: Vec<(String, String)>,
 }
 
 impl<T> fmt::Debug for DocumentCall<'_, T> {
@@ -351,10 +354,17 @@ impl<'a, T: Serialize + DeserializeOwned + Send + 'static> DocumentCall<'a, T> {
         self
     }
 
-    /// Sets the document to `value`, its words and its vector, as
-    /// [`crate::search::DocumentCall::set`] does.
+    /// As [`crate::search::DocumentCall::aliases`].
+    pub fn aliases<W: AsRef<str>, F: AsRef<str>>(mut self, pairs: impl IntoIterator<Item = (W, F)>) -> Self {
+        let owned = |(word, field): (W, F)| (word.as_ref().to_owned(), field.as_ref().to_owned());
+        self.aliases = pairs.into_iter().map(owned).collect();
+        self
+    }
+
+    /// Sets the document to `value`, its words, its aliases and its vector,
+    /// as [`crate::search::DocumentCall::set`] does.
     pub fn set(self, value: &T) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.index.set_encoded(Encoded::new(self.id, value, self.vector))
+        self.index.set_encoded(Encoded::new(self.id, value, self.vector, self.aliases))
     }
 }
 

@@ -12205,6 +12205,8 @@ pub(crate) struct SearchSet {
     pub(crate) vector: Option<Vec<u8>>,
     /// The document has no vector, on an index with vectors.
     pub(crate) no_vector: bool,
+    /// Each alias, one word, with the path of the field whose text it stands for.
+    pub(crate) aliases: BTreeMap<String, String>,
 }
 
 #[cfg(feature = "search")]
@@ -12221,6 +12223,7 @@ impl Message for SearchSet {
                 3 => message.value = codec::str(r, "value")?,
                 4 => message.vector = Some(codec::bin(r, "vector")?),
                 5 => message.no_vector = codec::bool(r, "noVector")?,
+                6 => message.aliases = codec::names(r, "aliases", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -12249,6 +12252,10 @@ impl Message for SearchSet {
             map.field(out, 5);
             codec::write_bool(out, &self.no_vector);
         }
+        if !self.aliases.is_empty() {
+            map.field(out, 6);
+            codec::write_names(out, &self.aliases, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -12259,6 +12266,7 @@ impl Message for SearchSet {
             + 1 + 5 + self.value.len()
             + self.vector.as_ref().map_or(0, |vector| 1 + 5 + vector.len())
             + 2
+            + 1 + codec::names_size(&self.aliases, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -12267,6 +12275,7 @@ impl Message for SearchSet {
             && self.value.is_empty()
             && self.vector.is_none()
             && !self.no_vector
+            && self.aliases.is_empty()
     }
 }
 
@@ -12328,6 +12337,7 @@ pub(crate) struct SearchDocument {
     pub(crate) value: String,
     pub(crate) vector: Option<Vec<u8>>,
     pub(crate) no_vector: bool,
+    pub(crate) aliases: BTreeMap<String, String>,
 }
 
 #[cfg(feature = "search")]
@@ -12343,6 +12353,7 @@ impl Message for SearchDocument {
                 2 => message.value = codec::str(r, "value")?,
                 3 => message.vector = Some(codec::bin(r, "vector")?),
                 4 => message.no_vector = codec::bool(r, "noVector")?,
+                5 => message.aliases = codec::names(r, "aliases", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -12367,6 +12378,10 @@ impl Message for SearchDocument {
             map.field(out, 4);
             codec::write_bool(out, &self.no_vector);
         }
+        if !self.aliases.is_empty() {
+            map.field(out, 5);
+            codec::write_names(out, &self.aliases, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -12376,6 +12391,7 @@ impl Message for SearchDocument {
             + 1 + 5 + self.value.len()
             + self.vector.as_ref().map_or(0, |vector| 1 + 5 + vector.len())
             + 2
+            + 1 + codec::names_size(&self.aliases, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -12383,6 +12399,7 @@ impl Message for SearchDocument {
             && self.value.is_empty()
             && self.vector.is_none()
             && !self.no_vector
+            && self.aliases.is_empty()
     }
 }
 

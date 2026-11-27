@@ -20,7 +20,8 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
-use super::document::{Analyzed, analyze};
+use super::aliases::{self, Aliases};
+use super::document::{Analyzed, Besides, analyze};
 use super::postings::{decode_keys, decode_lengths, encode_keys, encode_lengths};
 use super::score::Part;
 use super::segments;
@@ -55,26 +56,29 @@ const JOIN_INDEX: &str = "update _tinystore_search_indexes set next_doc = ?2, do
 const LAST_DOC: i64 = u32::MAX as i64 - 1;
 const DOCUMENT_NUMBERS: Limit = Limit { name: "document numbers", bound: LAST_DOC as u64 };
 
-/// A document ready to set: its id, its value as JSON, its words and its
-/// vector, if it has one.
+/// A document ready to set: its id, its value as JSON, its words, its
+/// aliases and its vector, if it has one.
 #[derive(Debug)]
 pub(crate) struct Prepared {
     pub(crate) index: i64,
     pub(crate) id: String,
     pub(crate) value: Vec<u8>,
     pub(crate) analyzed: Analyzed,
+    pub(crate) aliases: Aliases,
     pub(crate) vector: Option<Vector>,
     /// Whether the index keeps clusters of its vectors, whose head a vector joins.
     pub(crate) clustered: bool,
 }
 
 /// A document as a set or a rebuild gives it: its id, its value as JSON
-/// and its bytes, and what it says of its vector: nothing, none, or one.
+/// and its bytes, its aliases, and what it says of its vector: nothing,
+/// none, or one.
 #[derive(Debug)]
 pub(crate) struct Incoming<'v> {
     pub(crate) id: String,
     pub(crate) tree: Value,
     pub(crate) bytes: Vec<u8>,
+    pub(crate) aliases: Aliases,
     pub(crate) vector: Option<Option<&'v [f32]>>,
 }
 
@@ -83,7 +87,8 @@ impl Prepared {
     /// as its fields read them and its vector, which an index with vectors
     /// requires a set to give or to say it has none.
     pub(crate) fn new(index: i64, incoming: Incoming<'_>, settings: &Settings) -> Result<Prepared> {
-        let analyzed = analyze(&incoming.tree, &settings.fields, &settings.filters, &settings.synonyms)?;
+        let besides = Besides { synonyms: &settings.synonyms, aliases: &incoming.aliases };
+        let analyzed = analyze(&incoming.tree, &settings.fields, &settings.filters, besides)?;
         let vector = match (settings.vectors, incoming.vector) {
             (None, Some(Some(_))) => return Err(Error::invalid("a vector for an index without vectors")),
             (None, _) | (Some(_), Some(None)) => None,
@@ -95,13 +100,14 @@ impl Prepared {
             (Some(vectors), Some(Some(values))) => Some(Vector::new(values, vectors.dimensions)?),
         };
         let clustered = settings.vectors.is_some_and(|vectors| vectors.recall.is_some());
-        Ok(Prepared { index, id: incoming.id, value: incoming.bytes, analyzed, vector, clustered })
+        let (id, value, aliases) = (incoming.id, incoming.bytes, incoming.aliases);
+        Ok(Prepared { index, id, value, analyzed, aliases, vector, clustered })
     }
 
     /// What the write adds to its commit, about.
     pub(crate) fn bytes(&self) -> usize {
         let words: usize = self.analyzed.terms.iter().map(|(_, term, _)| term.len() + 16).sum();
-        self.value.len() + words + self.vector.as_ref().map_or(0, Vector::size)
+        self.value.len() + words + self.aliases.bytes() + self.vector.as_ref().map_or(0, Vector::size)
     }
 }
 
@@ -293,12 +299,14 @@ fn number(next: i64) -> Result<u32> {
     Ok(next as u32)
 }
 
-/// Keeps a document's row, numbered `doc`, holding `keys`, and its vector.
+/// Keeps a document's row, numbered `doc`, holding `keys`, its aliases and
+/// its vector.
 fn keep(tx: &Tx<'_>, (index, doc): (i64, u32), document: &Prepared, mut keys: Vec<i64>) -> Result<()> {
     keys.sort_unstable();
     let lengths: Vec<(u32, u32)> = document.analyzed.lengths.iter().map(|(part, len)| (part.0, *len)).collect();
     let row = (index, doc, &document.id, &document.value, encode_keys(&keys), encode_lengths(&lengths));
     execute(tx, KEEP_DOC, row, "keep a document")?;
+    document.aliases.keep(tx, (index, doc))?;
     if let Some(vector) = &document.vector {
         vectors::keep(tx, index, doc, vector)?;
         if document.clustered {
@@ -348,6 +356,7 @@ fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
         execute(tx, MARK_GONE, (index, doc, &keys), "mark a document gone")?;
     }
     execute(tx, DROP_DOC, (index, doc), "drop a document")?;
+    aliases::forget(tx, (index, doc))?;
     let had_vector = vectors::forget(tx, index, doc as u32)?;
     execute(tx, LEAVE_INDEX, (index, i64::from(words_left), i64::from(had_vector)), "count a document")?;
     Ok(true)

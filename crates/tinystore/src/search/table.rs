@@ -21,6 +21,7 @@ use rusqlite::{Connection, OptionalExtension, ToSql};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use super::aliases::Aliases;
 use super::engine::Search;
 use super::open::{Current, Data};
 use super::rebuild::{BESIDE, read_current, read_moving};
@@ -513,7 +514,8 @@ fn prepared_row(
 ) -> Result<Option<Prepared>> {
     let Some(row) = read(connection, settings, key)? else { return Ok(None) };
     let value = [row.digest.as_slice(), &key_json(key)].concat();
-    let incoming = Incoming { id: id.to_owned(), tree: row.tree, bytes: value, vector: Some(row.vector.as_deref()) };
+    let (tree, vector) = (row.tree, Some(row.vector.as_deref()));
+    let incoming = Incoming { id: id.to_owned(), tree, bytes: value, aliases: Aliases::default(), vector };
     Prepared::new(index, incoming, settings).map(Some)
 }
 

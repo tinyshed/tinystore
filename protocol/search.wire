@@ -42,6 +42,7 @@ message search.Set {
   3 value: json                      # 1 MiB at most
   4 vector: bin?                     # four bytes a dimension, little-endian floats
   5 noVector: bool                   # the document has no vector, on an index with vectors
+  6 aliases: {str}                   # each alias, one word, with the path of the field whose text it stands for
 }
 
 # Documents set in one commit, all of them or none: 1,000 at most, and no more
@@ -56,6 +57,7 @@ message search.Document {
   2 value: json
   3 vector: bin?
   4 noVector: bool
+  5 aliases: {str}
 }
 
 message search.Key {

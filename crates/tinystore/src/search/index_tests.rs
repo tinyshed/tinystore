@@ -578,7 +578,7 @@ fn setting_passages_a_thousand_at_a_time_takes() {
     let passages: Vec<serde_json::Value> = (0..100_000).map(|_| zipf.text(&mut random, 50).into()).collect();
     let started = std::time::Instant::now();
     for passage in &passages {
-        std::hint::black_box(document::analyze(passage, &fields, &[], &Default::default()).unwrap());
+        std::hint::black_box(document::analyze_plain(passage, &fields, &[]).unwrap());
     }
     eprintln!(
         "100,000 passages: sets {setting:?}, merges {merging:?}, into one {into_one:?}, their words alone {:?}",
@@ -1077,7 +1077,7 @@ impl Model {
                 &serde_json::to_value(&doc.value).unwrap(),
                 &settings.fields,
                 &settings.filters,
-                &settings.synonyms,
+                document::Besides { synonyms: &settings.synonyms, aliases: &Default::default() },
             )
             .unwrap();
             let terms = analyzed.terms.iter().map(|(part, term, tf)| ((*part, term.clone()), *tf)).collect();
@@ -1099,7 +1099,7 @@ impl Model {
             &serde_json::to_value(&value).unwrap(),
             &settings.fields,
             &settings.filters,
-            &settings.synonyms,
+            document::Besides { synonyms: &settings.synonyms, aliases: &Default::default() },
         )
         .unwrap();
         let terms = analyzed.terms.iter().map(|(part, term, tf)| ((*part, term.clone()), *tf)).collect();

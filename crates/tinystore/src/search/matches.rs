@@ -27,7 +27,7 @@ use super::document;
 use super::score::Part;
 use super::settings::Field;
 use super::snippet::{Cut, Snippet};
-use super::synonyms::{Standing, Synonyms};
+use super::synonyms::{Standing, Synonyms, one_word};
 
 /// Where a search's word matched a hit: a range of a field's text, and the
 /// query's word that found it. `&text[at.clone()]` is the whole word for a
@@ -144,20 +144,26 @@ impl Sought {
         }
     }
 
-    /// Where the search's words matched a document kept as `json`; nothing
-    /// for bytes that are not JSON, which no index keeps.
-    pub(crate) fn marked_in(&self, json: &[u8]) -> Marked {
-        serde_json::from_slice(json).map_or_else(|_| Marked::default(), |document| self.marked(&document))
+    /// Where the search's words matched a document kept as `json`, whose
+    /// `aliases` are each an alias and its field's path; nothing for bytes
+    /// that are not JSON, which no index keeps.
+    pub(crate) fn marked_in(&self, json: &[u8], aliases: &[(String, String)]) -> Marked {
+        serde_json::from_slice(json).map_or_else(|_| Marked::default(), |document| self.marked(&document, aliases))
     }
 
     /// Where the search's words matched `document`, a document or a table's
-    /// row as its index reads one: field by field in the index's order, a
-    /// list's strings in theirs, and each string's ranges in its text's;
-    /// and the snippet of the field it asks one of, cut of the first string
-    /// that matched, or of the first string where none did.
-    pub(crate) fn marked(&self, document: &Value) -> Marked {
+    /// row as its index reads one, with its `aliases`: field by field in the
+    /// index's order, a list's strings in theirs, and each string's ranges
+    /// in its text's; and the snippet of the field it asks one of, cut of
+    /// the first string that matched, or of the first string where none
+    /// did.
+    pub(crate) fn marked(&self, document: &Value, aliases: &[(String, String)]) -> Marked {
         let mut marked = Marked::default();
         let cut = self.ask.snippet.as_ref();
+        let aliases: Vec<(&str, Word)> = aliases
+            .iter()
+            .filter_map(|(alias, field)| Some((field.as_str(), one_word(alias, "an alias").ok()?)))
+            .collect();
         for keys in &self.fields {
             let snipped = cut.filter(|cut| cut.field == keys.path);
             if !self.ask.listed && snipped.is_none() {
@@ -165,9 +171,13 @@ impl Sought {
             }
             // A field of something else than text is a document its index refused.
             let Ok(texts) = document::texts(document, &keys.path) else { continue };
+            let stand_ins = StandIns {
+                synonyms: &self.synonyms,
+                aliases: aliases.iter().filter(|(field, _)| *field == keys.path).map(|(_, word)| word).collect(),
+            };
             let mut first = None;
             for (item, text) in texts {
-                let (ranges, words): (Vec<_>, Vec<_>) = keys.ranges(text, &self.synonyms).into_iter().unzip();
+                let (ranges, words): (Vec<_>, Vec<_>) = keys.ranges(text, &stand_ins).into_iter().unzip();
                 if let Some(cut) = snipped
                     && marked.snippet.is_none()
                     && (!ranges.is_empty() || first.is_none())
@@ -191,16 +201,29 @@ impl Sought {
     }
 }
 
+/// What stands in a field for some of its text: the index's synonyms, and
+/// the words of the document's aliases for the field.
+struct StandIns<'a> {
+    synonyms: &'a Synonyms,
+    aliases: Vec<&'a Word>,
+}
+
 impl Keys {
     /// The bytes of `text` that the search's words matched, in its order and
     /// apart, each with its query word's place: a word itself, and the text
     /// a synonym stands for where a search found it by the synonym, a
     /// phrase whole for its short form and a short form for its phrase's
-    /// words.
-    fn ranges(&self, text: &str, synonyms: &Synonyms) -> Vec<(Range<usize>, usize)> {
+    /// words, and the text whole, from its first word to its last, where a
+    /// search found it by an alias of its field.
+    fn ranges(&self, text: &str, stand_ins: &StandIns<'_>) -> Vec<(Range<usize>, usize)> {
         let Some(mapped) = analyzer::mapped(text) else { return Vec::new() };
         let words = analyzer::words_of(&mapped.normal);
         let mut found = Vec::new();
+        let by_alias = stand_ins.aliases.iter().filter_map(|alias| self.found_by(alias)).min();
+        if let (Some(at), Some(first), Some(last)) = (by_alias, words.first(), words.last()) {
+            found.push((mapped.original(first.at.start..last.at.end), at));
+        }
+        let synonyms = stand_ins.synonyms;
         for word in &words {
             if let Some(at) = self.sought(word) {
                 found.push((mapped.original(word.at.clone()), at));

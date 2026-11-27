@@ -13879,6 +13879,8 @@ type SearchSet struct {
 	Vector *[]byte `wire:"4,vector"`
 	// the document has no vector, on an index with vectors
 	NoVector bool `wire:"5,noVector"`
+	// each alias, one word, with the path of the field whose text it stands for
+	Aliases map[string]string `wire:"6,aliases"`
 }
 
 func (m SearchSet) Write(w *Writer) {
@@ -13909,6 +13911,15 @@ func (m SearchSet) Write(w *Writer) {
 		w.Bool(m.NoVector)
 		n++
 	}
+	if len(m.Aliases) > 0 {
+		w.Uint(6)
+		w.Map(len(m.Aliases))
+		for _, name0 := range SortedNames(m.Aliases) {
+			w.Str(name0)
+			w.Str(m.Aliases[name0])
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -13928,6 +13939,16 @@ func (m *SearchSet) Read(r *Reader) {
 			m.Vector = &v
 		case 5:
 			m.NoVector = r.Bool()
+		case 6:
+			v := map[string]string{}
+			seen0 := map[string]struct{}{}
+			for k0 := r.Map(); k0 > 0; k0-- {
+				name0 := r.Name(seen0)
+				item0 := r.Str()
+				v[name0] = item0
+			}
+			r.Leave()
+			m.Aliases = v
 		default:
 			r.Skip()
 		}
@@ -13941,7 +13962,8 @@ func (m SearchSet) IsZero() bool {
 		m.Id == "" &&
 		m.Value == "" &&
 		m.Vector == nil &&
-		!m.NoVector
+		!m.NoVector &&
+		len(m.Aliases) == 0
 }
 
 // SearchSetMany is the schema's search.SetMany.
@@ -14003,10 +14025,11 @@ func (m SearchSetMany) IsZero() bool {
 
 // SearchDocument is the schema's search.Document.
 type SearchDocument struct {
-	Id       string  `wire:"1,id"`
-	Value    string  `wire:"2,value"`
-	Vector   *[]byte `wire:"3,vector"`
-	NoVector bool    `wire:"4,noVector"`
+	Id       string            `wire:"1,id"`
+	Value    string            `wire:"2,value"`
+	Vector   *[]byte           `wire:"3,vector"`
+	NoVector bool              `wire:"4,noVector"`
+	Aliases  map[string]string `wire:"5,aliases"`
 }
 
 func (m SearchDocument) Write(w *Writer) {
@@ -14032,6 +14055,15 @@ func (m SearchDocument) Write(w *Writer) {
 		w.Bool(m.NoVector)
 		n++
 	}
+	if len(m.Aliases) > 0 {
+		w.Uint(5)
+		w.Map(len(m.Aliases))
+		for _, name0 := range SortedNames(m.Aliases) {
+			w.Str(name0)
+			w.Str(m.Aliases[name0])
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -14049,6 +14081,16 @@ func (m *SearchDocument) Read(r *Reader) {
 			m.Vector = &v
 		case 4:
 			m.NoVector = r.Bool()
+		case 5:
+			v := map[string]string{}
+			seen0 := map[string]struct{}{}
+			for k0 := r.Map(); k0 > 0; k0-- {
+				name0 := r.Name(seen0)
+				item0 := r.Str()
+				v[name0] = item0
+			}
+			r.Leave()
+			m.Aliases = v
 		default:
 			r.Skip()
 		}
@@ -14061,7 +14103,8 @@ func (m SearchDocument) IsZero() bool {
 	return m.Id == "" &&
 		m.Value == "" &&
 		m.Vector == nil &&
-		!m.NoVector
+		!m.NoVector &&
+		len(m.Aliases) == 0
 }
 
 // SearchKey is the schema's search.Key.

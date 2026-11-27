@@ -31,6 +31,7 @@
 //! those whose bound reaches the best; on an index opened with `recall`, it
 //! reads only the clusters nearest its question.
 
+mod aliases;
 mod analyzer;
 #[cfg(feature = "async")]
 mod awaited;
@@ -79,7 +80,7 @@ pub use engine::Maintenance;
 pub use filter::{Condition, Listing, Values, and, eq, is_in, missing, or, range};
 #[cfg(feature = "client")]
 pub(crate) use held::held;
-pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall, Total};
+pub use index::{Doc, Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall, Total};
 pub use many::{Among, Group, ManyFound, ManySearch, Merged, Searched};
 #[cfg(feature = "wire")]
 pub(crate) use many::{Many, Reading, searched};

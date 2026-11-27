@@ -541,7 +541,7 @@ pub(crate) fn found<T, R>(
     columns.resize(rows.len(), None);
     let Answer { hits, corrected, sought, total, .. } = answer;
     let hits = hits.into_iter().zip(rows).zip(columns).filter_map(|((ranked, row), columns)| {
-        let marked = sought.as_ref().zip(columns).map(|(sought, columns)| sought.marked(&columns));
+        let marked = sought.as_ref().zip(columns).map(|(sought, columns)| sought.marked(&columns, &[]));
         let Marked { matches, snippet } = marked.unwrap_or_default();
         let Ranked { id, score, text_score, similarity, .. } = ranked;
         row.map(|value| Hit { id, value, score, matches, snippet, text_score, similarity })

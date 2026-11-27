@@ -86,23 +86,104 @@ read again the same way. The same pairs in a different order are the same
 synonyms, so nothing is read again. With `rebuild: 'manual'`, the change
 waits for `store.reindex`.
 
+## A word for one document: aliases
+
+Some short forms mean one thing in one document and another thing in the
+next: «тп» is a dozen different courses, and a catalog computes a code for
+each new course every week. Give such a word to the document itself, as an
+alias. An alias names a field, and stands for that field's whole text in
+this document only.
+
+```ts
+await catalog.set('c-1', { name: 'Криптографические методы защиты информации' }, { aliases: { кмзи: 'name' } })
+await catalog.setMany([
+	{ id: 'c-7', value: { name: 'Теория принятия решений' }, aliases: { тп: 'name' } },
+	{ id: 'c-8', value: { name: 'Технологии программирования' }, aliases: { тп: 'name' } },
+])
+const { hits } = await catalog.search({ text: 'тп', matches: true }) // c-7 and c-8, each name marked whole
+```
+
+```python
+from tinystore.search import Doc
+
+await catalog.set("c-1", Course("Криптографические методы защиты информации"), aliases={"кмзи": "name"})
+await catalog.set_many([
+    Doc("c-7", Course("Теория принятия решений"), aliases={"тп": "name"}),
+    Doc("c-8", Course("Технологии программирования"), aliases={"тп": "name"}),
+])
+result = await catalog.search("тп", matches=True)  # c-7 and c-8, each name marked whole
+```
+
+```go
+err = catalog.Set(ctx, "c-1", Course{Name: "Криптографические методы защиты информации"},
+	search.Aliases{"кмзи": "name"})
+err = catalog.SetMany(ctx, []search.Doc[Course]{
+	{ID: "c-7", Value: Course{Name: "Теория принятия решений"}, Aliases: search.Aliases{"тп": "name"}},
+	{ID: "c-8", Value: Course{Name: "Технологии программирования"}, Aliases: search.Aliases{"тп": "name"}},
+})
+result, err := catalog.Search(ctx, "тп", search.Matches()) // c-7 and c-8, each name marked whole
+```
+
+```rust
+use tinystore::search::Doc;
+
+let kmzi = Course { name: "Криптографические методы защиты информации".into() };
+catalog.id("c-1").aliases([("кмзи", "name")]).set(&kmzi)?;
+let (decisions, programming) =
+    (Course { name: "Теория принятия решений".into() }, Course { name: "Технологии программирования".into() });
+catalog.set_many([
+    Doc::new("c-7", &decisions).aliases([("тп", "name")]),
+    Doc::new("c-8", &programming).aliases([("тп", "name")]),
+])?;
+let found = catalog.search("тп").matches().run()?; // c-7 and c-8, each name marked whole
+```
+
+- A search for the alias finds the document as if it matched the field the
+  alias names, and scores it with that field's weight. The alias is read
+  like any word: case, keyboard [layouts](layouts.md), [prefixes](prefix.md)
+  and [typos](typos.md) apply.
+- `matches` and snippets mark the field's text, from its first word to its
+  last, not the alias, which the document doesn't show.
+- No other document is found by the alias, and the same alias can stand for
+  a different field or text in each document (contract SRCH-30).
+- A set replaces the document's aliases with the ones it gives, so a set
+  without `aliases` leaves the document none, and a delete removes them.
+  Nothing else is read again: no rebuild, whatever the change (contract
+  SRCH-31).
+- An alias counts toward no field's length. If a [rebuild](rebuilds.md)
+  drops the field an alias names, the alias finds nothing until the field
+  comes back.
+
+**Synonyms or aliases?** Use `synonyms` for a short form that means the same
+phrase in every document, such as «бд» for «базы данных»: one pair finds
+every document that contains the phrase, but a change reads the index again.
+Use `aliases` for a word that belongs to one document, such as a course code
+or a product's codename: a change is one set, and no other document notices.
+
 ## Limits
 
-| What                 | Value                                     |
-|----------------------|-------------------------------------------|
-| synonyms per index   | 1,000 at most                             |
-| a short form         | one word after analysis, 64 bytes at most |
-| a phrase             | 1 to 8 words, none of them the short form |
-| the cost to a search | none: applied when a document is set      |
-| a field's length     | only the words written in it              |
+| What                 | Value                                         |
+|----------------------|-----------------------------------------------|
+| synonyms per index   | 1,000 at most                                 |
+| a short form         | one word after analysis, 64 bytes at most     |
+| a phrase             | 1 to 8 words, none of them the short form     |
+| aliases per document | 64 at most                                    |
+| an alias             | one word after analysis, 64 bytes at most     |
+| an alias's field     | one of the index's fields                     |
+| the cost to a search | none: both are applied when a document is set |
+| a field's length     | only the words written in it                  |
 
 Opening an index fails with an invalid error if it has a short form of two
 words, an empty phrase, a phrase that contains its own short form, or more
-than 1,000 pairs. The error identifies the index and the pair.
+than 1,000 pairs. The error identifies the index and the pair. A set fails
+with an invalid error if an alias is two words, names a field the index
+doesn't read, appears twice, or if there are more than 64. The error
+identifies the index, the document and the alias.
 
 Once this release opens a store's search.db, the release before it can't
 open that store. Otherwise the older release would set documents without
-their synonyms' words.
+their synonyms' words. The release that adds aliases does the same to
+0.13.0, which would read documents again without their aliases.
 
 ## Not yet
 

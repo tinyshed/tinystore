@@ -32,11 +32,12 @@ use crate::sqlite::{Config, File, Migration, Tx, sql_error};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Memory, Result, Store};
 
-const MIGRATIONS: &[Migration] = &[
+pub(super) const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
     Migration::of(2, "0002_segments.sql", include_str!("migrations/0002_segments.sql")),
     Migration::of(3, "0003_keys.sql", include_str!("migrations/0003_keys.sql")),
     Migration::of(4, "0004_synonyms.sql", include_str!("migrations/0004_synonyms.sql")),
+    Migration::of(5, "0005_aliases.sql", include_str!("migrations/0005_aliases.sql")),
 ];
 
 /// search's file in the store's directory.

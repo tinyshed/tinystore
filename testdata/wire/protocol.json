@@ -7045,6 +7045,13 @@
     },
     {
       "fields": {
+        "aliases": {
+          "names": {
+            "a": {
+              "str": "aliases"
+            }
+          }
+        },
         "handle": {
           "uint": "107"
         },
@@ -7061,7 +7068,7 @@
           "bin": "01ff"
         }
       },
-      "hex": "85016b02a2696403a77b2261223a317d04c40201ff05c3",
+      "hex": "86016b02a2696403a77b2261223a317d04c40201ff05c30681a161a7616c6961736573",
       "message": "search.Set",
       "name": "search.Set with every field"
     },
@@ -7077,6 +7084,13 @@
           "list": [
             {
               "fields": {
+                "aliases": {
+                  "names": {
+                    "a": {
+                      "str": "aliases"
+                    }
+                  }
+                },
                 "id": {
                   "str": "id"
                 },
@@ -7097,7 +7111,7 @@
           "uint": "107"
         }
       },
-      "hex": "82016b02918401a2696402a77b2261223a317d03c40201ff04c3",
+      "hex": "82016b02918501a2696402a77b2261223a317d03c40201ff04c30581a161a7616c6961736573",
       "message": "search.SetMany",
       "name": "search.SetMany with every field"
     },
@@ -7109,6 +7123,13 @@
     },
     {
       "fields": {
+        "aliases": {
+          "names": {
+            "a": {
+              "str": "aliases"
+            }
+          }
+        },
         "id": {
           "str": "id"
         },
@@ -7122,7 +7143,7 @@
           "bin": "01ff"
         }
       },
-      "hex": "8401a2696402a77b2261223a317d03c40201ff04c3",
+      "hex": "8501a2696402a77b2261223a317d03c40201ff04c30581a161a7616c6961736573",
       "message": "search.Document",
       "name": "search.Document with every field"
     },

@@ -211,6 +211,24 @@ async fn documents_with_vectors_are_set_and_found_as_the_blocking_api_finds_them
     store.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn awaited_sets_keep_a_documents_aliases_as_the_blocking_ones_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = opened(&dir, false);
+    let docs = store.index::<Article>("docs").fields(["title", "body"]).open().unwrap();
+    let (bread, rye) = (article("Bread at home", "flour", 1), article("Rye", "bread from rye", 2));
+    docs.id("d-1").aliases([("bah", "title")]).set(&bread).await.unwrap();
+    docs.set_many([Doc::new("d-2", &rye).aliases([("bfr", "body")])]).await.unwrap();
+    let found = docs.search("bah bfr").matches().run().await.unwrap();
+    assert_eq!(found, docs.blocking().search("bah bfr").matches().run().unwrap());
+    let marked: Vec<(&str, &str)> =
+        found.hits.iter().map(|hit| (hit.id.as_str(), hit.matches[0].field.as_str())).collect();
+    assert_eq!(marked, [("d-1", "title"), ("d-2", "body")], "each by the field its alias stands for");
+    let refused = docs.id("d-3").aliases([("x", "author")]).set(&article("Salt", "", 3)).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid);
+    store.close().await.unwrap();
+}
+
 // contract: STORE-10
 #[test]
 fn a_set_or_a_get_polled_while_a_change_holds_the_rows_waits_for_it_on_the_pool_never_in_the_poll() {

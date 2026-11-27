@@ -17,6 +17,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use super::aliases::Aliases;
 #[cfg(feature = "replication")]
 use super::engine::elsewhere;
 #[cfg(feature = "replication")]
@@ -30,16 +31,23 @@ use super::write::{Incoming, Prepared};
 use crate::{Error, Result, Store};
 
 /// A document an awaited set owns, made when its call is: its id, its value
-/// as JSON or why it has none, and what the call said of its vector.
+/// as JSON or why it has none, what the call said of its vector, and its
+/// aliases.
 pub(crate) struct Encoded {
     id: String,
     json: Result<(Value, Vec<u8>)>,
     vector: Option<Option<Vec<f32>>>,
+    aliases: Vec<(String, String)>,
 }
 
 impl Encoded {
-    pub(crate) fn new<T: Serialize>(id: String, value: &T, vector: Option<Option<&[f32]>>) -> Encoded {
-        Encoded { id, json: json(value), vector: vector.map(|vector| vector.map(<[f32]>::to_vec)) }
+    pub(crate) fn new<T: Serialize>(
+        id: String,
+        value: &T,
+        vector: Option<Option<&[f32]>>,
+        aliases: Vec<(String, String)>,
+    ) -> Encoded {
+        Encoded { id, json: json(value), vector: vector.map(|vector| vector.map(<[f32]>::to_vec)), aliases }
     }
 
     /// Its bytes as JSON: none where it has no JSON, which its set refuses.
@@ -51,7 +59,8 @@ impl Encoded {
     #[cfg(feature = "replication")]
     fn passed(self) -> Result<Passed> {
         let (tree, _) = self.json?;
-        Passed::of(&Given { id: self.id, value: &tree, vector: self.vector.as_ref().map(Option::as_deref) })
+        let vector = self.vector.as_ref().map(Option::as_deref);
+        Passed::of(&Given { id: self.id, value: &tree, vector, aliases: self.aliases })
     }
 }
 
@@ -63,8 +72,9 @@ impl ToSet for Encoded {
     fn prepared(self, data: &Data) -> Result<Prepared> {
         let (tree, bytes) = self.json?;
         checked(&self.id)?;
-        let incoming = Incoming { id: self.id, tree, bytes, vector: self.vector.as_ref().map(Option::as_deref) };
-        Prepared::new(data.id, incoming, &data.settings)
+        let aliases = Aliases::new(self.aliases, &data.settings.fields)?;
+        let vector = self.vector.as_ref().map(Option::as_deref);
+        Prepared::new(data.id, Incoming { id: self.id, tree, bytes, aliases, vector }, &data.settings)
     }
 }
 

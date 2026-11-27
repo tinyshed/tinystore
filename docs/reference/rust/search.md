@@ -181,6 +181,48 @@ A document with no number there never passes. Numbers compare as f64,
 so whole numbers past 2⁵³ compare by the nearest f64, where `eq` is
 exact.
 
+## Doc
+
+```rust
+pub struct Doc<'v, T> { /* private fields */ }
+```
+
+A document `Index::set_many` sets, with what it says of its vector and
+its aliases: `Doc::new("1", &course).aliases([("кмзи", "name")])`.
+
+### Doc.new
+
+```rust
+pub fn new(id: impl Key, value: &'v T) -> Self
+```
+
+The document `id` of `value`, saying nothing of its vector, with no
+alias.
+
+### Doc.vector
+
+```rust
+pub fn vector(self, vector: &'v [f32]) -> Self
+```
+
+As `DocumentCall::vector`.
+
+### Doc.without_vector
+
+```rust
+pub fn without_vector(self) -> Self
+```
+
+As `DocumentCall::without_vector`.
+
+### Doc.aliases
+
+```rust
+pub fn aliases<W: AsRef<str>, F: AsRef<str>>(self, pairs: impl IntoIterator<Item = (W, F)>) -> Self
+```
+
+As `DocumentCall::aliases`.
+
 ## Document
 
 ```rust
@@ -188,7 +230,8 @@ pub trait Document<'v, T>
 ```
 
 A document as `Index::set_many` takes it: `(id, &value)`, or on an index
-with vectors `(id, &value, &vector[..])` and `(id, &value, None)`.
+with vectors `(id, &value, &vector[..])` and `(id, &value, None)`; or a
+`Doc`, which says its aliases too.
 
 ### Document.parts
 
@@ -199,13 +242,23 @@ fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>)
 Its id, its value, and its vector: `None` when it says nothing of one,
 `Some(None)` when it has none.
 
+### Document.aliased
+
+```rust
+fn aliased(&self) -> Vec<(String, String)>
+```
+
+Its aliases, each a word and the path of the field it stands for;
+none unless it says.
+
 ## DocumentCall
 
 ```rust
 pub struct DocumentCall<'a, T> { /* private fields */ }
 ```
 
-A set of one document with its vector, run by `DocumentCall::set`.
+A set of one document with its vector or its aliases, run by
+`DocumentCall::set`.
 
 ### DocumentCall.vector
 
@@ -224,14 +277,34 @@ pub fn without_vector(self) -> Self
 
 The document has no vector, and only its words find it.
 
+### DocumentCall.aliases
+
+```rust
+pub fn aliases<W: AsRef<str>, F: AsRef<str>>(self, pairs: impl IntoIterator<Item = (W, F)>) -> Self
+```
+
+The document's aliases: each a word that stands for the whole text of
+one of its fields, in this document alone, by the field's path, as
+`[("кмзи", "name")]`. A search for the word finds the document as a
+match of that field, and its matches mark the field's text. One word
+of 64 bytes each, 64 at most; a set without them leaves the document
+none.
+
+```rust
+let courses = store.index::<serde_json::Value>("courses").field("name", 1.0).open()?;
+let course = serde_json::json!({ "name": "Криптографические методы защиты информации" });
+courses.id("1").aliases([("кмзи", "name")]).set(&course)?;
+let found = courses.search("кмзи").matches().run()?; // "1", its name marked whole
+```
+
 ### DocumentCall.set
 
 ```rust
 pub fn set(self, value: &T) -> Result<()>
 ```
 
-Sets the document to `value`, replacing it whole, its words and its
-vector; the next search sees it.
+Sets the document to `value`, replacing it whole, its words, its
+aliases and its vector; the next search sees it.
 
 ## Found
 
@@ -342,8 +415,8 @@ says it has none, through `id`.
 pub fn id(&self, id: impl Key) -> DocumentCall<'_, T>
 ```
 
-A set of the document `id` with its vector, run by its last step:
-`products.id("p-3").vector(&embedding).set(&product)`.
+A set of the document `id` with its vector or its aliases, run by its
+last step: `products.id("p-3").vector(&embedding).set(&product)`.
 
 ### Index.set_many
 
@@ -356,7 +429,8 @@ where
 Sets each document to its value, all of them in one commit or none:
 `(id, &value)`, or on an index with vectors `(id, &value, &vector)`,
 and in a list where some have none `(id, &value, Some(&vector[..]))`
-and `(id, &value, None)`. A refused one names its place in the list
+and `(id, &value, None)`; a `Doc` says its aliases too. A refused
+one names its place in the list
 and its id. A call holds 1,000 documents and 16 MiB of them as JSON
 at most, `SET_MANY_DOCUMENTS` and `SET_MANY_BYTES`; a larger
 import goes in calls of that size.
@@ -1394,8 +1468,8 @@ says it has none, through `id`.
 pub fn id(&self, id: impl Key) -> DocumentCall<'_, T>
 ```
 
-A set of the document `id` with its vector, run by its awaited last
-step: `products.id("p-3").vector(&embedding).set(&product).await`.
+A set of the document `id` with its vector or its aliases, run by its
+awaited last step: `products.id("p-3").vector(&embedding).set(&product).await`.
 
 ### aio::search::Index.set_many
 
@@ -1426,7 +1500,8 @@ says whether there was one.
 pub struct DocumentCall<'a, T> { /* private fields */ }
 ```
 
-A set of one document with its vector, run by `DocumentCall::set`.
+A set of one document with its vector or its aliases, run by
+`DocumentCall::set`.
 
 ### aio::search::DocumentCall.vector
 
@@ -1444,14 +1519,22 @@ pub fn without_vector(self) -> Self
 
 As `crate::search::DocumentCall::without_vector`.
 
+### aio::search::DocumentCall.aliases
+
+```rust
+pub fn aliases<W: AsRef<str>, F: AsRef<str>>(self, pairs: impl IntoIterator<Item = (W, F)>) -> Self
+```
+
+As `crate::search::DocumentCall::aliases`.
+
 ### aio::search::DocumentCall.set
 
 ```rust
 pub fn set(self, value: &T) -> impl Future<Output = Result<()>> + Send + 'static
 ```
 
-Sets the document to `value`, its words and its vector, as
-`crate::search::DocumentCall::set` does.
+Sets the document to `value`, its words, its aliases and its vector,
+as `crate::search::DocumentCall::set` does.
 
 ## aio::search::SearchCall
 

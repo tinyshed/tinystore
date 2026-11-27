@@ -29,6 +29,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
+use super::aliases::{self, Aliases};
 use super::engine::{Search, check_name};
 #[cfg(feature = "async")]
 use super::open::Settled;
@@ -117,6 +118,8 @@ const DROP_STEPS: &[&str] = &[
         (select index_id, key, doc from _tinystore_search_head where index_id = ?1 limit 4096)",
     "delete from _tinystore_search_docs where (index_id, doc) in
         (select index_id, doc from _tinystore_search_docs where index_id = ?1 limit 512)",
+    "delete from _tinystore_search_aliases where (index_id, doc, alias) in
+        (select index_id, doc, alias from _tinystore_search_aliases where index_id = ?1 limit 4096)",
     "delete from _tinystore_search_norms where (index_id, part, chunk) in
         (select index_id, part, chunk from _tinystore_search_norms where index_id = ?1 limit 64)",
     "delete from _tinystore_search_gone where (index_id, doc) in
@@ -238,8 +241,9 @@ fn copied(connection: &Connection, serving: i64, beside: &Data, progress: &Progr
             Some(_) => Some(vectors::values(connection, serving, *doc)?),
             None => None,
         };
-        let incoming =
-            Incoming { id: id.clone(), tree, bytes: bytes.clone(), vector: vector.as_ref().map(Option::as_deref) };
+        let aliases = Aliases::kept(aliases::read(connection, (serving, *doc))?, &beside.settings.fields);
+        let vector = vector.as_ref().map(Option::as_deref);
+        let incoming = Incoming { id: id.clone(), tree, bytes: bytes.clone(), aliases, vector };
         let prepared =
             Prepared::new(beside.id, incoming, &beside.settings).map_err(|error| error.within(format!("id {id:?}")))?;
         documents.push((*doc, prepared));

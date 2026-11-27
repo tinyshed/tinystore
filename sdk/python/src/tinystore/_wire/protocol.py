@@ -10411,6 +10411,13 @@ def _write_search_set(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(5)
         w.bool(x)
         n += 1
+    if (x := v.get("aliases")) is not None:
+        w.uint(6)
+        w.map(len(x))
+        for name0 in sorted(x):
+            w.str(name0)
+            w.str(x[name0])
+        n += 1
     w.close_map(head, n)
 
 
@@ -10429,6 +10436,14 @@ def _read_search_set(r: Reader) -> dict[str, Any]:
                 read["vector"] = r.bin()
             case 5:
                 read["no_vector"] = r.bool()
+            case 6:
+                named0: dict[str, Any] = {}
+                names0: set[str] = set()
+                for _ in range(r.map()):
+                    name0 = r.name(names0)
+                    named0[name0] = r.str()
+                r.leave()
+                read["aliases"] = named0
             case _:
                 r.skip()
     r.leave()
@@ -10448,6 +10463,8 @@ SearchSet = Message(
         "vector": (4, bin_),
         # the document has no vector, on an index with vectors
         "no_vector": (5, bool_),
+        # each alias, one word, with the path of the field whose text it stands for
+        "aliases": (6, names(str_)),
     },
     _write_search_set,
     _read_search_set,
@@ -10473,6 +10490,13 @@ def _write_search_document(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(4)
         w.bool(x)
         n += 1
+    if (x := v.get("aliases")) is not None:
+        w.uint(5)
+        w.map(len(x))
+        for name0 in sorted(x):
+            w.str(name0)
+            w.str(x[name0])
+        n += 1
     w.close_map(head, n)
 
 
@@ -10489,6 +10513,14 @@ def _read_search_document(r: Reader) -> dict[str, Any]:
                 read["vector"] = r.bin()
             case 4:
                 read["no_vector"] = r.bool()
+            case 5:
+                named0: dict[str, Any] = {}
+                names0: set[str] = set()
+                for _ in range(r.map()):
+                    name0 = r.name(names0)
+                    named0[name0] = r.str()
+                r.leave()
+                read["aliases"] = named0
             case _:
                 r.skip()
     r.leave()
@@ -10502,6 +10534,7 @@ SearchDocument = Message(
         "value": (2, str_),
         "vector": (3, bin_),
         "no_vector": (4, bool_),
+        "aliases": (5, names(str_)),
     },
     _write_search_document,
     _read_search_document,

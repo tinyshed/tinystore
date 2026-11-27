@@ -260,11 +260,21 @@ export interface TableIndexOptions {
 	rebuild?: 'automatic' | 'manual' | undefined
 }
 
-/** A document `setMany` sets: its id, its value, and its vector, or `null` for none. */
-export interface IndexDocument<T> {
+/** What a set says of its document besides its value: its vector, or `null` for none, and its aliases. */
+export interface IndexSetOptions {
+	vector?: Vector | null | undefined
+	/**
+	 * each alias, one word, with the path of the field whose whole text it
+	 * stands for in this document alone: `{ кмзи: 'name' }`; a set without
+	 * them leaves the document none
+	 */
+	aliases?: Readonly<Record<string, string>> | undefined
+}
+
+/** A document `setMany` sets: its id, its value, its vector, or `null` for none, and its aliases. */
+export interface IndexDocument<T> extends IndexSetOptions {
 	id: Key
 	value: T
-	vector?: Vector | null | undefined
 }
 
 /** How often `ready` asks whether a rebuild switched in. */
@@ -375,10 +385,11 @@ export class SearchIndex<T> extends Searchable<T> {
 	/**
 	 * Sets the document `id` to `value`, replacing it whole; the next search
 	 * sees it. On an index with vectors a set gives its vector, or `null` for
-	 * a document only its words find.
+	 * a document only its words find. Its aliases find it as a match of the
+	 * field each stands for, and mark that field's text.
 	 */
-	async set(id: Key, value: T, options?: { vector?: Vector | null | undefined }): Promise<void> {
-		const said = vectorSaid(options?.vector)
+	async set(id: Key, value: T, options?: IndexSetOptions): Promise<void> {
+		const said = { ...vectorSaid(options?.vector), ...aliasesSaid(options?.aliases) }
 		const json = documentJson(this.name, value)
 		await this.call(
 			'search.set',
@@ -398,6 +409,7 @@ export class SearchIndex<T> extends Searchable<T> {
 			id: keyText(document.id),
 			value: documentJson(this.name, document.value),
 			...vectorSaid(document.vector),
+			...aliasesSaid(document.aliases),
 		}))
 		await this.call(
 			'search.setMany',
@@ -796,6 +808,15 @@ function vectorSaid(vector: Vector | null | undefined): {
 		return {}
 	}
 	return vector === null ? { noVector: true } : { vector: vectorBytes(vector) }
+}
+
+/** A set's aliases as the wire takes them: none left out. */
+function aliasesSaid(aliases: Readonly<Record<string, string>> | undefined): {
+	aliases?: Record<string, string>
+} {
+	return aliases === undefined || Object.keys(aliases).length === 0
+		? {}
+		: { aliases: { ...aliases } }
 }
 
 /** A vector's floats' bytes, little-endian, four a dimension. */

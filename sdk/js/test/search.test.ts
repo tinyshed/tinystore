@@ -223,6 +223,28 @@ for (const way of ways) {
 			expect(refused).toBeInstanceOf(InvalidError)
 		})
 
+		// contract: SRCH-30, SRCH-31
+		test("a document's aliases find it alone, as a match of their field, and change with its set", async () => {
+			const courses = store.index<{ name: string }>('aliased', { fields: { name: 1 } })
+			const kmzi = 'Криптографические методы защиты информации'
+			await courses.set('1', { name: kmzi }, { aliases: { кмзи: 'name' } })
+			await courses.setMany([
+				{ id: '2', value: { name: 'Теория принятия решений' }, aliases: { тп: 'name' } },
+				{ id: '3', value: { name: 'Технологии программирования' }, aliases: { тп: 'name' } },
+				{ id: '4', value: { name: 'Теория вероятностей' } },
+			])
+			expect(ids(await courses.search('тп')).sort()).toEqual(['2', '3'])
+			const [found] = (
+				await courses.search({ text: 'КМЗИ', matches: true, snippet: { field: 'name' } })
+			).hits
+			expect(found?.matches).toEqual([{ field: 'name', start: 0, end: kmzi.length, word: 'КМЗИ' }])
+			expect(found?.snippet).toEqual({ text: kmzi, marks: [{ start: 0, end: kmzi.length }] })
+			await courses.set('2', { name: 'Теория принятия решений' })
+			expect(ids(await courses.search('тп'))).toEqual(['3'])
+			const refused = await caught(courses.set('5', { name: kmzi }, { aliases: { кмзи: 'title' } }))
+			expect(refused).toBeInstanceOf(InvalidError)
+		})
+
 		// contract: SRCH-22
 		test("a hit's snippet is cut around its first match, its marks in UTF-16 units", async () => {
 			const pages = store.index<{ title: string; plain: string }>('pages', {

@@ -34,30 +34,30 @@ October, `v0.3.0` and `v0.4.0` on 27 October, `v0.4.1` on 31 October,
 Go engine's `0.1.0-rc.1` to `rc.5`, the tags of the same names stay, and
 research's submodule is pinned to `v0.1.0-rc.5`.
 
-| Part           | What it is                                                                                                                      | Guide                                                |
-|----------------|---------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------|
-| runtime        | the store, its `LOCK`, clock, memory budget, background work, errors and each file's durability                                 | [inside](docs/handbook/inside/journey-of-a-write.md) |
-| SQLite adapter | the pinned build, one writer a file with grouped commits, `query_only` readers, checked migrations                              | [SQLite](docs/handbook/inside/sqlite.md)             |
-| sql            | the application's databases, migrations, tables, a query builder, batches, transactions, deleted rows, versions, mirrors        | [sql](docs/guides/sql/README.md)                     |
-| kv             | buckets, branches, expiry, versions, encrypted values, counters, rate limits, quotas, `once`                                    | [kv](docs/guides/kv/README.md)                       |
-| jobs           | queues, ids, gathers, repeats and cron, schedules, quiet hours, limits, retries, steps, workers                                 | [jobs](docs/guides/jobs/README.md)                   |
-| blobs          | files by path, uploads, conditions, copies, expiry, a ceiling, checked reads, a scrub, directories                              | [blobs](docs/guides/blobs/README.md)                 |
-| search         | words, vectors or both, filters, typos, synonyms, prefixes, layouts, matches, snippets, rebuilds, a table's index, many at once | [search](docs/guides/search/README.md)               |
-| channels       | messages to whoever listens now, a transaction's at its commit, how many listen                                                 | [channels](docs/guides/channels/README.md)           |
-| locks          | locks and semaphores with fences, urgent and background holds, a breaker, leases over the wire                                  | [locks](docs/guides/locks/README.md)                 |
-| config         | typed settings in layers, secrets, live settings kept in kv.db                                                                  | [config](docs/guides/config/README.md)               |
-| records        | streams of events and logs packed into blocks, reads, aggregates, sessions, a tail, others' lines                               | [records](docs/guides/records/README.md)             |
-| console        | a logger's lines printed as every SDK prints them, a `tracing` layer without a store                                            | [console](docs/guides/records/console.md)            |
-| metrics        | series, instruments, aggregates, comparisons, ingest and a gauge's replace, its own, the `metrics` recorder, Prometheus text    | [metrics](docs/guides/metrics/README.md)             |
-| backup         | one checked zip of every engine while it runs, and its restore                                                                  | [backup](docs/guides/backup/README.md)               |
-| replication    | nodes, a home a file, copies, writes passed home, moves, promotion, a witness                                                   | [nodes](docs/handbook/nodes/copies.md)               |
-| wire           | frames, MessagePack, credit, every engine's calls, written from `protocol/*.wire`                                               | [wire](docs/wire.md)                                 |
-| pipe and FFI   | a connection in memory to the core in this process, four C functions, PyO3's and napi-rs' modules                               | [one core](docs/handbook/inside/one-core.md)         |
-| server         | `tinystore`: `serve` over stdio, a socket, a pipe, TCP and TLS, and every command beside it                                     | [cli](docs/guides/cli/README.md)                     |
-| mcp            | a Rust program's MCP server, blocking or awaited: tools marked read, write or remove, `--write`                                 | [own MCP server](docs/guides/cli/mcp-server.md)      |
-| SDKs           | Bun and Node, Python and Go, each through the core in process, a child, a sidecar or a server                                   | [one directory](docs/handbook/start/directory.md)    |
-| async API      | `tinystore::aio`: `aio::Store`, its `tx` and `close`, every engine's handles and MCP, awaited                                   | [Rust with async](docs/handbook/start/rust-async.md) |
-| release        | seven targets, npm, PyPI, crates.io, GHCR, the GitHub release and the Go SDK's tag                                              | the `release` skill                                  |
+| Part           | What it is                                                                                                                               | Guide                                                |
+|----------------|------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------|
+| runtime        | the store, its `LOCK`, clock, memory budget, background work, errors and each file's durability                                          | [inside](docs/handbook/inside/journey-of-a-write.md) |
+| SQLite adapter | the pinned build, one writer a file with grouped commits, `query_only` readers, checked migrations                                       | [SQLite](docs/handbook/inside/sqlite.md)             |
+| sql            | the application's databases, migrations, tables, a query builder, batches, transactions, deleted rows, versions, mirrors                 | [sql](docs/guides/sql/README.md)                     |
+| kv             | buckets, branches, expiry, versions, encrypted values, counters, rate limits, quotas, `once`                                             | [kv](docs/guides/kv/README.md)                       |
+| jobs           | queues, ids, gathers, repeats and cron, schedules, quiet hours, limits, retries, steps, workers                                          | [jobs](docs/guides/jobs/README.md)                   |
+| blobs          | files by path, uploads, conditions, copies, expiry, a ceiling, checked reads, a scrub, directories                                       | [blobs](docs/guides/blobs/README.md)                 |
+| search         | words, vectors or both, filters, typos, synonyms, aliases, prefixes, layouts, matches, snippets, rebuilds, a table's index, many at once | [search](docs/guides/search/README.md)               |
+| channels       | messages to whoever listens now, a transaction's at its commit, how many listen                                                          | [channels](docs/guides/channels/README.md)           |
+| locks          | locks and semaphores with fences, urgent and background holds, a breaker, leases over the wire                                           | [locks](docs/guides/locks/README.md)                 |
+| config         | typed settings in layers, secrets, live settings kept in kv.db                                                                           | [config](docs/guides/config/README.md)               |
+| records        | streams of events and logs packed into blocks, reads, aggregates, sessions, a tail, others' lines                                        | [records](docs/guides/records/README.md)             |
+| console        | a logger's lines printed as every SDK prints them, a `tracing` layer without a store                                                     | [console](docs/guides/records/console.md)            |
+| metrics        | series, instruments, aggregates, comparisons, ingest and a gauge's replace, its own, the `metrics` recorder, Prometheus text             | [metrics](docs/guides/metrics/README.md)             |
+| backup         | one checked zip of every engine while it runs, and its restore                                                                           | [backup](docs/guides/backup/README.md)               |
+| replication    | nodes, a home a file, copies, writes passed home, moves, promotion, a witness                                                            | [nodes](docs/handbook/nodes/copies.md)               |
+| wire           | frames, MessagePack, credit, every engine's calls, written from `protocol/*.wire`                                                        | [wire](docs/wire.md)                                 |
+| pipe and FFI   | a connection in memory to the core in this process, four C functions, PyO3's and napi-rs' modules                                        | [one core](docs/handbook/inside/one-core.md)         |
+| server         | `tinystore`: `serve` over stdio, a socket, a pipe, TCP and TLS, and every command beside it                                              | [cli](docs/guides/cli/README.md)                     |
+| mcp            | a Rust program's MCP server, blocking or awaited: tools marked read, write or remove, `--write`                                          | [own MCP server](docs/guides/cli/mcp-server.md)      |
+| SDKs           | Bun and Node, Python and Go, each through the core in process, a child, a sidecar or a server                                            | [one directory](docs/handbook/start/directory.md)    |
+| async API      | `tinystore::aio`: `aio::Store`, its `tx` and `close`, every engine's handles and MCP, awaited                                            | [Rust with async](docs/handbook/start/rust-async.md) |
+| release        | seven targets, npm, PyPI, crates.io, GHCR, the GitHub release and the Go SDK's tag                                                       | the `release` skill                                  |
 
 From `v0.1.0` on, a store a release wrote opens in the next: an engine's
 schema changes through a migration of its own after `0001`, and the

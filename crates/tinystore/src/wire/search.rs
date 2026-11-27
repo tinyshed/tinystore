@@ -178,14 +178,11 @@ fn set(handles: &Handles, asked: SearchSet) -> Answered {
     let index = handles.documents(asked.handle)?;
     let value = document(&asked.value)?;
     let vector = floats(asked.vector.as_deref())?;
-    let call = index.id(&asked.id);
+    let call = index.id(&asked.id).aliases(&asked.aliases);
     let call = match (&vector, asked.no_vector) {
         (Some(vector), _) => call.vector(vector),
         (None, true) => call.without_vector(),
-        (None, false) => {
-            index.set(&asked.id, &value)?;
-            return Ok(Empty {}.encode());
-        }
+        (None, false) => call,
     };
     call.set(&value)?;
     Ok(Empty {}.encode())
@@ -196,11 +193,16 @@ struct Read {
     id: String,
     value: Value,
     vector: Option<Option<Vec<f32>>>,
+    aliases: Vec<(String, String)>,
 }
 
 impl<'v> Document<'v, Value> for &'v Read {
     fn parts(self) -> (String, &'v Value, Option<Option<&'v [f32]>>) {
         (self.id.clone(), &self.value, self.vector.as_ref().map(Option::as_deref))
+    }
+
+    fn aliased(&self) -> Vec<(String, String)> {
+        self.aliases.clone()
     }
 }
 
@@ -217,7 +219,8 @@ fn read(given: &SearchDocument) -> Result<Read, Failure> {
         (None, true) => Some(None),
         (None, false) => None,
     };
-    Ok(Read { id: given.id.clone(), value: document(&given.value)?, vector })
+    let aliases = given.aliases.iter().map(|(alias, field)| (alias.clone(), field.clone())).collect();
+    Ok(Read { id: given.id.clone(), value: document(&given.value)?, vector, aliases })
 }
 
 fn searched(handles: &Handles, asked: SearchQuery) -> Answered {

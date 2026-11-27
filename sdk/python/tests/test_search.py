@@ -170,6 +170,27 @@ async def test_a_short_form_finds_its_phrase_and_the_phrase_its_short_form(store
         await store.index("refused", Course, synonyms={"machine learning": "ml"}).search("ml")
 
 
+# contract: SRCH-30, SRCH-31
+async def test_a_documents_aliases_find_it_alone_as_a_match_of_their_field(store: tinystore.Store) -> None:
+    courses = store.index("aliased", Course, fields={"name": 1})
+    kmzi = "Криптографические методы защиты информации"
+    await courses.set("1", Course(kmzi), aliases={"кмзи": "name"})
+    await courses.set_many(
+        [
+            search.Doc("2", Course("Теория принятия решений"), aliases={"тп": "name"}),
+            search.Doc("3", Course("Технологии программирования"), aliases={"тп": "name"}),
+            ("4", Course("Теория вероятностей")),
+        ]
+    )
+    assert sorted(hit.id for hit in (await courses.search("тп")).hits) == ["2", "3"]
+    hit = (await courses.search("КМЗИ", matches=True)).hits[0]
+    assert hit.matches == [tinystore.Match("name", 0, len(kmzi), "КМЗИ")]
+    await courses.set("2", Course("Теория принятия решений"))
+    assert [hit.id for hit in (await courses.search("тп")).hits] == ["3"]
+    with pytest.raises(tinystore.InvalidError):
+        await courses.set("5", Course(kmzi), aliases={"кмзи": "title"})
+
+
 @dataclass
 class Page:
     title: str

@@ -318,6 +318,8 @@ These contracts are what does not.
 - **SRCH-27** A group's `more` MUST say exactly whether its index has a hit past the group's offset and limit under the group's filter: false at exactly the limit, true at one past it, the 1001st hit included.
 - **SRCH-28** An index rebuilt beside itself MUST be listed, once its rebuild switches in, with the time a program last opened it, the open the rebuild followed among them, never as never opened.
 - **SRCH-29** A group of a search among several indexes MUST page as a search of its index alone does: its hits MUST be that search's at the same `offset` and `limit`, `offset` and `limit` together 1000 at most and past it `limit` before any index is searched.
+- **SRCH-30** A document set with `aliases` MUST be found by a search for each alias, the word read as the index reads any, as a match of the field the alias names and weighed as that field, and no other document MUST be found by it, whatever the same alias means in another; its `matches` and snippets MUST mark that field's text whole, from its first word to its last. An alias MUST count in no field's length.
+- **SRCH-31** A document's aliases MUST be those its last set gave: a set without them MUST leave it none and a delete MUST take them, changing no other document and reading the index again for none; they MUST survive merges, purges and rebuilds, and an alias of a field a rebuild no longer reads MUST find nothing until a rebuild reads the field again.
 
 ## 5. Replication
 

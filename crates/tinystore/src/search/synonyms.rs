@@ -225,21 +225,28 @@ fn text_of(pair: &Value, at: usize) -> Option<&str> {
     pair.get(at).and_then(Value::as_str)
 }
 
+/// The one word of `text`, a short form or a document's alias, named `what`
+/// in why it is not one: more words, none, or more than 64 bytes.
+pub(crate) fn one_word(text: &str, what: &str) -> std::result::Result<Word, String> {
+    if text.len() > MOST_SHORT {
+        return Err(format!("{what} of {} bytes, past {MOST_SHORT}", text.len()));
+    }
+    let mut words = analyzer::words(text);
+    if words.len() != 1 {
+        return Err(format!("{what} is one word"));
+    }
+    Ok(words.remove(0))
+}
+
 /// A pair's words, or why an open cannot give it: a short form of more than
 /// one word or past 64 bytes, a phrase of no word or more than 8, or one
 /// that holds its short form among its words.
 fn synonym((short, phrase): &(String, String)) -> std::result::Result<Synonym, String> {
-    if short.len() > MOST_SHORT {
-        return Err(format!("a short form of {} bytes, past {MOST_SHORT}", short.len()));
-    }
-    let (mut shorts, phrase) = (analyzer::words(short), analyzer::words(phrase));
-    if shorts.len() != 1 {
-        return Err("a short form is one word".to_owned());
-    }
+    let short = one_word(short, "a short form")?;
+    let phrase = analyzer::words(phrase);
     if !(1..=MOST_PHRASE).contains(&phrase.len()) {
         return Err("a phrase is of 1 to 8 words".to_owned());
     }
-    let short = shorts.remove(0);
     // a short form among its phrase's words would stand for itself, and its
     // phrase would find the short form wherever its word stands alone
     if let Some(itself) = phrase.iter().find(|word| key(word) == key(&short)) {

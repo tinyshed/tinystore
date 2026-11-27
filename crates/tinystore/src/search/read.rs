@@ -18,6 +18,7 @@ use std::sync::Arc;
 use rusqlite::blob::Blob;
 use rusqlite::{Connection, MAIN_DB, OptionalExtension};
 
+use super::aliases;
 use super::analyzer::{self, Word};
 use super::clusters::{self, Phase, Probe};
 use super::correct::Corrector;
@@ -154,6 +155,9 @@ pub(crate) struct Answer {
 pub(crate) struct Ranked {
     pub(crate) id: String,
     pub(crate) value: Vec<u8>,
+    /// The document's aliases, each the alias and its field's path, read
+    /// only for a search that asks where its hits matched.
+    pub(crate) aliases: Vec<(String, String)>,
     pub(crate) score: f64,
     pub(crate) text_score: Option<f64>,
     pub(crate) similarity: Option<f64>,
@@ -235,7 +239,8 @@ pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<An
             page.iter().map(|(_, doc)| *doc).filter(|doc| !halves.cosines.contains_key(doc)).collect();
         halves.cosines.extend(vectors::cosines(connection, asked.index, question, &unread)?);
     }
-    let hits = page.into_iter().map(|(score, doc)| hit(connection, asked.index, doc, score, &halves));
+    let marks = asked.query.matches.is_some() && !matches!(mode, Mode::Vector);
+    let hits = page.into_iter().map(|(score, doc)| hit(connection, (asked.index, doc), score, &halves, marks));
     let hits = hits.collect::<Result<_>>()?;
     let sought = match &asked.query.matches {
         Some(ask) if !matches!(mode, Mode::Vector) => Some(sought(connection, &asked, ask)?),
@@ -984,13 +989,16 @@ fn push_held(list: &mut List, mut postings: Vec<Posting>, gone: &HashSet<u32>) {
     }
 }
 
-fn hit(connection: &Connection, index: i64, doc: u32, score: f64, halves: &Halves) -> Result<Ranked> {
+/// The hit of the document numbered `doc`, with its aliases where the
+/// search `marks` where its words matched.
+fn hit(connection: &Connection, (index, doc): (i64, u32), score: f64, halves: &Halves, marks: bool) -> Result<Ranked> {
     let failed = |error| sql_error(format!("read document {doc}"), error);
     let mut select = connection.prepare_cached(READ_HIT).map_err(failed)?;
     let found = select.query_row((index, doc), |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(failed)?;
     let (id, value) = found.ok_or_else(|| Error::corrupt(format!("document {doc} a search found is not kept")))?;
+    let aliases = if marks { aliases::read(connection, (index, doc))? } else { Vec::new() };
     let (text_score, similarity) = (halves.words.get(&doc).copied(), halves.cosines.get(&doc).copied());
-    Ok(Ranked { id, value, score, text_score, similarity })
+    Ok(Ranked { id, value, aliases, score, text_score, similarity })
 }
 
 /// Where a search's blocks come from: a run's at its place through a blob

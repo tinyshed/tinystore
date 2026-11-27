@@ -224,6 +224,19 @@ class _Unset:
 _UNSET: Any = _Unset()
 """A vector a set does not mention, apart from None, which says the document has none."""
 
+Aliases = Mapping[str, str]
+"""Each alias, one word, with the path of the field whose whole text it stands for in its document alone."""
+
+
+@dataclass(frozen=True, slots=True)
+class Doc[T]:
+    """A document set_many sets, with its vector, or None for none, and its aliases."""
+
+    id: Key
+    value: T
+    vector: Vector | None = _UNSET
+    aliases: Aliases | None = None
+
 
 class _Searchable[T]:
     """What every index answers: its searches, and where it stands."""
@@ -343,13 +356,15 @@ class SearchIndex[T](_Searchable[T]):
         super().__init__(link, via_link(link), name, opener, lambda hit: from_json(hit.get("value") or "null", of))
         self._of = of
 
-    async def set(self, id: Key, value: T, *, vector: Vector | None = _UNSET) -> None:
+    async def set(self, id: Key, value: T, *, vector: Vector | None = _UNSET, aliases: Aliases | None = None) -> None:
         """Sets the document id to value, replacing it whole; the next search sees it.
 
         On an index with vectors a set gives its vector, or None for a
-        document only its words find.
+        document only its words find. Its aliases, ``{"кмзи": "name"}``,
+        find it as a match of the field each stands for and mark that
+        field's text; a set without them leaves the document none.
         """
-        said = _vector_said(vector)
+        said = {**_vector_said(vector), **_aliases_said(aliases)}
         document = _document_json(self.name, value)
         await self._call(
             "search.set",
@@ -357,24 +372,28 @@ class SearchIndex[T](_Searchable[T]):
             "write",
         )
 
-    async def set_many(self, documents: Sequence[tuple[Key, T] | tuple[Key, T, Vector | None]]) -> None:
-        """Sets every document in one commit, all of them or none: (id, value) or (id, value, vector).
+    async def set_many(self, documents: Sequence[tuple[Key, T] | tuple[Key, T, Vector | None] | Doc[T]]) -> None:
+        """Sets every document in one commit, all of them or none: (id, value), (id, value, vector) or a Doc.
 
         A call holds 1,000 documents at most, ``bounds.SET_MANY_DOCUMENTS``, and no
         more than one request body holds, 2 MiB, ``bounds.REQUEST_BYTES``. Past
         either it raises a ``LimitError`` that names the bound.
         """
-        encoded = [
-            {
-                "id": key_text(each[0]),
-                "value": _document_json(self.name, each[1]),
-                **_vector_said(each[2] if len(each) == 3 else _UNSET),
-            }
-            for each in documents
-        ]
+        encoded = [self._encoded(each) for each in documents]
         await self._call(
             "search.setMany", lambda handle: SearchSetMany.encode(handle=handle, documents=encoded), "write"
         )
+
+    def _encoded(self, document: tuple[Key, T] | tuple[Key, T, Vector | None] | Doc[T]) -> dict[str, Any]:
+        """A document of a set_many as the wire takes it."""
+        if not isinstance(document, Doc):
+            document = Doc(document[0], document[1], document[2] if len(document) == 3 else _UNSET)
+        return {
+            "id": key_text(document.id),
+            "value": _document_json(self.name, document.value),
+            **_vector_said(document.vector),
+            **_aliases_said(document.aliases),
+        }
 
     async def delete(self, id: Key) -> bool:
         """Deletes the document id; says whether there was one."""
@@ -725,6 +744,11 @@ def _vector_said(vector: Vector | None) -> dict[str, Any]:
     if vector is _UNSET:
         return {}
     return {"no_vector": True} if vector is None else {"vector": _vector_bytes(vector)}
+
+
+def _aliases_said(aliases: Aliases | None) -> dict[str, Any]:
+    """What a set says of its aliases: none left out."""
+    return {"aliases": dict(aliases)} if aliases else {}
 
 
 def _vector_bytes(vector: Vector) -> bytes:

@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use super::aliases::Aliases;
 use super::analyzer;
 use super::engine::Search;
 use super::filter::{self, Condition};
@@ -324,8 +325,9 @@ impl<T: DeserializeOwned> Index<T> {
 /// document's value by `decode`, and where it matched when the search asked.
 pub(super) fn found_in<V>(answer: Answer, decode: impl Fn(&[u8]) -> Result<V>) -> Result<Found<V>> {
     let Answer { hits, corrected, sought, total, .. } = answer;
-    let hits = hits.into_iter().map(|Ranked { id, value, score, text_score, similarity }| {
-        let Marked { matches, snippet } = sought.as_ref().map(|sought| sought.marked_in(&value)).unwrap_or_default();
+    let hits = hits.into_iter().map(|Ranked { id, value, aliases, score, text_score, similarity }| {
+        let marked = sought.as_ref().map(|sought| sought.marked_in(&value, &aliases));
+        let Marked { matches, snippet } = marked.unwrap_or_default();
         let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
         Ok(Hit { id, value, score, matches, snippet, text_score, similarity })
     });
@@ -337,13 +339,13 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     /// search sees it. On an index with vectors a set gives its vector, or
     /// says it has none, through [`id`](Index::id).
     pub fn set(&self, id: impl Key, value: &T) -> Result<()> {
-        self.set_given(Given { id: id.text().into_owned(), value, vector: None })
+        self.set_given(Given { id: id.text().into_owned(), value, vector: None, aliases: Vec::new() })
     }
 
-    /// A set of the document `id` with its vector, run by its last step:
-    /// `products.id("p-3").vector(&embedding).set(&product)`.
+    /// A set of the document `id` with its vector or its aliases, run by its
+    /// last step: `products.id("p-3").vector(&embedding).set(&product)`.
     pub fn id(&self, id: impl Key) -> DocumentCall<'_, T> {
-        DocumentCall { index: self, id: id.text().into_owned(), vector: None }
+        DocumentCall { index: self, id: id.text().into_owned(), vector: None, aliases: Vec::new() }
     }
 
     fn set_given(&self, given: Given<'_, T>) -> Result<()> {
@@ -359,7 +361,8 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     /// Sets each document to its value, all of them in one commit or none:
     /// `(id, &value)`, or on an index with vectors `(id, &value, &vector)`,
     /// and in a list where some have none `(id, &value, Some(&vector[..]))`
-    /// and `(id, &value, None)`. A refused one names its place in the list
+    /// and `(id, &value, None)`; a [`Doc`] says its aliases too. A refused
+    /// one names its place in the list
     /// and its id. A call holds 1,000 documents and 16 MiB of them as JSON
     /// at most, [`SET_MANY_DOCUMENTS`] and [`SET_MANY_BYTES`]; a larger
     /// import goes in calls of that size.
@@ -415,12 +418,14 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     }
 }
 
-/// A set of one document with its vector, run by [`DocumentCall::set`].
+/// A set of one document with its vector or its aliases, run by
+/// [`DocumentCall::set`].
 #[must_use = "a document is set at `set`"]
 pub struct DocumentCall<'a, T> {
     index: &'a Index<T>,
     id: String,
     vector: Option<Option<&'a [f32]>>,
+    aliases: Vec<(String, String)>,
 }
 
 impl<T> std::fmt::Debug for DocumentCall<'_, T> {
@@ -443,19 +448,107 @@ impl<'a, T: Serialize + DeserializeOwned> DocumentCall<'a, T> {
         self
     }
 
-    /// Sets the document to `value`, replacing it whole, its words and its
-    /// vector; the next search sees it.
+    /// The document's aliases: each a word that stands for the whole text of
+    /// one of its fields, in this document alone, by the field's path, as
+    /// `[("кмзи", "name")]`. A search for the word finds the document as a
+    /// match of that field, and its matches mark the field's text. One word
+    /// of 64 bytes each, 64 at most; a set without them leaves the document
+    /// none.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let courses = store.index::<serde_json::Value>("courses").field("name", 1.0).open()?;
+    /// let course = serde_json::json!({ "name": "Криптографические методы защиты информации" });
+    /// courses.id("1").aliases([("кмзи", "name")]).set(&course)?;
+    /// let found = courses.search("кмзи").matches().run()?; // "1", its name marked whole
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn aliases<W: AsRef<str>, F: AsRef<str>>(mut self, pairs: impl IntoIterator<Item = (W, F)>) -> Self {
+        self.aliases = owned_pairs(pairs);
+        self
+    }
+
+    /// Sets the document to `value`, replacing it whole, its words, its
+    /// aliases and its vector; the next search sees it.
     pub fn set(self, value: &T) -> Result<()> {
-        self.index.set_given(Given { id: self.id, value, vector: self.vector })
+        self.index.set_given(Given { id: self.id, value, vector: self.vector, aliases: self.aliases })
     }
 }
 
+/// Pairs of text, owned.
+pub(super) fn owned_pairs<W: AsRef<str>, F: AsRef<str>>(
+    pairs: impl IntoIterator<Item = (W, F)>,
+) -> Vec<(String, String)> {
+    pairs.into_iter().map(|(word, field)| (word.as_ref().to_owned(), field.as_ref().to_owned())).collect()
+}
+
 /// A document as [`Index::set_many`] takes it: `(id, &value)`, or on an index
-/// with vectors `(id, &value, &vector[..])` and `(id, &value, None)`.
+/// with vectors `(id, &value, &vector[..])` and `(id, &value, None)`; or a
+/// [`Doc`], which says its aliases too.
 pub trait Document<'v, T> {
     /// Its id, its value, and its vector: `None` when it says nothing of one,
     /// `Some(None)` when it has none.
     fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>);
+
+    /// Its aliases, each a word and the path of the field it stands for;
+    /// none unless it says.
+    fn aliased(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+}
+
+/// A document [`Index::set_many`] sets, with what it says of its vector and
+/// its aliases: `Doc::new("1", &course).aliases([("кмзи", "name")])`.
+#[must_use = "a document is set by `set_many`"]
+pub struct Doc<'v, T> {
+    id: String,
+    value: &'v T,
+    vector: Option<Option<&'v [f32]>>,
+    aliases: Vec<(String, String)>,
+}
+
+impl<T> std::fmt::Debug for Doc<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Doc").field("id", &self.id).field("aliases", &self.aliases).finish_non_exhaustive()
+    }
+}
+
+impl<'v, T> Doc<'v, T> {
+    /// The document `id` of `value`, saying nothing of its vector, with no
+    /// alias.
+    pub fn new(id: impl Key, value: &'v T) -> Self {
+        Doc { id: id.text().into_owned(), value, vector: None, aliases: Vec::new() }
+    }
+
+    /// As [`DocumentCall::vector`].
+    pub fn vector(mut self, vector: &'v [f32]) -> Self {
+        self.vector = Some(Some(vector));
+        self
+    }
+
+    /// As [`DocumentCall::without_vector`].
+    pub fn without_vector(mut self) -> Self {
+        self.vector = Some(None);
+        self
+    }
+
+    /// As [`DocumentCall::aliases`].
+    pub fn aliases<W: AsRef<str>, F: AsRef<str>>(mut self, pairs: impl IntoIterator<Item = (W, F)>) -> Self {
+        self.aliases = owned_pairs(pairs);
+        self
+    }
+}
+
+impl<'v, T> Document<'v, T> for Doc<'v, T> {
+    fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>) {
+        (self.id, self.value, self.vector)
+    }
+
+    fn aliased(&self) -> Vec<(String, String)> {
+        self.aliases.clone()
+    }
 }
 
 impl<'v, K: Key, T> Document<'v, T> for (K, &'v T) {
@@ -499,18 +592,20 @@ pub(super) fn pass_on_documents(
     super::forward::pass_on_set(&search.store()?, name, &passed()?)
 }
 
-/// A document as a call gave it: its id, its value, and what it said of its
-/// vector.
+/// A document as a call gave it: its id, its value, what it said of its
+/// vector, and its aliases.
 pub(super) struct Given<'v, T> {
     pub(super) id: String,
     pub(super) value: &'v T,
     pub(super) vector: Option<Option<&'v [f32]>>,
+    pub(super) aliases: Vec<(String, String)>,
 }
 
 impl<'v, T> Given<'v, T> {
     fn of(document: impl Document<'v, T>) -> Self {
+        let aliases = document.aliased();
         let (id, value, vector) = document.parts();
-        Given { id, value, vector }
+        Given { id, value, vector, aliases }
     }
 }
 
@@ -848,11 +943,12 @@ pub(super) fn words_read(normal: &str) -> Vec<analyzer::Word> {
 }
 
 /// A document ready to set: its id checked, its value as JSON, its words as
-/// the index's fields read them and its vector.
+/// the index's fields read them, its aliases checked and its vector.
 fn prepared<T: Serialize>(index: i64, given: &Given<'_, T>, settings: &Settings) -> Result<Prepared> {
     let (tree, bytes) = json(given.value)?;
-    let incoming = Incoming { id: checked(&given.id)?.to_owned(), tree, bytes, vector: given.vector };
-    Prepared::new(index, incoming, settings)
+    let id = checked(&given.id)?.to_owned();
+    let aliases = Aliases::new(given.aliases.clone(), &settings.fields)?;
+    Prepared::new(index, Incoming { id, tree, bytes, aliases, vector: given.vector }, settings)
 }
 
 /// What a set_many takes of each document, given by reference or owned by an

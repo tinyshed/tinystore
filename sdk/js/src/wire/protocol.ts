@@ -12736,6 +12736,8 @@ export const SearchSet = message(
 		vector: [4, bin],
 		/** the document has no vector, on an index with vectors */
 		noVector: [5, bool],
+		/** each alias, one word, with the path of the field whose text it stands for */
+		aliases: [6, names(str)],
 	},
 	{
 		write(w, v) {
@@ -12766,6 +12768,11 @@ export const SearchSet = message(
 				w.bool(v.noVector)
 				n++
 			}
+			if (v.aliases !== undefined) {
+				w.field(6)
+				writeNames(w, v.aliases, str.write)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -12774,6 +12781,7 @@ export const SearchSet = message(
 			let $value: string | undefined
 			let $vector: Uint8Array | undefined
 			let $noVector: boolean | undefined
+			let $aliases: Record<string, string> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -12791,12 +12799,22 @@ export const SearchSet = message(
 					case 5:
 						$noVector = r.bool()
 						break
+					case 6:
+						$aliases = readNames(r, str.read)
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { handle: $handle, id: $id, value: $value, vector: $vector, noVector: $noVector }
+			return {
+				handle: $handle,
+				id: $id,
+				value: $value,
+				vector: $vector,
+				noVector: $noVector,
+				aliases: $aliases,
+			}
 		},
 	},
 )
@@ -12808,6 +12826,7 @@ export const SearchDocument = message(
 		value: [2, str],
 		vector: [3, bin],
 		noVector: [4, bool],
+		aliases: [5, names(str)],
 	},
 	{
 		write(w, v) {
@@ -12833,6 +12852,11 @@ export const SearchDocument = message(
 				w.bool(v.noVector)
 				n++
 			}
+			if (v.aliases !== undefined) {
+				w.field(5)
+				writeNames(w, v.aliases, str.write)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -12840,6 +12864,7 @@ export const SearchDocument = message(
 			let $value: string | undefined
 			let $vector: Uint8Array | undefined
 			let $noVector: boolean | undefined
+			let $aliases: Record<string, string> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -12854,12 +12879,15 @@ export const SearchDocument = message(
 					case 4:
 						$noVector = r.bool()
 						break
+					case 5:
+						$aliases = readNames(r, str.read)
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { id: $id, value: $value, vector: $vector, noVector: $noVector }
+			return { id: $id, value: $value, vector: $vector, noVector: $noVector, aliases: $aliases }
 		},
 	},
 )

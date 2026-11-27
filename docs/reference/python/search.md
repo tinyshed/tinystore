@@ -145,23 +145,31 @@ Documents of one type by id, found again by their words, vectors or both: ``stor
 ### SearchIndex.set
 
 ```python
-async def set(id: Key, value: T, *, vector: Vector | None = _UNSET) -> None: ...
+async def set(
+    id: Key,
+    value: T,
+    *,
+    vector: Vector | None = _UNSET,
+    aliases: Aliases | None = None,
+) -> None: ...
 ```
 
 Sets the document id to value, replacing it whole; the next search sees it.
 
 On an index with vectors a set gives its vector, or None for a
-document only its words find.
+document only its words find. Its aliases, ``{"кмзи": "name"}``,
+find it as a match of the field each stands for and mark that
+field's text; a set without them leaves the document none.
 
 ### SearchIndex.set_many
 
 ```python
 async def set_many(
-    documents: Sequence[tuple[Key, T] | tuple[Key, T, Vector | None]],
+    documents: Sequence[tuple[Key, T] | tuple[Key, T, Vector | None] | Doc[T]],
 ) -> None: ...
 ```
 
-Sets every document in one commit, all of them or none: (id, value) or (id, value, vector).
+Sets every document in one commit, all of them or none: (id, value), (id, value, vector) or a Doc.
 
 A call holds 1,000 documents at most, ``bounds.SET_MANY_DOCUMENTS``, and no
 more than one request body holds, 2 MiB, ``bounds.REQUEST_BYTES``. Past

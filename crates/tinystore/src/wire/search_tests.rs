@@ -27,8 +27,13 @@ fn bytes(vector: &[f32]) -> Vec<u8> {
 }
 
 fn set(client: &mut Client, handle: u64, (id, value): (&str, &str), vector: &[f32]) {
-    let asked =
-        SearchSet { handle, id: id.to_owned(), value: value.to_owned(), vector: Some(bytes(vector)), no_vector: false };
+    let asked = SearchSet {
+        handle,
+        id: id.to_owned(),
+        value: value.to_owned(),
+        vector: Some(bytes(vector)),
+        ..SearchSet::default()
+    };
     client.call::<Empty>(method::SEARCH_SET, &asked).unwrap();
 }
 
@@ -52,8 +57,8 @@ fn an_index_sets_reads_searches_and_deletes_documents_over_the_wire() {
         documents: vec![SearchDocument {
             id: "c".to_owned(),
             value: r#"{"title":"red hat"}"#.to_owned(),
-            vector: None,
             no_vector: true,
+            ..SearchDocument::default()
         }],
     };
     client.call::<Empty>(method::SEARCH_SET_MANY, &many).unwrap();
@@ -180,7 +185,7 @@ fn an_index_opened_with_layouts_reads_a_word_typed_with_the_other_on_over_the_wi
     let asked = SearchOpen { name: "courses".to_owned(), layouts, ..SearchOpen::default() };
     let handle = client.call::<Handle>(method::SEARCH_OPEN, &asked).unwrap().handle;
     let course = r#""Криптография""#.to_owned();
-    let asked_set = SearchSet { handle, id: "1".to_owned(), value: course, vector: None, no_vector: false };
+    let asked_set = SearchSet { handle, id: "1".to_owned(), value: course, ..SearchSet::default() };
     client.call::<Empty>(method::SEARCH_SET, &asked_set).unwrap();
     let typed = SearchQuery { prefix: true, ..query(handle, "rhbgnj") };
     let found: SearchFound = client.call(method::SEARCH_SEARCH, &typed).unwrap();
@@ -198,7 +203,7 @@ fn an_index_opened_with_synonyms_finds_a_short_form_by_its_phrase_over_the_wire(
     let asked = SearchOpen { name: "courses".to_owned(), synonyms, ..SearchOpen::default() };
     let handle = client.call::<Handle>(method::SEARCH_OPEN, &asked).unwrap().handle;
     let course = r#""Криптографические методы защиты информации""#.to_owned();
-    let asked_set = SearchSet { handle, id: "1".to_owned(), value: course, vector: None, no_vector: false };
+    let asked_set = SearchSet { handle, id: "1".to_owned(), value: course, ..SearchSet::default() };
     client.call::<Empty>(method::SEARCH_SET, &asked_set).unwrap();
     let found: SearchFound = client.call(method::SEARCH_SEARCH, &query(handle, "КМЗИ")).unwrap();
     assert_eq!(ids(&found), ["1"]);
@@ -207,12 +212,46 @@ fn an_index_opened_with_synonyms_finds_a_short_form_by_its_phrase_over_the_wire(
     assert_eq!(client.call::<Handle>(method::SEARCH_OPEN, &refused).unwrap_err().code, "invalid");
 }
 
+// contract: SRCH-30
+#[test]
+fn a_documents_aliases_find_it_alone_and_mark_its_field_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let fields = vec![SearchField { path: "name".to_owned(), weight: 1.0 }];
+    let asked = SearchOpen { name: "courses".to_owned(), fields, ..SearchOpen::default() };
+    let handle = client.call::<Handle>(method::SEARCH_OPEN, &asked).unwrap().handle;
+    let aliases = [("тп".to_owned(), "name".to_owned())].into();
+    let value = r#"{"name":"Теория принятия решений"}"#.to_owned();
+    let asked_set = SearchSet { handle, id: "1".to_owned(), value, aliases, ..SearchSet::default() };
+    client.call::<Empty>(method::SEARCH_SET, &asked_set).unwrap();
+    let document = |id: &str, name: &str, alias: &str| SearchDocument {
+        id: id.to_owned(),
+        value: format!(r#"{{"name":"{name}"}}"#),
+        aliases: [(alias.to_owned(), "name".to_owned())].into(),
+        ..SearchDocument::default()
+    };
+    let documents =
+        vec![document("2", "Технологии программирования", "тп"), document("3", "Теория вероятностей", "тв")];
+    client.call::<Empty>(method::SEARCH_SET_MANY, &SearchSetMany { handle, documents }).unwrap();
+    let marked = SearchQuery { matches: Some("utf16".to_owned()), ..query(handle, "ТП") };
+    let found: SearchFound = client.call(method::SEARCH_SEARCH, &marked).unwrap();
+    let mut found_ids = ids(&found);
+    found_ids.sort_unstable();
+    assert_eq!(found_ids, ["1", "2"]);
+    let first = &found.hits.iter().find(|hit| hit.id == "1").unwrap().matches.as_ref().unwrap()[0];
+    assert_eq!((first.field.as_str(), first.start, first.end), ("name", 0, 23), "the name whole, in UTF-16 units");
+    let unread = [("тп".to_owned(), "title".to_owned())].into();
+    let refused =
+        SearchSet { handle, id: "4".to_owned(), value: "{}".to_owned(), aliases: unread, ..SearchSet::default() };
+    assert_eq!(client.call::<Empty>(method::SEARCH_SET, &refused).unwrap_err().code, "invalid");
+}
+
 #[test]
 fn a_refusal_over_the_wire_names_what_failed() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());
     let handle = open(&mut client, "products");
-    let unsaid = SearchSet { handle, id: "a".to_owned(), value: "{}".to_owned(), vector: None, no_vector: false };
+    let unsaid = SearchSet { handle, id: "a".to_owned(), value: "{}".to_owned(), ..SearchSet::default() };
     let refused = client.call::<Empty>(method::SEARCH_SET, &unsaid).unwrap_err();
     assert_eq!(refused.code, "invalid");
     assert!(refused.message.contains("keeps vectors"), "{}", refused.message);
@@ -237,7 +276,8 @@ fn a_read_connection_opens_an_index_only_as_it_is_and_writes_none() {
     assert_eq!(ids(&found), ["a"], "its settings as they are, not the empty ones asked");
     let missing = SearchOpen { name: "nothing".to_owned(), ..SearchOpen::default() };
     assert_eq!(reader.call::<Handle>(method::SEARCH_OPEN, &missing).unwrap_err().code, "invalid");
-    let write = SearchSet { handle: read, id: "b".to_owned(), value: "{}".to_owned(), vector: None, no_vector: true };
+    let write =
+        SearchSet { handle: read, id: "b".to_owned(), value: "{}".to_owned(), no_vector: true, ..SearchSet::default() };
     assert_eq!(reader.call::<Empty>(method::SEARCH_SET, &write).unwrap_err().code, "permission");
 }
 
@@ -307,7 +347,7 @@ fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
         client.call(method::SEARCH_SEARCH, &SearchQuery { matches: Some("chars".to_owned()), ..filtered }).unwrap();
     let only = &matched.hits[0].matches.as_ref().unwrap()[0];
     assert_eq!((only.field.as_str(), only.start, only.end), ("title", 4, 9), "a column of the row");
-    let set = SearchSet { handle, id: "8".to_owned(), value: "{}".to_owned(), vector: None, no_vector: true };
+    let set = SearchSet { handle, id: "8".to_owned(), value: "{}".to_owned(), no_vector: true, ..SearchSet::default() };
     let refused = client.call::<Empty>(method::SEARCH_SET, &set).unwrap_err();
     assert!(refused.message.contains("written to the table"), "{}", refused.message);
     let named = SearchName { name: "articles_search".to_owned(), database: Some(database) };

@@ -232,14 +232,23 @@ func (x *Index[T]) call(ctx context.Context, method uint16, body func(handle uin
 	return x.via.Call(ctx, x.opener, method, body, idempotence)
 }
 
-// SetOption is what a set says of its document's vector.
-type SetOption interface{ set(*vectorSaid) }
+// SetOption is what a set says of its document: Vector, NoVector, Aliases.
+type SetOption interface{ set(*setSaid) }
 
-type vectorSaid struct {
+type setSaid struct {
 	vector   *[]byte
 	noVector bool
+	aliases  map[string]string
 	err      error
 }
+
+// Aliases are a document's own words for the whole text of its fields, each
+// alias, one word, with the field's path: search.Aliases{"кмзи": "name"}. A
+// search for one finds the document as a match of that field and marks the
+// field's text; a set without them leaves the document none.
+type Aliases map[string]string
+
+func (a Aliases) set(s *setSaid) { s.aliases = a }
 
 // QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Matches, Snippet, Limit, Offset, Hybrid.
 type QueryOption interface{ search(*wire.SearchQuery) }
@@ -250,7 +259,7 @@ type vector []float32
 // index's dimensions, as the program's own model gave it.
 func Vector(v []float32) vector { return vector(v) }
 
-func (v vector) set(s *vectorSaid) { s.vector = vectorBytes(v) }
+func (v vector) set(s *setSaid) { s.vector = vectorBytes(v) }
 
 func (v vector) search(q *wire.SearchQuery) { q.Vector = vectorBytes(v) }
 
@@ -267,7 +276,7 @@ type noVector struct{}
 // NoVector says the document has none, on an index with vectors: only its words find it.
 func NoVector() SetOption { return noVector{} }
 
-func (noVector) set(s *vectorSaid) { s.noVector = true }
+func (noVector) set(s *setSaid) { s.noVector = true }
 
 // Set sets the document id to value, replacing it whole; the next search sees it.
 func (x *Index[T]) Set(ctx context.Context, id any, value T, opts ...SetOption) error {
@@ -276,13 +285,15 @@ func (x *Index[T]) Set(ctx context.Context, id any, value T, opts ...SetOption) 
 		return err
 	}
 	_, err = x.call(ctx, wire.MethodSearchSet, func(handle uint64) []byte {
-		return wire.Encode(&wire.SearchSet{Handle: handle, Id: key, Value: document, Vector: said.vector, NoVector: said.noVector})
+		return wire.Encode(&wire.SearchSet{
+			Handle: handle, Id: key, Value: document, Vector: said.vector, NoVector: said.noVector, Aliases: said.aliases,
+		})
 	}, core.Writing)
 	return err
 }
 
-func (x *Index[T]) document(id any, value T, opts []SetOption) (string, string, vectorSaid, error) {
-	var said vectorSaid
+func (x *Index[T]) document(id any, value T, opts []SetOption) (string, string, setSaid, error) {
+	var said setSaid
 	for _, opt := range opts {
 		opt.set(&said)
 	}
@@ -297,12 +308,14 @@ func (x *Index[T]) document(id any, value T, opts []SetOption) (string, string, 
 	return key, string(document), said, nil
 }
 
-// Doc is a document SetMany sets: its id, its value and what it says of its vector.
+// Doc is a document SetMany sets: its id, its value, what it says of its
+// vector, and its aliases.
 type Doc[T any] struct {
 	ID       any
 	Value    T
 	Vector   []float32
 	NoVector bool
+	Aliases  Aliases
 }
 
 // SetMany sets every document in one commit, all of them or none. A call
@@ -312,7 +325,7 @@ type Doc[T any] struct {
 func (x *Index[T]) SetMany(ctx context.Context, docs []Doc[T]) error {
 	documents := make([]wire.SearchDocument, len(docs))
 	for i, doc := range docs {
-		var opts []SetOption
+		opts := []SetOption{doc.Aliases}
 		switch {
 		case doc.Vector != nil:
 			opts = append(opts, Vector(doc.Vector))
@@ -323,7 +336,9 @@ func (x *Index[T]) SetMany(ctx context.Context, docs []Doc[T]) error {
 		if err != nil {
 			return err
 		}
-		documents[i] = wire.SearchDocument{Id: key, Value: document, Vector: said.vector, NoVector: said.noVector}
+		documents[i] = wire.SearchDocument{
+			Id: key, Value: document, Vector: said.vector, NoVector: said.noVector, Aliases: said.aliases,
+		}
 	}
 	_, err := x.call(ctx, wire.MethodSearchSetMany, func(handle uint64) []byte {
 		return wire.Encode(&wire.SearchSetMany{Handle: handle, Documents: documents})

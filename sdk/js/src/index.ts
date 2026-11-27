@@ -221,6 +221,7 @@ export {
 	type IndexDocument,
 	type IndexInfo,
 	type IndexOptions,
+	type IndexSetOptions,
 	type IndexStatus,
 	type KeyboardLayout,
 	type ManyFound as SearchManyFound,

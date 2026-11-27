@@ -301,17 +301,32 @@ interface TableIndexOptions {
 How a table's index reads a table of its database: its columns of text,
 those a search may filter by, and a column of vectors the program fills.
 
-## IndexDocument
+## IndexSetOptions
 
 ```ts
-interface IndexDocument<T> {
-    id: Key
-    value: T
+interface IndexSetOptions {
     vector?: Vector | null | undefined
+    /**
+     * each alias, one word, with the path of the field whose whole text it
+     * stands for in this document alone: `{ кмзи: 'name' }`; a set without
+     * them leaves the document none
+     */
+    aliases?: Readonly<Record<string, string>> | undefined
 }
 ```
 
-A document `setMany` sets: its id, its value, and its vector, or `null` for none.
+What a set says of its document besides its value: its vector, or `null` for none, and its aliases.
+
+## IndexDocument
+
+```ts
+interface IndexDocument<T> extends IndexSetOptions {
+    id: Key
+    value: T
+}
+```
+
+A document `setMany` sets: its id, its value, its vector, or `null` for none, and its aliases.
 
 ## SearchIndex
 
@@ -324,14 +339,13 @@ Documents of one type by id, found again by their words, vectors or both: `store
 ### SearchIndex.set
 
 ```ts
-set(id: Key, value: T, options?: {
-        vector?: Vector | null | undefined
-    }): Promise<void>
+set(id: Key, value: T, options?: IndexSetOptions): Promise<void>
 ```
 
 Sets the document `id` to `value`, replacing it whole; the next search
 sees it. On an index with vectors a set gives its vector, or `null` for
-a document only its words find.
+a document only its words find. Its aliases find it as a match of the
+field each stands for, and mark that field's text.
 
 ### SearchIndex.setMany
 

@@ -395,6 +395,10 @@ fn a_document_set_on_a_copy_is_indexed_at_its_home_and_found_on_the_copy() {
     ];
     docs.set_many(many.iter().map(|(id, value)| (*id, value))).unwrap();
     assert_eq!(docs.search("many").run().unwrap().hits.len(), 2);
+    let named = serde_json::json!({ "title": "Theory of decisions" });
+    docs.set_many([crate::search::Doc::new("tod", &named).aliases([("tdm", "title")])]).unwrap();
+    assert_eq!(home_docs.search("tdm").run().unwrap().hits[0].id, "tod", "a set's aliases pass on with it");
+    assert_eq!(docs.search("tdm").run().unwrap().hits[0].id, "tod");
     assert!(docs.delete("far").unwrap());
     assert!(home_docs.get("far").unwrap().is_none());
     assert!(!docs.delete("far").unwrap());

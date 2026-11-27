@@ -56,8 +56,14 @@ fn a_fields_length_counts_its_written_words_and_none_a_synonym_adds() {
     let field = Field { path: "name".to_owned(), weight: 1.0, number: 0 };
     let document = json!({ "name": "экзамен по КМЗИ" });
     let synonyms = Synonyms::new(&pairs(&[("кмзи", "криптографические методы защиты информации")])).unwrap();
-    let with = document::analyze(&document, std::slice::from_ref(&field), &[], &synonyms).unwrap();
-    let without = document::analyze(&document, &[field], &[], &Synonyms::default()).unwrap();
+    let with = document::analyze(
+        &document,
+        std::slice::from_ref(&field),
+        &[],
+        document::Besides { synonyms: &synonyms, aliases: &Default::default() },
+    )
+    .unwrap();
+    let without = document::analyze_plain(&document, &[field], &[]).unwrap();
     assert_eq!(with.lengths, without.lengths, "three written words, whatever the synonyms");
     assert_eq!(with.terms.len(), without.terms.len() + 8, "four words of the phrase, each with its stem");
 }
