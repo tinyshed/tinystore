@@ -35,7 +35,10 @@ impl Read for Piped {
         if self.deaf.load(Ordering::Acquire) {
             return Ok(0);
         }
-        if self.ready.is_empty() {
+        // A commit of 30,000 series takes past ten seconds on a loaded runner, and
+        // an empty receive would read as the end of the stream.
+        let patience = Instant::now() + Duration::from_secs(120);
+        while self.ready.is_empty() && Instant::now() < patience {
             self.ready.extend(self.pipe.recv(Duration::from_secs(10)));
         }
         let count = into.len().min(self.ready.len());
